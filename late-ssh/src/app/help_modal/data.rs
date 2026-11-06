@@ -38,7 +38,7 @@ pub enum HelpTopic {
     Chips,
     Economy,
     Bonsai,
-    Zen,
+    Layouts,
     Settings,
     Voice,
     Streaming,
@@ -67,7 +67,7 @@ impl HelpTopic {
         HelpTopic::Chips,
         HelpTopic::Economy,
         HelpTopic::Bonsai,
-        HelpTopic::Zen,
+        HelpTopic::Layouts,
         HelpTopic::Settings,
         HelpTopic::Voice,
         HelpTopic::Streaming,
@@ -98,7 +98,7 @@ impl HelpTopic {
             HelpTopic::Chips => "Chips",
             HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
-            HelpTopic::Zen => "Zen",
+            HelpTopic::Layouts => "Layouts",
             HelpTopic::Settings => "Settings",
             HelpTopic::Voice => "Voice",
             HelpTopic::Streaming => "Streaming",
@@ -128,7 +128,7 @@ impl HelpTopic {
             HelpTopic::Chips => 18,
             HelpTopic::Economy => 19,
             HelpTopic::Bonsai => 20,
-            HelpTopic::Zen => 21,
+            HelpTopic::Layouts => 21,
             HelpTopic::Settings => 22,
             HelpTopic::Voice => 23,
             HelpTopic::Streaming => 24,
@@ -177,7 +177,7 @@ pub(crate) fn lines_for(
         HelpTopic::Chips => chips_help_lines(),
         HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
-        HelpTopic::Zen => zen_help_lines(),
+        HelpTopic::Layouts => layouts_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
         HelpTopic::Voice => voice_help_lines(),
         HelpTopic::Streaming => streaming_help_lines(),
@@ -199,13 +199,13 @@ pub(crate) fn bot_app_context() -> String {
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"unread N\" counter in the bottom-left border of the frame, right of the key hints; or press Ctrl+/ and type mentions. The unread count lives in the bottom border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, and Zork Trilogy; each is launched from there, not from its own top-level page. The Realm is the house's one standing world-conquest game: one season at a time, everyone in the house on the same map, the next world rising within a day of the last one falling (a #lounge headline announces both). Enter on its card opens the board to play or to watch; j on the map takes a spot while the gates are open (the roster has room and most of the world is still unclaimed). It is a campaign of orders: a few points a day, given in secret as takes or walls, all resolved at once when night falls at the house hour (the board's header counts down to it); o lists tonight's orders and the last night's dispatch, and the history view replays a night fight by fight (p). No leaving once in. Three ways to win, each after half the season played: hold the share of the world the overview names for three nights running, be the last one standing, or hold the biggest share when the season's clock runs out; the conqueror takes a chip pot shared with second and third in bigger wars. A world opened before the campaign still resolves each action the moment it is spent. Every world has its own public chat room, open to players and watchers alike: hidden by default so the board opens on the whole map, F4 on the board shows it as a right column (and hides it again; the title bar counts new messages while it is hidden), i types into it while it is shown. The hub also has info cards for our Minecraft and Vintage Story servers; see the Minecraft and Vintage Story topics. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It has two endings that pay chips: flying the starship out pays 15,000 chips and the [ADE] badge, and doing it while carrying the fleet beacon taken off the immortal wanderer on the ravaged battleship pays 20,000 and the [ADB] badge. They are claimed separately, so one account can earn both. The chips land for every run that gets out, because the save is wiped on the way out and a repeat is the whole arc again; the badge lands once per account. The battleship itself only appears on the map once the account has finished the game at least once, so a first run never meets it.\n\
-        - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat (or Zen, when you went in from Zen). Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home or Zen. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
+        - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat. Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
         - Anyone's running NetHack, DCSS, Brogue or Zork game can be watched, read-only: the Games hub rail lists who is playing under `live` (where they are, how long, who else watches), and sitting on a row previews their screen; Enter opens it across the page with that player's watch chat in a column on the right (F4 hides it and brings it back), ` hops away with the watch kept open (3 then shows the hub's cards; ` brings the watch back), Esc steps back. Open more and each one is kept, ` cycling through them; Esc, the game ending, or ten minutes away drops one. A game that just started also shows on the live strip (o opens it). The player opens their watchers' chat over their own running game with F4: a column on the right with the watcher count on top, and while it is open every key is the chat's (i writes, j/k pick a message, reactions and gilding as in any room); F4 or Esc hands the keys back to the game. The same F4 shows or hides the Realm board's chat. On Zork, a watcher suggests a command by starting a chat line with > (>open mailbox); the player's F3 types the newest one at an empty prompt without sending it, and Enter sends it as if they had typed it.\n\
         - Lateania rides the backtick cycle too, with a twist: pressing ` inside the world hops out like a single-press leave (the character autosaves out of the world, same as a confirmed Esc), and for the next 5 minutes Lateania stays a stop on the cycle, so ` from Home hops straight back into the same character, skipping the character-select gate. While that window is live the Games hub sidebar marks Lateania with the same green dot the roguelikes get. An explicit Esc-Esc leave drops it off the cycle immediately.\n\
         - A Dark Room and Green Dragon ride the backtick cycle too, as its last stops after Lateania and the roguelikes: pressing ` inside either hops onward with the door still loaded (the village keeps growing, the character stays listed as online), and ` from Home hops back in. While loaded they wear the same green in-progress dot on the Games hub sidebar. A loaded door left alone for 30 minutes (no key in it and its screen not open) ends its visit with the same save an explicit leave does and drops off the cycle; in Green Dragon that also drops the online flag, so an absent character becomes an ordinary sleeping PvP target. Two keys the hop never takes: a ` typed into a Green Dragon talk line stays a character, and there is no hopping out of a Green Dragon fight or mid-ascent in A Dark Room.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
         - People page 5 has three sections, stepped with [ and ]: the Map (the Earth shaded by who is where, online now, this month or everyone; /map lands on it; a user with no country set is not on it, Ctrl+O sets one), Profiles (one row per user who shared a project or posted a work card; s searches names, cards and projects), and Jobs (the remote job feed; /jobs lands on it, s searches postings, / keeps the ones that carry the user's tags, n posts one). Artboard has detailed page-local editing keybinds.\n\
-        - Calendars page 7 is the events board. Anyone can post an event to the board (five a day), everyone sees it, and i says I'm in or I'm out; the count of who is in shows on the event. Your own events live on the same grid, drawn green against the board's amber, and nobody else ever sees them; b hides the board to see only yours. n creates a private event (type a title like movie night tomorrow at 9pm and the time fills in; flip the where-it-goes control to put it on the board), e edits your own, d deletes your own; moderators can delete any post. v switches Month and List, [ and ] move a month, t is today; landing on a day marks its first event, j/k move along the day's events, click or Enter opens the marked event (an empty day starts a new one), right-click offers the actions you are allowed. A post shows up as a line in #lounge; an hour before a timed event starts it heads the now strip on Home and gets a Live panel row until it ends (o or click opens it on the board), and when it starts #lounge gets a headline; an all-day event takes the #lounge topic row for its day instead. Your own events show on page 7 only. Times use the account timezone or UTC.\n\
+        - Calendars page 7 is the events board. Anyone can post an event to the board (five a day), everyone sees it, and i says I'm in or I'm out; the count of who is in shows on the event. Your own events live on the same grid, drawn green against the board's amber, and nobody else ever sees them; b hides the board to see only yours. n creates a private event (type a title like movie night tomorrow at 9pm and the time fills in; flip the where-it-goes control to put it on the board), e edits your own, d deletes your own; moderators can delete any post. v switches Month and List, [ and ] move a month, t is today; landing on a day marks its first event, j/k move along the day's events, click or Enter opens the marked event (an empty day starts a new one), right-click offers the actions you are allowed. A post shows up as a line in #lounge; an hour before a timed event starts it heads the now strip on Home and gets a Live panel row until it ends (o or click opens it on the board), and when it starts #lounge gets a headline; an all-day event is a banner across the top of Home for its day instead. Your own events show on page 7 only. Times use the account timezone or UTC.\n\
         - Leaderboards page 6 holds every board. The Boards section leads: Top Chips, Arcade Wins, Late Time (monthly + all-time), and Top Drinkers (buzz points from every drink you take, whoever paid, monthly + yearly). Then the Games section: Lateania Adventurers (living characters by level, class shown on the row) and Lateania PvP (rivals slain in the Wildbound Waste), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. Then per-game daily win counts and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
     );
     for topic in HelpTopic::ALL {
@@ -233,10 +233,10 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Zork Trilogy, Minecraft, Vintage Story), 4 Artboard (shared ASCII canvas), 5 People (three sections: the map of who is where, the people's projects and open-to-work cards, and the job feed), 6 Leaderboards (every board, monthly and all-time), 7 Calendars (the events board: anyone posts, i says I'm in; your own private events beside it).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
-    - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, F flips, z zooms it over the whole screen, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
+    - Home is tiles you arrange yourself: Ctrl+E enters arrange mode (Esc when done), where Tab and the arrows focus any tile, space opens the tile picker for it, S splits, X closes, < > change width and { } height, F flips, R resets home, t walks a tile's title through named, a bare rule and hidden, b gives the page a border (boxed tiles), and + gives a tile a guest, the now strip or attention (your move or a result in a daily match, unread DMs and mentions, a companion uncared for today), which takes the tile over only while it has something. Tiles: the room rail, chat (up to ten, each bound to a room; the focused one is the page's chat and the rail follows it, the others watch), your bonsai, the reef (everyone has one, a fry and a sprout to start, more fish and plants in the Shop), the pet, music, the visualizer, a clock, the lobby, the live panel, an ascii piece, the pulse and more; each names its own keys on the right of its title while you arrange. Home keeps up to nine named layouts per device, saved on the SSH key: 1 is home, 2 is street (an ascii piece and the tank over two chats, news and #announcements, with the clock, pulse, friends and activity, boxed), yours to arrange or delete. Ctrl+E then a digit loads one, Ctrl+E L lists them (Enter loads, n saves the page as a new layout, d deletes, R resets home), and /layout, /layout <name>, /layout save <name> do the same from any composer. Nothing switches a layout for you. The pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
     - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened: a track queued in the YouTube booth stays at least two minutes, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over whatever is up while the cue moves. A link shared to News is not on the strip: it goes into #lounge as the sharer's own line, drawn as a card with the story's title, summary points and art, and Enter on the card opens the story. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
-    - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
+    - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /layout (Ctrl+E L), /redraw (Ctrl+R), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"unread N\" counter in the bottom-left border, right of the key hints.\n\
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
@@ -554,7 +554,7 @@ fn chips_help_lines() -> Vec<String> {
         "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, sharing news, bringing music, and inviting friends who stay.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
-        "  The Shop (/shop) for badge, flag, title and name-effect rentals, the Bonsai Decay Shield, the pet companion, the Aquarium, and the Aquarium Shield that minds the tank while you are away.".to_string(),
+        "  The Shop (/shop) for badge, flag, title and name-effect rentals, the Bonsai Decay Shield, the pet companion, fish and plants for your tank, and the Aquarium Shield that minds it while you are away.".to_string(),
         "  Badges, flags, titles, and name effects are rented for 24 hours or 30 days, one live at a time per slot.".to_string(),
         "  The one title on sale is Your Own Title (1,000 / 24h, 40,000 / 30d): you write it, up to 20 characters.".to_string(),
         "  It is screened before the chips move, so a refused title costs you nothing.".to_string(),
@@ -585,7 +585,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /guide             open the guide (same as ?)",
         "  /settings          open your settings modal (same as Ctrl+O)",
         "  /lobby             open / close the Lobby (same as Ctrl+G)",
-        "  /zen               open / close Zen (same as Ctrl+F)",
+        "  /layout            Home's layouts list; /layout <name or 1-9> loads one, /layout save <name> saves the page as a new one",
         "  /redraw            repaint the screen (same as Ctrl+R)",
         "  /icons             open emoji / nerd font picker",
         "  /picker            open the room picker (same as Ctrl+/)",
@@ -620,7 +620,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
-        "  /poll              start a Home room poll with 2-3 options",
+        "  /poll              start a Home room poll with 2-4 options",
         "  /pair @user        shared live coding scratchpad (both of you must run it)",
         "  /golive [title]    stream your screen via a browser publisher page",
         "  /golive obs [..]   stream from OBS over WHIP; /golive stop ends either",
@@ -656,10 +656,10 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
-        "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
+        "  Ctrl+E             Home's layouts: arrange mode on Home from any page (its rail, chat and panels are tiles, the Layouts guide; + gives a tile the now strip or attention as its guest; t walks a tile's title through named, a bare rule and hidden; Esc when done), then 1-9 loads that layout (2 is street) and L lists them",
         "  Ctrl+R             redraw the screen if something outside late.sh scribbled on it",
         "  Ctrl+S / /shop     open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
-        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
+        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home",
         "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages (/picker types it)",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
@@ -706,8 +706,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Polls",
-        "  /poll              create a 10/20/30-minute poll in the selected Home room",
-        "  va / vb / vc       vote while a poll is visible",
+        "  /poll              create a 30-minute or 1-hour poll in the selected Home room",
+        "  va / vb / vc / vd  vote while a poll is visible",
         "  v1 .. v5           tune to a pinned radio station",
         "  limit              one active poll per room",
         "  author             the strip names who started the poll, when it fits",
@@ -1335,6 +1335,13 @@ fn vintagestory_help_lines() -> Vec<String> {
         "  BetterEr Prospecting",
         "                    density readings count the real ore blocks (no false",
         "                    positives); adds borehole, stone, and proximity modes",
+        "  Prosequor         skills, attributes, and crafted quality that grow as you",
+        "                    play; grinding one skill slows its XP until you rest or",
+        "                    do other work; open the character screen (C), Skills tab",
+        "  Pal's Enhanced Locusts",
+        "                    Clockmaker locusts can be repaired, revived, commanded",
+        "                    in fights, and sent to drill out ore veins",
+        "  Cartographer      share your map waypoints with other players",
         "",
         "Land claims (built into the game)",
         "  /land claim new   start a claim, then mark two opposite corners:",
@@ -1396,7 +1403,7 @@ fn overview_lines() -> Vec<String> {
         "If a save loses to a newer edit, Ctrl+L reloads it and keeps your draft.",
         "A post is a line in #lounge; an hour before a timed event it heads the now",
         "strip on Home and the Live panel (o or click opens it); the start is a headline.",
-        "An all-day event takes the #lounge topic row for its day. Yours stay on page 7.",
+        "An all-day event is a banner across the top of Home for its day. Yours stay on page 7.",
         "Times use your account timezone (UTC fallback); all-day dates do not shift.",
         "",
         "Leaderboards: j/k or arrows select a board; click its row to switch.",
@@ -1446,13 +1453,13 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave; r restarts the session in the late CLI)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open / close the Lobby (daily games + house tables)",
-        "  Ctrl+F            open / close Zen",
+        "  Ctrl+E            Home's layouts: arrange mode on Home (its rail, chat and panels as tiles; Esc when done), then 1-9 loads one (2 is street) and L lists them",
         "  Ctrl+R            redraw the screen after outside terminal damage",
-        "  /settings /lobby  typed fallbacks for Ctrl+O, Ctrl+G, Ctrl+F, Ctrl+R,",
-        "  /zen /redraw      and ?, for terminals that swallow those keys",
+        "  /settings /lobby  typed fallbacks for Ctrl+O, Ctrl+G, Ctrl+E L, Ctrl+R,",
+        "  /layout /redraw   and ?, for terminals that swallow those keys",
         "  /guide",
         "  Ctrl+S / /shop    open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
-        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
+        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home",
         "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
@@ -1669,56 +1676,60 @@ fn news_help_lines() -> Vec<String> {
     lines
 }
 
-fn zen_help_lines() -> Vec<String> {
+fn layouts_help_lines() -> Vec<String> {
     [
-        "Zen",
+        "Layouts",
         "",
-        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef, the pet, your rooms' chat, music, a clock, the lobby, and an ascii piece, as tiles you arrange yourself. Ctrl+F opens it from any page and the same chord hands you back; Esc stays on the page. The layout is saved per account, the rooms your chat tiles are bound to included.",
+        "Home is a page of tiles you arrange yourself: the room rail, chats, your bonsai, the reef (or its small tank), the pet, music, the visualizer, a clock, the lobby, the live panel, an ascii piece, the pulse and more. Ctrl+E enters arrange mode, where the keys below edit the page; Esc when done. Outside it Home's keys are its chat's.",
         "",
-        "Each tile names its own keys on the right of its title (t hides the titles). The bottom row is your status line (Settings, Statusline) on the left and the layout keys on the right. ? opens this list, with every key.",
+        "A device keeps up to nine named layouts, saved on its SSH key. Every device starts with two: home (Home as it always drew) and street (the tiles Home does not draw: an ascii piece and the tank over two chats, news and #announcements, with the clock, pulse, friends and activity, boxed). Street is seeded once and then yours: arrange it, rename it by saving, or delete it. Nothing switches a layout for you.",
+        "",
+        "In arrange mode every tile names its keys on the right of its title, and the bottom row lists the mode's keys. ? opens this list, with every key.",
+        "",
+        "Layouts",
+        "  Ctrl+E 1-9        load that layout and leave arrange mode (2 is street)",
+        "  Ctrl+E L          the layouts list: Enter loads, n saves the page as a new layout, d deletes, R resets one, Esc closes",
+        "  /layout           the list from any composer; /layout <name or 1-9> loads one, /layout save <name> saves the page as a new one",
         "",
         "Focus and tiles",
         "  Tab / Shift+Tab   focus the next or previous tile",
         "  ←↓↑→              move focus",
         "  space             open the tile picker for the focused tile: j k or arrows move, Enter picks, Esc closes",
+        "  +                 the guest picker: the now strip or attention, which take the tile over while they have something",
         "  S                 split the focused tile (side by side when wide, stacked when tall)",
         "  X                 close the focused tile (the last one stays)",
-        "  z                 zoom the focused tile over the whole screen, no border, no status row; z again to unzoom",
         "  < >               trade one column of width with the nearest side-by-side split",
         "  { }               trade one row of height with the nearest stacked split",
         "  F                 flip the focused tile's parent split",
-        "  R                 reset to the default layout",
+        "  R                 reset home to its stock; no other layout has one",
         "",
         "Look",
-        "  b                 cycle the border style",
-        "  g                 cycle the gap between tiles",
-        "  t                 show or hide the titles",
+        "  b                 cycle the border: none draws Home's rules, the rest box every tile",
+        "  g                 cycle the gap between boxed tiles",
+        "  t                 the focused tile's title: named, a bare rule, hidden",
         "",
         "Chat tiles",
-        "  A page holds up to ten chat tiles, each bound to a room. The focused one is the active chat: it has the composer and the selection, and reading it marks the room read. The others watch their rooms and keep their unread counts until you focus them. Opening the page for the first time focuses the first chat tile; a click focuses any tile.",
-        "  [ ]               bind the focused chat tile to the previous or next joined room",
-        "  Ctrl+/            pick the focused chat tile's room from the picker (/picker too); a ?query message jump rebinds it the same way",
-        "  i / Enter         write in the focused chat tile's room",
-        "  j / k             select messages in the focused chat tile",
+        "  A page holds up to ten chat tiles, each bound to a room. The focused one is the page's chat, and the rail follows it: it has the composer and the selection, and reading it marks the room read. The others watch their rooms and keep their unread counts until you click them.",
+        "  [ ]               in arrange mode, bind the focused chat tile to the previous or next joined room",
+        "  Ctrl+/            pick a room (/picker too); it binds the page's chat tile and the rail follows",
         "",
-        "Tiles",
-        "  w                 open Bonsai Care, as on every page",
-        "  a                 feed the tank (free, once a day, +100 chips)",
-        "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
-        "  click             pet the pet; it reads the rest of your session itself",
-        "  [ ]  Enter        on an ascii tile, step through the pieces, or pick one from the list; z plays it full screen",
-        "  random            one random scene/style per Zen visit or screensaver activation",
+        "Tile keys, in arrange mode",
+        "  j k  Enter        on attention, pick a row and do it (a DM or mention opens in the first chat tile)",
+        "  [ ]  Enter        on an ascii tile, step through the pieces, or pick one from the list",
+        "  a                 on the reef or the tank, feed it (free, once a day, +100 chips)",
+        "  random            one random scene/style per visit to Home or screensaver activation",
         "  randomer          a different landscape every five minutes, in dots or pixels",
         "  Screensaver       the same choices in Settings > Tweaks > Screensaver",
-        "  s1-4              with a live tile on the page, open that row of it (the sidebar's live panel, wider)",
+        "",
+        "Everywhere on Home",
+        "  w                 open Bonsai Care, as on every page",
+        "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
+        "  click             pet the pet; it reads the rest of your session itself",
+        "  click             on the reef or the tank, feed it (free, once a day, +100 chips)",
+        "  s1-4              with a live tile on the page, open that row of it (outside arrange mode)",
         "  click             on a row of the live tile, the same",
         "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
-        "",
-        "Leaving",
-        "  Ctrl+F / /zen     back to the page you came from (the Clubhouse if you landed here)",
-        "  `                 hop through the games waiting on you; the last hop, and Esc off a board or table, come back here",
-        "  Esc               closes the tile picker, the composer, or a selection; never leaves",
-        "  ?                 open this guide",
+        "  `                 hop through the games waiting on you; the last hop comes back to Home",
     ]
     .iter()
     .map(|line| line.to_string())
@@ -1755,7 +1766,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, plain glyphs, terminal images, chat badges, landing page, input mode"
+        "  Tweaks: terminal background sync, text brightness, right sidebar mode, composer send behavior, plain glyphs, terminal images, chat badges, landing page, input mode"
             .to_string(),
         "  Statusline: bottom status bar components, their order, and display options".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
@@ -1828,15 +1839,16 @@ fn settings_help_lines() -> Vec<String> {
         "    Sync terminal background  paint your terminal's background to match the theme; off (or the Terminal theme) leaves your terminal's own background alone. Selections and highlights inside the app are part of the theme itself, not this toggle"
             .to_string(),
         "    Text Brightness         nudge overall text brightness up or down; click ◂ / ▸ to decrease / increase".to_string(),
-        "    Right sidebar           on / off / auto for Home and Arcade; Enter opens a panel checklist"
+        "    Right sidebar           on / off / auto for the Arcade; Enter opens the panel checklist, which"
             .to_string(),
-        "    Room list               on / off / auto for the Home room-list rail".to_string(),
-        "                            auto hides a rail on terminals too narrow to carry it, so one"
+        "                            orders the Arcade's panels (Home's tiles are arranged in place, Ctrl+E)"
+            .to_string(),
+        "                            auto hides the sidebar on terminals too narrow to carry it, so one"
             .to_string(),
         "                            account works on both a desktop and a phone".to_string(),
-        "                            both rows apply to this device (this SSH key) only, never the"
+        "                            the row applies to this device (this SSH key) only, never the"
             .to_string(),
-        "                            account default; `\\` on Home cycles the same two".to_string(),
+        "                            account default".to_string(),
         "  Input".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),
@@ -1846,7 +1858,7 @@ fn settings_help_lines() -> Vec<String> {
         "    Plain glyphs                  for fonts without flags or Nerd Font: text labels instead of flag emoji in chat badges and Shop Flags, and Nerd Font icons left out of chat messages and reactions"
             .to_string(),
         "  Startup".to_string(),
-        "    Land on                       where a session starts: Clubhouse (default), Home, or Zen; first sessions always start in the Clubhouse"
+        "    Land on                       where a session starts: Clubhouse (default) or Home; first sessions always start in the Clubhouse"
             .to_string(),
         "    Daily paper at login          show or skip the daily paper pop after login".to_string(),
         "    Auto restart on update        on (default): when the server updates and you have not typed for 5 minutes, the late CLI (native mode) reconnects you on its own, on the same page; the radio keeps playing, YouTube restarts. Voice, a video, or an unsent message or link keep you put. Off, or plain ssh: the update banner asks you to reconnect"
@@ -1861,7 +1873,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  On by default, and visible even while idle: Keyhints, mentions, voice, live, date."
             .to_string(),
-        "  Care counts the bonsai, tank, and pet still waiting on today's care; click it for Zen."
+        "  Care counts the bonsai, tank, and pet still waiting on today's care; click it for Home, where they live."
             .to_string(),
         "  Now reads what the #lounge now strip shows (a stream, a match, a booth track, a board event); click it to open that."
             .to_string(),
@@ -2184,7 +2196,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "",
         "Pet Companion",
         "  Unlock            Shop companion bought with Late Chips (/shop); t there picks cat, dog, or bird",
-        "  tile              lives on the Zen page (Ctrl+F) once unlocked, beside the tank if you put it there",
+        "  tile              a tile of Home once unlocked, beside the tank if you put it there",
         "  nothing to feed   it reads your session: a win makes it proud for half an hour, a loss makes it sulk for ten minutes,",
         "                    a message you send makes it chatty, music makes it vibe, ten quiet minutes and it sleeps",
         "  click it          and it purrs for a couple of minutes (the first pet of the day pays 100 chips); move the cursor in its tile and it walks after it",

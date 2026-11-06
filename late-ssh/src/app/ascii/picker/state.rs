@@ -1,5 +1,5 @@
 //! The piece picker's state machine: the list of every piece, a cursor on
-//! one, and what picked it. Opened over the Zen page from an ascii tile
+//! one, and what picked it. Opened over Home from an ascii tile in arrange mode
 //! (the Settings Tweaks row uses the settings modal's own picker).
 
 use late_core::models::user::AsciiSelection;

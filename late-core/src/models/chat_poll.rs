@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 pub const POLL_QUESTION_MAX_CHARS: usize = 200;
 pub const POLL_OPTION_MAX_CHARS: usize = 80;
-pub const POLL_MAX_OPTIONS: usize = 3;
+pub const POLL_MAX_OPTIONS: usize = 4;
 pub const POLL_MIN_OPTIONS: usize = 2;
-pub const POLL_DURATION_OPTIONS_SECS: [i64; 3] = [10 * 60, 20 * 60, 30 * 60];
+pub const POLL_DURATION_OPTIONS_SECS: [i64; 2] = [30 * 60, 60 * 60];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatPoll {
@@ -375,7 +375,7 @@ fn normalize_options(options: Vec<String>) -> Result<Vec<String>> {
     );
     ensure!(
         options.len() <= POLL_MAX_OPTIONS,
-        "poll supports at most three options"
+        "poll supports at most four options"
     );
     for option in &options {
         ensure!(
@@ -389,7 +389,7 @@ fn normalize_options(options: Vec<String>) -> Result<Vec<String>> {
 fn normalize_duration_secs(duration_secs: i64) -> Result<i64> {
     ensure!(
         POLL_DURATION_OPTIONS_SECS.contains(&duration_secs),
-        "poll duration must be 10, 20, or 30 minutes"
+        "poll duration must be 30 minutes or 1 hour"
     );
     Ok(duration_secs)
 }

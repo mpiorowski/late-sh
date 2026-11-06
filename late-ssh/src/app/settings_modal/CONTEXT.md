@@ -4,7 +4,7 @@
 tabs (Settings, Bio, Themes, Tweaks, Statusline, Account, RSS) share
 `state.rs`, `input.rs`, and `ui.rs`. Bio saves on Enter/Esc and its mouse Done
 control. Username, system fields, and feed URL editors have Save and Cancel.
-While a text field is being edited, `Ctrl+O`, `Ctrl+G`, `Ctrl+F` and `Ctrl+S`
+While a text field is being edited, `Ctrl+O`, `Ctrl+G`, `Ctrl+E` and `Ctrl+S`
 are ignored: each would close or reopen the modal and drop the typing.
 
 | Key | Action |

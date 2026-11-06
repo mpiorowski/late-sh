@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/ascii`
-- Purpose: animated ascii pieces, ported from ascii.rest, for the Zen ascii tile and the away screensaver.
+- Purpose: animated ascii pieces, ported from ascii.rest, for the Home ascii tile and the away screensaver.
 - Parent context: `../../../../CONTEXT.md`
 
 ---
@@ -22,18 +22,18 @@ original's halftone as braille, or **pixels**, solid half-blocks in true
 colour). `late_core::models::user::AsciiPiece` (a `scene` and a `style`)
 is a concrete choice of the eight. `AsciiSelection::ALL` lists those pieces,
 the screensaver's default first, then **random** and **randomer**. The selection is stored by key (`as_str`: `earthrise`,
-`misty_forest`, `aurora_fjord_pixels`, ...) in the Zen layout and in
+`misty_forest`, `aurora_fjord_pixels`, ...) in Home's layouts and in
 `users.settings.screensaver`. A key this build does not know (the text
 pieces ascii.rest also has, plasma, lava lamp and donut, were ported once
 and dropped) plays the default, `AsciiPiece::DEFAULT`, earthrise in dots,
-on a Zen tile (the rest of the layout kept) and as the screensaver alike.
+on a Home tile (the rest of the layout kept) and as the screensaver alike.
 
 `random` chooses uniformly from all eight pieces at activation and holds it.
 `randomer` also chooses at activation, then every five minutes chooses uniformly
 among pieces from other scenes (neither style of the current landscape can repeat).
-A screensaver activation and each visit to Zen start fresh; every tile has its
-own choice and clock. Leaving Zen, removing a tile or changing its selection
-ends that instance. Zoom, focus, resizing, layout splits and overlays preserve it;
+A screensaver activation and each visit to Home start fresh; every tile has its
+own choice and clock. Leaving Home, removing a tile or changing its selection
+ends that instance. Focus, resizing, layout splits and overlays preserve it;
 covered tiles keep their timers. Reselecting the same mode changes nothing.
 `playback.rs` owns the session-only resolved piece and monotonic deadline.
 The shared 1Hz tick advances it; a delayed tick switches once and retains the
@@ -42,7 +42,7 @@ rotations do not write settings or count as new screensaver activations.
 
 Two surfaces draw them, both through `ui::draw_piece`:
 
-- **The Zen ascii tile** (`../zen/CONTEXT.md`): the screensaver's default,
+- **The Home ascii tile** (`../zen/CONTEXT.md`): the screensaver's default,
   earthrise in dots (one `AsciiPiece::DEFAULT` for both), until
   `[` `]` step it through the pieces or Enter picks one from the list
   (`picker/`, a popup over the page: `j` `k` or a click, Enter picks, Esc
@@ -88,7 +88,7 @@ late-ssh/src/app/ascii/
 |-- alpine_dawn.rs      # scene: the range raymarched once (OnceLock), tinted + mirrored per frame
 |-- ui.rs               # draw_piece: a scene as pixels or braille dots by its style
 |-- playback.rs         # per-view selection, resolved piece and five-minute rotation clock
-|-- picker/             # the piece picker a Zen ascii tile opens: state.rs, input.rs, ui.rs
+|-- picker/             # the piece picker a Home ascii tile opens: state.rs, input.rs, ui.rs
 |-- fixtures/           # golden frames recorded from the TS originals: <slug>_t1.txt (glyphs) and <slug>_t1.colors (palette bytes), see Porting a piece
 |-- LICENSE-ascii-rest  # the MIT notice the port carries
 ```
@@ -174,7 +174,7 @@ late-ssh/src/app/ascii/
   when the scene moves it a visible step.
 - **Cadence in the tick.** Rendering and wake scheduling read the same resolved
   piece, without generating randomness; rotations request a repaint and adopt
-  the new piece's wake tier on that tick. A drawn Zen ascii tile, or the screensaver,
+  the new piece's wake tier on that tick. A drawn Home ascii tile, or the screensaver,
   repaints on its cadence's edge (`App::ascii_edge`: the half edge for a
   lively piece in dots, the quarter edge for one in pixels, the 1Hz edge
   for a slow one, whose frame cache hands back the same frame until its

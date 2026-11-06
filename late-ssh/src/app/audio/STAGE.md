@@ -2,7 +2,7 @@
 
 The right-rail music stage (`common/sidebar.rs`): the fixed-height accordion, the active-source rule, the title-bar tags, and the helpers behind it. Part of the audio domain; the rest is `CONTEXT.md`, the station table is `STATIONS.md`.
 
-Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
+Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`. Home's `music` tile (`draw_music_tile`) draws the dock alone through `draw_music_dock` once it is `MUSIC_DOCK_HEIGHT` rows and eighteen columns, the track over the station in a shorter tile, its band being Home's `visualizer` tile.
 
 **Product rules (user requirements):**
 1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
@@ -85,5 +85,5 @@ Tests (`sidebar_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage
 
 - There is no genre-vote row.
 - `v+1`..`v+5` tune to the station pinned in that slot while Radio is the source (`input.rs::handle_music_suffix`); on YouTube the digit is swallowed. The choice persists to `users.settings.radio_station` and confirms with a `Station: <label>` banner.
-- `va`/`vb`/`vc` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
+- `va`/`vb`/`vc`/`vd` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
 - v+x toggles radio and youtube through `app/state.rs::toggle_paired_playback_source` → `AudioService::persist_audio_source`, which updates every paired registry entry for the user and broadcasts `PairControlMessage::SetPlaybackSource { source, stream_url, station }`. Radio retargets direct-stream playback to the selected station (a house station resolves against the Icecast base URL); YouTube silences native output and starts the embedded webview helper on capable CLI builds.

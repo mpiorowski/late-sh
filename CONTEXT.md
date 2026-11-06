@@ -162,7 +162,7 @@ round, the pot, invites).
 | Key | Page | Lives in |
 |-----|------|----------|
 | `0` | Clubhouse, the walkable tavern; the default landing page. `0` again goes down to the undercity (runners only) | `app/clubhouse`, `app/deadchannel` |
-| `1` | Home: room rail, chat center (rooms plus News, Mentions, RSS, Voice, Discover), the live strip on #lounge, the right sidebar | `app/chat`, `app/live`, `late-ssh/CONTEXT.md` (sidebar) |
+| `1` | Home: room rail, chat (rooms plus News, Mentions, RSS, Voice, Discover; more chat tiles for more rooms), the live strip on #lounge, the sidebar panels; all tiles of one tree, arranged with `Ctrl+E` | `app/chat`, `app/live`, `app/zen` (the tree) |
 | `2` | The Arcade: solo games, daily puzzles, the quest strip | `app/arcade`, `app/hub` |
 | `3` | Games hub: door games, servers, live games to watch | `app/door` |
 | `4` | Artboard: the shared ASCII canvas and its gallery | `app/artboard` |
@@ -171,14 +171,14 @@ round, the pot, invites).
 | `7` | Calendars: the events board | `app/calendar` |
 
 `Tab`/`Shift+Tab` cycle the numbered pages. `users.settings.landing_page`
-picks Clubhouse, Home or Zen for returning sessions; a session with the tour
+picks Clubhouse or Home for returning sessions; a session with the tour
 still to walk always lands in the Clubhouse, and one a drain handoff moved
 off an updating pod lands on the page it left (`handoff`).
 
 Not in the cycle: the door screens (from the hub), the daily match board and
 house tables (from the Lobby), the Realm board, the paired Scratchpad, the
 Nightcap (behind the Clubhouse) and the undercity street. Overlays: Settings
-`Ctrl+O`, Lobby `Ctrl+G`, Zen `Ctrl+F`, Shop `Ctrl+S`, the guide `?`, the
+`Ctrl+O`, Lobby `Ctrl+G`, Home's layouts `Ctrl+E`, Shop `Ctrl+S`, the guide `?`, the
 bonsai `w`, the profile modal, The Late Edition `/paper`. Global keys and the
 keybinding change checklist: `late-ssh/CONTEXT.md`.
 
@@ -206,6 +206,7 @@ otherwise.
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
+| `attention` | The attention guest: what waits on you, a row each, gone when the list is empty |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
 | `herald` | The herald: two posts a day on the Fediverse and Bluesky, words and art, each slot's claim and post |
@@ -215,8 +216,8 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | Zen (`Ctrl+F`): the tiling layout, the pet and tank tiles |
-| `ascii` | The animated ascii pieces, the Zen ascii tile, the away screensaver |
+| `zen` | The tile tree behind Home (`Ctrl+E` arranges it and switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
+| `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
 | `games` | Shared game primitives: cards, the chips service, `chess_core`, `pool_core` (each kernel has its own `CONTEXT.md`) |
@@ -264,8 +265,9 @@ small modals.
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
-  budget, the IRC design and IRCv3 ideas, the parked audio leader, the CLI
-  YouTube backend plan, the permissions matrix).
+  budget, the Home layouts design (`HOME-LAYOUTS.md`), the IRC design and
+  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
+  permissions matrix).
 
 ## 7. Telemetry
 
@@ -279,14 +281,24 @@ query gotchas: `infra/RUNBOOK.md`.
 
 ## 8. Build, run, test
 
-- `mise install` sets up `rust`, `mold` and `cargo-nextest` (`.mise.toml`).
+- `mise install` sets up `rust`, `mold` (Linux only) and `cargo-nextest`
+  (`.mise.toml`).
 - `make start` runs the stack in Docker Compose (it copies `.env.dev` to
   `.env`; personal keys go in the gitignored `.env.local`; `make
   start-instance2` runs a second instance from `.env.dev2`). Connect with `ssh
   localhost -p 2222`. The dev profiles pin compose hostnames, so the apps run
   only inside compose. Config is compiled per profile (`late-ssh/CONTEXT.md`,
   Config).
-- late-ssh runs locally the way prod runs it: pods behind a local copy of the
+- `make start-barebones` runs a barebones multi-arch (`arm64` + `amd64`) compose
+  stack with only `postgres` and `late-ssh` (`cargo-watch`) from
+  `docker-compose.barebones.yml` (`make barebones-up`, `barebones-stop`,
+  `barebones-down`, `barebones-logs`, `barebones-ps`). It is its own compose
+  project with its own empty database, so `make test-db-clean` and the seed
+  scripts, which call plain `docker compose`, still reach the full stack's. It
+  binds the same ports as the full stack, so stop one before starting the
+  other, and a code change restarts the process and drops open sessions.
+- Under `make start`, late-ssh runs locally the way prod runs it: pods behind
+  a local copy of the
   prod SSH edge (`docker-compose.yml` `service-ssh` and `ssh-pod`,
   `scripts/fleet.sh`). `make start` builds the working tree as a generation,
   then watches `late-ssh`, `late-core`, `assets` and the Cargo files: a

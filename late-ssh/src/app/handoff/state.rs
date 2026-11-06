@@ -40,7 +40,6 @@ fn page_key(page: Page) -> &'static str {
         Page::Profiles => "profiles",
         Page::Leaderboard => "leaderboard",
         Page::Calendars => "calendars",
-        Page::Zen => "zen",
     }
 }
 
@@ -54,7 +53,6 @@ fn page_from_key(key: &str) -> Option<Page> {
         "profiles" => Some(Page::Profiles),
         "leaderboard" => Some(Page::Leaderboard),
         "calendars" => Some(Page::Calendars),
-        "zen" => Some(Page::Zen),
         _ => None,
     }
 }
@@ -101,13 +99,12 @@ impl ResumePoint {
         Some(Self { page, room_id })
     }
 
-    /// The landing a resumed session is built on. The three landings are
+    /// The landing a resumed session is built on. The two landings are
     /// themselves; any other page lands on Home and is switched to from
     /// there, like a digit pressed on the first frame.
     pub(crate) fn landing(&self) -> LandingPage {
         match self.page {
             Page::Clubhouse => LandingPage::Clubhouse,
-            Page::Zen => LandingPage::Zen,
             Page::Dashboard
             | Page::Arcade
             | Page::Games

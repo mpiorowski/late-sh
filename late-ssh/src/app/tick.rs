@@ -15,10 +15,10 @@ use crate::session::SessionMessage;
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
 /// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
-/// (a drawn Zen ascii tile, the away screensaver), riding the shared
+/// (a drawn ascii tile on Home, the away screensaver), riding the shared
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
-/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
+/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (Home's reef
 /// tile + profile-modal reef) and the lively ascii pieces in pixels,
 /// stepping on the `anim_quarter` /4 edge in tick().
 pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
@@ -66,10 +66,11 @@ impl App {
             Some(prev) => self.marquee_tick / 15 != prev,
         };
         self.last_one_hz_index = Some(self.marquee_tick / 15);
-        // A Zen layout edit is written at most once a second (and when the
-        // page is left), whatever the key repeat rate did to it.
+        // A Home layout edit is written at most once a second (and when the
+        // page or arrange mode is left), whatever the key repeat rate did
+        // to it.
         if one_hz {
-            self.flush_zen_layout();
+            self.flush_home_layout();
             self.record_attention();
             if let Some(minute) = self.newcomer_clock.take_minute() {
                 self.referral_service
@@ -165,7 +166,6 @@ impl App {
         // midnight asks the service once when a sprout has rooted or the
         // next is due, and the event clears or plants the floor.
         if one_hz
-            && self.shop_state.entitlements().has_aquarium()
             && self
                 .aquarium_care
                 .take_sprout_settlement_on(chrono::Utc::now().date_naive())
@@ -226,7 +226,7 @@ impl App {
             changed = true;
         }
         // Fire a debounced message search for the Ctrl+/ modal's `?` mode.
-        crate::app::room_search_modal::state::tick_message_search(self);
+        crate::app::chat::room_search_modal::state::tick_message_search(self);
         if let Some(room_id) = self.chat.take_requested_poll_room() {
             let allow_poll_modal = self.screen == Screen::Dashboard;
             crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);
@@ -532,7 +532,14 @@ impl App {
                 ) => {}
             }
         }
-        let reading = self.lounge_card_shown() && self.chat.selected_message_id.is_some();
+        // The strip waits for a reader only where it moves the messages:
+        // on the page's chat card. On furniture it covers, and nothing
+        // waits.
+        let reading = self.lounge_card_shown()
+            && self
+                .home
+                .active_chat_hosts(crate::app::zen::state::Guest::Now)
+            && self.chat.selected_message_id.is_some();
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
@@ -960,6 +967,11 @@ impl App {
                     self.chat_ctx_epoch += 1;
                 }
             }
+            // A new headcount bucket lands once in five minutes; the pulse
+            // tile reads the session's copy.
+            if self.presence.refresh_history() {
+                changed = true;
+            }
             // Runner looks (the #deadchannel portraits) ride the same edge:
             // a pointer bump when the directory changed, and the chat rows
             // rebuild once for every portrait in view.
@@ -1040,15 +1052,14 @@ impl App {
                     changed = true;
                 }
             }
-            // Mentions load only when asked for. An Inbox tile on the page
-            // asks whenever the unread count moves, so a new mention lands.
-            if self.screen == crate::app::common::primitives::Screen::Zen
-                && self.zen.shows(crate::app::zen::state::TileKind::Inbox)
-            {
+            // Mentions load only when asked for. A page hosting the
+            // attention guest asks whenever the unread count moves, so a
+            // new mention lands in its list.
+            if self.on_home() && self.home.hosts(crate::app::zen::state::Guest::Attention) {
                 let unread = self.chat.notifications.unread_count();
-                if self.zen_inbox_listed_unread != Some(unread) {
+                if self.home_attention_listed_unread != Some(unread) {
                     self.chat.notifications.list();
-                    self.zen_inbox_listed_unread = Some(unread);
+                    self.home_attention_listed_unread = Some(unread);
                 }
             }
             // The username directory swaps its Arc on every real change, so
@@ -1121,30 +1132,6 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
-            // A tank owned by the shop but with no clock in this session
-            // was bought just now (a connect-time owner always has one from
-            // bootstrap): take the row the purchase planted, sprout and
-            // fry. The fry is the one fish the snapshot says is swimming.
-            if self.shop_state.entitlements().has_aquarium()
-                && self.aquarium_care.last_fed.is_none()
-            {
-                let fry = self
-                    .shop_state
-                    .active_aquarium_creatures()
-                    .into_iter()
-                    .next()
-                    .map(|(creature, _)| creature);
-                let welcome = match &fry {
-                    Some(_) => String::from(
-                        "Your tank came with a fry and a sprout: cut the sprout in /shop within the week, or leave it to root"
-                    ),
-                    None => "Your tank came with a sprout: cut it in /shop within the week, or leave it to root"
-                        .to_string(),
-                };
-                self.aquarium_care
-                    .welcome_new_tank(chrono::Utc::now().date_naive(), fry);
-                self.banner = Some(crate::app::common::primitives::Banner::info(&welcome));
-            }
             self.aquarium_state.set_active_creatures(
                 &self.shop_state.active_aquarium_creatures(),
                 self.aquarium_care.fry_visible(),
@@ -1206,7 +1193,7 @@ impl App {
                 );
         }
         // The aquarium has no clock of its own: one step per quarter edge,
-        // and only while the Zen page is actually up (the sim pauses
+        // and only while a reef tile is actually up (the sim pauses
         // off-screen; the screen switch back forces its catch-up frame).
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
@@ -1223,9 +1210,9 @@ impl App {
             let now = Instant::now();
             let mut rng = rand::thread_rng();
             changed |= self.sync_screensaver(now, &mut rng);
-            if self.screen == Screen::Zen {
-                let zen_changed = self.zen.sync_playback(now, &mut rng);
-                changed |= zen_changed && self.screensaver().is_none();
+            if self.on_home() {
+                let tiles_changed = self.home.sync_playback(now, &mut rng);
+                changed |= tiles_changed && self.screensaver().is_none();
             }
         }
         changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
@@ -1377,18 +1364,21 @@ impl App {
         let sidebar_visible = self.right_sidebar_visible();
         // Ambient equalizer + bonsai sway: both are stateless, derived from
         // the wall clock at draw time (viz::render_eq, the bonsai sway sines),
-        // so there is nothing to advance here — the anim_half edge itself is
+        // so there is nothing to advance here: the anim_half edge itself is
         // the change, paid only while a surface showing them is visible (the
         // sidebar carries the eq strip and both bonsai panels; the modals
-        // sway). Deliberately NOT narrowed to sessions whose eq is actually
-        // animating: the bonsai sway holds this edge on its own, and Bonsai
-        // is enabled by default. An unpaired session repaints a static eq
-        // strip, which the frame diff then drops.
-        changed |=
-            anim_half && (sidebar_visible || self.show_bonsai_modal || self.screen == Screen::Zen);
+        // sway; a rice page pays it while it draws a music, visualizer or
+        // bonsai tile, so a rail and a chat alone settle). Deliberately NOT
+        // narrowed to sessions whose eq is actually animating: the bonsai
+        // sway holds this edge on its own. An unpaired session repaints a
+        // static eq strip, which the frame diff then drops.
+        changed |= anim_half
+            && (sidebar_visible
+                || self.show_bonsai_modal
+                || (self.on_home() && self.home.paints_on_half_edge()));
         // The live strip draws a shooter's cue: the aim is stored, the
         // half-tick edge paints it.
-        changed |= anim_half && self.live_strip_shown() && self.live.aiming();
+        changed |= anim_half && self.home_strip_hosted() && self.live.aiming();
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1396,7 +1386,7 @@ impl App {
         // so only those boundary ticks need a frame.
         if self.marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
-            && sidebar_visible
+            && (sidebar_visible || self.on_home())
         {
             let selected_radio_station = self.selected_radio_station;
             let radio_now_playing = self.station_now_playing(selected_radio_station);
@@ -1515,7 +1505,7 @@ impl App {
         // so the pet box rides the half tier it paints on. The
         // bonsai care modal and the profile's bonsai sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway. A
-        // Zen music or visualizer tile paints its eq on that edge too; left
+        // music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
         // tile in dots plays its frames on this edge too; one in pixels
         // rides the quarter tier below.
@@ -1524,8 +1514,8 @@ impl App {
             || crate::app::door::hub::state::animates(self)
             || crate::app::deadchannel::lounge::svc::animates(self)
             || self.right_sidebar_visible()
-            || (self.live_strip_shown() && self.live.aiming())
-            || (self.screen == Screen::Zen && self.zen.shows_equalizer())
+            || (self.home_strip_hosted() && self.live.aiming())
+            || (self.on_home() && self.home.paints_on_half_edge())
             || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
@@ -1542,12 +1532,12 @@ impl App {
         IDLE_TICK
     }
 
-    /// The ascii pieces on screen: the away screensaver's, or the Zen ascii
-    /// tiles' that are drawn (not zoomed away).
+    /// The ascii pieces on screen: the away screensaver's, or Home's ascii
+    /// tiles'.
     fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
         match (self.screensaver(), self.screen) {
             (Some(piece), _) => vec![piece],
-            (None, Screen::Zen) => self.zen.drawn_pieces(),
+            (None, Screen::Dashboard) => self.home.pieces(),
             (None, _) => Vec::new(),
         }
     }
@@ -1585,17 +1575,17 @@ impl App {
             .any(|piece| cadence(piece) == Cadence::Quarter)
     }
 
-    /// Whether the reef is actually on screen: the Zen page draws it for
-    /// everyone, owned or not (an unowned tank swims empty under a shop
-    /// caption), and no other page draws it at all. Shared by the sim's
-    /// step gate in tick() and the wake cadence, so an aquarium owner
+    /// Whether the reef is actually on screen: Home draws it in a
+    /// reef-form aquarium tile, owned or not (an unowned tank steps under
+    /// the shop note), and no other page draws it at all. Shared by the
+    /// sim's step gate in tick() and the wake cadence, so an aquarium owner
     /// browsing other screens pays no fish frames.
     fn aquarium_visible(&self) -> bool {
-        self.screen == Screen::Zen
+        self.reef_tile_inner().is_some()
     }
 
-    /// A paired client is playing and unmuted: the same reading the Zen
-    /// page's equalizer paints as moving (`EqState::Live` or `Ambient`),
+    /// A paired client is playing and unmuted: the same reading a music
+    /// tile's equalizer paints as moving (`EqState::Live` or `Ambient`),
     /// handed to the pet.
     fn music_playing(&self) -> bool {
         match self.paired_client_state() {
@@ -1615,20 +1605,14 @@ impl App {
             )
     }
 
-    /// Whether the live strip is on screen: the #lounge card (Zen's Live
-    /// tile is the panel, which does not animate).
-    fn live_strip_shown(&self) -> bool {
-        self.lounge_card_shown()
-    }
-
     /// Whether the right sidebar draws this frame (the settings draft
     /// previews the toggle live). Shared by the viz gate in tick() and the
     /// wake cadence.
     pub(crate) fn right_sidebar_visible(&self) -> bool {
         let mode = if self.show_settings {
-            self.settings_modal_state.device_rails().1
+            self.settings_modal_state.device_rails()
         } else {
-            self.rail_modes().1
+            self.rail_modes()
         };
         crate::app::render::resolve_right_sidebar_enabled(mode, self.screen, self.size.0)
     }
@@ -1750,7 +1734,6 @@ impl App {
             | Screen::Clubhouse
             | Screen::Nightcap
             | Screen::City
-            | Screen::Zen
             | Screen::DailyMatch
             | Screen::Realm
             | Screen::Scratchpad => Place::Whole,

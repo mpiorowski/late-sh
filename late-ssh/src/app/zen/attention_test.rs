@@ -1,15 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, TimeZone, Utc};
-use late_core::models::{
-    article::{Article, ArticleFeedItem},
-    chat_room::ChatRoom,
-    notification::NotificationView,
-    rss_entry::{RssEntry, RssEntryView},
-};
+use late_core::models::{chat_room::ChatRoom, notification::NotificationView};
 use uuid::Uuid;
 
-use super::{Headline, InboxRow, headlines, inbox_rows};
+use super::{Inputs, Item, Match, items, unread_rows};
 
 fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 14, 12, minute, 0)
@@ -60,7 +55,7 @@ fn mention(
 }
 
 #[test]
-fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
+fn the_unread_rows_list_dms_by_count_then_mentions_newest_first() {
     let viewer = Uuid::now_v7();
     let (alice, bob, carol, dave) = (
         Uuid::now_v7(),
@@ -92,9 +87,18 @@ fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
         (alice, "alice"),
         lounge,
         Some("lounge"),
-        "  hi\n  there",
+        "answered",
         at(1),
         Some(at(2)),
+    );
+    let older = mention(
+        viewer,
+        (alice, "alice"),
+        lounge,
+        Some("lounge"),
+        "hi",
+        at(3),
+        None,
     );
     let fresh = mention(viewer, (bob, "bob"), with_bob.id, None, "ping", at(5), None);
     let rooms = vec![
@@ -104,122 +108,136 @@ fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
         (with_dave, Vec::new()),
     ];
 
-    let rows = inbox_rows(
+    let rows = unread_rows(
         viewer,
         &rooms,
         &unread_counts,
         &usernames,
         &ignored,
-        &[read.clone(), fresh.clone()],
+        &[read, older.clone(), fresh.clone()],
     );
 
+    // The read mention answered itself: it never comes back as a row.
     assert_eq!(
         rows,
         vec![
-            InboxRow::Dm {
+            Item::Dm {
                 room_id: with_bob.id,
                 peer: "bob".to_string(),
                 unread: 3,
             },
-            InboxRow::Dm {
+            Item::Dm {
                 room_id: with_alice.id,
                 peer: "alice".to_string(),
                 unread: 1,
             },
-            InboxRow::Mention {
+            Item::Mention {
                 room_id: with_bob.id,
                 message_id: fresh.message_id,
                 actor: "bob".to_string(),
                 room: None,
-                preview: "ping".to_string(),
-                at: at(5),
-                unread: true,
             },
-            InboxRow::Mention {
+            Item::Mention {
                 room_id: lounge,
-                message_id: read.message_id,
+                message_id: older.message_id,
                 actor: "alice".to_string(),
                 room: Some("lounge".to_string()),
-                preview: "hi there".to_string(),
-                at: at(1),
-                unread: false,
             },
         ]
     );
 }
 
-fn rss(url: &str, title: &str, feed: &str, published: Option<DateTime<Utc>>) -> RssEntryView {
-    RssEntryView {
-        entry: RssEntry {
-            id: Uuid::now_v7(),
-            created: at(20),
-            updated: at(20),
-            feed_id: Uuid::now_v7(),
-            user_id: Uuid::now_v7(),
-            guid: url.to_string(),
-            url: url.to_string(),
-            title: title.to_string(),
-            summary: String::new(),
-            published_at: published,
-            shared_at: None,
-            dismissed_at: None,
-        },
-        feed_title: feed.to_string(),
-        feed_url: format!("{url}/feed"),
+fn quiet() -> Inputs {
+    Inputs {
+        my_moves: Vec::new(),
+        results: Vec::new(),
+        unread: Vec::new(),
+        tank_due: false,
+        tree_due: false,
+        pet_due: false,
     }
 }
 
 #[test]
-fn headlines_merge_news_and_rss_newest_first_and_a_shared_entry_lists_once() {
-    let article = ArticleFeedItem {
-        article: Article {
-            id: Uuid::now_v7(),
-            created: at(10),
-            updated: at(10),
-            lounge_message_id: None,
-            user_id: Uuid::now_v7(),
-            url: "https://a.example/one".to_string(),
-            title: "Big news".to_string(),
-            summary: String::new(),
-            ascii_art: String::new(),
-        },
-        author_username: "mira".to_string(),
-        body: late_core::models::article_body::BodyStatus::Pending,
-    };
-    let entries = vec![
-        // Shared to News already: the article speaks for it.
-        rss("https://a.example/one", "Big news", "a feed", Some(at(9))),
-        // No title and no publish date: the link and the fetch time.
-        rss("https://b.example/two", "", "b feed", None),
-        rss(
-            "https://c.example/three",
-            "Old\n  story",
-            "c feed",
-            Some(at(2)),
-        ),
-    ];
+fn nothing_waiting_is_an_empty_list_so_the_guest_stays_down() {
+    assert!(items(quiet()).is_empty());
+}
 
+#[test]
+fn the_list_puts_your_moves_first_then_results_people_and_the_companions() {
+    let dm = Item::Dm {
+        room_id: Uuid::nil(),
+        peer: "ana".to_string(),
+        unread: 3,
+    };
+    let mention = Item::Mention {
+        room_id: Uuid::nil(),
+        message_id: Uuid::nil(),
+        actor: "bo".to_string(),
+        room: Some("lounge".to_string()),
+    };
+    let listed = items(Inputs {
+        my_moves: vec![Match {
+            game: "chess",
+            opponent: "mat".to_string(),
+        }],
+        results: vec![Match {
+            game: "battleship",
+            opponent: "lee".to_string(),
+        }],
+        unread: vec![dm.clone(), mention.clone()],
+        tank_due: true,
+        tree_due: false,
+        pet_due: true,
+    });
     assert_eq!(
-        headlines(&[article], &entries),
+        listed,
         vec![
-            Headline {
-                title: "https://b.example/two".to_string(),
-                source: "b feed".to_string(),
-                url: "https://b.example/two".to_string(),
-                at: at(20),
+            Item::YourMove {
+                game: "chess",
+                opponent: "mat".to_string(),
             },
-            Headline {
-                title: "Big news".to_string(),
-                source: "news · mira".to_string(),
-                url: "https://a.example/one".to_string(),
-                at: at(10),
+            Item::Result {
+                game: "battleship",
+                opponent: "lee".to_string(),
             },
-            Headline {
-                title: "Old story".to_string(),
-                source: "c feed".to_string(),
-                url: "https://c.example/three".to_string(),
-                at: at(2),
-            },
+            dm,
+            mention,
+            Item::FeedTank,
+            Item::PetPet,
         ]
     );
+    let words: Vec<String> = listed.iter().map(Item::label).collect();
+    assert_eq!(
+        words,
+        vec![
+            "your move: chess vs mat",
+            "result in: battleship vs lee",
+            "@ana: 3 unread",
+            "@bo mentioned you in #lounge",
+            "the tank is unfed today",
+            "the pet is unpetted today",
+        ]
+    );
+    let acts: Vec<&str> = listed.iter().map(Item::act).collect();
+    assert_eq!(acts, vec!["play", "look", "read", "read", "feed", "pet"]);
+}
+
+#[test]
+fn a_single_unread_dm_and_a_nameless_room_read_in_words() {
+    let dm = Item::Dm {
+        room_id: Uuid::nil(),
+        peer: "ana".to_string(),
+        unread: 1,
+    };
+    assert_eq!(dm.label(), "@ana: one unread");
+    let mention = Item::Mention {
+        room_id: Uuid::nil(),
+        message_id: Uuid::nil(),
+        actor: "bo".to_string(),
+        room: None,
+    };
+    assert_eq!(mention.label(), "@bo mentioned you");
+    assert_eq!(Item::WaterTree.label(), "the tree is unwatered today");
+    assert_eq!(Item::WaterTree.act(), "water");
 }

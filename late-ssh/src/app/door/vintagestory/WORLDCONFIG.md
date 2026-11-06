@@ -42,7 +42,7 @@ kubectl exec deploy/vintagestory -- cat /data/serverconfig.json
 echo '/worldconfig landcover' | kubectl attach -i deploy/vintagestory     # the answer lands in the pod log
 ```
 
-The seed is fixed: `-915463208`, in `WorldConfig.Seed` and in the save.
+The seed is fixed: `-1224630403`, in `WorldConfig.Seed` and in the save.
 The boot log prints it (`Using world seed: ...`); `/seed` on the console
 prints nothing, an admin types it in game.
 Spawn is the default (the world centre), not moved.
@@ -64,9 +64,9 @@ reverts on restart):
 | `PassTimeWhenEmpty` | `false` |
 
 World: `PlayStyle` `surviveandbuild`, `WorldType` `standard`, `Seed`
-`"-915463208"`, and this block in `WorldConfig.WorldConfiguration`, written
+`"-1224630403"`, and this block in `WorldConfig.WorldConfiguration`, written
 before the world was generated. A reset that keeps this seed and block
-(`scripts/vintagestory_reroll.sh -915463208 0.4 0.75`) regenerates the same
+(`scripts/vintagestory_reroll.sh -1224630403 0.4 0.75`) regenerates the same
 terrain; any other seed is a different world:
 
 ```json
@@ -82,7 +82,8 @@ terrain; any other seed is a different world:
   "lightningFires": "true",
   "temporalStorms": "off",
   "temporalRifts": "off",
-  "colorAccurateWorldmap": "true"
+  "colorAccurateWorldmap": "true",
+  "foodSpoilSpeed": "0.25"
 }
 ```
 
@@ -94,8 +95,10 @@ gives bigger landmasses and bigger oceans, a lower one many small islands (the
 wiki's World Configuration table and our own renders agree). On 1.22.7, 0.4 /
 0.75 gives landmasses a few kilometres across with straits of about 100-200
 blocks between them; 0.4 / 3 gives continents wider than 20k blocks. The seed
-was picked with vs-seedmap (Finding a seed) at 0.4 / 0.75 over a scout radius
-of 12 (12.8k blocks across): land is 39% of that map. The polar distance is our own addition, not part of that set: half
+(the amazing seed in Finding a seed) was picked among many at 0.4 with scales
+from 0.75 to 3, by flying over each in game; vs-seedmap at 0.4 / 0.75 over a
+scout radius of 12 (12.8k blocks across) puts land at 43% of that map. The
+polar distance is our own addition, not part of that set: half
 the preset's, so a sea crossing reaches a different climate in half the
 distance and gives the boat a second reason to exist. Those four are locked.
 
@@ -105,7 +108,13 @@ world: tools last 150%, saplings grow in 75% of the time
 on most cubic blocks instead of only stone and wood, a death keeps the
 inventory, lightning starts fires (they spread because `AllowFireSpread` is
 on in Terraform), no temporal storms or rifts for now (the stability meter
-itself stays on), and the world map shows the real terrain colors.
+itself stays on), the world map shows the real terrain colors, and food
+spoils at a quarter of the normal rate (half the Exploration preset's).
+Every perishable ages on the shared world clock, so food a player leaves in
+a chest or carries when logging out keeps rotting while others play; the
+slower rate softens that. `foodSpoilSpeed` was first set on the live save
+with `/worldconfig` and later added to the block on the volume by hand, so
+`/worldconfig <key>` on the console and the file agree on every key.
 
 Every other world key is the `surviveandbuild` preset or the attribute
 default.

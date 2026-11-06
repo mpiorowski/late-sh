@@ -8,13 +8,13 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
+    chat::room_search_modal::state::{
+        MessageQuery, ModalQuery, RoomSearchModalState, filtered_items, hit_room_label,
+        parse_modal_query, resolve_message_scope,
+    },
     chat::state::{ChatState, MessageSearchHit},
     common::primitives::format_relative_time_short,
     common::theme,
-    room_search_modal::state::{
-        MessageQuery, ModalQuery, PickerScope, RoomSearchModalState, filtered_items,
-        hit_room_label, parse_modal_query, resolve_message_scope,
-    },
 };
 use uuid::Uuid;
 
@@ -33,7 +33,6 @@ pub(crate) fn draw(
     state: &RoomSearchModalState,
     chat: &ChatState,
     user_id: Uuid,
-    scope: PickerScope,
 ) {
     let popup = centered_rect(
         area,
@@ -74,7 +73,7 @@ pub(crate) fn draw(
             .split(inner);
 
             draw_query(frame, layout[0], state);
-            draw_results(frame, layout[1], state, chat, user_id, scope);
+            draw_results(frame, layout[1], state, chat, user_id);
             draw_footer(frame, layout[2], false);
         }
         ModalQuery::Messages(message_query) => {
@@ -123,9 +122,8 @@ fn draw_results(
     state: &RoomSearchModalState,
     chat: &ChatState,
     user_id: Uuid,
-    scope: PickerScope,
 ) {
-    let items = filtered_items(chat, user_id, scope, state.query());
+    let items = filtered_items(chat, user_id, state.query());
     let selected = state.selected().min(items.len().saturating_sub(1));
     if items.is_empty() {
         frame.render_widget(
@@ -174,7 +172,9 @@ enum ResultRow {
     Item(usize),
 }
 
-fn result_rows(items: &[crate::app::room_search_modal::state::RoomSearchItem]) -> Vec<ResultRow> {
+fn result_rows(
+    items: &[crate::app::chat::room_search_modal::state::RoomSearchItem],
+) -> Vec<ResultRow> {
     let mut rows = Vec::with_capacity(items.len().saturating_mul(2));
     let mut last_section: Option<bool> = None;
     for (index, item) in items.iter().enumerate() {
@@ -201,7 +201,7 @@ fn result_view_start(rows: &[ResultRow], selected: usize, height: usize) -> usiz
 }
 
 fn result_item_line(
-    item: &crate::app::room_search_modal::state::RoomSearchItem,
+    item: &crate::app::chat::room_search_modal::state::RoomSearchItem,
     active: bool,
     width: usize,
 ) -> Line<'static> {
@@ -276,10 +276,10 @@ fn message_status_text(
         && resolve_message_scope(chat, user_id, scope).is_none()
     {
         return match scope {
-            crate::app::room_search_modal::state::MessageScope::Room(_) => {
+            crate::app::chat::room_search_modal::state::MessageScope::Room(_) => {
                 "  Finish the #room scope (a joined room), then type your query".to_string()
             }
-            crate::app::room_search_modal::state::MessageScope::Dm(_) => {
+            crate::app::chat::room_search_modal::state::MessageScope::Dm(_) => {
                 "  Finish the @user scope (an open DM), then type your query".to_string()
             }
         };

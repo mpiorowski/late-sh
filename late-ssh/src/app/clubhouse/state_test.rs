@@ -256,12 +256,8 @@ fn tutorial_tours_every_page_then_comes_home() {
             Tutorial::VisitCalendar,
             TourModal::None,
         ),
-        (TourMove::Zen, Tutorial::VisitZen, TourModal::None),
-        (
-            TourMove::Page(Screen::Clubhouse),
-            Tutorial::Homecoming,
-            TourModal::None,
-        ),
+        (TourMove::Layouts, Tutorial::VisitLayouts, TourModal::None),
+        (TourMove::Homecoming, Tutorial::Homecoming, TourModal::None),
     ] {
         assert!(state.tutorial_forced_step().is_some());
         assert_eq!(state.tutorial_advance(), went);

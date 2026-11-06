@@ -25,8 +25,9 @@ fn paint(canvas: &mut Canvas, origin: Pos, rows: &[&str], color: RgbColor) {
     }
 }
 
-/// Typed keys, a selection filled, copied, and pasted in another tint,
-/// then saved and burned: the whole canvas after each step.
+/// Typed keys, a selection filled, copied, and pasted with the brush on
+/// another tint (the paste keeps the colour it was copied in), then saved
+/// and burned: the whole canvas after each step.
 #[test]
 fn a_draft_types_fills_a_selection_and_stamps_a_copy() {
     let mut draft = Draft::new(None, 0);
@@ -64,12 +65,7 @@ fn a_draft_types_fills_a_selection_and_stamps_a_copy() {
         &["HI", "###", "###"],
         white,
     );
-    paint(
-        &mut expected,
-        Pos { x: 5, y: 5 },
-        &["###", "###"],
-        tint_paint(Tint::Static),
-    );
+    paint(&mut expected, Pos { x: 5, y: 5 }, &["###", "###"], white);
     assert_eq!(draft.canvas, expected);
     assert_eq!(draft.editor.cursor, Pos { x: 5, y: 5 });
     assert!(!draft.selecting());
@@ -110,6 +106,75 @@ fn erasing_takes_the_selection_when_one_is_held() {
         &["a"],
         tint_paint(Tint::White),
     );
+    assert_eq!(draft.canvas, expected);
+}
+
+/// A selection of two colours, one glyph of them wide, pasted with the brush
+/// on a third: each cell lands in its own colour and the original stays.
+#[test]
+fn a_paste_keeps_each_cells_colour_whatever_the_brush_holds() {
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let mut stored = blank();
+    stored.put_glyph_colored(Pos { x: 0, y: 0 }, 'A', red);
+    stored.put_glyph_colored(Pos { x: 1, y: 0 }, '日', blue);
+    let mut draft = Draft::new(Some(stored.clone()), 1);
+    draft.edit(Edit::Extend(MoveDir::Right));
+    draft.edit(Edit::Extend(MoveDir::Right));
+    draft.edit(Edit::Copy);
+    draft.edit(Edit::Deselect);
+    draft.brush = Brush::Full {
+        color: RgbColor::new(40, 255, 40),
+        picker: None,
+    };
+    draft.editor.cursor = Pos { x: 5, y: 3 };
+
+    draft.edit(Edit::Paste);
+
+    let mut expected = stored;
+    expected.put_glyph_colored(Pos { x: 5, y: 3 }, 'A', red);
+    expected.put_glyph_colored(Pos { x: 6, y: 3 }, '日', blue);
+    assert_eq!(draft.canvas, expected);
+}
+
+/// A cut lifts the colours before it wipes the cells, and the wiped cells
+/// stay wiped.
+#[test]
+fn a_cut_keeps_the_colours_it_lifted() {
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let mut stored = blank();
+    stored.put_glyph_colored(Pos { x: 1, y: 1 }, 'A', red);
+    stored.put_glyph_colored(Pos { x: 2, y: 1 }, 'B', blue);
+    let mut draft = Draft::new(Some(stored), 0);
+    draft.editor.cursor = Pos { x: 1, y: 1 };
+    draft.edit(Edit::Extend(MoveDir::Right));
+    draft.edit(Edit::Cut);
+    draft.edit(Edit::Deselect);
+    draft.editor.cursor = Pos { x: 0, y: 4 };
+
+    draft.edit(Edit::Paste);
+
+    let mut expected = blank();
+    expected.put_glyph_colored(Pos { x: 0, y: 4 }, 'A', red);
+    expected.put_glyph_colored(Pos { x: 1, y: 4 }, 'B', blue);
+    assert_eq!(draft.canvas, expected);
+}
+
+/// With no selection a copy takes the cell under the cursor, and a glyph
+/// stored with no colour is pasted with none rather than the brush's.
+#[test]
+fn a_paste_invents_no_colour_for_a_cell_that_had_none() {
+    let mut stored = blank();
+    stored.put_glyph(Pos { x: 0, y: 0 }, 'U');
+    let mut draft = Draft::new(Some(stored.clone()), 0);
+    draft.edit(Edit::Copy);
+    draft.editor.cursor = Pos { x: 3, y: 0 };
+
+    draft.edit(Edit::Paste);
+
+    let mut expected = stored;
+    expected.put_glyph(Pos { x: 3, y: 0 }, 'U');
     assert_eq!(draft.canvas, expected);
 }
 

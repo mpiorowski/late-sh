@@ -4,17 +4,18 @@
 //
 // The row is also where *per-device* preferences live. A session knows exactly
 // which key it authenticated with, which is the only device identity late.sh
-// has, so the home rail layout is stored here rather than on the account: a
-// 50-column phone and a 200-column desktop on one account no longer overwrite
-// each other's sidebars. `settings` is empty for a key that has never been
-// configured, and an empty override means "inherit the account default".
-// The Artboard content disclaimer lives here for the same reason: the NSFW
-// gate wants to be on at work and off at home on one account.
+// has, so the Home tile layouts and the Arcade's sidebar mode are
+// stored here rather than on the account: a 50-column phone and a 200-column
+// desktop on one account no longer overwrite each other's pages. `settings` is
+// empty for a key that has never been configured, and an empty override means
+// "inherit the account default". The Artboard content disclaimer lives here
+// for the same reason: the NSFW gate wants to be on at work and off at home on
+// one account.
 //
 // A key is not perfectly a device (one key copied to two machines, or a
-// forwarded agent, reads as one identity). `RoomListMode::Auto` /
-// `RightSidebarMode::Auto` cover that case by resolving from the live terminal
-// width instead; see `late-ssh/src/app/render.rs`.
+// forwarded agent, reads as one identity). `RightSidebarMode::Auto` covers
+// that case for the Arcade by resolving from the live terminal width instead;
+// see `late-ssh/src/app/render.rs`.
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
@@ -23,7 +24,7 @@ use serde_json::{Value, json};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::user::{RightSidebarMode, RoomListMode};
+use super::user::RightSidebarMode;
 
 crate::user_scoped_model! {
     table = "user_ssh_keys";
@@ -47,8 +48,9 @@ crate::user_scoped_model! {
     }
 }
 
-const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
+const HOME_LAYOUT_KEY: &str = "home_layout";
+const HOME_LAYOUTS_KEY: &str = "home_layouts";
 const AUDIO_MUTED_KEY: &str = "audio_muted";
 const AUDIO_VOLUME_KEY: &str = "audio_volume_percent";
 const ARTBOARD_DISCLAIMER_KEY: &str = "artboard_disclaimer";
@@ -102,41 +104,44 @@ pub fn extract_key_audio(settings: &Value) -> Option<KeyAudio> {
     })
 }
 
-/// One device's home rail layout. Stored complete or not at all: both rails are
-/// always written together, so there is no half-configured state to reason
-/// about, and a key with no stored layout inherits the account default.
+/// One device's Arcade sidebar mode. A key with no stored mode inherits the
+/// account default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyLayout {
-    pub room_list_mode: RoomListMode,
     pub right_sidebar_mode: RightSidebarMode,
 }
 
 impl KeyLayout {
     pub fn to_value(self) -> Value {
         json!({
-            ROOM_LIST_MODE_KEY: self.room_list_mode.as_str(),
             RIGHT_SIDEBAR_MODE_KEY: self.right_sidebar_mode.as_str(),
         })
     }
 }
 
-/// The device layout stored on a key, or `None` when this key has never been
-/// configured and should follow the account default. A blob missing or
-/// mangling either mode reads as `None` rather than half-applying: the pair is
-/// written atomically, so a partial one can only come from hand-editing.
+/// The Arcade sidebar mode stored on a key, or `None` when this key has never
+/// been configured and should follow the account default. A mangled value
+/// reads as `None` rather than guessing.
 pub fn extract_key_layout(settings: &Value) -> Option<KeyLayout> {
-    let room_list_mode = settings
-        .get(ROOM_LIST_MODE_KEY)
-        .and_then(Value::as_str)
-        .and_then(RoomListMode::from_key)?;
     let right_sidebar_mode = settings
         .get(RIGHT_SIDEBAR_MODE_KEY)
         .and_then(Value::as_str)
         .and_then(RightSidebarMode::from_key)?;
-    Some(KeyLayout {
-        room_list_mode,
-        right_sidebar_mode,
-    })
+    Some(KeyLayout { right_sidebar_mode })
+}
+
+/// This device's Home tile layout from before Home had named layouts, or
+/// `None` to follow the account's `home_layout` seed. Read only as the
+/// seed for a key with no `home_layouts` yet; nothing writes it any more.
+pub fn extract_key_home_layout(settings: &Value) -> Option<Value> {
+    settings.get(HOME_LAYOUT_KEY).cloned()
+}
+
+/// This device's named Home layouts (`zen::presets::Layouts` JSON, parsed
+/// by `late-ssh`), or `None` when the key has never saved or switched one
+/// and Home should seed its set from the single stored layouts.
+pub fn extract_key_home_layouts(settings: &Value) -> Option<Value> {
+    settings.get(HOME_LAYOUTS_KEY).cloned()
 }
 
 impl UserSshKey {
@@ -188,8 +193,9 @@ impl UserSshKey {
         Ok(row.map(Self::from))
     }
 
-    /// Store this device's rail layout. Scoped by owner as well as fingerprint
-    /// so a stale fingerprint can never write onto another account's key.
+    /// Store this device's Arcade sidebar mode. Scoped by owner as well as
+    /// fingerprint so a stale fingerprint can never write onto another
+    /// account's key.
     pub async fn set_layout(
         client: &Client,
         user_id: Uuid,
@@ -197,6 +203,17 @@ impl UserSshKey {
         layout: KeyLayout,
     ) -> Result<()> {
         Self::merge_settings(client, user_id, fingerprint, layout.to_value()).await
+    }
+
+    /// Store this device's named Home layouts, scoped like `set_layout`.
+    pub async fn set_home_layouts(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+        layouts: &Value,
+    ) -> Result<()> {
+        let value = json!({ HOME_LAYOUTS_KEY: layouts });
+        Self::merge_settings(client, user_id, fingerprint, value).await
     }
 
     /// Store whether this device shows the Artboard content disclaimer.

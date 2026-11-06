@@ -106,7 +106,6 @@ fn draw_body(
         columns[1],
         state,
         state.selected_item(),
-        state.entitlements().has_aquarium(),
         pet_species,
         care,
         today,
@@ -258,13 +257,11 @@ fn visible_window_start(selected_index: usize, item_count: usize, height: usize)
         .min(item_count.saturating_sub(height))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_item_detail(
     frame: &mut Frame,
     area: Rect,
     state: &ShopState,
     item: Option<&ShopCatalogItem>,
-    has_aquarium: bool,
     pet_species: PetSpecies,
     care: &AquariumCare,
     today: NaiveDate,
@@ -307,8 +304,6 @@ fn draw_item_detail(
         }
     } else if item.is_welcome_fish() {
         "with the tank"
-    } else if item.is_tank_stock() && !has_aquarium {
-        "needs aquarium"
     } else if item.is_aquarium_plant() {
         "buy plant"
     } else if item.is_aquarium_fish() {
@@ -334,7 +329,6 @@ fn draw_item_detail(
             .add_modifier(Modifier::BOLD)
     } else if item.is_welcome_fish()
         || item.is_sprout()
-        || (item.is_tank_stock() && !has_aquarium)
         || (item.is_custom_title() && !state.custom_titles_available())
     {
         Style::default()
@@ -574,17 +568,6 @@ fn draw_item_detail(
             ),
         ]));
     } else if let Some(kind) = item.tank_stock_kind() {
-        if !has_aquarium {
-            lines.push(Line::from(vec![
-                Span::raw("  unlock "),
-                Span::styled(
-                    "Aquarium first",
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-        }
         if let Some(size) = &item.aquarium_size {
             lines.push(Line::from(vec![
                 Span::raw("  size   "),
@@ -617,7 +600,7 @@ fn draw_item_detail(
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
-        if item.is_welcome_fish() && has_aquarium {
+        if item.is_welcome_fish() {
             let dim = Style::default().fg(theme::TEXT_DIM());
             let fed_days = care.fed_days_to_next_fry_on(today);
             let fish_full =
@@ -749,13 +732,10 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: PetSpecies) {
     let selected = state.selected_item();
-    let has_aquarium = state.entitlements().has_aquarium();
     let enter_label = if selected.is_some_and(|item| item.is_sprout()) {
         "grows on its own"
     } else if selected.is_some_and(|item| item.is_welcome_fish()) {
         "with the tank"
-    } else if selected.is_some_and(|item| item.is_tank_stock() && !has_aquarium) {
-        "needs aquarium"
     } else if selected.is_some_and(|item| item.is_tank_stock()) {
         "buy one"
     } else if selected.is_some_and(|item| item.is_username_effect()) {
@@ -782,9 +762,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: P
         Span::styled("Enter", key),
         Span::styled(format!(" {enter_label}"), text),
     ];
-    if selected.is_some_and(|item| item.is_sprout() && has_aquarium) {
+    if selected.is_some_and(|item| item.is_sprout()) {
         spans.extend([Span::styled("  -", key), Span::styled(" cut", text)]);
-    } else if selected.is_some_and(|item| item.is_tank_stock() && has_aquarium) {
+    } else if selected.is_some_and(|item| item.is_tank_stock()) {
         spans.extend([Span::styled("  +/-", key), Span::styled(" active", text)]);
     }
     if selected.is_some_and(|item| item.is_pet_companion() && item.owned) {

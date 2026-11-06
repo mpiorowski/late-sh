@@ -109,7 +109,7 @@ Each session spawns one render task (`ssh.rs`) with two triggers:
   sleeps that long unless input or a `RenderSignal` wake lands first. Tiers
   (`app/tick.rs`): `HOT_TICK` 66 ms (splash, 2 s after any input, an active
   ultimate, house tables, an open arcade game); `ANIM_HALF_TICK` 132 ms (the
-  Clubhouse, a visible right sidebar, a Zen music/visualizer tile, the live
+  Clubhouse, a visible right sidebar, Home with a bonsai or eq tile, the live
   strip while it draws, the bonsai modal and a profile showing a tree, the pet
   box, ascii pieces in dots); `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces,
   ascii pieces in pixels); `IDLE_TICK` 500 ms otherwise. The away screensaver
@@ -310,16 +310,22 @@ Some settings belong to the SSH key a session authenticated with
 (`ClientHandler::auth_fingerprint`, not `users.fingerprint`), stored in
 `user_ssh_keys.settings` and scoped by `user_id` as well:
 
-- **The two Home rails** (room list, right sidebar). `App::rail_modes()` is the
-  only resolver: this key's layout, else the account's. `\` cycles both / room
-  list hidden / sidebar hidden / both hidden / `auto`; it and the two Settings
-  Appearance rows write the key, never the account (the account value is only
-  the seed for a key with none). The settings modal keeps them in
-  `device_rails`, outside the draft `save()` writes, pinned by
-  `unrelated_settings_edits_do_not_republish_this_device_rails`. `auto` resolves
-  against the live width each frame (`AUTO_ROOM_LIST_MIN_COLS` 96,
-  `AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). The `show_*` bools are still written next
-  to the `*_mode` strings for rollback safety.
+- **The Arcade's right sidebar.** `App::rail_modes()` is the only resolver:
+  this key's mode, else the account's. The Settings Appearance row writes
+  the key, never the account (the account value is only the seed for a key
+  with none). The settings modal keeps it in `device_rails`, outside the
+  draft `save()` writes, pinned by
+  `cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings`.
+  `auto` resolves against the live width each frame
+  (`AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). `show_right_sidebar` is still written
+  next to the mode for rollback safety.
+- **Home's tile layouts** (`app/zen/CONTEXT.md`): `home_layouts` (Home's
+  named layouts, up to nine, and the current one) on the key, written by
+  `App::flush_home_layout` through `ProfileState::set_device_home_layouts`.
+  A key with no `home_layouts` seeds the set from its own `home_layout`,
+  and that from the account's `users.settings.home_layout`; nothing writes
+  `home_layout` or the account's copy, and the old `zen_layout` keys are
+  read nowhere.
 - **The Artboard content disclaimer.** Same shape (`artboard_disclaimer` on the
   key, `App::artboard_disclaimer_enabled`), except a failed key read fails
   closed to on.
@@ -368,7 +374,15 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   flag), batched per replica onto the `presence` notify every 200 ms with a 3 s
   heartbeat, dropped 10 s after a replica goes quiet. A new room adds a part to
   the record, never a local registry. `late_ssh_presence_total{beat}`,
-  `late_ssh_presence_records{scope}`.
+  `late_ssh_presence_records{scope}`. The same service runs the pulse
+  sampler (table in `late-core/src/models/presence_sample.rs`): each replica
+  writes its human headcount once a five-minute bucket to `presence_samples`
+  (one row per replica per bucket, pruned past two days) and reads the last
+  day back, summed per bucket, onto a second watch the sessions copy on
+  their tick (`PresenceSession::history`) for Home's pulse tile; the
+  sparkline maths is `presence/pulse.rs`; `presence/ui.rs` draws the tile
+  and the pinned presence block (the sidebar's top rows, Home's presence
+  tile). `late_ssh_pulse_samples_total{outcome}`.
 - **Username directory.** `State.username_directory` is the app-wide
   `Uuid -> username` map: loaded at startup, refreshed every 30 minutes, updated
   on login, profile save, mod rename and account delete. Plain name labels read
@@ -386,14 +400,19 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   of the Clubhouse seat pool). AI lives in `app/ai`: `bot_app_context()` feeds
   @bot the full guide, `bartender_app_context()` feeds @bartender navigation
   only, @graybeard gets neither.
-- **Sidebar** (`app/common/sidebar.rs`). Pinned core rows (online count, clock,
-  connected friends) then the user's panels (`RightSidebarComponent`) in their
-  order, each a fixed height; `visible_components` stops at the first panel
-  that does not fit, so panels drop from the bottom. Free space takes leftover
-  rows. Pet and Tank are shop-gated and view only here. A panel missing from a
-  stored list is backfilled at its default under its default predecessor
+- **Sidebar** (`app/common/sidebar.rs`), the Arcade's. Pinned core rows
+  (online count, clock, connected friends) then the user's panels
+  (`RightSidebarComponent`) in their order, each a fixed height;
+  `visible_components` stops at the first panel that does not fit, so panels
+  drop from the bottom. Free space takes leftover rows. Pet is
+  shop-gated, and Pet and Tank are view only here. A panel missing from a stored list is
+  backfilled at its default under its default predecessor
   (`normalize_right_sidebar_components`). Stored `"activity"` and `"pot"` keys
-  are dropped on read. The Live panel is `app/live`.
+  are dropped on read. The Live panel is `app/live`. Home draws the same
+  rows and panels as tiles of its own tree (`app/zen/CONTEXT.md`): its stock
+  layout is fixed (the Settings checklist shapes the Arcade's sidebar alone),
+  and the panel widgets (`draw_music_stage`, `draw_panel_rule`, presence's
+  `draw_core_block`) are shared with the tiles.
 - **Frame.** Status bars on both borders through `app/statusline`; the toast is
   a 3-row block top-center of the content area, under the settings overlay.
   The sponsor link `late.sh/thanks` redirects through late-web.
@@ -418,14 +437,14 @@ interaction mode ignores mouse reports.
 | `?` | Global guide (not while composing; Artboard keeps its own help) |
 | `Ctrl+O` | Settings, from anywhere but active Artboard editing |
 | `Ctrl+G` | Lobby modal (daily games and house tables) |
-| `Ctrl+F` | Zen over the current page, and back |
+| `Ctrl+E` | Home's layouts: arrange mode on Home (from any other page, Home first; its rail, chat and panels are tiles, `Esc` is done), then a digit loads layout 1..9 and `L` lists them (`app/zen/CONTEXT.md`) |
 | `Ctrl+S` | Shop (active games and editors keep their own `Ctrl+S`) |
 | `Ctrl+R` | Full repaint (redo inside the chat composer) |
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |
 | `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
-| `\` | Cycle this device's rails (Home) |
-| `/settings` `/lobby` `/zen` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
+| `/settings` `/lobby` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
+| `/layout` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one |
 | `Esc` | Close the top modal |
 
 `Ctrl+O/G/F/S` are ignored while a Settings text field is being edited.

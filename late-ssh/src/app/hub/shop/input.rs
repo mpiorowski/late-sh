@@ -243,10 +243,6 @@ fn toggle_pet_species(app: &mut App) -> Option<Banner> {
 /// clears at once; the service writes it behind the row's own gate (still
 /// standing, still within its week).
 fn cut_sprout(app: &mut App) {
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(Banner::error("Unlock Aquarium first"));
-        return;
-    }
     match app
         .aquarium_care
         .cut_sprout(chrono::Utc::now().date_naive())

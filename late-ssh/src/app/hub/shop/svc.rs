@@ -16,7 +16,7 @@ use late_core::{
         chips::UserChips,
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
-            AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
+            AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU,
             BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
             MarketplaceItem, PET_COMPANION_SKU, PurchaseResult, PurchaseStatus,
@@ -163,10 +163,6 @@ impl ShopCatalogItem {
         self.sku == AQUARIUM_SHIELD_SKU
     }
 
-    pub fn is_aquarium(&self) -> bool {
-        self.sku == AQUARIUM_SKU
-    }
-
     pub fn is_aquarium_fish(&self) -> bool {
         self.item_kind == AQUARIUM_FISH_ITEM_KIND
     }
@@ -289,7 +285,6 @@ fn purchase_story(
         PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded => {}
         PurchaseStatus::AlreadyOwned
         | PurchaseStatus::InsufficientFunds
-        | PurchaseStatus::RequiresAquarium
         | PurchaseStatus::OwnedCapReached => return None,
     }
     let duration = rental_duration_secs(&result.item);
@@ -356,7 +351,6 @@ fn custom_title_outcome(settled: SettledPurchase) -> CustomTitleOutcome {
         Some(
             PurchaseStatus::AlreadyOwned
             | PurchaseStatus::InsufficientFunds
-            | PurchaseStatus::RequiresAquarium
             | PurchaseStatus::OwnedCapReached,
         )
         | None => CustomTitleOutcome::Refused(settled.message),
@@ -917,7 +911,6 @@ impl ShopService {
                         result.item.price_chips, result.item.name
                     )
                 }
-                PurchaseStatus::RequiresAquarium => "Unlock Aquarium first".to_string(),
                 PurchaseStatus::OwnedCapReached => {
                     match TankStockKind::of(&result.item.item_kind) {
                         Some(TankStockKind::Plant) => {

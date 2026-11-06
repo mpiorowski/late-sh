@@ -25,7 +25,7 @@ Read the details in [LICENSE](LICENSE), the plain-English policy in [LICENSING.m
 - The events board on `7`: anyone posts an event, everyone sees it, `i` says I'm in; your own events sit beside it, private
 - Real-time global chat and shared activity feed
 - Audio streaming via Icecast/Liquidsoap, played by the paired CLI or the public `/listen` page
-- Animated ASCII scenes in Zen tiles and away screensavers, with random and five-minute randomer modes
+- Animated ASCII scenes in Home tiles and away screensavers, with random and five-minute randomer modes
 - Terminal games including 2048, Sudoku, Nonograms, Minesweeper, and Solitaire
 - Zork Trilogy door with an autosave and a manual save per edition
 - Web frontend for landing, profiles, and the token-less `/listen` page
@@ -134,7 +134,7 @@ compose service names (`postgres`, `icecast`), so `late-ssh` and `late-web`
 do not run outside it.
 
 ```bash
-mise install        # rust, mold and cargo-nextest, as pinned in .mise.toml
+mise install        # rust, mold (Linux only) and cargo-nextest, as pinned in .mise.toml
 make start          # copies .env.dev to .env and starts the stack
 ssh localhost -p 2222
 ```

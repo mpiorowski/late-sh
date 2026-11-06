@@ -7,9 +7,13 @@ pub(crate) mod gild;
 pub(crate) mod history_modal;
 pub mod input;
 pub(crate) mod list_ui;
+pub(crate) mod mod_modal;
 pub mod news;
 pub mod notifications;
 pub mod polls;
+pub(crate) mod room_info_modal;
+pub(crate) mod room_search_modal;
+pub(crate) mod sheet_modal;
 #[cfg(test)]
 mod sheet_test;
 pub mod showcase;

@@ -202,24 +202,29 @@ async fn feed_day_runs_the_streak_and_closes_the_starvation_account() {
 }
 
 #[tokio::test]
-async fn ensure_starts_the_clock_yesterday_and_keeps_an_existing_row() {
+async fn welcome_starts_the_clock_yesterday_and_keeps_an_existing_row() {
     let test_db = test_db().await;
-    let user = create_test_user(&test_db.db, "aquarium-care-ensure").await;
+    let user = create_test_user(&test_db.db, "aquarium-care-welcome").await;
     let client = test_db.db.get().await.expect("db client");
     let today = Utc::now().date_naive();
 
-    AquariumCare::ensure(&**client, user.id).await.unwrap();
+    assert!(AquariumCare::welcome(&**client, user.id).await.unwrap());
     let care = AquariumCare::load(&**client, user.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(care.last_fed.date_naive(), today.pred_opt().unwrap());
     assert_eq!(care.streak, 0);
+    assert_eq!(care.sprout_born, Some(today));
+    assert_eq!(care.next_sprout, today + chrono::Days::new(14));
 
     AquariumCare::feed_day(&**client, user.id, today, today.pred_opt().unwrap())
         .await
         .unwrap();
-    AquariumCare::ensure(&**client, user.id).await.unwrap();
+    assert!(
+        !AquariumCare::welcome(&**client, user.id).await.unwrap(),
+        "only the call that made the row says so"
+    );
     let care = AquariumCare::load(&**client, user.id)
         .await
         .unwrap()
@@ -227,7 +232,7 @@ async fn ensure_starts_the_clock_yesterday_and_keeps_an_existing_row() {
     assert_eq!(
         care.last_fed.date_naive(),
         today,
-        "ensure never rewinds a fed tank"
+        "welcome never rewinds a fed tank"
     );
     assert_eq!(care.streak, 1);
 }
@@ -250,9 +255,11 @@ async fn the_sprout_clock_raises_one_every_two_weeks_and_cut_or_root_clears_it()
     let user = create_test_user(&test_db.db, "aquarium-care-sprout").await;
     let client = test_db.db.get().await.expect("db client");
     let today = Utc::now().date_naive();
-    AquariumCare::ensure(&**client, user.id).await.unwrap();
+    AquariumCare::feed_day(&**client, user.id, today, today.pred_opt().unwrap())
+        .await
+        .unwrap();
 
-    // A fresh row books the first sprout two weeks out: nothing today.
+    // A bare floor with the next sprout booked two weeks out: nothing today.
     let care = AquariumCare::load(&**client, user.id)
         .await
         .unwrap()

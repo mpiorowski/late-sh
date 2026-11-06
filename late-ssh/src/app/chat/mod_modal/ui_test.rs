@@ -1,6 +1,6 @@
 use super::state::ModModalState;
+use crate::app::chat::mod_modal::ui::*;
 use crate::app::common::theme;
-use crate::app::mod_modal::ui::*;
 use ratatui::{Terminal, backend::TestBackend};
 use ratatui::{buffer::Buffer, style::Modifier, text::Line};
 

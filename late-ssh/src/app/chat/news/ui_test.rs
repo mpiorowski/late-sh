@@ -1,12 +1,13 @@
 use super::{
-    ArticleListView, ascii_preview_if_fit, draw_article_list, lay_out, lounge_card_lines,
-    scroll_offset,
+    ArticleListView, COMPACT_UNDER_ROWS, ascii_preview_if_fit, draw_article_list, lay_out,
+    lay_out_compact, lounge_card_lines, scroll_offset,
 };
 use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
 use late_core::models::article_body::BodyStatus;
 use late_core::models::article_read::WatchPosition;
 use ratatui::{Terminal, backend::TestBackend};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -66,6 +67,7 @@ fn view<'a>(
         marker,
         watch_positions,
         mine_only: false,
+        scroll: None,
     }
 }
 
@@ -145,6 +147,65 @@ fn the_list_sections_the_shelf_over_the_feed_and_shows_every_story_whole() {
 /// The unread dot marks a feed story the visit's marker has no read for,
 /// and never a story on the shelf: the shelf is the reader's own list.
 #[test]
+fn a_short_list_is_one_row_a_story_with_the_title_giving_way_first() {
+    let first = card_at(
+        "https://example.com/one",
+        BodyStatus::Ready { reading_minutes: 7 },
+    );
+    let second = card_at(
+        "https://other.org/two",
+        BodyStatus::Ready { reading_minutes: 7 },
+    );
+    let articles = vec![first.clone(), second.clone()];
+    let marker: HashSet<Uuid> = HashSet::new();
+    let positions: HashMap<Uuid, WatchPosition> = HashMap::new();
+    let view = view(&articles, 0, 1, &marker, &positions);
+
+    let layout = lay_out_compact(&view, 60);
+    assert_eq!(layout.rows.len(), 2, "one row a story, no rules");
+    assert_eq!(layout.selected, 1..2);
+    assert_eq!(layout.context, 0..2, "the story above, nothing below");
+    let texts: Vec<String> = layout
+        .rows
+        .iter()
+        .map(|row| row.line.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert!(
+        texts[0].starts_with("● Why LISTEN/NOTIFY stops scaling · example.com · now"),
+        "{texts:?}"
+    );
+    assert!(texts[1].ends_with(" · other.org · now"), "{texts:?}");
+
+    // Narrow, the tail keeps its width and the title is cut.
+    let narrow = lay_out_compact(&view, 30);
+    let row: String = narrow.rows[0]
+        .line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(row.ends_with(" · example.com · now"), "{row:?}");
+    assert!(row.chars().count() <= 30, "{row:?}");
+
+    // The drawn list picks the compact form under the threshold and the
+    // whole one at it.
+    let short = drawn(&view, 60, COMPACT_UNDER_ROWS - 1);
+    assert!(short[0].contains("· example.com · now"), "{short:?}");
+    assert!(short[1].contains("· other.org · now"), "{short:?}");
+    // The first story selected: the second one's would scroll this
+    // story's headline off the top, the whole list being a row taller.
+    let tall = drawn(
+        &self::view(&articles, 0, 0, &marker, &positions),
+        60,
+        COMPACT_UNDER_ROWS,
+    );
+    assert!(
+        tall[1].trim_start().starts_with("@mat"),
+        "the full list's meta row: {tall:?}"
+    );
+}
+
+#[test]
 fn the_unread_dot_marks_the_feed_and_not_the_shelf() {
     let marker = HashSet::new();
     let positions = HashMap::new();
@@ -181,14 +242,116 @@ fn a_long_bullet_is_cut_at_two_rows() {
     assert!(text(4).trim_end().ends_with('…'), "{:?}", text(4));
 }
 
-/// The draw scrolls just enough to keep the selected story's last row in
-/// view, and no further than its first row on a short screen.
+/// Stories of 5 rows with a rule between: story `i` is rows `6i..6i+5`.
+fn story(i: usize) -> std::ops::Range<usize> {
+    6 * i..6 * i + 5
+}
+
+/// The story above through the story below, as `lay_out` reports it.
+fn context(i: usize, count: usize) -> std::ops::Range<usize> {
+    let start = if i == 0 {
+        story(0).start
+    } else {
+        story(i - 1).start
+    };
+    let end = if i + 1 == count {
+        story(i).end
+    } else {
+        story(i + 1).end
+    };
+    start..end
+}
+
+/// Walking up from the newest story at the bottom, the window holds still
+/// until the story above the selection would leave it, and only then
+/// scrolls, a story at a time.
 #[test]
-fn the_scroll_keeps_the_selected_story_in_view() {
-    assert_eq!(scroll_offset(&(0..2), 10), 0);
-    assert_eq!(scroll_offset(&(8..14), 10), 4);
-    assert_eq!(scroll_offset(&(8..14), 3), 8);
-    assert_eq!(scroll_offset(&(8..14), 0), 8);
+fn the_list_scrolls_only_when_the_next_story_would_leave_the_window() {
+    let count = 10;
+    let total = story(count - 1).end;
+    let height = 24;
+    let mut offset = 0;
+    let mut offsets = Vec::new();
+    for i in (0..count).rev() {
+        offset = scroll_offset(offset, total, &story(i), &context(i, count), height);
+        offsets.push(offset);
+    }
+    // The first draw lands at the bottom; moving up keeps it there while
+    // stories 8, 7 and 6 (with 5, 6 above them in view) move inside it.
+    assert_eq!(offsets[0], total - height);
+    assert_eq!(offsets[1], total - height);
+    assert_eq!(offsets[2], total - height);
+    // Story 6 is selected: story 5 above it must be in view, row 30.
+    assert_eq!(offsets[3], story(5).start.min(total - height));
+    // At the top it stops at row 0.
+    assert_eq!(*offsets.last().unwrap(), 0);
+    // Every step keeps the selected story and the one above it in view.
+    for (step, i) in (0..count).rev().enumerate() {
+        let top = context(i, count).start;
+        assert!(
+            offsets[step] <= top,
+            "story {i} at offset {}",
+            offsets[step]
+        );
+        assert!(story(i).end <= offsets[step] + height);
+    }
+
+    // And back down: still until the story below would leave the window.
+    let held = scroll_offset(0, total, &story(1), &context(1, count), height);
+    assert_eq!(held, 0);
+    let held = scroll_offset(held, total, &story(2), &context(2, count), height);
+    assert_eq!(held, 0);
+    let moved = scroll_offset(held, total, &story(3), &context(3, count), height);
+    assert_eq!(moved, story(4).end - height);
+}
+
+/// Real draws sharing one kept offset, on a list with a shelf: the window holds
+/// while the selection moves inside it, scrolls when the story above would
+/// leave it, and walking back to the first story brings the shelf's rule back.
+/// Stories are 6 rows: a rule at row 0, the rule under the shelf at row 7, then
+/// 7 rows a story, so 42 rows and a lowest offset of 18 on a window of 24.
+#[test]
+fn the_kept_offset_holds_the_list_and_walks_back_to_the_shelf_rule() {
+    let marker = HashSet::new();
+    let positions = HashMap::new();
+    let articles: Vec<_> = (0..6).map(|_| card(BodyStatus::Pending)).collect();
+    let scroll = Cell::new(0);
+    let draw = |selected_index| {
+        let list = ArticleListView {
+            scroll: Some(&scroll),
+            ..view(&articles, 1, selected_index, &marker, &positions)
+        };
+        drawn(&list, 80, 24)
+    };
+
+    draw(5);
+    assert_eq!(scroll.get(), 18);
+    draw(4);
+    assert_eq!(scroll.get(), 18, "the story above is still in the window");
+    draw(3);
+    assert_eq!(scroll.get(), 15, "the story above would leave the window");
+    draw(2);
+    draw(1);
+    let rows = draw(0);
+    assert_eq!(scroll.get(), 0);
+    assert!(rows[0].starts_with("━━ saved"), "{:?}", rows[0]);
+}
+
+/// Too short for a story and both neighbours, the neighbours share what the
+/// selected story leaves; shorter than the story, its first rows show.
+#[test]
+fn a_short_window_keeps_the_selected_story_first() {
+    let total = story(9).end;
+    let offset = scroll_offset(0, total, &story(5), &context(5, 10), 9);
+    assert!(offset <= story(5).start && story(5).end <= offset + 9);
+    assert_eq!(
+        scroll_offset(0, total, &story(5), &context(5, 10), 3),
+        story(5).start
+    );
+    assert_eq!(
+        scroll_offset(0, total, &story(5), &context(5, 10), 0),
+        story(5).start.min(total)
+    );
 }
 
 /// A #lounge card is the story in six rows, the art down the right: the

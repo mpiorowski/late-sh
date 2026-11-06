@@ -241,9 +241,6 @@ impl ShopState {
     /// Every creature in the water, fish and plants alike, as the tank
     /// draws them: `(creature, active count)`.
     pub(crate) fn active_aquarium_creatures(&self) -> Vec<(String, usize)> {
-        if !self.snapshot.entitlements.has_aquarium() {
-            return Vec::new();
-        }
         self.snapshot
             .items
             .iter()
@@ -448,11 +445,6 @@ impl ShopState {
             ));
         }
         if item.is_tank_stock() {
-            if !self.snapshot.entitlements.has_aquarium() {
-                return Some(Banner::error(
-                    "Unlock Aquarium before buying fish or plants",
-                ));
-            }
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("Buying {}", item.name)));
@@ -478,11 +470,6 @@ impl ShopState {
             self.service
                 .purchase_item_task(self.user_id, item.sku, None, None);
             return Some(Banner::success(&format!("Renting {}", item.name)));
-        }
-        // The shield minds a tank; without one it would take the chips and
-        // mind nothing.
-        if item.is_aquarium_shield() && !self.snapshot.entitlements.has_aquarium() {
-            return Some(Banner::error("Unlock Aquarium before buying a shield"));
         }
         if item.is_consumable() {
             if item.requires_room {
@@ -610,9 +597,6 @@ impl ShopState {
         let item = self.selected_item()?.clone();
         if !item.is_tank_stock() {
             return None;
-        }
-        if !self.snapshot.entitlements.has_aquarium() {
-            return Some(Banner::error("Unlock Aquarium before managing the tank"));
         }
         self.service
             .adjust_aquarium_active_task(self.user_id, item.sku, delta);

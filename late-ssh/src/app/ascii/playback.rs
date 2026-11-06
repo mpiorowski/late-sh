@@ -1,5 +1,5 @@
 //! Per-view playback. Only the selection is persisted; the resolved piece and
-//! its clock belong to one screensaver activation or one Zen tile visit.
+//! its clock belong to one screensaver activation or one visit to a Home ascii tile.
 
 use std::time::{Duration, Instant};
 

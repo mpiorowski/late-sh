@@ -218,8 +218,8 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_lobby_toggle() {
         crate::app::input::toggle_lobby_globally(app);
     }
-    if app.chat.take_requested_zen_toggle() {
-        crate::app::input::toggle_zen_globally(app);
+    if let Some(command) = app.chat.take_requested_layout_command() {
+        crate::app::zen::input::run_layout_command(app, command);
     }
     if app.chat.take_requested_guide() {
         crate::app::input::open_guide_globally(app);
@@ -249,7 +249,7 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         }
     }
     if app.chat.take_requested_mod_modal() {
-        crate::app::mod_modal::input::open(app);
+        crate::app::chat::mod_modal::input::open(app);
     }
     if let Some(room_id) = app.chat.take_requested_poll_room() {
         open_requested_poll_modal(app, room_id, allow_poll_modal);

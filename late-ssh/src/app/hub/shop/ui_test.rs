@@ -218,12 +218,11 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
 fn companions_tab_rows_split_pet_bonsai_the_tank_its_growth_plants_and_fish() {
     use late_core::models::marketplace::{
         AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
-        AQUARIUM_SHIELD_SKU, AQUARIUM_SKU, PET_COMPANION_SKU,
+        AQUARIUM_SHIELD_SKU, PET_COMPANION_SKU,
     };
 
     let pet = chat_item(PET_COMPANION_SKU, "feature_unlock");
     let bonsai_shield = bonsai_shield_item();
-    let tank = chat_item(AQUARIUM_SKU, "feature_unlock");
     let tank_shield = chat_item(AQUARIUM_SHIELD_SKU, AQUARIUM_CONSUMABLE_ITEM_KIND);
     let fry = ShopCatalogItem {
         welcome_fish: true,
@@ -240,11 +239,10 @@ fn companions_tab_rows_split_pet_bonsai_the_tank_its_growth_plants_and_fish() {
     // them so before the rows are built, stable): catalog `sort_order`
     // runs the fry before the fish and the fish before the sprout and the
     // plants; the sort moves the tank's growth and its plants in between
-    // the tank and the fish.
+    // its shield and the fish.
     let mut items = vec![
         &pet,
         &bonsai_shield,
-        &tank,
         &tank_shield,
         &fry,
         &fish,
@@ -261,15 +259,14 @@ fn companions_tab_rows_split_pet_bonsai_the_tank_its_growth_plants_and_fish() {
             "[Bonsai]",
             "1:bonsai_decay_shield_two_weeks",
             "[Aquarium]",
-            "2:aquarium",
-            "3:aquarium_shield_two_weeks",
+            "2:aquarium_shield_two_weeks",
             "[Growing]",
-            "4:aquarium_fish_fry",
-            "5:aquarium_sprout",
+            "3:aquarium_fish_fry",
+            "4:aquarium_sprout",
             "[Plants]",
-            "6:aquarium_plant_seatuft",
+            "5:aquarium_plant_seatuft",
             "[Fish]",
-            "7:aquarium_fish_mj",
+            "6:aquarium_fish_mj",
         ]
     );
     for item in [&fish, &plant, &sprout, &fry] {

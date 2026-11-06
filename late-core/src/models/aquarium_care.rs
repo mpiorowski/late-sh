@@ -91,30 +91,14 @@ impl AquariumCare {
         Ok(row.map(Self::from))
     }
 
-    /// Start the clock for a tank owner who has never fed: the row is
-    /// created as if the last meal was yesterday, so the tank is hungry now
-    /// and the first fish is at stake `CARE_DAYS` from today. An existing row
-    /// is left alone.
-    pub async fn ensure(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "INSERT INTO user_aquarium_care (user_id, last_fed)
-                 VALUES ($1, current_timestamp - interval '1 day')
-                 ON CONFLICT (user_id) DO NOTHING",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
-    }
-
-    /// A tank just bought comes with its first sprout: the row starts like
-    /// `ensure` (hungry now, the first fish at stake `CARE_DAYS` out) with a
-    /// sprout up today and the next booked `SPROUT_EVERY_DAYS` out. Called
-    /// inside the purchase transaction, before the welcome fry is stamped
-    /// (`marketplace::welcome_aquarium_fry_in_tx`); an existing row is left
-    /// alone.
-    pub async fn welcome(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
-        client
+    /// A new tank's row: as if the last meal was yesterday, so the tank is
+    /// hungry now and the first fish is at stake `CARE_DAYS` from today, with
+    /// its first sprout up today and the next booked `SPROUT_EVERY_DAYS` out.
+    /// Called before the welcome fry is stamped
+    /// (`marketplace::welcome_aquarium_tank_in_tx`). Returns whether this call
+    /// created the row; an existing row is left alone.
+    pub async fn welcome(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
+        let created = client
             .execute(
                 "INSERT INTO user_aquarium_care (user_id, last_fed, sprout_born, next_sprout)
                  VALUES ($1, current_timestamp - interval '1 day', current_date,
@@ -123,7 +107,7 @@ impl AquariumCare {
                 &[&user_id, &(SPROUT_EVERY_DAYS as i32)],
             )
             .await?;
-        Ok(())
+        Ok(created == 1)
     }
 
     /// Stamp today's feeding. Returns the new streak when this call was the

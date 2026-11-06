@@ -2,7 +2,7 @@ use ratatui_textarea::{Input, Key};
 
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::input::{ParsedInput, insert_pasted_text};
-use crate::app::{mod_modal::state::ModModalState, state::App};
+use crate::app::{chat::mod_modal::state::ModModalState, state::App};
 use crate::moderation::command::{ModCommand, parse_mod_command};
 
 pub(crate) fn open(app: &mut App) {

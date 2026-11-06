@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::state::{HandoffCheck, ResumePoint};
 use crate::app::common::primitives::Page;
 
-const PAGES: [Page; 9] = [
+const PAGES: [Page; 8] = [
     Page::Clubhouse,
     Page::Dashboard,
     Page::Arcade,
@@ -14,7 +14,6 @@ const PAGES: [Page; 9] = [
     Page::Profiles,
     Page::Leaderboard,
     Page::Calendars,
-    Page::Zen,
 ];
 
 #[test]
@@ -44,6 +43,9 @@ fn a_resume_point_this_server_did_not_write_is_refused() {
         "v1".to_string(),
         "v2:dashboard".to_string(),
         "v1:nightcap".to_string(),
+        // `zen` is a Home layout, not a page: a session moved off it starts
+        // fresh.
+        "v1:zen".to_string(),
         "v1:dashboard:not-a-uuid".to_string(),
         format!("v1:dashboard:{room_id}:extra"),
         format!("v1:dashboard:{room_id}:"),

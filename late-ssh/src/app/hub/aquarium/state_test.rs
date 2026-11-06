@@ -86,18 +86,6 @@ fn the_sprout_stands_until_it_is_cut_and_a_bare_floor_has_nothing_to_cut() {
     care.set_sprout(day(3));
     care.clear_sprout();
     assert!(!care.sprout_visible());
-
-    // A tank bought this session takes the row the purchase planted:
-    // hungry since yesterday, the sprout up today.
-    let mut bought = AquariumCare::new(None, Vec::new());
-    assert_eq!(bought.last_fed, None);
-    bought.welcome_new_tank(day(10), Some("seahorse".to_string()));
-    assert!(bought.sprout_visible());
-    assert!(bought.hungry_on(day(10)));
-    assert_eq!(bought.bar_on(day(10)), CareBar::Dry(1));
-    // The welcome fry swims small for its first week, then it is grown.
-    assert_eq!(bought.fry_visible_on(day(16)), Some("seahorse"));
-    assert_eq!(bought.fry_visible_on(day(17)), None);
 }
 
 #[test]

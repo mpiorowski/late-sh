@@ -3,7 +3,7 @@ use crate::app::{
     input::ParsedInput, state::App,
 };
 
-use super::state::{ModalQuery, PickerScope, filtered_items, parse_modal_query};
+use super::state::{ModalQuery, filtered_items, parse_modal_query};
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let message_mode = matches!(
@@ -13,13 +13,7 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let len = if message_mode {
         app.chat.message_search.hits.len()
     } else {
-        filtered_items(
-            &app.chat,
-            app.user_id,
-            PickerScope::for_screen(app.screen),
-            app.room_search_modal_state.query(),
-        )
-        .len()
+        filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len()
     };
     app.room_search_modal_state.clamp(len);
 
@@ -83,24 +77,13 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let len = if message_mode {
         app.chat.message_search.hits.len()
     } else {
-        filtered_items(
-            &app.chat,
-            app.user_id,
-            PickerScope::for_screen(app.screen),
-            app.room_search_modal_state.query(),
-        )
-        .len()
+        filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len()
     };
     app.room_search_modal_state.clamp(len);
 }
 
 fn submit(app: &mut App) {
-    let items = filtered_items(
-        &app.chat,
-        app.user_id,
-        PickerScope::for_screen(app.screen),
-        app.room_search_modal_state.query(),
-    );
+    let items = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query());
     let Some(item) = items.get(app.room_search_modal_state.selected()).cloned() else {
         return;
     };
@@ -154,21 +137,11 @@ fn close_into_room(app: &mut App, slot: RoomSlot) {
     app.chat.news.stop_composing();
     crate::app::input::close_reader_and_player(app);
     app.room_search_modal_state.close();
-    // On Zen with a chat tile focused, a room pick is that tile's: it
-    // rebinds the tile the way `[` `]` do and Home's selection stays put.
-    // Any other pick there (a feed, News, a chat tile not focused) moves
-    // Home's selection and stays on the page; everywhere else the room
-    // opens on Home.
-    if app.screen == Screen::Zen
-        && let RoomSlot::Room(room_id) = slot
-        && crate::app::zen::input::bind_focused_chat_to_room(app, room_id)
-    {
-        return;
-    }
-    app.chat.select_room_slot(slot);
-    if app.screen != Screen::Zen {
-        app.set_screen(Screen::Dashboard);
-    }
+    // The pick lands on Home, where it binds the active chat tile (a room
+    // or News) or shows on the rail (any other row): Home first, so the
+    // arrival's own sync cannot undo it.
+    app.set_screen(Screen::Dashboard);
+    crate::app::zen::input::pick_for_active_chat(app, slot);
     app.sync_visible_chat_room();
 }
 

@@ -5,7 +5,7 @@
 //! page sits in the strip's picture column; the words beside it are the
 //! title, how long until it starts or that it is on, the count, and who
 //! posted it. An all-day post never touches the strip or the panel: it
-//! takes the #lounge topic row for its day. Personal events reach none of
+//! is the banner across the top of Home for its day. Personal events reach none of
 //! this; they are the viewer's and live on screen 7 alone.
 
 use chrono::{DateTime, Datelike, Utc};
@@ -118,7 +118,7 @@ pub(crate) fn panel_events(live: &[CalendarEvent], tz: Tz) -> Vec<PanelEvent> {
         .collect()
 }
 
-/// The #lounge topic row on a day the board has all-day posts:
+/// Home's banner on a day the board has all-day posts:
 /// `📅 Hackathon · Community call`. The row exists only on the day, so it
 /// never says when. `None` on any other day.
 pub(crate) fn day_text(live: &[CalendarEvent], now: DateTime<Utc>) -> Option<String> {

@@ -81,8 +81,7 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
     use crate::test_helpers::{new_test_db, wait_until};
     use late_core::models::statusline::default_statusline_components;
     use late_core::models::user::{
-        LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode,
-        default_right_sidebar_components,
+        LandingPage, RightSidebarMode, TerminalImagesMode, default_right_sidebar_components,
     };
     use late_core::test_utils::create_test_user;
 
@@ -106,8 +105,6 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
         right_sidebar_mode: RightSidebarMode::On,
         right_sidebar_components: default_right_sidebar_components(),
         statusline_components: default_statusline_components(),
-        show_room_list_sidebar: true,
-        room_list_mode: RoomListMode::On,
         keep_composer_focused: false,
         start_with_music_muted: false,
         landing_page: LandingPage::Clubhouse,

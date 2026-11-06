@@ -6,15 +6,17 @@
 //! A `Draft` is a session-local `dartboard_core::Canvas` edited through
 //! `dartboard_editor` as a library: no server, no ops, no swatch strip, no
 //! floating brush. Keys arrive as a closed `Edit` (the shop's own set) and
-//! become the editor's actions here. Pure: nothing here knows whether the
-//! draft was saved; `dirty` compares against what the panel opened on.
+//! become the editor's actions here, but for copy and paste: the editor's
+//! clipboard holds glyphs only, so the draft keeps its own (`Copied`). Pure:
+//! nothing here knows whether the draft was saved; `dirty` compares against
+//! what the panel opened on.
 
 use std::cell::Cell;
 
 use dartboard_core::{Canvas, CellValue, Pos, RgbColor};
 use dartboard_editor::{
-    AppPointerEvent, EditorAction, EditorSession, MoveDir, Viewport, handle_editor_action,
-    handle_editor_pointer, paste_text_block,
+    AppPointerEvent, Clipboard, EditorAction, EditorSession, MoveDir, Viewport, capture_bounds,
+    capture_selection, handle_editor_action, handle_editor_pointer, paste_text_block,
 };
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use ratatui::layout::Rect;
@@ -72,7 +74,7 @@ pub fn tint_paint(tint: Tint) -> RgbColor {
 
 /// The shop's keys, as the editor's actions see them. Everything the
 /// panel offers on the canvas and nothing else: no pan, no push or pull,
-/// no border, no swatches past the primary one copy and paste use.
+/// no border, no swatches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edit {
     Move(MoveDir),
@@ -92,6 +94,63 @@ pub enum Edit {
     Deselect,
 }
 
+/// What the last copy or cut lifted: the glyphs and each cell's colour, so
+/// a paste puts back what was lifted whatever the brush holds. It only ever
+/// holds colours already on this poster, so it opens nothing past the brush's
+/// gate.
+#[derive(Debug, Clone)]
+struct Copied {
+    glyphs: Clipboard,
+    /// Row by row, one for each cell of `glyphs`.
+    colours: Vec<Option<RgbColor>>,
+}
+
+impl Copied {
+    /// The selection, or the cell under the cursor without one.
+    fn lift(editor: &EditorSession, canvas: &Canvas) -> Self {
+        let bounds = editor
+            .selection_or_cursor_bounds()
+            .normalized_for_canvas(canvas);
+        let glyphs = match editor.selection() {
+            Some(selection) => capture_selection(canvas, selection),
+            None => capture_bounds(canvas, bounds),
+        };
+        let mut colours = Vec::with_capacity(bounds.width() * bounds.height());
+        for y in bounds.min_y..=bounds.max_y {
+            for x in bounds.min_x..=bounds.max_x {
+                colours.push(canvas.fg(Pos { x, y }));
+            }
+        }
+        Self { glyphs, colours }
+    }
+
+    /// Stamped with its top left at `at`, cut to the canvas; a cell the copy
+    /// left empty clears what is under it, as the editor's paste does.
+    fn stamp(&self, canvas: &mut Canvas, at: Pos) {
+        for y in 0..self.glyphs.height {
+            for x in 0..self.glyphs.width {
+                let target = Pos {
+                    x: at.x + x,
+                    y: at.y + y,
+                };
+                if target.x >= canvas.width || target.y >= canvas.height {
+                    continue;
+                }
+                match self.glyphs.get(x, y) {
+                    Some(CellValue::Narrow(ch) | CellValue::Wide(ch)) => {
+                        match self.colours[y * self.glyphs.width + x] {
+                            Some(fg) => canvas.put_glyph_colored(target, ch, fg),
+                            None => canvas.put_glyph(target, ch),
+                        };
+                    }
+                    Some(CellValue::WideCont) => {}
+                    None => canvas.clear(target),
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Draft {
     pub canvas: Canvas,
@@ -100,6 +159,8 @@ pub struct Draft {
     /// The next burn key burns: the first press arms, any other key
     /// disarms (the ledge's two presses).
     pub burn_armed: bool,
+    /// What `^V` stamps; nothing until the first copy or cut.
+    copied: Option<Copied>,
     /// What the panel opened on, or what was saved or burned since:
     /// `dirty` is the canvas differing from it.
     hung: Canvas,
@@ -123,6 +184,7 @@ impl Draft {
             editor: EditorSession::default(),
             brush: Brush::for_marks(marks),
             burn_armed: false,
+            copied: None,
             drawn_at: Cell::new(None),
         }
     }
@@ -175,9 +237,20 @@ impl Draft {
             (Edit::EraseBack | Edit::EraseHere, true) => EditorAction::FillSelectionOrCell(' '),
             (Edit::EraseBack, false) => EditorAction::Backspace,
             (Edit::EraseHere, false) => EditorAction::Delete,
-            (Edit::Copy, _) => EditorAction::CopySelection,
-            (Edit::Cut, _) => EditorAction::CutSelection,
-            (Edit::Paste, _) => EditorAction::PastePrimarySwatch,
+            (Edit::Copy, _) => {
+                self.copied = Some(Copied::lift(&self.editor, &self.canvas));
+                return;
+            }
+            (Edit::Cut, _) => {
+                self.copied = Some(Copied::lift(&self.editor, &self.canvas));
+                EditorAction::CutSelection
+            }
+            (Edit::Paste, _) => {
+                if let Some(copied) = &self.copied {
+                    copied.stamp(&mut self.canvas, self.editor.cursor);
+                }
+                return;
+            }
             (Edit::Deselect, _) => EditorAction::ClearSelection,
         };
         let color = self.brush.color();

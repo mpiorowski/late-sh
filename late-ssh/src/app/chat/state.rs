@@ -257,7 +257,6 @@ impl ComposerCommands {
             | Screen::Calendars
             | Screen::Leaderboard
             | Screen::City
-            | Screen::Zen
             | Screen::DailyMatch
             | Screen::HouseTable
             | Screen::Realm
@@ -1042,7 +1041,6 @@ pub struct ChatState {
     requested_shop_modal: bool,
     requested_onboard: bool,
     requested_lobby_toggle: bool,
-    requested_zen_toggle: bool,
     requested_guide: bool,
     requested_redraw: bool,
     requested_mod_modal: bool,
@@ -1115,6 +1113,8 @@ pub struct ChatState {
     opened_stream_room: Option<Uuid>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
+    /// `/layout`, run by Home (`zen::input::run_layout_command`).
+    requested_layout_command: Option<crate::app::zen::presets::LayoutCommand>,
     requested_poll_room: Option<Uuid>,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
@@ -1414,7 +1414,6 @@ impl ChatState {
             requested_shop_modal: false,
             requested_onboard: false,
             requested_lobby_toggle: false,
-            requested_zen_toggle: false,
             requested_guide: false,
             requested_redraw: false,
             requested_mod_modal: false,
@@ -1444,6 +1443,7 @@ impl ChatState {
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
+            requested_layout_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -2145,10 +2145,6 @@ impl ChatState {
         std::mem::take(&mut self.requested_lobby_toggle)
     }
 
-    pub fn take_requested_zen_toggle(&mut self) -> bool {
-        std::mem::take(&mut self.requested_zen_toggle)
-    }
-
     pub fn take_requested_guide(&mut self) -> bool {
         std::mem::take(&mut self.requested_guide)
     }
@@ -2325,6 +2321,12 @@ impl ChatState {
         self.live_streams
             .iter()
             .find(|stream| stream.room_id == room_id)
+    }
+
+    pub(crate) fn take_requested_layout_command(
+        &mut self,
+    ) -> Option<crate::app::zen::presets::LayoutCommand> {
+        self.requested_layout_command.take()
     }
 
     pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
@@ -2872,7 +2874,7 @@ impl ChatState {
     /// the rail has never listed, so an unknown room gets a neutral label
     /// rather than blocking the open.
     fn history_room_label(&self, room_id: Uuid) -> String {
-        crate::app::room_search_modal::state::hit_room_label(self, self.user_id, room_id)
+        crate::app::chat::room_search_modal::state::hit_room_label(self, self.user_id, room_id)
     }
 
     /// Fetch the next page if the viewport has reached that edge. Called
@@ -2964,7 +2966,7 @@ impl ChatState {
     }
 
     /// Open the reader on a News article by id (a News card, a #lounge
-    /// card, the Live panel, a Zen Live tile), marking that article read.
+    /// card, the Live panel, a Home Live tile), marking that article read.
     /// False when this session no longer knows it (deleted).
     pub(crate) fn open_reader_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
@@ -3252,7 +3254,7 @@ impl ChatState {
         }
     }
 
-    fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
+    pub(crate) fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
         if self.news_selected {
             Some("news")
         } else if self.feeds_selected {
@@ -3812,18 +3814,20 @@ impl ChatState {
             return None;
         }
 
-        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+R, ?), for
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+R, ?), for
         // terminals and multiplexers that swallow those keys. Each one runs
-        // exactly what its key runs.
+        // exactly what its key runs; `/layout` below stands in for Ctrl+E.
         if body.trim() == "/lobby" {
             self.clear_composer_after_submit();
             self.requested_lobby_toggle = true;
             return None;
         }
 
-        if body.trim() == "/zen" {
+        // Home's layouts: the list, one by name or digit, or the page
+        // saved under a name (`Ctrl+E` has the same three).
+        if let Some(command) = crate::app::zen::presets::LayoutCommand::parse(&body) {
             self.clear_composer_after_submit();
-            self.requested_zen_toggle = true;
+            self.requested_layout_command = Some(command);
             return None;
         }
 
@@ -4205,7 +4209,7 @@ impl ChatState {
         if matches!(body.trim(), "/aquarium" | "/aq") {
             self.clear_composer_after_submit();
             return Some(Banner::info(
-                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
+                "The reef is a tile of Home: /aquarium feed; its sprout is cut in /shop",
             ));
         }
 
@@ -7419,7 +7423,7 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// A connected friend, as the sidebar friends row and the Zen Friends tile
+/// A connected friend, as the sidebar friends row and the Home Friends tile
 /// draw them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveFriend {
@@ -7432,7 +7436,7 @@ pub struct ActiveFriend {
 }
 
 /// The ticker queue length: enough to fill the one-row ticker on any sane
-/// width and a tall Zen Activity tile, without hoarding history.
+/// width and a tall Home Activity tile, without hoarding history.
 const ACTIVITY_TICKER_CAP: usize = 40;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails
@@ -7949,7 +7953,7 @@ pub(crate) fn room_activity_at(
 }
 
 /// The other participant in a DM room, from `user_id`'s perspective.
-fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+pub(crate) fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
     if room.dm_user_a == Some(user_id) {
         room.dm_user_b
     } else {

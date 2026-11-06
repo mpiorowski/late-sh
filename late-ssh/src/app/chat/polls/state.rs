@@ -41,6 +41,7 @@ impl PollModalState {
                 new_input("Option 1"),
                 new_input("Option 2"),
                 new_input("Option 3 (optional)"),
+                new_input("Option 4 (optional)"),
             ],
             duration_index: 0,
         }
@@ -54,6 +55,7 @@ impl PollModalState {
             new_input("Option 1"),
             new_input("Option 2"),
             new_input("Option 3 (optional)"),
+            new_input("Option 4 (optional)"),
         ];
         self.duration_index = 0;
         self.sync_cursor_visibility();

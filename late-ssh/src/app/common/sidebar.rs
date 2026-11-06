@@ -18,6 +18,7 @@ use crate::app::chat::state::ActiveFriend;
 use crate::app::hub::aquarium::{state::AquariumState, ui as aquarium_ui};
 use crate::app::pet::state::PetState;
 use crate::app::pet::ui::{Neighbours, PetView, WatchSide, draw_pet_box};
+use crate::app::presence::ui::{draw_core_block, friend_names_joined};
 use late_core::models::user::{
     AudioSource, RadioSlots, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
@@ -33,7 +34,7 @@ const RULE_HEIGHT: u16 = 1;
 // dances while a client is actually paired; muted flatlines it, and an
 // unpaired session gets a pointer to the guide instead. The band scales
 // to whatever height it's given; the stage pins 3.
-const MUSIC_VIZ_HEIGHT: u16 = 3;
+pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock portion of the stage: volume row (1) + the two sources as an
 // accordion (10) + keybind footer (1). Constant for BOTH active sources, so
 // the panels below never shift; `music_stage_height_is_constant` locks this
@@ -41,7 +42,7 @@ const MUSIC_VIZ_HEIGHT: u16 = 3;
 // credit) + `RADIO_SLOTS` slot rows, then the youtube title + track. On
 // youtube: the radio title alone, then the youtube title + track +
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
-const MUSIC_DOCK_HEIGHT: u16 = 12;
+pub(crate) const MUSIC_DOCK_HEIGHT: u16 = 13;
 // Full music stage: the wave strip on top of the dock.
 const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 const MUSIC_QUEUE_HEIGHT: u16 = 4;
@@ -67,9 +68,8 @@ pub(crate) struct SidebarProps<'a> {
     /// The pet panel's pet; `None` without a Pet Companion, which hides
     /// the panel.
     pub pet: Option<&'a PetState>,
-    /// The tank panel's reef; `None` without the aquarium, which hides
-    /// the panel.
-    pub tank: Option<SidebarTank<'a>>,
+    /// The tank panel's reef.
+    pub tank: SidebarTank<'a>,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -122,15 +122,14 @@ pub(crate) struct SidebarTank<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SidebarOwnership {
     pub pet: bool,
-    pub tank: bool,
 }
 
 impl SidebarOwnership {
     pub(crate) fn owns(self, component: RightSidebarComponent) -> bool {
         match component {
             RightSidebarComponent::Pet => self.pet,
-            RightSidebarComponent::Tank => self.tank,
-            RightSidebarComponent::Live
+            RightSidebarComponent::Tank
+            | RightSidebarComponent::Live
             | RightSidebarComponent::Music
             | RightSidebarComponent::Bonsai
             | RightSidebarComponent::Daily
@@ -165,7 +164,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Free space panel wherever it sits, else to the bottom of the rail.
     let ownership = SidebarOwnership {
         pet: props.pet.is_some(),
-        tank: props.tank.is_some(),
     };
     let visible = visible_components(props.components, ownership, area.height);
 
@@ -284,7 +282,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                 };
                 // View only, like the tank: no click target and no frame
                 // for the tick, so the pet is petted and walks after the
-                // cursor on the Zen page alone.
+                // cursor on a Home pet tile alone.
                 let view = PetView {
                     state,
                     pet_rect_slot: None,
@@ -293,14 +291,11 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                 draw_pet_box(frame, body, &view, pet_neighbours(&visible, idx));
             }
             RightSidebarComponent::Tank => {
-                let Some(tank) = &props.tank else {
-                    unreachable!("an unowned tank panel is never visible");
-                };
                 aquarium_ui::draw_mini_tank(
                     frame.buffer_mut(),
                     body,
-                    tank.aquarium,
-                    tank.hungry,
+                    props.tank.aquarium,
+                    props.tank.hungry,
                     props.marquee_tick,
                 );
             }
@@ -310,7 +305,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 }
 
 /// The pet goes and watches a bonsai or tank panel right above or below
-/// its own, the sidebar twin of the Zen tile's edge contact. A spacer
+/// its own, the sidebar twin of the Home pet tile's edge contact. A spacer
 /// between them breaks the contact.
 fn pet_neighbours(visible: &[RightSidebarComponent], pet_idx: usize) -> Neighbours {
     let above = pet_idx.checked_sub(1).map(|idx| visible[idx]);
@@ -382,110 +377,6 @@ fn visible_components(
         keep.push(setting.component);
     }
     keep
-}
-
-/// The pinned two-row core block at the top of the rail. Presence is chrome
-/// now, not a panel: row one is the online count (left) and the clock
-/// (right); row two is connected friends, an away one carrying the away
-/// glyph. Both rows always render so the panel list below never shifts.
-fn draw_core_block(
-    frame: &mut Frame,
-    area: Rect,
-    clock_text: &str,
-    online_count: usize,
-    active_friends: &[ActiveFriend],
-    tick: usize,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    let row = |offset: u16| Rect {
-        x: area.x,
-        y: area.y + offset,
-        width: area.width,
-        height: 1,
-    };
-
-    // Row 0 — presence left, clock right.
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("● ", Style::default().fg(theme::SUCCESS())),
-            Span::styled(
-                online_count.to_string(),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" here", Style::default().fg(theme::TEXT_DIM())),
-        ])),
-        row(0),
-    );
-    let mut parts = clock_text.rsplitn(2, ' ');
-    let time = parts.next().unwrap_or(clock_text);
-    let label = parts.next();
-    // Native `⊙` (U+2299 circled dot operator). Reliably mono across
-    // terminals, reads as a small clock face without competing with digits.
-    let mut clock_spans: Vec<Span<'static>> =
-        vec![Span::styled("⊙ ", Style::default().fg(theme::AMBER_DIM()))];
-    clock_spans.push(Span::styled(
-        time.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ));
-    if let Some(label) = label {
-        clock_spans.push(Span::raw(" "));
-        clock_spans.push(Span::styled(
-            label.to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(clock_spans)).right_aligned(),
-        row(0),
-    );
-
-    if area.height < 2 {
-        return;
-    }
-
-    // Row 1 — connected friends. Blank when there are none: the reserved
-    // row is what keeps chrome stable.
-    if !active_friends.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                friend_names_text(active_friends, area.width as usize, tick),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            row(1),
-        );
-    }
-}
-
-/// Every connected friend on the one reserved row, in `active_friends`
-/// order (here before away, then most recent login). The list scrolls
-/// (marquee) when it overruns the rail instead of stopping at the few names
-/// that happen to fit, so the whole crowd can be read.
-fn friend_names_text(friends: &[ActiveFriend], width: usize, tick: usize) -> String {
-    crate::app::common::marquee::marquee_text(&friend_names_joined(friends), width, tick)
-}
-
-fn friend_names_joined(friends: &[ActiveFriend]) -> String {
-    friends
-        .iter()
-        .map(|friend| match friend.away {
-            true => format!(
-                "@{} {}",
-                friend.username,
-                crate::app::common::away::AWAY_GLYPH
-            ),
-            false => format!("@{}", friend.username),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Conservative lower bound on any marquee rail width in the sidebar. Real
@@ -572,7 +463,7 @@ fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
 
 /// `── label ────` separator-with-title above each panel. `active` swaps the
 /// label to bold amber for attention (the lobby's your-turn glow).
-fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
+pub(crate) fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -597,20 +488,39 @@ fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+/// The title rule with no text: a tile's divider and nothing else. `active`
+/// lights it, which is all a lobby with a game waiting has left to say.
+pub(crate) fn draw_bare_rule(frame: &mut Frame, area: Rect, active: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let color = match active {
+        true => theme::AMBER(),
+        false => theme::BORDER_DIM(),
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(color),
+        )),
+        area,
+    );
+}
+
 /// Inputs for the music stage, bundled so the pure line builder is easy to
 /// drive from tests.
-struct MusicStageProps<'a> {
-    paired_client: Option<&'a ClientAudioState>,
-    queue: &'a QueueSnapshot,
-    source: AudioSource,
-    selected_station: RadioStation,
-    radio_slots: RadioSlots,
-    radio_now_playing: Option<&'a str>,
-    youtube_source_count: usize,
-    radio_source_count: usize,
+pub(crate) struct MusicStageProps<'a> {
+    pub paired_client: Option<&'a ClientAudioState>,
+    pub queue: &'a QueueSnapshot,
+    pub source: AudioSource,
+    pub selected_station: RadioStation,
+    pub radio_slots: RadioSlots,
+    pub radio_now_playing: Option<&'a str>,
+    pub youtube_source_count: usize,
+    pub radio_source_count: usize,
     /// Free-running frame counter driving the marquee on now-playing rows
     /// too long for the rail.
-    marquee_tick: usize,
+    pub marquee_tick: usize,
 }
 
 /// Music stage: a small equalizer strip pinned on top, then the dock.
@@ -648,8 +558,17 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>, 
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
     render_eq(frame, viz_area, props.marquee_tick, eq_state);
 
-    let lines = music_stage_lines(dock_area.width, props);
-    frame.render_widget(Paragraph::new(lines), dock_area);
+    draw_music_dock(frame, dock_area, props);
+}
+
+/// The dock alone, no equalizer: Home's `music` tile, which leaves the
+/// band to a `visualizer` tile of its own.
+fn draw_music_dock(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let lines = music_stage_lines(area.width, props);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'static>> {
@@ -657,6 +576,9 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
     let station_label = props.selected_station.label();
     let mut lines = Vec::with_capacity(MUSIC_DOCK_HEIGHT as usize);
     lines.push(volume_row_line(props.paired_client));
+    // The keys that move the bar above, named where it is read; they are
+    // the house's on every page (`app/input.rs`), not the dock's.
+    lines.push(keybind_row_line(width, VOLUME_KEYS));
 
     lines.push(stage_title_line(
         width,
@@ -829,6 +751,10 @@ pub(crate) fn youtube_track(queue: &QueueSnapshot) -> Option<String> {
         _ => title,
     })
 }
+
+/// `- = volume  m mute`: the paired client's volume and mute keys, under
+/// the bar they move.
+pub(crate) const VOLUME_KEYS: &[(&str, &str)] = &[("- =", "volume"), ("m", "mute")];
 
 fn volume_row_line(paired_client: Option<&ClientAudioState>) -> Line<'static> {
     let mut spans = vec![Span::styled(
@@ -1218,6 +1144,62 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     let mut out: String = chars.into_iter().take(max_chars - 1).collect();
     out.push('…');
     out
+}
+
+/// The narrowest tile the music dock reads in: the station rows with
+/// their keys.
+const MUSIC_DOCK_MIN_COLS: u16 = 18;
+
+/// Home's music tile: tall enough for the dock, it is the sidebar's music
+/// panel without its band (volume, stations, the keys); shorter, the
+/// track over the station. The equalizer is the visualizer tile's.
+pub(crate) fn draw_music_tile(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
+    if area.height >= MUSIC_DOCK_HEIGHT && area.width >= MUSIC_DOCK_MIN_COLS {
+        draw_music_dock(frame, area, props);
+        return;
+    }
+    let track = current_track_text(
+        props.source,
+        props.queue,
+        props.selected_station,
+        props.radio_now_playing,
+    );
+    let station = station_text(props.source, props.selected_station);
+    draw_music_short(frame, area, &track, &station);
+}
+
+/// A music tile too short for the dock: the track over the station,
+/// centred in the tile, the station first to go when the tile is a single
+/// row.
+fn draw_music_short(frame: &mut Frame, area: Rect, track: &str, station: &str) {
+    if area.height == 0 {
+        return;
+    }
+    let text_rows: u16 = area.height.min(2);
+    let top = area.y + (area.height - text_rows) / 2;
+    let track = Line::from(vec![
+        Span::styled("♪ ", Style::default().fg(theme::AMBER())),
+        Span::styled(track.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
+    ])
+    .centered();
+    let station = Line::from(Span::styled(
+        station.to_string(),
+        Style::default().fg(theme::TEXT_DIM()),
+    ))
+    .centered();
+    frame.render_widget(
+        Paragraph::new(vec![track, station]),
+        Rect::new(area.x, top, area.width, text_rows),
+    );
+}
+
+/// The player's second row: the source, then the station or stream it is
+/// tuned to. YouTube has no station, so it stays one word.
+fn station_text(source: AudioSource, station: RadioStation) -> String {
+    match source {
+        AudioSource::Radio => format!("radio · {}", station.label()),
+        AudioSource::Youtube => "youtube".to_string(),
+    }
 }
 
 #[cfg(test)]

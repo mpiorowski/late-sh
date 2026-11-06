@@ -125,6 +125,9 @@ pub(crate) fn image_png_bytes() -> Result<Vec<u8>> {
     anyhow::bail!("clipboard image upload is not supported on this platform");
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 #[path = "clipboard_test.rs"]
 mod clipboard_test;

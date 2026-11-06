@@ -13,7 +13,11 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-use super::{state::DailyState, svc::DailyOutcome};
+use super::{
+    state::DailyState,
+    svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem, DailyOutcome},
+};
+use crate::app::common::primitives::format_relative_time_short;
 
 /// Four match slots + status line (open count + entries) + key hints. The
 /// panel has no title row of its own: the sidebar's labeled separator rule
@@ -66,10 +70,11 @@ pub(crate) fn draw_daily_inline(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The Zen tile's shape: only the games actually running, then one footer
-/// row carrying the open count, your entries, and the two keys. No empty
-/// slots, so the tile can be as short as its content. Top-aligned; rows
-/// past the area are dropped, the footer never is.
+/// The Home lobby tile: the latest tables on the board, newest first, over
+/// the `N open · entries/cap` row, with the Lobby's two keys on the last row
+/// (`COMPACT_FOOTER_KEYS`). What waits on you is not this tile's
+/// job: the attention guest hosted on it takes the tile over while it has
+/// something (`../../zen/CONTEXT.md`, the attention guest).
 pub(crate) fn draw_daily_compact(
     frame: &mut Frame,
     area: Rect,
@@ -80,8 +85,92 @@ pub(crate) fn draw_daily_compact(
         return;
     }
     let props = daily_panel_props(state, lobby_glow);
-    let lines = daily_compact_lines(area.width, area.height, &props);
+    let feed = daily_feed_rows(state);
+    let lines = daily_compact_lines(area.width, area.height, &feed, &props);
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// One table in the Home tile's feed.
+pub(crate) struct DailyFeedRow {
+    pub game: &'static str,
+    /// The challenger alone for an open challenge, `a·b` for a match.
+    pub who: String,
+    pub state: DailyFeedState,
+    /// `2m`, `3h`: how long since the row's last change, computed by the
+    /// caller so the line builder stays clock-free.
+    pub age: String,
+}
+
+/// Where a table in the feed stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DailyFeedState {
+    Open,
+    Playing,
+    Done,
+}
+
+/// Every table the snapshot knows, newest change first: open challenges by
+/// their posting, matches by their last move, finished ones by their
+/// finish. Finished tables stay only while a player has not seen the
+/// result, which is as long as the snapshot carries them.
+fn daily_feed_rows(state: &DailyState) -> Vec<DailyFeedRow> {
+    let name = |username: &Option<String>| username.clone().unwrap_or_else(|| "player".to_string());
+    let mut rows: Vec<(chrono::DateTime<chrono::Utc>, DailyFeedRow)> = Vec::new();
+    for item in state.lobby() {
+        let DailyChallengeItem {
+            game,
+            created,
+            challenger_username,
+            ..
+        } = item;
+        rows.push((
+            *created,
+            DailyFeedRow {
+                game: game.label(),
+                who: name(challenger_username),
+                state: DailyFeedState::Open,
+                age: format_relative_time_short(*created),
+            },
+        ));
+    }
+    for item in state.all_matches() {
+        let DailyMatchItem {
+            game,
+            challenger_username,
+            opponent_username,
+            updated,
+            ..
+        } = item;
+        rows.push((
+            *updated,
+            DailyFeedRow {
+                game: game.label(),
+                who: format!("{}·{}", name(challenger_username), name(opponent_username)),
+                state: DailyFeedState::Playing,
+                age: format_relative_time_short(*updated),
+            },
+        ));
+    }
+    for item in state.all_finished() {
+        let DailyFinishedItem {
+            game,
+            challenger_username,
+            opponent_username,
+            finished_at,
+            ..
+        } = item;
+        rows.push((
+            *finished_at,
+            DailyFeedRow {
+                game: game.label(),
+                who: format!("{}·{}", name(challenger_username), name(opponent_username)),
+                state: DailyFeedState::Done,
+                age: format_relative_time_short(*finished_at),
+            },
+        ));
+    }
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
+    rows.into_iter().map(|(_, row)| row).collect()
 }
 
 fn daily_panel_props(state: &DailyState, lobby_glow: bool) -> DailyPanelProps {
@@ -134,7 +223,7 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
     let mut lines = Vec::with_capacity(DAILY_PANEL_HEIGHT as usize);
     for slot in 0..MATCH_SLOTS {
         match props.matches.get(slot) {
-            Some(row) => lines.push(match_line(width, row, RowMarker::Arrow)),
+            Some(row) => lines.push(match_line(width, row)),
             None => lines.push(empty_slot_line()),
         }
     }
@@ -144,41 +233,92 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
     lines
 }
 
-/// Match rows for as many games as fit above the footer (a quiet lobby says
-/// so in one faint row), then `1 open · 1/10 · ctrl+g · \` toggle`.
-fn daily_compact_lines(width: u16, height: u16, props: &DailyPanelProps) -> Vec<Line<'static>> {
-    let room = (height as usize).saturating_sub(1);
-    let mut lines = Vec::with_capacity(room + 1);
-    if props.matches.is_empty() {
+/// Feed rows for as many tables as fit above the footer (a quiet board says
+/// so in one faint row), then `1 open · 1/10`, then the keys on the last row.
+fn daily_compact_lines(
+    width: u16,
+    height: u16,
+    feed: &[DailyFeedRow],
+    props: &DailyPanelProps,
+) -> Vec<Line<'static>> {
+    let room = (height as usize).saturating_sub(2);
+    let mut lines = Vec::with_capacity(room + 2);
+    if feed.is_empty() {
         if room > 0 {
             lines.push(Line::from(Span::styled(
-                "no games running",
+                "no tables yet",
                 Style::default().fg(theme::TEXT_FAINT()),
             )));
         }
     } else {
-        // Bare rows: the tile already pads the edge, and the bright name
-        // and the colored status carry the attention the marker would.
-        for row in props.matches.iter().take(room) {
-            lines.push(match_line(width, row, RowMarker::Bare));
+        for row in feed.iter().take(room) {
+            lines.push(feed_line(width, row));
         }
     }
-    // Flush with the rows above it; the keys are on the tile's title.
+    // Flush with the rows above it, the keys under it as the music dock
+    // names its own.
     lines.push(status_line(width, props));
+    lines.push(compact_keys_line(width));
     lines
 }
 
-/// Whether a match row leads with the two-column attention marker (`► `,
-/// blank for a waiting row) or starts at the name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RowMarker {
-    Arrow,
-    Bare,
+/// The two keys the Home tile's last row names, as the arrange footer
+/// spells them: `^G` opens the Lobby, the backtick toggles you through the
+/// games waiting on you and back to chat.
+pub(crate) const COMPACT_FOOTER_KEYS: [(&str, &str); 2] = [("^G", "open"), ("`", "toggle")];
+
+/// `^G open  ` toggle`, trimmed from the right a whole key at a time on a
+/// tile too narrow for both.
+fn compact_keys_line(width: u16) -> Line<'static> {
+    let mut keep = COMPACT_FOOTER_KEYS.len();
+    while keep > 0
+        && crate::app::statusline::bar::keys_line(&COMPACT_FOOTER_KEYS[..keep]).width()
+            > width as usize
+    {
+        keep -= 1;
+    }
+    crate::app::statusline::bar::keys_line(&COMPACT_FOOTER_KEYS[..keep])
 }
 
-/// `► mira        your turn` / `  c0ld          waiting` / `► kal   you won`,
-/// or the same rows without the marker column.
-fn match_line(width: u16, row: &DailyPanelMatchRow, lead: RowMarker) -> Line<'static> {
+/// `○ chess srw        2m` / `● pool srw·crk     5m` / `· chess crk·srw    1h`:
+/// the state as a marker, the game dim, the names bright while the table is
+/// live and faint once it is done, the age flush right.
+fn feed_line(width: u16, row: &DailyFeedRow) -> Line<'static> {
+    let (marker, marker_style, who_style) = match row.state {
+        DailyFeedState::Open => (
+            "○ ",
+            Style::default().fg(theme::AMBER()),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        DailyFeedState::Playing => (
+            "● ",
+            Style::default().fg(theme::SUCCESS()),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        DailyFeedState::Done => (
+            "· ",
+            Style::default().fg(theme::TEXT_FAINT()),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    };
+    let age_w = row.age.chars().count();
+    let game = format!("{} ", row.game);
+    let fixed = 2 + game.chars().count() + age_w + 1;
+    let who = truncate_chars(&row.who, (width as usize).saturating_sub(fixed));
+    let pad = (width as usize)
+        .saturating_sub(2 + game.chars().count() + who.chars().count() + age_w)
+        .max(1);
+    Line::from(vec![
+        Span::styled(marker.to_string(), marker_style),
+        Span::styled(game, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(who, who_style),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(row.age.clone(), Style::default().fg(theme::TEXT_FAINT())),
+    ])
+}
+
+/// `► mira        your turn` / `  c0ld          waiting` / `► kal   you won`.
+fn match_line(width: u16, row: &DailyPanelMatchRow) -> Line<'static> {
     // Everything but "waiting" is an attention row: glowing marker, bright
     // bold name, accent-colored status.
     let (marker_color, status, status_color) = match row.status {
@@ -216,10 +356,7 @@ fn match_line(width: u16, row: &DailyPanelMatchRow, lead: RowMarker) -> Line<'st
                 .add_modifier(Modifier::BOLD),
         )
     };
-    let (marker, marker_w) = match lead {
-        RowMarker::Arrow => (marker, 2),
-        RowMarker::Bare => ("", 0),
-    };
+    let marker_w = 2;
     let status_w = status.chars().count();
     let name_budget = (width as usize).saturating_sub(marker_w + status_w + 1);
     let name = truncate_chars(&row.opponent, name_budget);
@@ -269,7 +406,8 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
 /// `ctrl+g · \` toggle` — the two keys that front the Lobby: `ctrl+g` opens
 /// the modal, and the backtick toggles you through the games waiting on you
 /// (boards on your move, seated tables, unfinished dailies) and back to chat.
-/// Constant chrome of the sidebar panel; the Zen tile names them on its title.
+/// Constant chrome of the sidebar panel; the Home tile puts the same two on
+/// its last row (`COMPACT_FOOTER_KEYS`).
 fn hints_line() -> Line<'static> {
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())

@@ -718,9 +718,11 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
         extract_landing_page(&json!({ "landing_page": "home" })),
         LandingPage::Home
     );
+    // `zen` is a Home layout, not a page: a stored `zen` lands in the
+    // Clubhouse, and never switches the device's Home layout.
     assert_eq!(
         extract_landing_page(&json!({ "landing_page": "zen" })),
-        LandingPage::Zen
+        LandingPage::Clubhouse
     );
     assert_eq!(
         extract_landing_page(&json!({ "landing_page": "clubhouse" })),
@@ -987,7 +989,7 @@ async fn country_counts_can_ignore_the_long_gone() {
 
 #[test]
 fn sidebar_modes_cycle_in_both_directions_and_wrap() {
-    use crate::models::user::{RightSidebarMode, RoomListMode};
+    use crate::models::user::RightSidebarMode;
     for mode in [
         RightSidebarMode::On,
         RightSidebarMode::Off,
@@ -998,12 +1000,6 @@ fn sidebar_modes_cycle_in_both_directions_and_wrap() {
         assert_eq!(mode.cycle(true).cycle(true).cycle(true), mode);
     }
     assert_eq!(RightSidebarMode::On.cycle(false), RightSidebarMode::Auto);
-    for mode in [RoomListMode::On, RoomListMode::Off, RoomListMode::Auto] {
-        assert_eq!(mode.cycle(true).cycle(false), mode);
-        assert_eq!(mode.cycle(false).cycle(true), mode);
-        assert_eq!(mode.cycle(false).cycle(false).cycle(false), mode);
-    }
-    assert_eq!(RoomListMode::On.cycle(false), RoomListMode::Auto);
 }
 
 /// Seeds users in the pre-migration shape, runs migration 220 over them,

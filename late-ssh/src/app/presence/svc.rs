@@ -18,20 +18,30 @@
 //! reconnect there is nothing to re-read: every replica's next heartbeat
 //! refills presence, and a leaver missed meanwhile ages out. Every live
 //! record goes out on a `watch` that sessions copy on their tick.
+//!
+//! The pulse rides alongside: a second task samples this replica's human
+//! headcount (`crate::state::online_human_count`, the sidebar's count, so
+//! IRC sessions count too) once a five-minute bucket into
+//! `presence_samples` and reads the last day back, every replica's rows
+//! summed per bucket, onto a second `watch` (`History`) for Home's pulse
+//! tile. The maths that turns the day into a sparkline is `pulse.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use late_core::MutexRecover;
 use late_core::db::Db;
 use late_core::models::presence::{
     PresenceBatch, PresenceRecord, notify_presence, parse_presence_payload,
 };
+use late_core::models::presence_sample::{HeadcountPoint, PresenceSample};
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::state::Presence;
 use crate::metrics::{self, PresenceScope, PresenceWire};
 use crate::pg_listener::{Channel, Signal};
+use crate::state::{ActiveUsers, online_human_count};
 
 /// How often changes go out: the worst extra latency another replica sees
 /// on a step.
@@ -40,6 +50,9 @@ const FLUSH: Duration = Duration::from_millis(200);
 /// alive elsewhere (`state::HEARD_TTL_MS`) and fills a replica that just
 /// came up.
 const HEARTBEAT: Duration = Duration::from_secs(3);
+/// How often the sampler looks at the clock. A bucket is five minutes
+/// wide, so a look a minute never misses one.
+const SAMPLE_TICK: Duration = Duration::from_secs(60);
 
 /// What a session tells the task.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,25 +65,45 @@ pub enum PresenceEvent {
 /// tick copy is a pointer bump.
 pub type Records = Arc<Vec<PresenceRecord>>;
 
+/// The last day of headcount buckets, oldest first, by `Arc` for the same
+/// reason.
+pub type History = Arc<Vec<HeadcountPoint>>;
+
+/// What one headcount sample did, for `metrics::record_pulse_sample`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PulseSampleOutcome {
+    Recorded,
+    WriteFailed,
+    ReadFailed,
+}
+
 #[derive(Clone)]
 pub struct PresenceService {
     events_tx: mpsc::UnboundedSender<PresenceEvent>,
     records_rx: watch::Receiver<Records>,
+    history_rx: watch::Receiver<History>,
 }
 
 impl PresenceService {
     /// What the task subscribes to.
     pub const CHANNELS: &'static [Channel] = &[Channel::Presence];
 
-    /// Start this replica's presence: the loop and its publisher. The
-    /// replica id is fresh per process, so a restarted pod is never taken
-    /// for the sessions of its previous life.
-    pub fn start(db: Db, signals: mpsc::UnboundedReceiver<Signal>) -> Self {
+    /// Start this replica's presence: the loop, its publisher and the
+    /// headcount sampler over `active_users`. The replica id is fresh per
+    /// process, so a restarted pod is never taken for the sessions of its
+    /// previous life, and its samples are new rows beside the old pod's.
+    pub fn start(
+        db: Db,
+        signals: mpsc::UnboundedReceiver<Signal>,
+        active_users: ActiveUsers,
+    ) -> Self {
         let replica_id = Uuid::now_v7();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (records_tx, records_rx) = watch::channel(Arc::new(Vec::new()));
+        let (history_tx, history_rx) = watch::channel(Arc::new(Vec::new()));
         let (publish_tx, publish_rx) = mpsc::channel(1);
-        tokio::spawn(publish_loop(db, publish_rx));
+        tokio::spawn(publish_loop(db.clone(), publish_rx));
+        tokio::spawn(sample_loop(db, active_users, replica_id, history_tx));
         tokio::spawn(presence_loop(
             Presence::new(replica_id),
             events_rx,
@@ -82,17 +115,21 @@ impl PresenceService {
         Self {
             events_tx,
             records_rx,
+            history_rx,
         }
     }
 
     /// Presence with no task behind it, for test apps and headless paths:
-    /// events go nowhere and the records are whatever it was built with.
+    /// events go nowhere, the records are whatever it was built with, and
+    /// the history stays empty.
     pub fn detached(records: Vec<PresenceRecord>) -> Self {
         let (events_tx, _) = mpsc::unbounded_channel();
         let (_, records_rx) = watch::channel(Arc::new(records));
+        let (_, history_rx) = watch::channel(Arc::new(Vec::new()));
         Self {
             events_tx,
             records_rx,
+            history_rx,
         }
     }
 
@@ -107,6 +144,10 @@ impl PresenceService {
 
     pub(super) fn records_rx(&self) -> watch::Receiver<Records> {
         self.records_rx.clone()
+    }
+
+    pub(super) fn history_rx(&self) -> watch::Receiver<History> {
+        self.history_rx.clone()
     }
 }
 
@@ -220,6 +261,69 @@ async fn publish(db: &Db, batch: &PresenceBatch) -> anyhow::Result<()> {
 /// stamps from different replicas compare.
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+enum SampleError {
+    Write(anyhow::Error),
+    Read(anyhow::Error),
+}
+
+/// Once a bucket: write this replica's headcount, read the day back, send
+/// it on the watch. A failed bucket is logged and counted and tried again
+/// on the next look, a minute on.
+async fn sample_loop(
+    db: Db,
+    active_users: ActiveUsers,
+    replica_id: Uuid,
+    history_tx: watch::Sender<History>,
+) {
+    let mut tick = tokio::time::interval(SAMPLE_TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_bucket = None;
+    loop {
+        tick.tick().await;
+        let now = chrono::Utc::now();
+        let bucket = PresenceSample::bucket_of(now);
+        if last_bucket == Some(bucket) {
+            continue;
+        }
+        let online = online_human_count(&active_users.lock_recover()) as i64;
+        match record_and_read(&db, replica_id, bucket, now, online).await {
+            Ok(points) => {
+                metrics::record_pulse_sample(PulseSampleOutcome::Recorded);
+                last_bucket = Some(bucket);
+                history_tx.send_replace(Arc::new(points));
+            }
+            Err(SampleError::Write(error)) => {
+                metrics::record_pulse_sample(PulseSampleOutcome::WriteFailed);
+                tracing::warn!(error = ?error, online, "failed to record the headcount sample");
+            }
+            Err(SampleError::Read(error)) => {
+                metrics::record_pulse_sample(PulseSampleOutcome::ReadFailed);
+                tracing::warn!(error = ?error, "failed to read the headcount history");
+            }
+        }
+    }
+}
+
+async fn record_and_read(
+    db: &Db,
+    replica_id: Uuid,
+    bucket: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+    online: i64,
+) -> Result<Vec<HeadcountPoint>, SampleError> {
+    let client = match db.get().await {
+        Ok(client) => client,
+        Err(error) => return Err(SampleError::Write(error)),
+    };
+    if let Err(error) = PresenceSample::record(&client, replica_id, bucket, online).await {
+        return Err(SampleError::Write(error));
+    }
+    match PresenceSample::last_day(&client, now).await {
+        Ok(points) => Ok(points),
+        Err(error) => Err(SampleError::Read(error)),
+    }
 }
 
 #[cfg(test)]

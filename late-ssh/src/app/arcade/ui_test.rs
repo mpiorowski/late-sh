@@ -45,7 +45,6 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
     let mut app = make_app(test_db.db.clone(), user.id, "sliding-puzzle-ui-token");
     app.resize(80, 24).expect("resize test terminal");
     app.device_rails = Some(KeyLayout {
-        room_list_mode: app.rail_modes().0,
         right_sidebar_mode: RightSidebarMode::On,
     });
     app.set_screen(Screen::Arcade);
@@ -200,7 +199,6 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
     let mut app = make_app(test_db.db.clone(), user.id, "sliding-puzzle-instant-token");
     app.resize(80, 24).expect("resize test terminal");
     app.device_rails = Some(KeyLayout {
-        room_list_mode: app.rail_modes().0,
         right_sidebar_mode: RightSidebarMode::On,
     });
     app.set_screen(Screen::Arcade);
@@ -283,7 +281,6 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     let mut app = make_app(test_db.db.clone(), user.id, "solvers-roster-token");
     app.resize(120, 30).expect("resize test terminal");
     app.device_rails = Some(KeyLayout {
-        room_list_mode: app.rail_modes().0,
         right_sidebar_mode: RightSidebarMode::On,
     });
     app.set_screen(Screen::Arcade);

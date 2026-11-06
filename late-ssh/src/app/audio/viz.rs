@@ -408,7 +408,7 @@ fn row_style(row: usize, rows: usize) -> Style {
     Style::default().fg(color)
 }
 
-/// Equalizer for the sidebar's music stage and the Zen music tile: the
+/// Equalizer for the sidebar's music stage and Home's music tile: the
 /// dancing band at [`EQ_ROWS`] rows, or the muted and unpaired strips.
 pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: EqState) {
     if area.height == 0 || area.width == 0 {
@@ -458,6 +458,29 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: 
         }
     };
     lines.extend(dance_lines(dance, wall_tick, width, EQ_ROWS));
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Home's visualizer tile: the equalizer at the tile's full height, the
+/// same bars and peak caps as the music stage, only taller.
+pub(crate) fn draw_visualizer_tile(
+    frame: &mut Frame,
+    area: Rect,
+    wall_tick: usize,
+    eq_state: EqState,
+) {
+    if area.width < 2 || area.height == 0 {
+        return;
+    }
+    let dance = match eq_state {
+        EqState::Live(live) => Dance::Live(live),
+        EqState::Ambient => Dance::Ambient,
+        EqState::Muted | EqState::Unpaired => {
+            render_eq(frame, area, wall_tick, eq_state);
+            return;
+        }
+    };
+    let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
 }
 

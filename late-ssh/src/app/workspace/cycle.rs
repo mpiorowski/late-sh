@@ -1,10 +1,9 @@
-//! The backtick workspace cycle: the base page (Home chat, or Zen when you
-//! went into the games from Zen) -> each daily board waiting on your move
+//! The backtick workspace cycle: Home -> each daily board waiting on your move
 //! -> each house table you're seated at -> each Arcade daily puzzle you've
 //! started but not finished -> each live door game (a recently-detached
 //! Lateania world, the running roguelikes, then the two loaded native
 //! remakes) -> each open watch of someone else's game (on the Games hub, or
-//! stepped away from; door then handle order) -> back to the base.
+//! stepped away from; door then handle order) -> back to Home.
 //! The one key that spans the Lobby game
 //! domains, the Arcade dailies, and the door games: inside a running
 //! roguelike the same backtick detaches (the game keeps running) and hops
@@ -25,14 +24,14 @@ use crate::app::{
     workspace::arcade::{active_daily_stop, open_stop, unfinished_daily_stops},
 };
 
-/// One stop on the backtick cycle: the base page, a daily board where it's
+/// One stop on the backtick cycle: Home, a daily board where it's
 /// your move, a house table where you hold a seat, an Arcade daily puzzle
 /// with moves on it that isn't solved yet, or a roguelike door game with a
 /// live (running, possibly detached) session. Rooms are gone and real-time
 /// Arcade games (Lateris, Snake, Traffic, NES) never participate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GameWorkspace {
-    /// The page the chain comes home to, `App::workspace_base`.
+    /// Home, where the chain starts and comes home to.
     Base,
     DailyBoard(Uuid),
     HouseTable(HouseTable),
@@ -52,107 +51,13 @@ pub(crate) enum GameWorkspace {
     Watch(LiveGameKey),
 }
 
-/// Where the hop chain comes home to: the page you went into the games
-/// from. Only the two pages that answer backtick can be a base, so the loop
-/// always closes; going in from any other page comes home to Home chat.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorkspaceBase {
-    Home,
-    /// Zen, with the page its `Ctrl+F` hands back. `set_screen` forgets
-    /// that page on the way out of Zen, so the base carries it and the
-    /// return restores it.
-    Zen {
-        back: Option<Screen>,
-    },
-}
-
-impl WorkspaceBase {
-    /// The base for leaving the current screen into the games.
-    fn leaving(app: &App) -> Self {
-        match app.screen {
-            Screen::Zen => WorkspaceBase::Zen {
-                back: app.zen_return_screen,
-            },
-            _ => WorkspaceBase::Home,
-        }
-    }
-
-    pub(crate) fn screen(self) -> Screen {
-        match self {
-            WorkspaceBase::Home => Screen::Dashboard,
-            WorkspaceBase::Zen { .. } => Screen::Zen,
-        }
-    }
-}
-
-/// The game side of the chain: every screen a stop can be on, the Arcade
-/// lobby included (a daily is started there without a screen change).
-/// Crossing from a page onto this side is going into the games. The Games
-/// hub is a page, but an open watch drawn over it is a stop, so the hub
-/// counts as game side exactly while it draws one.
-fn is_game_side(app: &App, screen: Screen) -> bool {
-    match screen {
-        Screen::DailyMatch
-        | Screen::HouseTable
-        | Screen::Realm
-        | Screen::Arcade
-        | Screen::Nethack
-        | Screen::Dcss
-        | Screen::Brogue
-        | Screen::Lateania
-        | Screen::Darkroom
-        | Screen::GreenDragon
-        | Screen::Zork => true,
-        Screen::Games => watch_on_hub(app),
-        Screen::Dashboard
-        | Screen::Rebels
-        | Screen::Dopewars
-        | Screen::Bashquest
-        | Screen::Codekeep
-        | Screen::Usurper
-        | Screen::Artboard
-        | Screen::Profiles
-        | Screen::Calendars
-        | Screen::Leaderboard
-        | Screen::Clubhouse
-        | Screen::Nightcap
-        | Screen::City
-        | Screen::Zen
-        | Screen::Scratchpad => false,
-    }
-}
-
-/// `set_screen`'s hook, run before a real screen change while `app.screen`
-/// is still the page being left. Going from a page into the games (a hop,
-/// a Lobby jump, a hub launch) records the base. `Ctrl+F` handing Zen back
-/// to a game screen is closing Zen, not going in from it, so `close_zen`
-/// puts the base back itself. Coming back to Zen from the games restores
-/// the page its `Ctrl+F` hands back; a fresh chord has already stamped its
-/// own, so the restore only fills an empty one.
-pub(crate) fn note_screen_change(app: &mut App, next: Screen) {
-    if is_game_side(app, next) && !is_game_side(app, app.screen) {
-        app.workspace_base = WorkspaceBase::leaving(app);
-    }
-    if next == Screen::Zen
-        && is_game_side(app, app.screen)
-        && app.zen_return_screen.is_none()
-        && let WorkspaceBase::Zen { back } = app.workspace_base
-    {
-        app.zen_return_screen = back;
-    }
-}
-
-/// Backtick: hop the base page -> each match waiting on your move (nearest
-/// deadline first) -> each house table you're seated at (roster order) ->
-/// each unfinished Arcade daily (lobby order) -> each live door game (hub
-/// sidebar order) -> back to the base.
+/// Backtick: hop Home -> each match waiting on your move (nearest deadline
+/// first) -> each house table you're seated at (roster order) -> each
+/// unfinished Arcade daily (lobby order) -> each live door game (hub
+/// sidebar order) -> back to Home.
 pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     let current = match app.screen {
-        // Pressed on a base page: that page is the base for this chain.
-        Screen::Dashboard | Screen::Zen => {
-            app.workspace_base = WorkspaceBase::leaving(app);
-            GameWorkspace::Base
-        }
+        Screen::Dashboard => GameWorkspace::Base,
         Screen::DailyMatch => match app.daily.board.as_ref() {
             Some(board) => GameWorkspace::DailyBoard(board.match_id),
             None => GameWorkspace::Base,
@@ -222,7 +127,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     let arcade_stops = unfinished_daily_stops(app);
     let door_stops = crate::app::door::hub::state::live_doors(app);
     let watches = watch_keys(app);
-    let base = app.workspace_base.screen();
+    let base = Screen::Dashboard;
     // Preserve where the first stop in the hop chain was opened from so
     // `q`/`Esc` still returns there after any number of backtick hops. Arcade
     // and door stops don't record an origin, so a chain passing through one
@@ -254,7 +159,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     match next {
         GameWorkspace::Base => {
             match app.screen {
-                Screen::Dashboard | Screen::Zen => {
+                Screen::Dashboard => {
                     app.banner = Some(Banner::error("No games waiting on you."));
                 }
                 // Wrap back to the base, no modal: this is the other half of
@@ -341,13 +246,9 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     }
 }
 
-/// Whether the Games hub draws an open watch. Stepped away from, a watch is
+/// The open watch the Games hub draws, if any. Stepped away from, a watch is
 /// still a stop on the cycle (`App::away_watches`), but the hub shows its
 /// cards.
-fn watch_on_hub(app: &App) -> bool {
-    watch_key_on_hub(app).is_some()
-}
-
 fn watch_key_on_hub(app: &App) -> Option<LiveGameKey> {
     app.spectate_state
         .as_ref()
