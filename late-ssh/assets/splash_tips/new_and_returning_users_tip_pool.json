@@ -35,7 +35,7 @@
   "Resize your terminal and the layout reflows automatically",
   "No Ctrl+E in your terminal? /edit arranges Home from any composer",
   "On Home, Alt+1 to Alt+9 loads a layout in one chord (macOS: Option as Meta)",
-  "Two chats on Home? Alt+arrows hop between them, Space jumps to a room on either",
+  "Two chats on Home? Alt+arrows or Alt+J/K hop between them, Space jumps to a room on either",
   "Arranging Home, O keeps a tile to the room you are in; elsewhere the chat gets its space",
   "The reef keeps to #lounge. Want it in every room? /edit from #lounge, Tab to it, O",
   "You land in the Clubhouse: walk with hjkl, press i to talk, w to wave, x to dance",

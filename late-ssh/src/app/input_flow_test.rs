@@ -6310,7 +6310,7 @@ async fn two_chat_tiles(
 }
 
 #[tokio::test]
-async fn alt_arrows_hop_the_chat_tiles_and_a_composer_keeps_them() {
+async fn alt_arrows_and_alt_j_k_hop_the_chat_tiles_and_a_composer_keeps_them() {
     let test_db = new_test_db().await;
     let (mut app, lounge, quiet, first, second) = two_chat_tiles(&test_db, "zen-hop-it").await;
 
@@ -6330,10 +6330,21 @@ async fn alt_arrows_hop_the_chat_tiles_and_a_composer_keeps_them() {
         ]
     );
 
-    // In a draft they are the word jumps: the focus and the draft stay.
+    // Alt+J and Alt+K are the same walk: next and previous.
+    app.handle_input(b"\x1bj");
+    assert_eq!(app.home.focus, first);
+    assert_eq!(app.chat.selected_room_id, Some(lounge));
+    app.handle_input(b"\x1bk");
+    assert_eq!(app.home.focus, second);
+    assert_eq!(app.chat.selected_room_id, Some(quiet));
+
+    // In a draft the arrows are the word jumps and Alt+J/K do nothing: the
+    // focus and the draft stay.
     app.handle_input(b"i");
     app.handle_input(b"one two");
     app.handle_input(b"\x1b[1;3D");
+    app.handle_input(b"\x1bj");
+    app.handle_input(b"\x1bk");
     assert_eq!(app.home.focus, second);
     assert!(app.chat.composing);
     app.handle_input(b"X");

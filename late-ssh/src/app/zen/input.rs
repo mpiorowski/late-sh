@@ -67,19 +67,20 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
         load_layout_by_digit(app, *digit);
         return true;
     }
-    // Alt+arrows: the next or previous chat tile, the keyboard's click on
-    // one. Arrange mode's plain arrows already walk every tile, and a composer
-    // being typed in keeps these for its word jumps: the chat composer gates
-    // this handler in `app/input.rs`, the news composer and a feeds search
-    // are checked here. A room jump in progress is finished or cancelled
-    // first, so its labels never answer for another tile.
-    if let ParsedInput::AltArrow(key) = event
+    // Alt+arrows and Alt+J/K: the next or previous chat tile, the keyboard's
+    // click on one. Arrange mode's plain arrows already walk every tile, and a
+    // composer being typed in keeps these (the arrows for its word jumps):
+    // the chat composer gates this handler in `app/input.rs`, the news
+    // composer and a feeds search are checked here. A room jump in progress
+    // is finished or cancelled first, so its labels never answer for another
+    // tile.
+    if let Some(delta) = chat_tile_hop(event)
         && !app.home.arrange
         && !app.chat.room_jump_active
         && !app.chat.news.composing()
         && !app.chat.feeds.processing()
     {
-        return hop_chat_tile(app, *key);
+        return hop_chat_tile(app, delta);
     }
     if app.home.arrange {
         // The layouts list owns every key while it is up (Esc closes it
@@ -162,14 +163,19 @@ pub fn handle_home_arrow(app: &mut App, key: u8) -> bool {
     chat::input::handle_arrow(app, key)
 }
 
-/// Alt+arrows outside arrange mode: left and up go to the previous chat tile,
-/// right and down to the next, as arrange mode's arrows walk its tiles.
-fn hop_chat_tile(app: &mut App, key: u8) -> bool {
-    let delta = match key {
-        b'A' | b'D' => -1,
-        b'B' | b'C' => 1,
-        _ => return false,
-    };
+/// The chat tile hop a key asks for: left, up and Alt+K go to the previous
+/// chat tile, right, down and Alt+J to the next, as arrange mode's arrows
+/// walk its tiles.
+fn chat_tile_hop(event: &ParsedInput) -> Option<isize> {
+    match event {
+        ParsedInput::AltArrow(b'A' | b'D') | ParsedInput::AltK => Some(-1),
+        ParsedInput::AltArrow(b'B' | b'C') | ParsedInput::AltJ => Some(1),
+        _ => None,
+    }
+}
+
+/// Outside arrange mode, the focus moves `delta` chat tiles along the page.
+fn hop_chat_tile(app: &mut App, delta: isize) -> bool {
     if !app.home.focus_chat_step(delta) {
         return false;
     }

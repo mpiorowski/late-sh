@@ -230,7 +230,7 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `Ctrl+N` / `Ctrl+P` | Next/previous room |
 | `Ctrl+H` / `Ctrl+L`, wheel over the rail | Scroll the room rail without changing room (not while composing) |
 | `Space` | Room-jump mode; a room another chat tile on the page shows moves the focus there (`../zen/CONTEXT.md`) |
-| `Alt+arrows` | Focus the next or previous chat tile on the page (not while composing) |
+| `Alt+arrows`, `Alt+J` / `Alt+K` | Focus the next or previous chat tile on the page (not while composing) |
 | `j` / `k` / arrows | Move message selection or synthetic-list selection; inside a selected message taller than the pane they scroll it by rows first (`CONTEXT.md` §9) |
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
 | `i` | Start composing in selected room, or start News composer when selected |
