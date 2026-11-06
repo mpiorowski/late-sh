@@ -5102,10 +5102,28 @@ async fn the_second_chat_tile_draws_the_pages_card_when_it_is_active() {
         "the ticker follows the focus to the second tile; frame={frame:?}"
     );
 
-    // News on the second tile is the page's News, composer and all.
+    // News on the second tile is the page's News, composer and all. The
+    // first tile has News on `street`, so a pick there would only move the
+    // focus back: #lounge frees it first.
+    let (_, rect, _) = app.home_tile_rects()[left];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, left);
+    app.handle_input(b"\x1f");
+    app.handle_input(b"lounge\r");
+    assert_eq!(
+        app.home.active_chat_room(),
+        Some(ChatRoomBinding::Room(lounge.id))
+    );
+    let (_, rect, _) = app.home_tile_rects()[right];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, right);
     app.handle_input(b"\x1f");
     app.handle_input(b"news\r");
     assert!(app.chat.news_selected);
+    assert_eq!(app.home.focus, right);
+    assert_eq!(app.home.active_chat_room(), Some(ChatRoomBinding::News));
     let frame = render_plain(&mut app);
     assert!(
         frame.contains("Share URL"),
@@ -5283,10 +5301,12 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
 
 /// The stock `street` holds News on the left and #announcements on the
 /// right. Focusing the right tile moves the rail to #announcements; a
-/// News pick in the picker then binds that tile to News and the rail
+/// #lounge pick in the picker then binds that tile to #lounge and the rail
 /// shows it, the arrival sync notwithstanding: a pick made on Home stands.
+/// A News pick next finds News on the left tile and moves the focus there,
+/// binding nothing: the page shows no room twice.
 #[tokio::test]
-async fn home_street_picks_news_into_the_active_tile() {
+async fn home_street_pick_binds_the_active_tile_or_focuses_the_tile_showing_it() {
     use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
@@ -5336,22 +5356,46 @@ async fn home_street_picks_news_into_the_active_tile() {
     assert!(!app.chat.news_selected);
 
     app.handle_input(b"\x1f");
-    app.handle_input(b"news\r");
-    assert!(app.chat.news_selected, "the pick stands on Home");
-    assert_eq!(app.home_chat_room_id(), None, "no room to act on");
+    app.handle_input(b"lounge\r");
+    assert_eq!(
+        app.chat.selected_room_id,
+        Some(lounge.id),
+        "the pick stands on Home"
+    );
+    assert_eq!(app.home.focus, right);
     assert_eq!(
         app.home.chat_tiles(),
         vec![
             (left, ChatRoomBinding::News),
-            (right, ChatRoomBinding::News)
+            (right, ChatRoomBinding::Room(lounge.id))
         ],
         "the pick binds the active tile"
+    );
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"news\r");
+    assert!(
+        app.chat.news_selected,
+        "the rail follows the focus onto News"
+    );
+    assert_eq!(app.home_chat_room_id(), None, "no room to act on");
+    assert_eq!(
+        app.home.focus, left,
+        "the pick goes to the tile showing News"
+    );
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (left, ChatRoomBinding::News),
+            (right, ChatRoomBinding::Room(lounge.id))
+        ],
+        "the pick binds nothing"
     );
     let frame = render_plain(&mut app);
     assert_eq!(
         frame.matches("chat · news").count(),
-        2,
-        "both rules say News; frame={frame:?}"
+        1,
+        "one rule says News; frame={frame:?}"
     );
 
     // Leaving `home` pinned its one chat, bound to no room, to #lounge, the
@@ -6314,6 +6358,131 @@ async fn home_a_draft_stays_in_its_room_when_the_focus_moves() {
         "a new draft belongs to the focused tile's room"
     );
     app.chat.reset_composer();
+}
+
+/// The zen fixture's chat bound to #lounge and a second chat tile split from
+/// it bound to another room, the focus on the second: the page's furniture
+/// sits after both, so walking off the end of them has to skip it.
+async fn two_chat_tiles(
+    test_db: &late_core::test_utils::TestDb,
+    name: &str,
+) -> (crate::app::state::App, Uuid, Uuid, usize, usize) {
+    use crate::app::zen::state::TileKind;
+
+    let viewer = create_test_user(&test_db.db, name).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-hop-quiet")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+    let mut app = make_app(test_db.db.clone(), viewer.id, name);
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "zen-hop-quiet").await;
+    load_zen_fixture(&mut app);
+    wait_for_render_contains(&mut app, "bonsai").await;
+    let first = app
+        .home
+        .first_tile_of(TileKind::Chat)
+        .expect("the fixture has a chat");
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, lounge.id
+    ));
+    assert!(app.home.split_focused(true));
+    let second = app.home.focus;
+    assert!(app.home.rice.root.set_kind(second, TileKind::Chat));
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, quiet.id
+    ));
+    (app, lounge.id, quiet.id, first, second)
+}
+
+#[tokio::test]
+async fn alt_arrows_hop_the_chat_tiles_and_a_composer_keeps_them() {
+    let test_db = new_test_db().await;
+    let (mut app, lounge, quiet, first, second) = two_chat_tiles(&test_db, "zen-hop-it").await;
+
+    // Right off the last chat wraps past the furniture to the first, and
+    // left comes back. The rail goes with the focus; the bindings stay.
+    app.handle_input(b"\x1b[1;3C");
+    assert_eq!(app.home.focus, first);
+    assert_eq!(app.chat.selected_room_id, Some(lounge));
+    app.handle_input(b"\x1b[1;3D");
+    assert_eq!(app.home.focus, second);
+    assert_eq!(app.chat.selected_room_id, Some(quiet));
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (first, ChatRoomBinding::Room(lounge)),
+            (second, ChatRoomBinding::Room(quiet))
+        ]
+    );
+
+    // In a draft they are the word jumps: the focus and the draft stay.
+    app.handle_input(b"i");
+    app.handle_input(b"one two");
+    app.handle_input(b"\x1b[1;3D");
+    assert_eq!(app.home.focus, second);
+    assert!(app.chat.composing);
+    app.handle_input(b"X");
+    assert_eq!(app.chat.composer().lines(), ["one Xtwo"]);
+    app.chat.reset_composer();
+
+    // Mid room jump they leave the jump's labels on the tile it began on.
+    app.handle_input(b" ");
+    app.handle_input(b"\x1b[1;3C");
+    assert_eq!(app.home.focus, second);
+    assert!(app.chat.room_jump_active);
+}
+
+#[tokio::test]
+async fn a_room_named_on_another_tile_moves_the_focus_there_instead_of_showing_it_twice() {
+    use crate::app::chat::state::RoomSlot;
+
+    let test_db = new_test_db().await;
+    let (mut app, lounge, quiet, first, second) = two_chat_tiles(&test_db, "zen-pick-it").await;
+    let both = vec![
+        (first, ChatRoomBinding::Room(lounge)),
+        (second, ChatRoomBinding::Room(quiet)),
+    ];
+
+    // `Space` and the room's letter.
+    let key = app
+        .chat
+        .room_jump_targets()
+        .into_iter()
+        .find_map(|(key, slot)| (slot == RoomSlot::Room(lounge)).then_some(key))
+        .expect("#lounge has a jump key");
+    app.handle_input(b" ");
+    app.handle_input(&[key]);
+    assert_eq!(app.home.focus, first);
+    assert_eq!(app.chat.selected_room_id, Some(lounge));
+    assert_eq!(app.home.chat_tiles(), both);
+
+    // The `Ctrl+/` picker's pick.
+    crate::app::zen::input::pick_for_active_chat(&mut app, RoomSlot::Room(quiet));
+    assert_eq!(app.home.focus, second);
+    assert_eq!(app.chat.selected_room_id, Some(quiet));
+    assert_eq!(app.home.chat_tiles(), both);
+
+    // Arranging, a pick is a layout edit: the focused tile takes the room.
+    app.handle_input(b"\x05");
+    crate::app::zen::input::pick_for_active_chat(&mut app, RoomSlot::Room(lounge));
+    assert_eq!(app.home.focus, second);
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (first, ChatRoomBinding::Room(lounge)),
+            (second, ChatRoomBinding::Room(lounge))
+        ]
+    );
 }
 
 /// The first frame comes before the rooms do: a chat tile with no room to

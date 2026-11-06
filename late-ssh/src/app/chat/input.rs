@@ -745,7 +745,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 let changed = app.chat.handle_room_jump_key(byte);
                 if changed {
                     app.chat.reset_composer();
-                    app.sync_visible_chat_room();
+                    crate::app::zen::input::focus_chat_on_rail(app);
                     app.chat.request_list();
                 }
                 return true;
