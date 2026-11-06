@@ -175,6 +175,9 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+    /// Receives the stream header's `▶ watch here` button rect, for the
+    /// click that opens the room's stream in the paired CLI's viewer window.
+    pub stream_watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
     pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
@@ -1152,6 +1155,7 @@ pub fn draw_dashboard_chat_card(
                     .iter()
                     .find(|stream| stream.room_id == room.id)
             }),
+            watch_hit: view.stream_watch_hit,
             voice,
             // The live strip stands in for the topic row while it is up:
             // the board is the room's news, and the topic is a key away in
@@ -3127,6 +3131,9 @@ pub struct ChatRenderInput<'a> {
     pub work_unread_count: i64,
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
+    /// Receives the stream header's `▶ watch here` button rect, for the
+    /// click that opens the room's stream in the paired CLI's viewer window.
+    pub stream_watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -4644,6 +4651,9 @@ struct RoomHeader<'a> {
     /// watcher count, and the watch-URL nudge (a terminal-only person in
     /// the room is otherwise missing the show).
     stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
+    /// Where the stream row's `▶ watch here` button lands this frame, for
+    /// `app::input`'s click; `None` when nothing is drawn.
+    watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     row: Option<TopicRow<'a>>,
     /// Whether the block ends in a rule. False when the daily live strip
@@ -4677,10 +4687,20 @@ impl RoomHeader<'_> {
 /// here the hint *is* the URL. A live stream's `watch: https://…/live/<id>`
 /// runs 51 cells, so at ordinary chat-pane widths something has to give for
 /// the link to show at all.
+struct StreamHeaderRow {
+    line: Line<'static>,
+    /// The `▶ watch here` button's columns, counted from the row's first
+    /// content cell. `None` while the stream is pending (nothing to watch
+    /// yet) or when the row is too tight to hold the button.
+    watch_button: Option<std::ops::Range<u16>>,
+}
+
+const STREAM_WATCH_BUTTON: &str = "\u{25B6} watch here";
+
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
     width: usize,
-) -> Line<'static> {
+) -> StreamHeaderRow {
     let hint = if stream.watch_url.is_empty() {
         Vec::new()
     } else {
@@ -4722,9 +4742,23 @@ fn stream_header_line(
     let hint_width: usize = hint.iter().map(Span::width).sum();
     let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
     let status_width = status.width();
-    let watching = watching.filter(|count| status_width + count.width() + reserved <= width);
-    let title_budget =
-        width.saturating_sub(status_width + watching.as_ref().map_or(0, Span::width) + reserved);
+    // The button is the row's one action, so it outranks the count and the
+    // title for space; it sits two cells after whatever precedes it.
+    let button = stream.live.then(|| {
+        Span::styled(
+            STREAM_WATCH_BUTTON,
+            Style::default()
+                .fg(theme::TEXT())
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )
+    });
+    let button = button.filter(|button| status_width + 2 + button.width() + reserved <= width);
+    let button_width = button.as_ref().map_or(0, |button| 2 + button.width());
+    let watching = watching
+        .filter(|count| status_width + count.width() + button_width + reserved <= width);
+    let title_budget = width.saturating_sub(
+        status_width + watching.as_ref().map_or(0, Span::width) + button_width + reserved,
+    );
 
     let mut left = vec![status];
     let title = stream.title.trim();
@@ -4735,8 +4769,18 @@ fn stream_header_line(
         ));
     }
     left.extend(watching);
+    let watch_button = button.map(|button| {
+        let start = left.iter().map(Span::width).sum::<usize>() + 2;
+        let end = start + button.width();
+        left.push(Span::raw("  "));
+        left.push(button);
+        start as u16..end as u16
+    });
 
-    row_with_hint(left, hint, width)
+    StreamHeaderRow {
+        line: row_with_hint(left, hint, width),
+        watch_button,
+    }
 }
 
 /// Draw the header and return the area left for messages. A room with neither
@@ -4767,7 +4811,18 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
 
     let mut lines: Vec<Line> = Vec::new();
     if let Some(stream) = header.stream {
-        lines.push(padded(stream_header_line(stream, width)));
+        let row = stream_header_line(stream, width);
+        if let Some(slot) = header.watch_hit {
+            // The stream row is the block's first; its content starts one
+            // cell in, after the pad cell every text row opens with.
+            slot.set(row.watch_button.map(|cols| Rect {
+                x: area.x + 1 + cols.start,
+                y: area.y,
+                width: cols.end - cols.start,
+                height: 1,
+            }));
+        }
+        lines.push(padded(row.line));
     }
     if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
@@ -4929,6 +4984,7 @@ fn draw_selected_content(
                         .live_streams
                         .iter()
                         .find(|stream| stream.room_id == room.id),
+                    watch_hit: view.stream_watch_hit,
                     voice,
                     row: room_topic(room).map(|text| TopicRow {
                         text,

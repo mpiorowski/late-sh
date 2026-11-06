@@ -4880,3 +4880,68 @@ fn buy_posts_the_order_the_bar_rings_up() {
         "{gift}"
     );
 }
+
+/// A bare `/watch` is the typed twin of the header's `▶ watch here`: it
+/// resolves to the selected room's stream only while that stream is live,
+/// and `/watch @user` stays the browser path whatever room is open.
+#[tokio::test]
+async fn bare_watch_opens_the_selected_rooms_live_stream_here() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "watch_here").await;
+    let mut state = counter_test_state(&test_db, user.id);
+    let submit = |state: &mut ChatState, command: &str| {
+        state.composer.insert_str(command);
+        state.submit_composer(false, ComposerCommands::Enabled)
+    };
+    let room_id = Uuid::from_u128(41);
+    let mut stream = crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(7),
+        username: "mat".to_string(),
+        title: "hacking".to_string(),
+        room_id,
+        voice_channel_id: Uuid::from_u128(9),
+        stream_id: "abc".to_string(),
+        live: false,
+        went_live_at: None,
+        watching: 0,
+        watch_url: String::new(),
+    };
+
+    // Nowhere in particular: usage.
+    state.live_streams = vec![stream.clone()];
+    state.selected_room_id = None;
+    assert!(
+        submit(&mut state, "/watch").is_some(),
+        "no stream room selected is a usage error"
+    );
+    assert_eq!(state.take_requested_watch(), None);
+
+    // In the room, but the stream is still pending: nothing to watch.
+    state.selected_room_id = Some(room_id);
+    assert!(
+        submit(&mut state, "/watch").is_some(),
+        "a pending stream is a usage error"
+    );
+    assert_eq!(state.take_requested_watch(), None);
+    assert!(!state.request_watch_here());
+
+    // Live: both the command and the click resolve to this room.
+    stream.live = true;
+    state.live_streams = vec![stream];
+    assert_eq!(submit(&mut state, "/watch"), None);
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Here { room_id })
+    );
+    assert!(state.request_watch_here());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Here { room_id })
+    );
+
+    assert_eq!(submit(&mut state, "/watch @bob"), None);
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::User("bob".to_string()))
+    );
+}

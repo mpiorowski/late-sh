@@ -467,6 +467,7 @@ impl App {
         self.own_chat_hit.set(None);
         self.own_chat_undrawn.set(false);
         self.chat.last_composer_rect.set(None);
+        self.chat.last_stream_watch_hit.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
         // previous frame's top to know when the viewport stays put. Clearing
@@ -898,6 +899,7 @@ impl App {
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
+            stream_watch_hit: Some(&self.chat.last_stream_watch_hit),
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
@@ -1064,6 +1066,7 @@ impl App {
             work_unread_count,
             work_view,
             work_state: Some(&self.chat.work),
+            stream_watch_hit: Some(&self.chat.last_stream_watch_hit),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),

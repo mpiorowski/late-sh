@@ -1,6 +1,6 @@
 # late-webview Context
 
-The helper process that hosts the official YouTube IFrame Player for the paired `late` CLI. The server side of YouTube playback (queue, sources, booth) is `../late-ssh/src/app/audio/CONTEXT.md`; the CLI side of pairing is `../late-cli/PAIRING.md`.
+The helper process that hosts the official YouTube IFrame Player for the paired `late` CLI, and, in its `watch` mode, the window a `/watch @user` stream opens in. The server side of YouTube playback (queue, sources, booth) is `../late-ssh/src/app/audio/CONTEXT.md`; the CLI side of pairing is `../late-cli/PAIRING.md`; streams are `../late-ssh/src/app/stream/CONTEXT.md`.
 
 ## YouTube in the CLI: the embedded webview
 
@@ -97,6 +97,18 @@ Current v1 opens a small undecorated companion window. Hidden/offscreen mode is 
 - Booth audio never shells out to an external player; the helper is how YouTube audio plays. Watching a video (a News story or a YouTube link in chat) is a separate feature that does run the user's own `mpv` and `yt-dlp` (`../late-cli/VIDEO.md`).
 
 ---
+
+## Stream watch window: `late-webview watch <url>`
+
+The stream room's `▶ watch here` button (or a bare `/watch` typed in that room) opens the stream's watch page (`late.sh/live/{id}`) in a window of its own beside the terminal. It is opt-in: `/watch @user` still opens the browser, and the go-live console always does, since `getDisplayMedia` never runs in wry. The watch page is a complete LiveKit client that only receives (`canPublish=false`, no mic, no screen picker), so the helper has to be no more than a browser with WebRTC switched on.
+
+- Entry: `late_webview::run_watch(url)`, reached through the `watch_stream` pair control (advertised as the `stream_viewer` capability; `../late-cli/PAIRING.md`). On Linux the CLI spawns `late-webview watch <url>`; on Windows/macOS it re-executes itself as `late webview-watch <url>` (`../late-cli/src/main.rs`), the same split as the YouTube helper. A helper that fails to start falls back to the browser so the click always lands somewhere; the one warn line in `late.log` says why. A session with no paired CLI, or an older one, gets the browser/QR path from the server instead.
+- No pair WS, no page server, no JS bridge: the window loads the real `https://late.sh/live/{id}` URL (a genuine origin, so none of the YouTube loopback-server workarounds apply) and the page runs exactly as it does in a browser. Closing the window is the only way out, like a tab. A second click opens a second window.
+- The window is decorated, resizable, focused, titled `late.sh · live`, app id `sh.late.watch`. It starts at a quarter of the screen (half the primary monitor's width by half its height, 960x540 when no monitor can be measured). It runs in its own process group and outlives the CLI session.
+- WebKitGTK ships WebRTC off; `enable_webrtc` flips `enable-webrtc` on the WebKit settings **before** the first navigation (the webview is built without a URL and `load_url` runs after the switch), or the page's global object is created without `RTCPeerConnection`. The GStreamer sandbox paths are exposed as for YouTube, since WebRTC decodes through GStreamer too. Autoplay is allowed (`with_autoplay(true)`), so audio starts without a click where the engine permits; the page's own "unmute" fallback covers the rest.
+- The engine's own user agent is kept (the YouTube window claims Chrome): `livekit-client` reads it to pick codec and transport workarounds, and WebKit under a Chrome UA takes the wrong branch.
+- `?voices=off` on the URL is the server's doing, not the helper's: a viewer already sitting in the stream room's voice channel starts the page with room voices off, so they are not heard twice (`../late-ssh/src/app/stream/CONTEXT.md` §3.3).
+- Stderr goes to the same `webview.log` as the YouTube helper, with `NO_AT_BRIDGE=1` and the DMABUF workaround set for the same reasons. Platform caveats from the troubleshooting section above apply unchanged; the WebRTC-specific one is WebKitGTK's `webrtcbin` (gst-plugins-bad) stack, which is younger than libwebrtc and is where a "could not reach the video stream" status with a working browser should be looked at first.
 
 ## YouTube spectrum: OS capture of the helper's audio
 

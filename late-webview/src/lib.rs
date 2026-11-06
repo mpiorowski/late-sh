@@ -41,6 +41,9 @@ use wry::WebViewBuilderExtUnix;
 pub mod commands;
 pub mod pair;
 
+#[cfg(test)]
+mod lib_test;
+
 pub use commands::{WebviewCommand, WebviewEvent};
 
 /// Platform tag sent in the pair-WS `client_state`. Mirrors the label the
@@ -77,6 +80,122 @@ const PAGE_HTML: &str = include_str!("page.html");
 const WEBVIEW_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const WEBVIEW_WINDOW_WIDTH: f64 = 200.0;
 const WEBVIEW_WINDOW_HEIGHT: f64 = 200.0;
+/// Where the stream watch window starts when no monitor can be measured;
+/// see [`watch_window_size`]. Resizable either way.
+const WATCH_WINDOW_FALLBACK_WIDTH: f64 = 960.0;
+const WATCH_WINDOW_FALLBACK_HEIGHT: f64 = 540.0;
+
+/// `late-webview watch <url>`: a plain, decorated, resizable window on the
+/// stream watch page (`late.sh/live/{id}`). Nothing is bridged and no page
+/// is served: the watch page is a complete LiveKit client that only
+/// receives, so the helper has to be no more than a browser with WebRTC
+/// switched on. The URL is the capability; closing the window is the only
+/// way out, same as a browser tab.
+///
+/// Unlike the YouTube window this one keeps the engine's own user agent:
+/// `livekit-client` reads it to pick codec and transport workarounds, and
+/// claiming Chrome on WebKit would send it down the wrong branch.
+pub fn run_watch(url: &str) -> Result<()> {
+    let url = parse_watch_url(url)?;
+
+    let mut event_loop_builder = EventLoopBuilder::<()>::new();
+    #[cfg(target_os = "linux")]
+    event_loop_builder.with_app_id("sh.late.watch");
+    let event_loop: EventLoop<()> = event_loop_builder.build();
+
+    let window = WindowBuilder::new()
+        .with_title("late.sh · live")
+        .with_inner_size(watch_window_size(&event_loop))
+        .build(&event_loop)
+        .context("failed to build stream watch window")?;
+
+    // WebRTC decodes through GStreamer on WebKitGTK, so the sandbox needs
+    // the same plugin paths the YouTube window needs.
+    #[cfg(target_os = "linux")]
+    expose_gstreamer_paths_to_webkit_sandbox();
+
+    // Built without a URL on purpose: on WebKitGTK the WebRTC switch below
+    // has to be flipped before the first navigation, or the page's global
+    // object is created without `RTCPeerConnection`.
+    let webview = WebViewBuilder::new().with_autoplay(true);
+    #[cfg(target_os = "linux")]
+    let webview = webview
+        .build_gtk(
+            window
+                .default_vbox()
+                .context("tao window did not provide a GTK vbox")?,
+        )
+        .context("failed to build stream watch webview")?;
+    #[cfg(not(target_os = "linux"))]
+    let webview = webview
+        .build(&window)
+        .context("failed to build stream watch webview")?;
+    #[cfg(target_os = "linux")]
+    enable_webrtc(&webview)?;
+    webview
+        .load_url(&url)
+        .map_err(|err| anyhow::anyhow!("failed to load stream watch page: {err}"))?;
+
+    info!(target: "late_cli::webview", url = %url, "stream watch window ready");
+
+    event_loop.run(move |event, _, control_flow| {
+        let _keep_window_alive = &window;
+        let _keep_webview_alive = &webview;
+
+        *control_flow = ControlFlow::Wait;
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            info!(target: "late_cli::webview", "stream watch window closed");
+            *control_flow = ControlFlow::Exit;
+        }
+    });
+}
+
+/// A quarter of the screen (half its width by half its height): big enough
+/// to read a shared terminal, small enough to sit beside one.
+fn watch_window_size<T>(event_loop: &EventLoop<T>) -> LogicalSize<f64> {
+    let monitor = event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next());
+    match monitor {
+        Some(monitor) => {
+            let screen = monitor.size().to_logical::<f64>(monitor.scale_factor());
+            LogicalSize::new(screen.width / 2.0, screen.height / 2.0)
+        }
+        None => LogicalSize::new(WATCH_WINDOW_FALLBACK_WIDTH, WATCH_WINDOW_FALLBACK_HEIGHT),
+    }
+}
+
+/// The watch URL as the helper accepts it from argv: an absolute http(s)
+/// URL with no whitespace. The CLI gates the scheme before spawning; this
+/// is the helper's own boundary for a hand-typed invocation.
+fn parse_watch_url(url: &str) -> Result<String> {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        anyhow::bail!("stream watch url must be http(s)");
+    }
+    if url.chars().any(char::is_whitespace) {
+        anyhow::bail!("stream watch url must not contain whitespace");
+    }
+    Ok(url.to_string())
+}
+
+/// WebKitGTK ships WebRTC off; the watch page is nothing without it.
+#[cfg(target_os = "linux")]
+fn enable_webrtc(webview: &WebView) -> Result<()> {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+    use wry::WebViewExtUnix;
+
+    let settings = webview
+        .webview()
+        .settings()
+        .context("webkit webview has no settings object")?;
+    settings.set_enable_webrtc(true);
+    Ok(())
+}
 
 /// Legacy spike entry point. Opens the webview and autoloads a single
 /// hard-coded `video_id`. No WS connection.

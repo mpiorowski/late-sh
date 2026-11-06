@@ -418,3 +418,16 @@ fn video_controls_deserialize_from_wire_names() {
         .unwrap();
     assert!(matches!(stop, PairControlMessage::VideoStop { play_id: 7 }));
 }
+
+#[test]
+fn watch_stream_deserializes_from_its_wire_name() {
+    let msg = serde_json::from_str::<PairControlMessage>(
+        r#"{"event":"watch_stream","url":"https://late.sh/live/abc?voices=off"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        msg,
+        PairControlMessage::WatchStream { ref url } if url == "https://late.sh/live/abc?voices=off"
+    ));
+    assert!(BASE_CAPABILITIES.contains(&"stream_viewer"));
+}

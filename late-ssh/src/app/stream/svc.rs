@@ -141,7 +141,7 @@ impl StreamService {
     }
 
     pub fn watch_url(&self, stream_id: &str) -> String {
-        format!("{}/live/{stream_id}", self.web_url)
+        watch_page_url(&self.web_url, stream_id, WatchPageVoices::On)
     }
 
     fn publish_url(&self, publish_token: &str) -> String {
@@ -631,9 +631,44 @@ impl StreamService {
     }
 
     /// `/watch @user`: the live stream's watch URL, if that user is live.
-    pub fn watch_url_for_username(&self, username: &str) -> Option<String> {
+    /// `viewer_voice_channel` is the voice channel the viewer sits in right
+    /// now: when it is this stream's channel, the viewer already hears the
+    /// room's voices through the terminal, so the URL asks the page to
+    /// start with voices off (one audio path per sound).
+    pub fn watch_url_for_username(
+        &self,
+        username: &str,
+        viewer_voice_channel: Option<Uuid>,
+    ) -> Option<String> {
         let view = self.registry.stream_for_username(username)?;
-        view.live.then(|| self.watch_url(&view.stream_id))
+        self.watch_url_for_view(&view, viewer_voice_channel)
+    }
+
+    /// `▶ watch here` or a bare `/watch` in a stream room: the room's watch
+    /// URL, if its stream is live. Same voices rule as `/watch @user`.
+    pub fn watch_url_for_room(
+        &self,
+        room_id: Uuid,
+        viewer_voice_channel: Option<Uuid>,
+    ) -> Option<String> {
+        let view = self.registry.snapshot().for_room(room_id).cloned()?;
+        self.watch_url_for_view(&view, viewer_voice_channel)
+    }
+
+    fn watch_url_for_view(
+        &self,
+        view: &super::registry::LiveStreamView,
+        viewer_voice_channel: Option<Uuid>,
+    ) -> Option<String> {
+        if !view.live {
+            return None;
+        }
+        let voices = if viewer_voice_channel == Some(view.voice_channel_id) {
+            WatchPageVoices::Off
+        } else {
+            WatchPageVoices::On
+        };
+        Some(watch_page_url(&self.web_url, &view.stream_id, voices))
     }
 
     /// Ingress status poll for OBS streams; run right before [`sweep`] from
@@ -686,6 +721,22 @@ impl StreamService {
         for ended in self.registry.sweep() {
             self.end_stream_task(ended);
         }
+    }
+}
+
+/// How the watch page starts its room-voices audio. `Off` is the query the
+/// page understands (`?voices=off`); `On` is the page's own default and
+/// adds nothing, so the URL the room header shows stays short.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WatchPageVoices {
+    On,
+    Off,
+}
+
+pub(super) fn watch_page_url(web_url: &str, stream_id: &str, voices: WatchPageVoices) -> String {
+    match voices {
+        WatchPageVoices::On => format!("{web_url}/live/{stream_id}"),
+        WatchPageVoices::Off => format!("{web_url}/live/{stream_id}?voices=off"),
     }
 }
 

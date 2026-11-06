@@ -4063,26 +4063,53 @@ impl App {
             }
         }
 
-        if let Some(username) = self.chat.take_requested_watch() {
+        if let Some(request) = self.chat.take_requested_watch() {
             changed = true;
-            match self.stream_service.watch_url_for_username(&username) {
-                Some(url) => {
-                    self.stream_service.note_viewer_of_username(
-                        &username,
-                        self.user_id,
-                        &self.username,
-                    );
-                    self.open_stream_url(
-                        url,
-                        "Watch Stream".to_string(),
-                        format!("@{username} is live. Open on any device or scan:"),
-                        true,
-                    );
+            let viewer_voice_channel = self.voice.current_room(self.user_id);
+            match request {
+                crate::app::chat::state::StreamWatchRequest::User(username) => {
+                    match self
+                        .stream_service
+                        .watch_url_for_username(&username, viewer_voice_channel)
+                    {
+                        Some(url) => {
+                            self.stream_service.note_viewer_of_username(
+                                &username,
+                                self.user_id,
+                                &self.username,
+                            );
+                            self.open_stream_url(
+                                url,
+                                "Watch Stream".to_string(),
+                                format!("@{username} is live. Open on any device or scan:"),
+                                true,
+                            );
+                        }
+                        None => {
+                            self.banner = Some(Banner::error(&format!(
+                                "@{username} is not live right now."
+                            )));
+                        }
+                    }
                 }
-                None => {
-                    self.banner = Some(Banner::error(&format!(
-                        "@{username} is not live right now."
-                    )));
+                crate::app::chat::state::StreamWatchRequest::Here { room_id } => {
+                    match self
+                        .stream_service
+                        .watch_url_for_room(room_id, viewer_voice_channel)
+                    {
+                        Some(url) => {
+                            self.stream_service.note_viewer_in_room(
+                                room_id,
+                                self.user_id,
+                                &self.username,
+                            );
+                            self.open_stream_viewer(url);
+                        }
+                        None => {
+                            self.banner =
+                                Some(Banner::error("This stream is not live right now."));
+                        }
+                    }
                 }
             }
         }
@@ -4346,6 +4373,32 @@ impl App {
             title,
             subtitle,
         }));
+    }
+
+    /// `▶ watch here`: the stream in the paired CLI's own viewer window.
+    /// Without a CLI that can open one (an older CLI, or no CLI at all), the
+    /// URL takes the `/watch @user` path instead: the browser through
+    /// `open_url`, else the QR modal.
+    fn open_stream_viewer(&mut self, url: String) {
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_stream_viewer_cli(
+                    &self.session_token,
+                    PairControlMessage::WatchStream { url: url.clone() },
+                )
+            });
+        if sent {
+            self.banner = Some(Banner::success("Opening the stream window..."));
+            return;
+        }
+        self.open_stream_url(
+            url,
+            "Watch Stream".to_string(),
+            "Open on any device or scan:".to_string(),
+            true,
+        );
     }
 
     fn voice_leave_current_channel(&mut self) -> bool {

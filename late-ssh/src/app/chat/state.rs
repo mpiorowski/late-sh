@@ -328,6 +328,16 @@ pub(crate) enum GoLiveCommand {
     Stop,
 }
 
+/// Where a stream opens. `User` is `/watch @user`: the browser through the
+/// paired CLI, else the QR modal. `Here` is the stream room's `▶ watch
+/// here` button or a bare `/watch` typed inside a live stream room: the
+/// paired CLI's own viewer window, falling back to the `User` path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum StreamWatchRequest {
+    User(String),
+    Here { room_id: Uuid },
+}
+
 /// `/golive` with an optional title, or the `stop` / `obs [title]`
 /// subcommands. `None` means the body is not a golive command at all.
 fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
@@ -906,6 +916,10 @@ pub struct ChatState {
     /// interior mutable through the immutable view references used in
     /// rendering. Reset to `None` at the start of every frame.
     pub(crate) last_composer_rect: Cell<Option<Rect>>,
+    /// The stream header's `▶ watch here` button rect from the latest
+    /// render, for the click in `app::input`; same frame reset as
+    /// `last_composer_rect`. `None` when no live stream row was drawn.
+    pub(crate) last_stream_watch_hit: Cell<Option<Rect>>,
     /// Top visible wrapped composer row, updated on every render that draws
     /// the composer. Mouse clicks use this to map visible rows back to the
     /// underlying multiline composer when `ratatui_textarea` has scrolled.
@@ -1107,8 +1121,9 @@ pub struct ChatState {
     /// brings the message along and `push_message` promotes the beat. A
     /// beat whose message never lands ages out at the next insert.
     pending_name_hits: HashMap<Uuid, (u64, Instant)>,
-    /// Set by /watch @user; consumed by `App`.
-    requested_watch: Option<String>,
+    /// Set by `/watch` or the stream header's `▶ watch here`; consumed by
+    /// `App`, which owns the stream service.
+    requested_watch: Option<StreamWatchRequest>,
     /// A stream room this session just opened; consumed by `App`, which
     /// tells the stream service a named viewer showed up. Recorded here
     /// rather than acted on inline because `App` owns the stream service.
@@ -1346,6 +1361,7 @@ impl ChatState {
             composer_room_id: None,
             next_cup_variant: 0,
             last_composer_rect: Cell::new(None),
+            last_stream_watch_hit: Cell::new(None),
             last_composer_viewport_top: Cell::new(None),
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
@@ -2293,8 +2309,30 @@ impl ChatState {
         self.requested_pot.take()
     }
 
-    pub(crate) fn take_requested_watch(&mut self) -> Option<String> {
+    pub(crate) fn take_requested_watch(&mut self) -> Option<StreamWatchRequest> {
         self.requested_watch.take()
+    }
+
+    /// The stream header's `▶ watch here` click. Returns whether the
+    /// selected room had a live stream to open.
+    pub(crate) fn request_watch_here(&mut self) -> bool {
+        match self.live_stream_room_here() {
+            Some(room_id) => {
+                self.requested_watch = Some(StreamWatchRequest::Here { room_id });
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The selected room, when its stream is live: what `▶ watch here` and
+    /// a bare `/watch` open. A pending stream has nothing to watch yet.
+    fn live_stream_room_here(&self) -> Option<Uuid> {
+        let room_id = self.selected_room_id?;
+        self.live_streams
+            .iter()
+            .find(|stream| stream.room_id == room_id && stream.live)
+            .map(|stream| stream.room_id)
     }
 
     pub(crate) fn take_opened_stream_room(&mut self) -> Option<Uuid> {
@@ -2998,7 +3036,7 @@ impl ChatState {
     /// thumbnail: what Enter or a click on it watches (`app/video/`). An
     /// image in the same message takes the preview, and Enter opens it
     /// instead.
-    pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<WatchRequest> {
+    pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<StreamWatchRequest> {
         let message = self.selected_message_in_room(room_id)?;
         let video_id = match inline_preview_source_in_body(&message.body) {
             Some(InlinePreviewSource::Video { video_id }) => video_id,
@@ -4130,12 +4168,20 @@ impl ChatState {
             self.clear_composer_after_submit();
             match target {
                 Some(name) => {
-                    self.requested_watch = Some(name.to_string());
+                    self.requested_watch = Some(StreamWatchRequest::User(name.to_string()));
                     return None;
                 }
-                None => {
-                    return Some(Banner::error("Usage: /watch @user"));
-                }
+                None => match self.live_stream_room_here() {
+                    Some(room_id) => {
+                        self.requested_watch = Some(StreamWatchRequest::Here { room_id });
+                        return None;
+                    }
+                    None => {
+                        return Some(Banner::error(
+                            "Usage: /watch @user, or /watch inside a live stream room",
+                        ));
+                    }
+                },
             }
         }
 

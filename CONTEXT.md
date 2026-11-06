@@ -34,7 +34,7 @@ changing a domain.
 | `late-core` | Models, migrations, DB pool, shared helpers | `late-core/CONTEXT.md` |
 | `late-web` | Web pages (axum, port 3000): landing, `/listen`, gallery, profiles, The Late Edition (`/paper`, with RSS), `/stream` proxy, `/live` | `late-web/CONTEXT.md` |
 | `late-cli` | The `late` companion: launches SSH, plays audio locally, pairs over WS, voice | `late-cli/CONTEXT.md` |
-| `late-webview` | The CLI's YouTube helper process (keeps WebKitGTK out of `late`) | `late-webview/CONTEXT.md` |
+| `late-webview` | The CLI's YouTube helper process and stream watch window (keeps WebKitGTK out of `late`) | `late-webview/CONTEXT.md` |
 | `late-{nethack,dcss,brogue,usurper,dopewars,bashquest,codekeep,zork}` | Standalone door hosts, one pod each | the door's context under `late-ssh/src/app/door/` |
 | `infra/` | Terraform for the RKE2 cluster, Liquidsoap/Icecast config | `infra/README.md`, `infra/RUNBOOK.md` |
 
@@ -181,7 +181,7 @@ otherwise.
 | `late-core/CONTEXT.md` | Model rules, migrations, users and keys, the chip ledger, test DB helpers |
 | `late-web/CONTEXT.md` | Web routes, templates, `/listen`, stream proxy, gallery and profile pages |
 | `late-cli/CONTEXT.md` | The `late` binary: SSH modes, token handshake, audio pipeline, voice (the pair protocol in `PAIRING.md`, installers in `DISTRIBUTION.md`, terminal video in `VIDEO.md`) |
-| `late-webview/CONTEXT.md` | The YouTube helper process: lifecycle, mute/volume, troubleshooting, the Linux spectrum capture |
+| `late-webview/CONTEXT.md` | The YouTube helper process: lifecycle, mute/volume, troubleshooting, the Linux spectrum capture; the stream watch window |
 | `late-ssh/src/ircd/CONTEXT.md` | Embedded IRC server: token auth, room/DM projection, IRCv3 caps, history, moderation |
 | `DESIGN_GUIDE.md` | TUI conventions: layout, spacing, text roles, palette, modals, forms, hit geometry |
 | `chat` | Rooms, DMs, composer, message actions, Showcase/Work feeds; the composer, every slash command and key in `COMMANDS.md`, rendering in `RENDERING.md`, read marks in `MARKS.md`, room data and the rail in `ROOMS.md` |

@@ -84,6 +84,12 @@ pub enum PairControlMessage {
     OpenUrl {
         url: String,
     },
+    /// Ask a CLI advertising `stream_viewer` to open a stream's watch page
+    /// in its own embedded window (`late-webview watch`). Sent for the
+    /// stream room's `▶ watch here`; `OpenUrl` stays the browser path.
+    WatchStream {
+        url: String,
+    },
     /// Play a News video in the rectangle the TUI reserved, in 0-based
     /// terminal cells. Only CLIs advertising `video` get it. `play_id` is a
     /// per-session counter tying every later message to this play, so a
@@ -311,6 +317,17 @@ impl PairedClientRegistry {
     /// to a QR modal for raw SSH sessions.
     pub fn send_control_to_open_url_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_open_url) > 0
+    }
+
+    /// Deliver to the first paired CLI advertising the `stream_viewer`
+    /// capability. Returns whether anyone got it, so the caller can fall
+    /// back to the browser or the QR modal.
+    pub fn send_control_to_stream_viewer_cli(
+        &self,
+        token: &str,
+        msg: PairControlMessage,
+    ) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_stream_viewer) > 0
     }
 
     /// Deliver a video control to the paired CLIs on `token` advertising

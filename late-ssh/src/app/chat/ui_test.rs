@@ -113,7 +113,7 @@ fn live_stream_view(watch_url: &str) -> crate::app::stream::registry::LiveStream
 fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
     let url = "https://late.sh/live/abc123";
     let width = 80;
-    let line = stream_header_line(&live_stream_view(url), width);
+    let line = stream_header_line(&live_stream_view(url), width).line;
     let text: String = line
         .spans
         .iter()
@@ -128,7 +128,7 @@ fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
 
 #[test]
 fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
-    let line = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), 30);
+    let line = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), 30).line;
     let text: String = line
         .spans
         .iter()
@@ -136,6 +136,46 @@ fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
         .collect();
 
     assert!(!text.contains("watch:"), "got {text:?}");
+}
+
+/// The button is the row's one action: it is there for a live stream, its
+/// recorded columns cover exactly the label (so a click on the URL beside
+/// it is not a click on the button), and a pending stream offers nothing.
+#[test]
+fn stream_header_offers_watch_here_only_once_the_stream_is_live() {
+    let row = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), 120);
+    let text: String = row
+        .line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let cols = row.watch_button.expect("a live stream has the button");
+    let start = usize::from(cols.start);
+    let end = usize::from(cols.end);
+    let button: String = text
+        .chars()
+        .scan(0usize, |col, c| {
+            let at = *col;
+            *col += UnicodeWidthStr::width(c.to_string().as_str());
+            Some((at, c))
+        })
+        .filter(|(at, _)| (start..end).contains(at))
+        .map(|(_, c)| c)
+        .collect();
+    assert_eq!(button, STREAM_WATCH_BUTTON, "in {text:?}");
+
+    let mut pending = live_stream_view("");
+    pending.live = false;
+    let row = stream_header_line(&pending, 120);
+    assert!(row.watch_button.is_none());
+    let text: String = row
+        .line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(!text.contains(STREAM_WATCH_BUTTON), "got {text:?}");
 }
 
 #[test]
@@ -1117,6 +1157,7 @@ fn chat_view<'a>(
             mine_only: false,
         },
         work_state: None,
+        stream_watch_hit: None,
         keep_composer_focused: false,
         composer_rect_slot: None,
         composer_viewport_top_slot: None,
@@ -2884,6 +2925,7 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 f,
                 area,
                 super::RoomHeader {
+                    watch_hit: None,
                     stream: None,
                     voice: None,
                     row: super::room_topic(&room).map(|text| super::TopicRow {
@@ -2926,6 +2968,7 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 f,
                 area,
                 super::RoomHeader {
+                    watch_hit: None,
                     stream: None,
                     voice: None,
                     row: super::room_topic(&room).map(|text| super::TopicRow {
@@ -2952,6 +2995,7 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 f,
                 area,
                 super::RoomHeader {
+                    watch_hit: None,
                     stream: None,
                     voice: None,
                     row: super::room_topic(&room).map(|text| super::TopicRow {
@@ -3046,7 +3090,7 @@ fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
         REAL_WATCH_URL,
     );
 
-    let line = super::stream_header_line(&stream, WIDTH);
+    let line = super::stream_header_line(&stream, WIDTH).line;
     let text = line.to_string();
     assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
     assert!(text.starts_with("● LIVE "), "{text:?}");
@@ -3065,27 +3109,42 @@ fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
 
 /// Below 73 columns the watcher count goes too: a link nobody can see is
 /// worse than a count nobody misses. That floor was 83 while ids were hex.
+/// From 74 the `▶ watch here` button (the row's one action) takes its 14
+/// cells first, so the count is back for good only from 87.
 #[test]
 fn stream_header_drops_the_watcher_count_before_the_watch_url() {
     const WIDTH: usize = 70;
     let stream = live_stream("bug hunt", REAL_WATCH_URL);
 
-    let line = super::stream_header_line(&stream, WIDTH);
+    let line = super::stream_header_line(&stream, WIDTH).line;
     let text = line.to_string();
     assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
     assert!(!text.contains("watching"), "the count yielded: {text:?}");
     assert!(line.width() <= WIDTH, "{}", line.width());
 
     // One column higher than the floor the count needs, it comes back.
-    let roomy = super::stream_header_line(&stream, 73).to_string();
+    let roomy = super::stream_header_line(&stream, 73).line.to_string();
     assert!(roomy.contains("· 3 watching"), "{roomy:?}");
     assert!(roomy.contains(REAL_WATCH_URL), "{roomy:?}");
+    assert!(!roomy.contains(super::STREAM_WATCH_BUTTON), "{roomy:?}");
+
+    // The button outranks the count: at 80 it is there and the count is not.
+    let eighty = super::stream_header_line(&stream, 80).line.to_string();
+    assert!(eighty.contains(super::STREAM_WATCH_BUTTON), "{eighty:?}");
+    assert!(!eighty.contains("watching"), "{eighty:?}");
+    assert!(eighty.contains(REAL_WATCH_URL), "{eighty:?}");
+
+    // Both, with the link, from 87.
+    let wide = super::stream_header_line(&stream, 87).line.to_string();
+    assert!(wide.contains(super::STREAM_WATCH_BUTTON), "{wide:?}");
+    assert!(wide.contains("· 3 watching"), "{wide:?}");
+    assert!(wide.contains(REAL_WATCH_URL), "{wide:?}");
 }
 
 #[test]
 fn stream_header_keeps_a_short_title_whole() {
     let stream = live_stream("bug hunt", "https://late.sh/live/abc");
-    let text = super::stream_header_line(&stream, 80).to_string();
+    let text = super::stream_header_line(&stream, 80).line.to_string();
     assert!(text.contains("bug hunt"), "{text:?}");
     assert!(!text.contains('…'), "nothing to clip: {text:?}");
     assert!(

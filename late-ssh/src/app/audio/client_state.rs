@@ -179,6 +179,16 @@ impl ClientAudioState {
                 .any(|capability| capability == "open_url")
     }
 
+    /// The `stream_viewer` capability: the CLI can open a stream's watch
+    /// page in its own embedded window.
+    pub fn supports_stream_viewer(&self) -> bool {
+        self.client_kind == ClientKind::Cli
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability == "stream_viewer")
+    }
+
     /// The `video` capability: every precondition for playing a News video
     /// in the terminal held when the CLI started.
     pub fn supports_video(&self) -> bool {

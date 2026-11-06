@@ -99,7 +99,9 @@ async fn stream_banned_user_cannot_go_live_until_the_ban_is_lifted() {
         other => panic!("expected GoLiveFailed while banned, got {other:?}"),
     }
     assert!(
-        service.watch_url_for_username(&target.username).is_none(),
+        service
+            .watch_url_for_username(&target.username, None)
+            .is_none(),
         "a refused go-live must not leave a watchable stream behind"
     );
 
@@ -154,4 +156,21 @@ async fn expired_stream_ban_does_not_block_going_live() {
         StreamEvent::GoLiveReady { user_id, .. } => assert_eq!(user_id, target.id),
         other => panic!("expected GoLiveReady with an expired ban, got {other:?}"),
     }
+}
+
+/// The URL is the only channel the terminal has to the page's audio
+/// defaults: a viewer already in the room's voice channel must not hear the
+/// voices twice, everyone else keeps the page's own default.
+#[test]
+fn watch_page_url_asks_for_voices_off_only_on_request() {
+    use crate::app::stream::svc::{WatchPageVoices, watch_page_url};
+
+    assert_eq!(
+        watch_page_url("https://late.test", "abc_-1", WatchPageVoices::On),
+        "https://late.test/live/abc_-1"
+    );
+    assert_eq!(
+        watch_page_url("https://late.test", "abc_-1", WatchPageVoices::Off),
+        "https://late.test/live/abc_-1?voices=off"
+    );
 }

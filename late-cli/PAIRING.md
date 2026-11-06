@@ -32,7 +32,7 @@ Client to server:
   "client_kind": "cli",
   "ssh_mode": "native",
   "platform": "linux",
-  "capabilities": ["clipboard_image", "youtube", "voice", "open_url"],
+  "capabilities": ["clipboard_image", "youtube", "voice", "open_url", "stream_viewer"],
   "video_blockers": ["not_kitty", "no_mpv"],
   "muted": false,
   "volume_percent": 30
@@ -112,7 +112,7 @@ Client to server, native mode only (see "Latency samples"):
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
-- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below). `reconnect` is appended in native mode only, the one mode that can redial on its own.
+- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, `open_url`, and `stream_viewer` (the `watch_stream` control: a stream watch page in the CLI's own `late-webview watch` window, `../late-webview/CONTEXT.md`); Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below). `reconnect` is appended in native mode only, the one mode that can redial on its own.
 - `video_blockers`: present exactly when `video` is not in `capabilities`; every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
 
 Pairing behavior:

@@ -8,6 +8,7 @@
 //! Modes:
 //! - `late-webview` — pair relay: reads the session token from stdin and
 //!   `LATE_API_BASE_URL` from the environment (default `https://api.late.sh`).
+//! - `late-webview watch <url>` — a window on a stream watch page, no WS.
 //! - `late-webview spike <video_id>` — debugging: autoload one video, no WS.
 
 use anyhow::{Context, Result};
@@ -29,6 +30,10 @@ fn main() -> Result<()> {
                 .get(1)
                 .context("usage: late-webview spike <video_id>")?;
             late_webview::run_spike(video_id)
+        }
+        Some("watch") => {
+            let url = args.get(1).context("usage: late-webview watch <url>")?;
+            late_webview::run_watch(url)
         }
         Some(other) => anyhow::bail!("unknown late-webview mode: {other}"),
         None => run_pair(),

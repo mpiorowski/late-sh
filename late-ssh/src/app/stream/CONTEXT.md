@@ -140,11 +140,16 @@ Cross-domain touchpoints:
   `Ctrl+/` room picker lists the same live streams as `#{username}-live`,
   pickable before joining), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
-  room's chat (title, watcher count, watch-URL nudge; the URL carries a
+  room's chat (title, watcher count, the `▶ watch here` button once the
+  stream is live, watch-URL nudge; the URL carries a
   trailing space so it never lands in the last column, where terminal link
   detection swallows the pane border `│` or the `────` rule below it and
   hands the clicker a 404), and the stream-room arm in `select_room_slot`
-  (lazy join on first open).
+  (lazy join on first open). The button's rect rides
+  `ChatState::last_stream_watch_hit` (reset every frame) to the click in
+  `app/input.rs`; a bare `/watch` typed in the room is its typed twin. Both
+  record `StreamWatchRequest::Here`, `/watch @user` records
+  `StreamWatchRequest::User`, and `App::tick_stream` consumes either.
 - `app/voice/ui.rs::OnAirView`: the ⦿ ON AIR strip marker while the
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
@@ -152,7 +157,15 @@ Cross-domain touchpoints:
   `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
   `voice_toggle_join`'s one-time ON AIR confirm, `StreamQrModal`.
 - `paired_clients.rs` / `late-cli/src/ws.rs`: `PairControlMessage::OpenUrl`
-  + the `open_url` capability (xdg-open/open/cmd start).
+  + the `open_url` capability (xdg-open/open/cmd start: the browser, for
+  `/watch @user` and the `/golive` console, whose `getDisplayMedia` needs a
+  real one), and `PairControlMessage::WatchStream` + the `stream_viewer`
+  capability: the stream room's `▶ watch here` button (or a bare `/watch`
+  typed there) opens the watch page in the CLI's own embedded window
+  (`late-webview watch`, see `late-webview/CONTEXT.md`). The CLI falls back
+  to the browser when the window cannot start; `App::open_stream_viewer`
+  falls back to the `OpenUrl`/QR path when no paired CLI advertises
+  `stream_viewer`.
 - `late-cli/src/voice.rs`: the audio-only voice runtime unsubscribes from
   any remote video track (`publication.set_subscribed(false)`), so a CLI
   voice participant in a stream room never downloads the screen share. Same
@@ -198,7 +211,13 @@ Cross-domain touchpoints:
    poll reconnects in place, never stranding a viewer on "reload to retry". Note the two halves take different network paths
    (the page over HTTPS to `late.sh`, media over WebRTC to `rtc.late.sh`),
    so a working page with no picture is a normal failure mode and the status
-   line says so after three failures.
+   line says so after three failures. `/watch @user` and `▶ watch here`
+   compose the URL with `StreamService::watch_url_for_username` /
+   `watch_url_for_room`, which append `?voices=off` when the viewer sits in
+   that stream room's voice channel: they already hear the voices through
+   the terminal, so the page starts with its voices toggle off (one audio
+   path per sound); the toggle still works. Every other watch URL (the room
+   header's nudge, the rail) is bare.
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -325,7 +344,19 @@ Cross-domain touchpoints:
   through a rename; a reclaimed username does not inherit the old room.
 - `svc_test.rs`: the stream-ban gate on `go_live`: a banned user is refused
   with no half-registered stream left behind, an expired row does not block
-  (expiry is read-time only), and lifting the ban restores `/golive`.
+  (expiry is read-time only), and lifting the ban restores `/golive`; the
+  watch URL carries `?voices=off` only when asked.
+- `chat/ui_test.rs::stream_header_offers_watch_here_only_once_the_stream_is_live`:
+  the button is on the row for a live stream with its recorded columns
+  covering exactly the label, and absent while pending.
+- `chat/state_internal_test.rs::bare_watch_opens_the_selected_rooms_live_stream_here`:
+  a bare `/watch` and the click both resolve to the selected room's live
+  stream, are usage errors elsewhere or while pending, and `/watch @user`
+  stays the browser request.
+- `late-cli/src/ws_test.rs`: `watch_stream` deserializes from its wire name
+  and `stream_viewer` is advertised.
+- `late-webview/src/lib_test.rs`: the `watch` mode's argv boundary accepts
+  only absolute http(s) URLs without whitespace.
 - `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`:
   `/mod ban stream` tears a live stream out of the registry and writes the
   row; `/mod unban stream` clears it.
