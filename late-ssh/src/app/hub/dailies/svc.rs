@@ -9,6 +9,7 @@ use late_core::{
     MutexRecover,
     db::Db,
     models::{
+        daily_rung::record_rung_win,
         daily_streak::{DailyStreakSnapshot, get_daily_streak_snapshot, record_daily_win},
         quest::{
             QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
@@ -66,6 +67,8 @@ pub enum QuestEvent {
         title: String,
         reward_chips: i64,
     },
+    /// The day's rung won on its day: the star, and how many that makes.
+    RungStar { user_id: Uuid, stars: i64 },
 }
 
 #[derive(Clone)]
@@ -217,15 +220,24 @@ impl QuestService {
         }
 
         // Any daily board win keeps the day on the streak, whatever the
-        // quests drew; the win's own UTC date so it rolls with the boards.
+        // quests drew, and the day's rung won earns the star; both on the
+        // win's own UTC date so they roll with the boards.
         let mut streak_day = None;
-        if let ActivityKind::GameWon { game, .. } = &event.kind
-            && game.daily_puzzle().is_some()
+        let mut rung_star = None;
+        if let ActivityKind::GameWon { game, detail, .. } = &event.kind
+            && let Some(puzzle) = game.daily_puzzle()
         {
-            streak_day =
-                record_daily_win(&**client, user_id, event.occurred_at.date_naive()).await?;
+            let won_on = event.occurred_at.date_naive();
+            streak_day = record_daily_win(&**client, user_id, won_on).await?;
             if let Some(day) = streak_day {
                 crate::metrics::record_daily_streak_day(day);
+            }
+            if let Some(difficulty_key) = detail.as_deref() {
+                rung_star =
+                    record_rung_win(&**client, user_id, won_on, puzzle, difficulty_key).await?;
+                if rung_star.is_some() {
+                    crate::metrics::record_rung_star();
+                }
             }
         }
 
@@ -238,6 +250,9 @@ impl QuestService {
                 title,
                 reward_chips,
             });
+        }
+        if let Some(stars) = rung_star {
+            self.publish_event(QuestEvent::RungStar { user_id, stars });
         }
 
         Ok(())

@@ -144,6 +144,7 @@ fn quest_sections() -> Vec<GuideSection> {
             "The weekly slot is a hard Arcade quest.".to_string(),
             "Quest rewards pay automatically when the progress target completes.".to_string(),
             "The daily streak above the quests is kept by any daily board won that UTC day, quest or not; it pays no chips, and a missed day restarts it at 1.".to_string(),
+            "The rung is one daily board a day, the same for everyone, named above the daily cards; win it on its day for a star. Stars pay no chips and there is no catching up on yesterday's.".to_string(),
         ],
     }]
 }

@@ -3067,6 +3067,21 @@ mod inner {
         daily_streak_days_total().add(1, &[KeyValue::new("day", streak_day_label(day))]);
     }
 
+    fn rung_stars_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_rung_stars_total")
+                .with_description("Stars earned by winning the day's rung on its day")
+                .build()
+        })
+    }
+
+    /// The day's rung won on its day: one star.
+    pub fn record_rung_star() {
+        rung_stars_total().add(1, &[]);
+    }
+
     fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
         match load {
             SlidingPuzzleArtLoad::Featured => "featured",
@@ -4659,6 +4674,7 @@ mod inner {
     }
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_daily_streak_day(_day: StreakDay) {}
+    pub fn record_rung_star() {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}

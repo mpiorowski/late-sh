@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::daily_rung::Rung;
 use late_core::models::presence::{ClubhouseStand, Emote, Spot};
 use uuid::Uuid;
 
@@ -210,8 +211,9 @@ pub enum BoardStop {
     TooSmall,
     /// Open and waiting to be solved.
     Open,
-    /// Connected: the send-off, with the hours until the next board.
-    Solved { hours_left: u32 },
+    /// Connected: the send-off, with the hours until the next board and
+    /// the rung it brings, the first star.
+    Solved { hours_left: u32, tomorrow: Rung },
 }
 
 /// Why the tour is starting.

@@ -270,7 +270,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   Arcade draws the board in the room left under it. It stands in one of
   three places, `ui::board_stop` (`BoardStop`): `Open`, the header asks
   for the board's keys and Enter is one of them (it turns the tile);
-  `Solved`, the send-off, Enter settles in; `TooSmall`, a terminal the
+  `Solved`, the send-off, which names tomorrow's rung as the first star
+  (`late_core::models::daily_rung::rung_for` on the next UTC day; the
+  tour's own easy Netwalk is never a rung, so day one's win is never a
+  star and tomorrow's can be the first), Enter settles in; `TooSmall`, a terminal the
   board does not fit under the header
   (`arcade/netwalk/ui.rs::lent_board_fits` on the room left under it),
   where the header says so and Enter walks on, so nobody is held at a

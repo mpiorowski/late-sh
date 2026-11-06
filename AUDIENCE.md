@@ -765,6 +765,19 @@ SELECT consecutive_days, count(*) FROM user_daily_quest_streaks
 WHERE last_completed_date >= current_date - 1 GROUP BY 1 ORDER BY 1;
 ```
 
+The rung: stars a day, against the day's other boards (each
+`<game>_daily_wins` table, by its day column, is the roster of one
+board), and how many of a day's starrers star again the next day:
+
+```sql
+SELECT day, count(*) AS stars,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM daily_rung_stars n
+         WHERE n.user_id = s.user_id AND n.day = s.day + 1)) AS back_tomorrow
+FROM daily_rung_stars s
+WHERE day >= current_date - 28 GROUP BY 1 ORDER BY 1;
+```
+
 deadchannel's eligible pool: the people seen this week with the hours
 and the bio the gate asks for (`haunt/state.rs` holds the thresholds),
 and how many already hold a runner row:

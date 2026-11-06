@@ -12,6 +12,8 @@ use ratatui::{
 };
 use uuid::Uuid;
 
+use late_core::models::daily_rung::{Rung, rung_for};
+
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
     app::{
@@ -662,6 +664,8 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
+    let rung = rung_for(chrono::Utc::now().date_naive());
+    lines.push(rung_line(rung));
     lines.push(Line::from(""));
 
     let today = view.today_solvers();
@@ -683,7 +687,17 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_MUTED())
         };
         let status = if card.available {
-            card_status_spans(view, &today, puzzle, show_hint && game == selection)
+            let mut status = Vec::new();
+            if puzzle == rung.puzzle {
+                status.push(Span::styled("✦ ", Style::default().fg(theme::AMBER())));
+            }
+            status.extend(card_status_spans(
+                view,
+                &today,
+                puzzle,
+                show_hint && game == selection,
+            ));
+            status
         } else {
             vec![Span::styled(
                 "Coming Soon",
@@ -843,6 +857,27 @@ fn push_game_section(lines: &mut Vec<Line<'static>>, title: &str) {
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
+}
+
+/// The day's rung, named above the cards: the one board everyone is on
+/// today, and the star it is worth today only.
+fn rung_line(rung: Rung) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled("✦ ", Style::default().fg(theme::AMBER())),
+        Span::styled(
+            "Today's rung",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(": ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(rung.label(), Style::default().fg(theme::AMBER())),
+        Span::styled(
+            ". The same board for everyone; win it today for the star. A new rung every day at 00:00 UTC.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
 }
 
 /// A daily card's status: the tier marks, then today's solver count and,

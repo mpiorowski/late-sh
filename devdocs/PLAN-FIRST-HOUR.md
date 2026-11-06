@@ -37,10 +37,9 @@ The design reasoning behind it, every decision and the ones turned
 down, is in Claude Code session `2fc40c39-0365-400e-b8c0-dd75cbf98223`
 (`claude --resume` in this repo). What is left of the step:
 
-- **The streak.** The first session's win is day 1 of the streak, now
-  that any daily win keeps the day (step 2's first piece, built). The
-  send-off's "tomorrow" line moves from a time to the rung ("tomorrow
-  is your first star: Sudoku") when step 2's rung ships.
+- **The streak and the star.** The first session's win is day 1 of the
+  streak, now that any daily win keeps the day, and the send-off names
+  tomorrow's rung as the first star (step 2's first two pieces, built).
 - **Measure, then gate.** Deploy, wait seven days for a full weekly
   cohort, wait seven more for its first week, then run the funnel
   queries in `AUDIENCE.md` section 6 and read the Newcomers row
@@ -71,18 +70,15 @@ Decided, in the order it ships; each piece has its own number to read:
    until the release after this one ships. Measure: live streaks (35,
    six past 30 days), two-day return.
 2. **The rung: one board a day, the same for everyone, and the star.**
-   A fixed rotation keyed to the calendar, never the person, so the
-   solvers roster for the rung is the day's crowd and the chat has one
-   board to argue about. Never repeats a game inside a week. The knob
-   is time, not the difficulty label (medium Netwalk is three minutes,
-   medium Sudoku can be thirty): a rung is a board a regular finishes
-   in five to fifteen minutes, the rotation picks per game whichever
-   difficulty lands there, and a true hard board at most once a week
-   on a fixed night. Winning the rung on its day earns the star; there
-   is no catching up on yesterday's. The tour's easy Netwalk is not a
-   star, on purpose: the send-off says "tomorrow is your first star:
-   Sudoku", which is tomorrow named with a prize instead of a time.
-   Measure: the rung's roster size against the other boards, active
+   Built; what it is lives in `late-ssh/src/app/hub/CONTEXT.md`
+   (Quests), the lobby's line in `arcade/CONTEXT.md`, the send-off in
+   `clubhouse/CONTEXT.md` §5. The rotation is keyed to the calendar,
+   never the person, so the rung's solvers roster is the day's crowd
+   and the chat has one board to argue about; the knob is time, not
+   the difficulty label. The tour's easy Netwalk is not a star, on
+   purpose: "tomorrow is your first star: easy Sudoku" is tomorrow
+   named with a prize instead of a time. Measure: the rung's roster
+   size against the other boards (`AUDIENCE.md` section 6), active
    minutes on rung days.
 3. **The marks beside the name.** The chat author label already carries
    the bonsai glyph, the country and the allowlisted badges; the ladder

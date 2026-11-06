@@ -244,6 +244,44 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
 /// `o` opens the roster over the selected daily: tiers hardest first, the
 /// names grouped under them, Esc closes it. A solver of another daily is
 /// neither counted nor listed.
+/// The lobby names the day's rung above the cards and marks its card, so
+/// the one board everyone is on today is never a guess.
+#[tokio::test]
+async fn the_lobby_names_todays_rung_and_marks_its_card() {
+    use crate::{
+        app::common::primitives::Screen,
+        test_helpers::{make_app, new_test_db, render_plain},
+    };
+    use late_core::{models::daily_rung::rung_for, test_utils::create_test_user};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rung-reader").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "rung-reader-token");
+    app.resize(120, 40).expect("resize test terminal");
+    app.set_screen(Screen::Arcade);
+
+    let rung = rung_for(chrono::Utc::now().date_naive());
+    let lobby = render_plain(&mut app);
+    assert!(
+        lobby.contains(&format!("✦ Today's rung: {}.", rung.label())),
+        "{lobby}"
+    );
+    let card = lobby
+        .lines()
+        .find(|line| line.contains(&format!("[ {} ]", rung.puzzle.title())))
+        .expect("the rung's card is in the lobby");
+    assert!(
+        card.contains("✦ "),
+        "the rung's card carries the star: {card}"
+    );
+    let other_cards = lobby
+        .lines()
+        .filter(|line| line.contains("[ ") && !line.contains(rung.puzzle.title()))
+        .filter(|line| line.contains('✦'))
+        .count();
+    assert_eq!(other_cards, 0, "only the rung's card is starred: {lobby}");
+}
+
 #[tokio::test]
 async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     use std::{collections::HashMap, sync::Arc};

@@ -24,6 +24,7 @@ use crate::app::common::theme;
 use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::daily_rung::rung_for;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 use late_core::models::user::{RADIO_SLOTS, RadioStation};
 
@@ -1921,6 +1922,7 @@ pub(crate) fn board_stop(
     ) {
         (true, true | false) => BoardStop::Solved {
             hours_left: hours_to_rollover(now),
+            tomorrow: rung_for(now.date_naive() + chrono::Duration::days(1)),
         },
         (false, true) => BoardStop::Open,
         (false, false) => BoardStop::TooSmall,
@@ -1971,11 +1973,17 @@ fn board_header(board: BoardStop) -> TourHeader {
                 Span::styled("lock", text),
             ],
         ),
-        BoardStop::Solved { hours_left } => (
+        BoardStop::Solved {
+            hours_left,
+            tomorrow,
+        } => (
             vec![
                 Line::from(Span::styled("connected. that was day one.", text)),
                 Line::from(Span::styled(
-                    format!("the next board is up at 00:00 UTC, in {hours_left} h."),
+                    format!(
+                        "tomorrow is your first star: {}, up at 00:00 UTC, in {hours_left} h.",
+                        tomorrow.label()
+                    ),
                     text,
                 )),
                 Line::default(),

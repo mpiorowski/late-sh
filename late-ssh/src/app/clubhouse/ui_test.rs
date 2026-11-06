@@ -525,13 +525,17 @@ fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
         "{small:#?}"
     );
 
-    let solved = header(BoardStop::Solved { hours_left: 7 });
+    let monday = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+    let solved = header(BoardStop::Solved {
+        hours_left: 7,
+        tomorrow: rung_for(monday),
+    });
     assert!(
         solved[1].contains("connected. that was day one."),
         "{solved:#?}"
     );
     assert!(
-        solved[2].contains("the next board is up at 00:00 UTC, in 7 h."),
+        solved[2].contains("tomorrow is your first star: easy Sudoku, up at 00:00 UTC, in 7 h."),
         "{solved:#?}"
     );
     assert!(
@@ -557,26 +561,39 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
             .with_timezone(&chrono::Utc)
     };
     let noon = at("2026-11-06T12:10:00Z");
+    let tomorrow = rung_for(chrono::NaiveDate::from_ymd_opt(2026, 11, 7).unwrap());
     let default_terminal = Rect::new(1, 1, 78, 22);
     assert_eq!(board_stop(default_terminal, false, noon), BoardStop::Open);
     assert_eq!(
         board_stop(default_terminal, true, noon),
-        BoardStop::Solved { hours_left: 12 }
+        BoardStop::Solved {
+            hours_left: 12,
+            tomorrow
+        }
     );
     // Too short for the header and a five-tile board under it.
     let tiny = Rect::new(1, 1, 78, 9);
     assert_eq!(board_stop(tiny, false, noon), BoardStop::TooSmall);
     assert_eq!(
         board_stop(tiny, true, noon),
-        BoardStop::Solved { hours_left: 12 }
+        BoardStop::Solved {
+            hours_left: 12,
+            tomorrow
+        }
     );
 
     assert_eq!(
         board_stop(default_terminal, true, at("2026-11-06T23:30:00Z")),
-        BoardStop::Solved { hours_left: 1 }
+        BoardStop::Solved {
+            hours_left: 1,
+            tomorrow
+        }
     );
     assert_eq!(
         board_stop(default_terminal, true, at("2026-11-06T00:00:00Z")),
-        BoardStop::Solved { hours_left: 24 }
+        BoardStop::Solved {
+            hours_left: 24,
+            tomorrow
+        }
     );
 }

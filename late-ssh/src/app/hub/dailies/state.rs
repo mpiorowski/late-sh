@@ -56,7 +56,12 @@ impl QuestState {
                     };
                     banner = Some(Banner::success(&message));
                 }
-                _ => {}
+                QuestEvent::RungStar { user_id, stars } if user_id == self.user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "✦ Today's rung, done. That is star {stars}."
+                    )));
+                }
+                QuestEvent::Completed { .. } | QuestEvent::RungStar { .. } => {}
             }
         }
 
