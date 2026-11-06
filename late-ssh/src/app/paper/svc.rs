@@ -81,8 +81,10 @@ pub const PAPER_MAX_ATTEMPTS: i32 = 3;
 pub const PAPER_ROOM_LINES: usize = 5;
 pub const PAPER_READING_LINES: usize = 5;
 pub const PAPER_OUTSIDE_LINES: usize = 4;
-/// How many radio stations YESTERDAY names, the most listened first.
-pub const PAPER_YESTERDAY_STATIONS: i64 = 3;
+/// How many radio stations YESTERDAY names, the most listened first. Six,
+/// one more than the doors' line names, so a day shows the catalogue's
+/// spread and not only the house channel: small counts are the point.
+pub const PAPER_YESTERDAY_STATIONS: i64 = 6;
 
 /// Ceiling on one room's transcript handed to the model, in characters.
 /// Truncation drops the oldest messages and the head line says so.

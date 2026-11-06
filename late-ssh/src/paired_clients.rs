@@ -3,7 +3,7 @@ use late_core::models::user::{AudioSource, RadioStation};
 use late_core::models::user_ssh_key::KeyAudio;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -634,6 +634,20 @@ impl PairedClientRegistry {
     /// Update every entry for `user_id` to the new audio source and push
     /// `SetPlaybackSource` to each. The CLI uses it to gate its direct-stream
     /// decoder and to start or stop its embedded webview helper.
+    /// The users who can hear something right now: everyone with at least
+    /// one paired client that is not muted. The roll call counts only these
+    /// (`app/audio/svc.rs`), since an account with no client, or a muted
+    /// one, is on its source and hears nothing.
+    pub fn hearing_user_ids(&self) -> HashSet<Uuid> {
+        let clients = self.clients.lock_recover();
+        clients
+            .values()
+            .flatten()
+            .filter(|entry| !entry.state.muted)
+            .map(|entry| entry.user_id)
+            .collect()
+    }
+
     pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) {
         let mut targets = Vec::new();
         {

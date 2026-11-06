@@ -12,7 +12,7 @@ macOS / Linux / Termux:
 curl -fsSL https://cli.late.sh/install.sh | bash
 ```
 
-On Termux, the installer detects the environment and downloads the Android build.
+On Termux, the installer detects the environment and downloads the Android build. On NixOS, use the flake below; the installer warns that the prebuilt binaries need nix-ld.
 
 Windows PowerShell (x64):
 

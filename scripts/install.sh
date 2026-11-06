@@ -41,6 +41,13 @@ is_termux() {
   [[ -n "${TERMUX_VERSION:-}" ]] || [[ "${PREFIX:-}" == "/data/data/com.termux/files/usr" ]]
 }
 
+# NixOS has no /lib64/ld-linux-x86-64.so.2 or FHS library paths, so the
+# prebuilt glibc binaries only start under nix-ld. The flake is the supported
+# route there; the install still proceeds for users who run nix-ld.
+is_nixos() {
+  [[ -e /etc/NIXOS ]] || { [[ -r /etc/os-release ]] && grep -Eq '^ID="?nixos"?$' /etc/os-release; }
+}
+
 is_windows_shell() {
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
@@ -410,6 +417,11 @@ main() {
       fi
       ;;
   esac
+
+  if is_nixos; then
+    log "warning: detected NixOS; prebuilt binaries only start under nix-ld, and embedded YouTube playback also needs GStreamer paths nix-ld does not set"
+    log "warning: use the flake instead: nix run github:mpiorowski/late-sh#late"
+  fi
 
   if [[ "$target" == *-windows-* ]]; then
     log "run 'late.exe --help' to verify the install"

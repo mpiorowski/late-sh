@@ -254,7 +254,9 @@ small modals.
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
   budget, the IRC design, the parked audio leader, the CLI YouTube backend
-  plan, the rest of the Artboard hot-worker plan).
+  plan, the rest of the Artboard hot-worker plan, and
+  `PLAN-FIRST-HOUR.md`: the first session, the daily ladder, the launch
+  post, in that order).
 
 ## 7. Telemetry
 

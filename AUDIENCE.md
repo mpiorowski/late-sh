@@ -17,10 +17,11 @@ Measured 2026-10-15 to 2026-10-22 (logs) and 2026-09-27 to 2026-10-22
 
 | | |
 |---|---|
-| Concurrent sessions, weekly average | 15, 21, 20, 23, 22 over the five weeks ending 2026-10-22 |
-| Concurrent sessions, 90-day peak | 43 |
+| Concurrent sessions, weekly average | 24, 23, 24, 25, 24 over the five weeks ending 2026-11-06 (15, 21, 20, 23, 22 over the five ending 2026-10-22; the line is flat) |
+| Concurrent sessions, 90-day peak | 43; 42 in the 60 days to 2026-11-06 |
 | Distinct people connecting per day | 85 to 135 |
-| Distinct people connecting per week | 371 |
+| Distinct people connecting per week | 371 (logs, week ending 2026-10-22); 295 seen in the 7 days and 1,069 in the 30 days to 2026-11-06 (`users.last_seen`) |
+| Accounts | 18,726 on 2026-11-06; 291 with 8 h or more of lifetime, 172 with 24 h or more |
 | Sessions per day | about 290, of which about 18 (6%) are a first session |
 | Sessions per person per week | 170 people once, 89 two or three times, 59 four to seven, 34 eight to twenty, 19 more than twenty |
 | Share of sessions from the 20 most frequent people | 49% |
@@ -50,9 +51,14 @@ from 2026-10-20 to 2026-10-25 joined to lifetime `user_online_time`
 | All 327 | 95 | 216 | 16 | 107 | 1,266 / 1,006 |
 | The 81 with 24 h or more lifetime | 43 | 27 | 11 | 52 | 1,177 / 917 |
 
-156 accounts have 24 h or more lifetime; the other 75 did not connect in
-the window. Which client a session used is in the logs only, so the split
-cannot reach further back than log retention.
+156 accounts had 24 h or more lifetime on 2026-10-25 (172 on 2026-11-06);
+the other 75 did not connect in the window. Which client a session used is
+in the logs only, so the split cannot reach further back than log
+retention.
+
+Newcomers arrive on plain ssh: of the 108 first-week accounts with a
+session summary in the 7 days to 2026-11-06, 91 (84%) used it. The first
+session is a bare terminal with no radio to hear.
 
 ## 2. Where the time goes
 
@@ -89,7 +95,8 @@ Doors in total (Lateania, A Dark Room, the Realm and the ten PTY doors):
 
 **Inside Home** (labeled hours, 2026-10-02 on): #lounge 4,461 h (69%),
 public topic rooms 1,409 h (22%), News 183 h (3%), private rooms 136 h,
-cyberspace 85 h, DMs 71 h, #deadchannel 57 h before its switch,
+cyberspace 85 h, DMs 71 h, #deadchannel 57 h before its switch (110 h in
+the 14 days to 2026-11-06 after it),
 Notifications 16 h, Discover 14 h, Feeds 4 h. Active time keeps the same
 order: #lounge 561 h, topic rooms 134 h, News 20 h, DMs 10 h.
 
@@ -98,7 +105,13 @@ Nonogram 173, 2048 123, Le Word 89, Minesweeper 85, Tetris 72, Sliding
 Puzzle 66, Rubik's Cube 14, Snake 10, Traffic 4. Boards finished per day:
 160 to 285, climbing through October; 94% of finishes are the shared daily
 board, 6% a personal one. By finishes Minesweeper leads (1,175), then
-Sliding Puzzle, Le Word, Nonogram, Sudoku, Solitaire.
+Sliding Puzzle, Le Word, Nonogram, Sudoku, Solitaire. Since Netwalk, Chess
+Puzzle, Word Wheel and Quartets opened on 2026-10-28: 330 to 450 boards a
+day, Netwalk second by wins within a week, while the week's distinct daily
+players stayed at 85 (93 the week before) and daily wins per player per
+week went from 13 to 22. A new daily is more boards from the same people.
+Share cards per daily win, 14 days to 2026-11-06: Le Word 20%, Word Wheel
+9%, every grid game under 2.5%.
 
 **Inside the Artboard:** 143 h on the canvas, 7 h in the gallery. The
 Artboard's active hours jumped from 1 to 3 a day to 21 and 31 on
@@ -136,45 +149,163 @@ Web, 25 days: the landing page 535,000 views (about 432,000 of them the
 kubelet's readiness probe, every 5 s, from before it moved to `/health`; treat as noise), gallery 4,400, profile pages 3,700 plus 1,400 index views, terms
 764, `/listen` 147, a live stream page 136.
 
-**The newcomer funnel**, from the referral clock (section 6): the 298
-accounts created 2026-10-02 to 2026-10-15, about 21 a day, followed for
+Per person, 2026-10-23 to 2026-11-06 (14 days, database unless stated):
+
+| | |
+|---|---|
+| Chat messages per day | 1,030 to 1,450 (740 to 1,020 in the three weeks before); the 10 busiest authors write 80% of them, the 20 busiest 90% |
+| Daily quests completed per week | 250 to 280 by 52 to 64 people, flat since the week of 2026-09-28; weekly quests by 5 to 19 people |
+| Daily quest streaks alive (a completion today or yesterday) | 35: 15 at 1 or 2 days, 10 at 3 to 6, 3 at 7 to 13, 1 at 14 to 29, 6 at 30 or more |
+| Streak bonus paid | 33 to 36 people and about 46,000 chips a week |
+| People who completed a daily quest | 64 in 7 days, 106 in 28, 524 ever |
+| Doors, distinct people (openings) | the Realm 24 (254), Lateania 22 (148), A Dark Room 14 (132), night city 11 (110), NetHack 10 (68), Brogue 7 (53), DCSS 6 (72) |
+| Lateania fights won | 63,000, 24,000 of them on 2026-10-30, from two level-100 characters at 212 M and 104 M xp: scripted, and it inflates the Games row, the paper's YESTERDAY line and the herald's Sunday card |
+| Shop | the 181 purchases in the week of 2026-11-02 are the free aquarium claim, not chips spent |
+| Chips | median balance 1,000 (the stipend), 90th percentile 1,100, top 353,000 |
+| Referrals | 10 in 30 days |
+| Radio, the roll call (`radio_listens`, from 2026-10-26) | 50 to 90 people a day on a station, 185 of 240 on chillsynth; rows written before the roll call was limited to paired, unmuted clients count the station picked, chillsynth is the default, and 148 of those 185 never touched the picker. Read the paper's top-stations line from the day that change shipped |
+| Radio, the people who can hear it (78 CLI users with 10 min or more in the week to 2026-11-06) | 64 picked a station, 42 pinned slots; chillsynth 34, the other nightride.fm channels 22, the rest of the catalogue 22 (classical 6, chill 5, rock 3, coderadio 2, plaza 2, five others 1 each) |
+
+**The newcomer funnel**, from the referral clock (section 6): the 628
+accounts created 2026-10-02 to 2026-10-29, about 22 a day, followed for
 their first week. An active minute is a UTC minute with keyboard input.
 
 | | Accounts | Share |
 |---|---|---|
-| Typed anything on day one | 276 | 93% |
-| 5 or more active minutes on day one | 156 | 52% |
-| 20 or more active minutes on day one | 47 | 16% |
-| Typed anything on days 2 to 8 | 42 | 14% |
-| Typed on two or more of days 2 to 8 | 14 | 5% |
-| One day of 20 or more active minutes in days 2 to 8 | 17 | 6% |
-| Three such days | 7 | 2% |
+| Typed anything on day one | 598 | 95% |
+| 5 or more active minutes on day one | 331 | 53% |
+| 20 or more active minutes on day one | 94 | 15% |
+| Typed anything on days 2 to 8 | 93 | 15% |
+| Typed on two or more of days 2 to 8 | 32 | 5% |
+| One day of 20 or more active minutes in days 2 to 8 | 38 | 6% |
+| Three such days | 10 | 2% |
 
 Median active minutes in the week after day one: 0. The 90th percentile:
-2. The per-day numbers are flat across the two weeks (0 to 3 returners a
-day out of 9 to 39 signups), so this is the shape, not a bad week.
+5. Each weekly cohort since the clock started reads the same within a
+point or two, so this is the shape, not a bad week.
 
-**deadchannel**, switched on 2026-10-21. In 25 days the first-contact gate
-was evaluated 1,154 times at connect: 800 passes, 174 bios too short, 159
-too few hours, 8 too few settings (counts per connect, not per person).
-13 bios screened, all passed. Beats delivered: 137 clock glitches, 3 name
-flickers, 1 breakthrough, 1 runner created. Fights: 207 roads started,
-2,324 rounds, 231 wins, 11 losses, 2 crossings (staff and testers before
-the switch). Lounge spawns: 29 landed, 8 hit, 4 put down, 25 slipped
-away. In the two days since the switch: 9 spawns landed, 2 put down, 82
-fight commands. Too early to read; what to watch is in section 5.
+How deep day one went says who comes back:
+
+| Active minutes on day one | Accounts | Typed again | On two or more days |
+|---|---|---|---|
+| 0 | 30 | 13% | 0% |
+| 1 to 4 | 267 (43%) | 7% | 0% |
+| 5 to 19 | 237 (38%) | 14% | 3% |
+| 20 to 59 | 65 (10%) | 34% | 15% |
+| 60 or more | 29 (5%) | 59% | 48% |
+
+What day one held, read against the same return. This is correlation,
+not proof: the people who did these may be the people who would have
+stayed anyway.
+
+| Did this on day one | Accounts | Typed again | On two or more days |
+|---|---|---|---|
+| Completed a daily quest | 19 (3%) | 58% | 37% |
+| Won a daily puzzle | 44 (7%) | 34% | 25% |
+| Sent a chat message | 157 (25%) | 26% | 12% |
+| 5 or more minutes, neither won nor chatted | 177 (28%) | 16% | 5% |
+| Everyone | 628 | 15% | 5% |
+
+In days 2 to 7 the Arcade is the screen first-week accounts spend the
+most active minutes on, ahead of Home (metrics, `tenure="first_week"`,
+7 days to 2026-11-06).
+
+**The first session is the tour.** Every first visit lands in the
+Clubhouse and runs the forced tour (`late-ssh/src/app/clubhouse/CONTEXT.md`
+§5): 18 stops over every page, Enter the only key that works, a pool
+break and a scripted dungeon fight that must be played, the daily board a
+stop that is looked at and not played, and nothing in the route that
+names tomorrow. Stops reached, 14 days to 2026-11-06:
+
+| Stop | Reached |
+|---|---|
+| welcome | 579 |
+| chat | 499 |
+| music (the Stations modal) | 475 |
+| arcade | 348 |
+| table (the pool break) | 338 |
+| games | 288 |
+| done | 265 |
+
+46% finish. The biggest single drop is the Stations modal into the
+Arcade page, on sessions that are 84% plain ssh with nothing to hear.
+40% of day-one sessions end with the Clubhouse on screen
+(`late_ssh_session_ends_total{tenure="day_one"}`).
+
+**deadchannel**, switched on 2026-10-21, read 16 days later (2026-11-06):
+16 runners, 13 of them touched the game that day and 15 in the week,
+levels 1 to 11, no mark yet. The haunting since the switch, per connect:
+1,792 gate passes, 39 bio screens, 24 whispers, 12 breakthroughs, 11
+runners created. Fights: 17 to 33 roads started a day in the last week,
+80 cleared and 21 dropped in all; 17 crossings, 11 won. Lounge spawns
+land 4 a day: flickers put down 30 of 66, howlers 4 of 23 (two runners
+are rarely on #lounge together), 9 distinct hitters. The wire carries 30
+to 93 messages a day from 5 to 9 runners, and #deadchannel took 110 h of
+Home attention in 14 days against 57 h in the three weeks before the
+switch. The ceiling is the pool, not the ladder. Of the 295 people seen
+in the week:
+
+| | People |
+|---|---|
+| With 8 h online | 110 |
+| With 8 h and a bio of 100 characters or more | 38 |
+| Of those, already invited (16 hold a runner row) | 17 |
+| With 8 h and no such bio | 72 |
+
+About 20 people are left to haunt; dropping the hours gate to 2 adds
+four. The bio is the binding leg, and by the game's own design the thing
+that gets a regular to write one is the mark beside a runner's name,
+which the room sees after the public flip.
 
 ## 4. What the numbers say
 
 - **The first session is the leak.** Nine in ten newcomers type on day
-  one and half of them stay five minutes, then 86% never press a key
-  again and 94% never come back for a second day. The regulars were not
-  made by the current first session either: 298 signups in two weeks
-  produced 7 people with three active days. Arrivals are not the lever
-  until that changes; a launch post today pours 100 people into a 94%
+  one and half of them stay five minutes, then 85% never press a key
+  again and 95% never come back for a second day. The regulars were not
+  made by the current first session either: 628 signups in four weeks
+  produced 10 people with three active days. Arrivals are not the lever
+  until that changes; a launch post today pours 100 people into a 95%
   leak, which is what July's Hacker News spike measured. The lever is
   the first hour: what a newcomer sees, is handed, and has a reason to
   return to tomorrow.
+- **The first hour is a museum walk, and the exhibit that predicts a
+  return is the one it does not let them touch.** The tour is 18 stops
+  over every page with a pool break and a dungeon fight played by
+  obligation; 46% reach the end and 43% of all signups are gone inside
+  five active minutes. The daily board is a glance on the way past, yet
+  the 7% who won one on day one came back on two days at five times the
+  rate of everyone else, and the 3% who completed a daily quest at seven
+  times. Depth says the same: an hour on day one and half come back
+  twice, under five minutes and none do. The first session should get a
+  newcomer to one finished daily and name tomorrow, and nothing else.
+- **The Arcade's audience is fixed; a new daily deepens it.** Four new
+  dailies doubled the boards finished a day and left the week's distinct
+  daily players at 85, with wins per player up from 13 to 22. More boards
+  is real hours-left-open value and the best day-one hook the site has,
+  and it is not growth.
+- **The station catalogue landed with the people who can hear it.** Among
+  CLI users this week, four in five picked a station and half pinned
+  slots; chillsynth holds under half of them, and the non-synth
+  stations hold as many as the other nightride.fm channels. The roll
+  call said otherwise only because it counted the default for the
+  plain-ssh majority, who hear nothing; it now counts paired, unmuted
+  clients only. Which station plays cannot be
+  measured server-side for third-party streams (the CLI plays them
+  direct), so the pick is the best read there is.
+- **The quest strip is a progression system nobody is shown.** Two daily
+  quests, a weekly, a six-slot streak meter and a chip bonus already run
+  at the top of the Arcade lobby: 52 to 64 people a week complete one,
+  flat since September, and 35 streaks are alive, six of them past 30
+  days. It pays chips into a deflated economy, it is visible on one
+  screen and in no message line or profile, and the tour gives it half a
+  sentence. The streak is the strongest "tomorrow" the site owns and the
+  newcomer never meets it.
+- **deadchannel works for everyone in it and is out of people.** Thirteen
+  of sixteen runners touch it on a given day, the wire doubled Home's
+  attention on the room, and about 20 eligible people remain. The gates
+  are the design, not a bug: the game is the prestige track and stays
+  one, so its pool grows only as the house grows. The first hour feeds
+  it; nothing inside it does.
 - **late.sh is a terminal people leave open.** 81% of attention is idle,
   the night is as busy as the morning, and the longest-connected tenth of
   the crowd holds nearly half the connected time. Concurrency is weekly
@@ -245,15 +376,35 @@ fight commands. Too early to read; what to watch is in section 5.
 
 Live, in order of evidence behind them:
 
-- **The first hour, before anything else.** The funnel above says the
-  next ritual, surface or launch post lands on people who are gone by
-  day two. What a newcomer is handed on day one (the tour, the paper, an
-  invitation to come back tomorrow: a daily board started, a runner
-  promised, a seat kept) is the unmeasured half of this doc. The Grafana
-  "Newcomers" row (section 6) is where to read it: day-one active minutes
-  by screen, the tour stop where newcomers leave, and the screen that was
-  up when a day-one session ended. Read a week of it before designing
-  anything.
+- **The first hour, before anything else: a first session built around
+  the daily board.** The funnel says the next ritual, surface or launch
+  post lands on people who are gone by day two, and the day-one reads
+  (section 3) say what holds them: a finished daily, a quest ticked, a
+  reason named for tomorrow. The design that follows, in the tour's own
+  terms (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): three or four stops
+  instead of 18 (what this is, the chat, today's board, see you
+  tomorrow); today's daily as the one play the route requires, in place
+  of the pool break and the scripted fight; no Stations stop on plain
+  ssh, where there is nothing to hear; a send-off that names tomorrow
+  (the board resets at 00:00 UTC, the streak that starts tonight, the
+  paper at the door). Measure it on the next cohort with the queries in
+  section 6. Targets: newcomers who win a daily on day one from 7% to 25%
+  or more, two-day return from 5% to 9%, tour completion from 46% to 80%.
+  Two to three weeks of work and one cohort to read. The steps, the
+  ladder that follows and the post after that: `devdocs/PLAN-FIRST-HOUR.md`.
+  - **A ladder on the dailies (the Duolingo shape).** Half of it is
+    built: daily and weekly quests, a streak with a chip bonus, a strip
+    at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What
+    Duolingo has that the strip does not: the streak is the first thing
+    you see and the thing you are warned about losing, others can see
+    it, the reward is standing rather than currency, and day one ends
+    inside it. The gap is visibility and the day-one handshake, not more
+    quest kinds: the streak on the profile and beside the name in the
+    Arcade rosters, the first session's daily starting it, the
+    keypress-return moment (section 4) saying what it is at. Chips cannot
+    be the reward; the median balance is the stipend. Unmeasured:
+    whether a visible streak moves the 85 weekly players or only
+    decorates them.
 - **Daily boards are the proven ritual.** The Arcade's daily is the floor
   deadchannel's ration loop is built to copy. More of that shape (one
   shared object a day, finished in minutes, talked about in #lounge) beats
@@ -411,13 +562,19 @@ Live, in order of evidence behind them:
     bot that only broadcasts gets muted; an account that posts twice a
     day and otherwise behaves like a person gets followed.
   - **When.** It is an arrivals lever, and the funnel in section 3 says
-    arrivals leak at 94% on day two. Flip the row on once the first hour
-    has moved, so the first thing new followers find is a place that
-    holds them. Not measured yet beyond the counter.
+    arrivals leak at 95% on day two. The row is on; two posts a day to a
+    few followers is the account being built, not a launch. The posts
+    that bring a crowd wait for the first hour, so the first thing new
+    followers find is a place that holds them. Not measured yet beyond
+    the counter.
   - **What is left.** The herald is live and documented in
     `late-ssh/src/app/herald/CONTEXT.md` (the post, the switches, the
     account setup by hand, the telemetry); its two secrets went out
-    under the deploy skew rule in `infra/RUNBOOK.md`. Bluesky's
+    under the deploy skew rule in `infra/RUNBOOK.md`. The slot
+    constraint is under the same rule: an old pod still running against
+    a changed `herald_posts` constraint fails every claim, logging
+    `failed to claim the herald's day` every five minutes until it
+    drains, and loses nothing once it has. Bluesky's
     automation label is on (Settings, "Show automation label"), and the
     landing page links both accounts with `rel="me"`, which is what makes
     the Mastodon profile's `https://late.sh` link show verified. Open:
@@ -455,10 +612,15 @@ Live, in order of evidence behind them:
       not posted behind a mark. The boards the hand run marked for 18 to
       24 October were posted there before any of this; check the account
       for them.
-- **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
-  three surfaces"), which is the game's public launch. The Hacker News
-  front page in July 2026 peaked at about 100 sessions and settled back to
-  the same 40; a post before something holds people repeats that.
+- **Launch posts follow the first hour, not the deadchannel flip.** The
+  Hacker News front page in July 2026 peaked at about 100 sessions and
+  settled back to the same 40; a post before something holds people
+  repeats that, and the lifetime yield today is about one regular per
+  hundred signups. The flip (`GAME.md`, "The three surfaces") is the
+  game's own launch and waits on runners; runners wait on bios; bios, by
+  design, wait on the flip. Gating the posts on it as well gates them on
+  a loop. Post once the next cohort's two-day return has moved; the flip
+  comes when the game is ready, at its own pace.
 - **Progress Quest** is the cheap next door on the incremental shelf, the
   only door shape that holds people (`devdocs/DOOR-CANDIDATES.md`).
 
@@ -481,7 +643,13 @@ What to watch for deadchannel, from the counters in
 `late-ssh/src/app/deadchannel/CONTEXT.md`, Gotchas: runners created
 against gate passes (the funnel), roads started per day against runners
 (the ritual), lounge hits against spawns landed (does the room notice),
-and `#deadchannel` hours inside Home (does anyone sit on the wire).
+and `#deadchannel` hours inside Home (does anyone sit on the wire). The
+16-day read is in section 3: the ritual and the wire hold, the room
+notices flickers and misses howlers, and the funnel's ceiling is the
+eligible pool. The gates stay as designed; the game is the prestige
+track. The arena and bets stay unbuilt at two or three runners online at
+once (the coordination rule above); the first marks, due within days, are
+the next thing the game itself has to show.
 
 ## 6. Measuring
 
@@ -546,6 +714,66 @@ SELECT count(*) AS accounts,
        count(*) FILTER (WHERE good_days >= 3) AS back_3_days,
        count(*) FILTER (WHERE good_days >= 5) AS back_5_days
 FROM days;
+```
+
+The day-one reads in section 3 come from the same table. Depth on day one
+against first-week return; for the action table swap the `m1` buckets for
+a day-one fact (a `chip_ledger` row with reason `daily_puzzle_win`, a
+`chat_messages` row, a `user_quest_progress` row completed on the join
+day):
+
+```sql
+WITH cohort AS (
+  SELECT id, created::date AS joined FROM users
+  WHERE created >= '2026-10-02' AND created < now() - interval '7 days'
+), d1 AS (
+  SELECT c.id, coalesce(a.active_minutes, 0) AS m1
+  FROM cohort c
+  LEFT JOIN newcomer_activity_days a ON a.user_id = c.id AND a.day = c.joined
+), ret AS (
+  SELECT c.id,
+         count(*) FILTER (WHERE a.day > c.joined AND a.day <= c.joined + 7) AS back_days
+  FROM cohort c
+  LEFT JOIN newcomer_activity_days a ON a.user_id = c.id
+  GROUP BY c.id
+)
+SELECT CASE WHEN m1 = 0 THEN '0' WHEN m1 < 5 THEN '1-4' WHEN m1 < 20 THEN '5-19'
+            WHEN m1 < 60 THEN '20-59' ELSE '60+' END AS day_one_minutes,
+       count(*) AS accounts,
+       count(*) FILTER (WHERE back_days >= 1) AS typed_again,
+       count(*) FILTER (WHERE back_days >= 2) AS two_days
+FROM d1 JOIN ret USING (id)
+GROUP BY 1 ORDER BY min(m1);
+```
+
+The quest strip: completions and people per week, and the streaks alive:
+
+```sql
+SELECT date_trunc('week', p.completed_at)::date AS week, a.cadence,
+       count(*) AS done, count(DISTINCT p.user_id) AS people
+FROM user_quest_progress p JOIN quest_assignments a ON a.id = p.assignment_id
+WHERE p.completed_at >= now() - interval '42 days'
+GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT consecutive_days, count(*) FROM user_daily_quest_streaks
+WHERE last_completed_date >= current_date - 1 GROUP BY 1 ORDER BY 1;
+```
+
+deadchannel's eligible pool: the people seen this week with the hours
+and the bio the gate asks for (`haunt/state.rs` holds the thresholds),
+and how many already hold a runner row:
+
+```sql
+SELECT count(*) FILTER (WHERE hours >= 8) AS with_hours,
+       count(*) FILTER (WHERE hours >= 8 AND bio >= 100) AS eligible,
+       count(*) FILTER (WHERE hours >= 8 AND bio >= 100 AND r.user_id IS NOT NULL) AS invited
+FROM (
+  SELECT u.id, coalesce(t.total_milliseconds, 0) / 3600000.0 AS hours,
+         length(coalesce(u.settings->>'bio', '')) AS bio
+  FROM users u
+  LEFT JOIN user_online_time t ON t.user_id = u.id
+  WHERE u.last_seen >= now() - interval '7 days'
+) p
+LEFT JOIN deadchannel_runners r ON r.user_id = p.id;
 ```
 
 Gaps in what the telemetry can answer, by design (no per-person metric

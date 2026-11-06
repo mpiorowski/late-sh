@@ -294,10 +294,11 @@ fn pair_radio_tracks_adds_the_house_mounts_to_the_radio_meta() {
     );
 }
 
-/// The roll call writes every human online down for the day by the source
-/// they picked, once however many times it is called: an account on the
-/// radio under its station with no paired CLI at all, an account on YouTube
-/// once, and a bot (online with no fingerprint) not at all.
+/// The roll call writes every human who can hear something down for the day
+/// by the source they picked, once however many times it is called: a paired
+/// account on the radio under its station, a paired account on YouTube once.
+/// An account with no paired client, one whose client is muted, and a bot
+/// (online with no fingerprint) are not written at all.
 #[tokio::test]
 async fn the_roll_call_writes_each_online_listener_down_once_a_day() {
     use crate::app::audio::svc::RollCall;
@@ -312,6 +313,8 @@ async fn the_roll_call_writes_each_online_listener_down_once_a_day() {
     let listener = create_test_user(&test.db, "roll-call-listener").await;
     let watcher = create_test_user(&test.db, "roll-call-watcher").await;
     let bot = create_test_user(&test.db, "roll-call-bot").await;
+    let bystander = create_test_user(&test.db, "roll-call-bystander").await;
+    let muted = create_test_user(&test.db, "roll-call-muted").await;
     let nightride = RadioStation::from_key("nightride").expect("nightride");
     let client = test.db.get().await.expect("db client");
     User::set_radio_station(&client, listener.id, nightride)
@@ -321,11 +324,25 @@ async fn the_roll_call_writes_each_online_listener_down_once_a_day() {
         .await
         .expect("move the watcher to youtube");
     let active_users = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let service = AudioService::new(
-        test.db.clone(),
-        None,
-        PairedClientRegistry::new("https://audio.late.sh"),
-        active_users.clone(),
+    let paired = PairedClientRegistry::new("https://audio.late.sh");
+    let service = AudioService::new(test.db.clone(), None, paired.clone(), active_users.clone());
+    let pair = |token: &str, user_id, source| {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let registration = paired
+            .register(token.to_string(), tx, user_id, source)
+            .expect("a pair slot");
+        (registration, rx)
+    };
+    let (_listener_pair, _listener_rx) = pair("tok-listener", listener.id, AudioSource::Radio);
+    let (_watcher_pair, _watcher_rx) = pair("tok-watcher", watcher.id, AudioSource::Youtube);
+    let (muted_pair, _muted_rx) = pair("tok-muted", muted.id, AudioSource::Radio);
+    paired.update_state_and_enforce_mute_policy(
+        "tok-muted",
+        muted_pair,
+        crate::app::audio::client_state::ClientAudioState {
+            muted: true,
+            ..Default::default()
+        },
     );
     let now = chrono::Utc::now();
     assert_eq!(
@@ -359,6 +376,18 @@ async fn the_roll_call_writes_each_online_listener_down_once_a_day() {
             ),
         ),
         (bot.id, online("roll-call-bot", None, AudioSource::Radio)),
+        (
+            bystander.id,
+            online(
+                "roll-call-bystander",
+                Some("SHA256:bystander"),
+                AudioSource::Radio,
+            ),
+        ),
+        (
+            muted.id,
+            online("roll-call-muted", Some("SHA256:muted"), AudioSource::Radio),
+        ),
     ]);
 
     for _ in 0..2 {

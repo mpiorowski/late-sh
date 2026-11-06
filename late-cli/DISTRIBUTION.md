@@ -15,7 +15,7 @@ Installer defaults:
 - `LATE_INSTALL_CHECKSUM_BASE_URL` overrides where `sha256sums.txt` is read from; default is the GitHub Release assets, `https://github.com/mpiorowski/late-sh/releases/download`
 - `LATE_INSTALL_VERSION` selects a specific version instead of `latest`
 - `LATE_INSTALL_DIR` overrides install directory
-- Shell installer detects WSL, Termux, and Git Bash/MSYS/Cygwin; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build
+- Shell installer detects WSL, Termux, Git Bash/MSYS/Cygwin, and NixOS; Termux receives the Android build and Windows shell environments receive the Windows `late.exe` build. On NixOS (`/etc/NIXOS` or `ID=nixos` in `/etc/os-release`) it still installs the glibc binaries, for nix-ld users, but ends with a warning pointing at the flake: the binaries cannot start without nix-ld, and `late-webview` needs the GStreamer and GIO paths only the flake wrapper sets
 - Shell installer targets `/usr/local/bin`, `$HOME/.local/bin`, the Termux prefix, or `%LOCALAPPDATA%\Programs\late` under Windows shell environments, depending on platform and permissions
 - PowerShell installer places `late.exe` under `%LOCALAPPDATA%\Programs\late` unless overridden and prints a PATH hint when needed
 - PowerShell installer uses environment-based architecture detection instead of `RuntimeInformation.OSArchitecture` so older Windows PowerShell/.NET hosts can run it
