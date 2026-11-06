@@ -313,14 +313,13 @@ fn choose_template<'a>(
     weighted_pick(&pool, cadence, period_start, slot)
 }
 
-/// Assigned quests are arcade-only for now (owner decision 2026-07-13, see
-/// `devdocs/FRD-LOBBY-CONSOLIDATION.md`): the daily slots draw an easy and
-/// a medium quest, the weekly slot a hard one — all from the arcade page
-/// (score/level runs plus the daily puzzles). The room-game templates were
-/// deactivated by migration 110; the Rooms demolition (phase 3) deletes
-/// their events. Each slot rolls from the full difficulty bucket; there is no
-/// cross-slot domain avoidance, so an easy and a medium puzzle of the same
-/// family can both appear on the same day.
+/// Assigned quests are arcade-only for now (owner decision 2026-07-13): the
+/// daily slots draw an easy and a medium quest, the weekly slot a hard one —
+/// all from the arcade page (score/level runs plus the daily puzzles). The
+/// room-game templates were deactivated by migration 110; the Rooms
+/// demolition (phase 3) deletes their events. Each slot rolls from the full
+/// difficulty bucket; there is no cross-slot domain avoidance, so an easy and
+/// a medium puzzle of the same family can both appear on the same day.
 fn slot_difficulty_preference(cadence: &str, slot: i32) -> Option<&'static str> {
     match (cadence, slot) {
         ("daily", 1) => Some("easy"),

@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. The design and what v1 left out: `devdocs/HOME-LAYOUTS.md`.
+- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. What is not built: §1, Not built.
 - Status: Experimental.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -221,7 +221,7 @@ arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
 `gaps`).
 
 Furniture and focus: outside arrange mode only chat tiles take the focus
-(`TileKind::takes_focus`), by click, `Alt+arrows` or the arrows of arrange
+(`TileKind::takes_focus`), by click, `Alt+arrows`, `Alt+J` `Alt+K` or the arrows of arrange
 mode; a click on a panel is its gesture (the pet is petted, the tank is fed, a
 live row opens, the Live strip on the reef opens what it shows rather than
 feeding) and the keys stay with the chat (`focus_home_tile_at`). A page opens with
@@ -231,7 +231,7 @@ else the first): it draws Home's card (the rail's selection, synthetic
 entries included, `HomeView`) with the card's own chrome, its keys are
 Home's (`input::handle_home_key`), and `App::home_chat_room_id` is `None` while
 a synthetic entry is up. Every other chat tile watches its room under a
-`chat · #room` rule, a click or `Alt+arrows` from being the page's chat, so a stream
+`chat · #room` rule, a click, `Alt+arrows` or `Alt+J` `Alt+K` from being the page's chat, so a stream
 night is two chats: the stream room and #lounge.
 
 Guests (`Guest`: now, attention) are the two widgets that come and go:
@@ -347,6 +347,12 @@ Every row is a fact the session already holds, and every row clears on the act t
 
 Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), an unowned or put-away pet is never due; everyone has a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
 
+### Not built
+
+- Fit shares: a split sized to its content. Splits are fixed (`Share::First`, `Share::Second`); a Fit share would touch every tree walker in `layout.rs` and `state.rs`.
+- A `MyStream` chat binding, and a `layout` component on the status line.
+- A layout shared as an ASCII picture, like CSS grid areas (`/layout share`): each letter a kind, each letter's cells a solid rectangle. A picture whose rectangles form a guillotine partition converts to the tree; a pinwheel is refused with a message.
+
 ## 2. File map
 
 ```text
@@ -378,7 +384,7 @@ domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
 row in `TileKind::ALL` (the one list the compiler does not check), and
 the arms the build then asks for (`label`, `one_per_page`, `takes_focus`,
 `hints`, the stock `home()`, the `draw_rice` match), a `draw_tile` on
-the domain's surface, and the kind table in `devdocs/HOME-LAYOUTS.md`. `input.rs`: `handle_home_event` ahead of Home's own keys,
+the domain's surface. `input.rs`: `handle_home_event` ahead of Home's own keys,
 `Ctrl+E` (`layout_chord_globally`, `go_home_for_layouts`) among the
 reserved chords, the Esc arm (one call, `handle_escape`), a click on the
 page (`focus_home_tile_at`), the `StatusClick::HomeLayout` click and the
@@ -417,11 +423,12 @@ trimmed a key at a time on a narrow tile.
 Outside arrange mode Home's keys are Home's (`input::handle_home_key`): the
 active chat tile is Home's chat, the rail its room, `i` / Enter compose
 in it, `j` `k` select in it and the message actions act on its
-selection; the furniture takes no keys. `Alt+arrows` move the focus to the
-next chat tile (right, down) or the previous one (left, up), wrapping past the
-furniture (`hop_chat_tile`, `ZenState::focus_chat_step`), the same move as a
-click (`focus_moved`); nothing moves with one chat tile, in a composer (the
-word jumps keep them) or during a room jump. With a Live tile on the page,
+selection; the furniture takes no keys. `Alt+arrows` and `Alt+J` `Alt+K` move
+the focus to the next chat tile (right, down, `Alt+J`) or the previous one
+(left, up, `Alt+K`), wrapping past the furniture (`chat_tile_hop`,
+`hop_chat_tile`, `ZenState::focus_chat_step`), the same move as a click
+(`focus_moved`); nothing moves with one chat tile, in a composer (the word
+jumps keep the arrows, `Alt+J` `Alt+K` do nothing) or during a room jump. With a Live tile on the page,
 `s` then a row's number opens that row (`live::input::open_from_prefix`,
 Home's own prefix; any other key after
 `s` is swallowed), and a click on a row opens it without focusing the
@@ -622,7 +629,7 @@ update.
   picker owning the keys and the clicks under it, the chat keys staying
   off a tile that is not a chat, the Live tile's `s` prefix,
   `[` `]` in rail order, a second chat tile keeping its room with the
-  rail following the active one, `Alt+arrows` hopping the chat tiles, a
+  rail following the active one, `Alt+arrows` and `Alt+J` `Alt+K` hopping the chat tiles, a
   room picked on another tile moving the focus there, a draft staying in its room, the pet
   click leaving Home's focus alone, and `?` opening the Layouts topic.
   The Live tile's rows are the panel's (`live/panel_test.rs`), the care

@@ -631,17 +631,21 @@ impl AudioService {
     }
 
     /// The roll call: every human online on this replica (the roster the
-    /// music dock's source counts read), written down for `now`'s UTC day by
-    /// the source they have picked: on the radio under its station
-    /// (`RadioListen::record`), on YouTube once (`YoutubeListen::record`).
-    /// It counts who is tuned in, not who is audible: an account with no
-    /// paired CLI, or a muted one, is on its source all the same. Each
-    /// replica calls its own roster and a listener already written today is
-    /// a no-op, so a day's rows are its distinct listeners. Returns how many
-    /// listeners this call found, for the counters.
+    /// music dock's source counts read) who can hear something, written down
+    /// for `now`'s UTC day by the source they have picked: on the radio
+    /// under its station (`RadioListen::record`), on YouTube once
+    /// (`YoutubeListen::record`). Hearing means a paired client that is not
+    /// muted (`PairedClientRegistry::hearing_user_ids`): a plain-ssh session
+    /// sits on the default station and hears nothing, and writing it down
+    /// made the default the top station of every day. Each replica calls its
+    /// own roster and a listener already written today is a no-op, so a
+    /// day's rows are its distinct listeners. Returns how many listeners
+    /// this call found, for the counters.
     pub async fn roll_call(&self, now: DateTime<Utc>) -> Result<RollCall> {
+        let hearing = self.paired_clients.hearing_user_ids();
         let online: Vec<Uuid> = crate::state::online_human_ids(&self.active_users.lock_recover())
             .into_iter()
+            .filter(|user_id| hearing.contains(user_id))
             .collect();
         let mut called = RollCall::default();
         if online.is_empty() {

@@ -1957,7 +1957,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_radio_listeners_total")
                 .with_description(
-                    "Online accounts on the radio source at each roll call, by station",
+                    "Online accounts with an unmuted paired client on the radio source at each roll call, by station",
                 )
                 .build()
         })
@@ -1968,7 +1968,7 @@ mod inner {
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_youtube_listeners_total")
-                .with_description("Online accounts on the YouTube source at each roll call")
+                .with_description("Online accounts with an unmuted paired client on the YouTube source at each roll call")
                 .build()
         })
     }

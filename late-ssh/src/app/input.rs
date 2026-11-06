@@ -144,7 +144,10 @@ pub enum ParsedInput {
     AltS,
     AltA,
     AltC,
-    /// Alt+K samples the Artboard colour under the cursor.
+    /// Alt+J on Home focuses the next chat tile.
+    AltJ,
+    /// Alt+K samples the Artboard colour under the cursor; on Home it
+    /// focuses the previous chat tile.
     AltK,
     /// Alt+1..9 (`ESC 1`..`ESC 9`), the digit 1-9: on Home it loads that
     /// layout in one chord, an extra to `Ctrl+E` then the digit. Ctrl+digit
@@ -553,6 +556,7 @@ impl Perform for VtCollector {
                 b'a' | b'A' => self.events.push(ParsedInput::AltA),
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
+                b'j' | b'J' => self.events.push(ParsedInput::AltJ),
                 b'k' | b'K' => self.events.push(ParsedInput::AltK),
                 b'1'..=b'9' => self.events.push(ParsedInput::AltDigit(byte - b'0')),
                 _ => {}
@@ -1096,9 +1100,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                 chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
-        // Alt+digit is Home's (`zen::input::handle_home_event`, above);
-        // every other page, and a composer being typed in, ignores it.
-        ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK | ParsedInput::AltDigit(_) => {}
+        // Alt+digit and Alt+J/K are Home's (`zen::input::handle_home_event`,
+        // above); every other page, and a composer being typed in, ignores them.
+        ParsedInput::AltA
+        | ParsedInput::AltC
+        | ParsedInput::AltJ
+        | ParsedInput::AltK
+        | ParsedInput::AltDigit(_) => {}
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
         // the composer gate, so F4 closes it from the composer too.

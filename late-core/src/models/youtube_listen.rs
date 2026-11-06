@@ -4,8 +4,9 @@
 //! A row is one account on YouTube on one day, the booth's twin of
 //! `radio_listen.rs`. The audio service's roll call
 //! (`late-ssh/src/app/audio/svc.rs`) writes one for every online account on
-//! the YouTube source, on every replica, and the same account again is a
-//! no-op, so a day's rows count listeners, never minutes. The paper's
+//! the YouTube source with an unmuted paired client, on every replica, and
+//! the same account again is a no-op, so a day's rows count listeners,
+//! never minutes. The paper's
 //! YESTERDAY column reads a day's count.
 
 use anyhow::Result;

@@ -253,9 +253,10 @@ small modals.
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
-  budget, the Home layouts design (`HOME-LAYOUTS.md`), the IRC design and
-  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
-  permissions matrix).
+  budget, the IRC design, the parked audio leader, the CLI YouTube backend
+  plan, the rest of the Artboard hot-worker plan, and
+  `PLAN-FIRST-HOUR.md`: the first session, the daily ladder, the launch
+  post, in that order).
 
 ## 7. Telemetry
 
