@@ -63,3 +63,4 @@ upstream-brogue/
 GUIDE.md
 
 /scripts/test/aggstats.json
+.cache_ggshield
