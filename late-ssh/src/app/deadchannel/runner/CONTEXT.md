@@ -38,7 +38,7 @@ chat's rows builder takes `runner_looks: Option<&HashMap<Uuid, RunnerEntry>>`,
 `Some` only while the rendered room is #deadchannel: a runner's author
 header opens its badge stack with the level badge (`runner/ui.rs::badge_text`,
 `▚7`, painted in the level's band through `AuthorTint.runner`; the
-first badge, so it sits right after the name, crown, and title),
+first badge, so it sits right after the name and title),
 every entry in the room wraps `PORTRAIT_GUTTER` (6) cells short, and a block-opening message by a
 runner gets `attach_portrait` (the face right-aligned on the entry's
 first rows, the hood level with the header, wearing what the entry has

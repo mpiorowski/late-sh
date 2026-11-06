@@ -70,42 +70,65 @@ pub(crate) fn draw_join_overlay(frame: &mut Frame, area: Rect, draft: &RealmJoin
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// One row per palette colour: its five shades, its name, and who wears it
-/// already. The cursor never sits on a taken one.
+/// Twenty colours in two columns of ten, read down: each its three shades,
+/// its name, and who wears it already. The cursor never sits on a taken one.
 fn color_lines(cursor: usize, taken: &[(usize, String)], text_width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for (idx, palette) in PLAYER_PALETTES.iter().enumerate() {
-        let held = taken.iter().find(|(slot, _)| *slot == idx);
-        let is_selected = idx == cursor && held.is_none();
-        let mut spans = vec![Span::raw(" "), marker_span(is_selected)];
-        for (r, g, b) in palette.shades {
-            spans.push(Span::styled(
-                "\u{25ae}",
-                Style::default().fg(if held.is_some() {
-                    theme::TEXT_FAINT()
-                } else {
-                    Color::Rgb(r, g, b)
-                }),
-            ));
-        }
+    let rows = PLAYER_PALETTES.len().div_ceil(2);
+    let column = text_width / 2;
+    (0..rows)
+        .map(|row| {
+            let mut spans = vec![Span::raw(" ")];
+            for idx in [row, row + rows] {
+                if idx < PLAYER_PALETTES.len() {
+                    spans.extend(color_cell(idx, cursor, taken, column));
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// One colour of the picker, padded to its column.
+fn color_cell(
+    idx: usize,
+    cursor: usize,
+    taken: &[(usize, String)],
+    width: usize,
+) -> Vec<Span<'static>> {
+    let palette = &PLAYER_PALETTES[idx];
+    let held = taken.iter().find(|(slot, _)| *slot == idx);
+    let is_selected = idx == cursor && held.is_none();
+    let mut spans = vec![marker_span(is_selected)];
+    for (r, g, b) in palette.shades {
         spans.push(Span::styled(
-            format!(" {:<9}", palette.name),
-            Style::default().fg(match (held.is_some(), is_selected) {
-                (true, _) => theme::TEXT_FAINT(),
-                (false, true) => theme::TEXT_BRIGHT(),
-                (false, false) => theme::TEXT(),
+            "\u{25ae}",
+            Style::default().fg(if held.is_some() {
+                theme::TEXT_FAINT()
+            } else {
+                Color::Rgb(r, g, b)
             }),
         ));
-        if let Some((_, who)) = held {
-            let room = text_width.saturating_sub(21);
-            spans.push(Span::styled(
-                truncate(&format!("worn by {who}"), room),
-                Style::default().fg(theme::TEXT_FAINT()),
-            ));
-        }
-        lines.push(Line::from(spans));
     }
-    lines
+    spans.push(Span::styled(
+        format!(" {:<8}", palette.name),
+        Style::default().fg(match (held.is_some(), is_selected) {
+            (true, _) => theme::TEXT_FAINT(),
+            (false, true) => theme::TEXT_BRIGHT(),
+            (false, false) => theme::TEXT(),
+        }),
+    ));
+    // Marker, shades and name take fourteen columns; who wears it gets the
+    // rest of the cell.
+    let room = width.saturating_sub(15);
+    let worn = match held {
+        Some((_, who)) => truncate(who, room),
+        None => String::new(),
+    };
+    spans.push(Span::styled(
+        format!(" {worn:<room$}"),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    spans
 }
 
 fn marker_span(selected: bool) -> Span<'static> {

@@ -26,12 +26,6 @@ pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
 /// Deadchannel's Old Signal put down, the first time. The one door badge
 /// that pays no chips: the game's wallets never convert (GAME.md).
 pub const DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY: &str = "deadchannel_old_signal";
-/// The month's last crown holder. Monthly like the ranked boards (it is
-/// earned again every month and shows only for the month after), but
-/// rankless like a milestone: the crown has one holder, so a `#1` on the
-/// badge would be noise. That split is why it is in
-/// [`is_rankless_award`] and not in [`MILESTONE_AWARD_CATEGORIES`].
-pub const CROWN_AWARD_CATEGORY: &str = "crown";
 /// The Artboard gallery's monthly board: ranked like the arcade boards
 /// (`ART1` to `ART3`), scored by the best single piece's applause so ten
 /// mediocre frames never beat one good one, and the only ranked award that
@@ -39,7 +33,7 @@ pub const CROWN_AWARD_CATEGORY: &str = "crown";
 /// [`GALLERY_AWARD_MIN_APPLAUSE`] to be ranked at all.
 pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
 /// The Late Time board's monthly winner: whoever was online longest last
-/// month. First place only, so rankless like the crown (`LATE`, never
+/// month. First place only, so rankless (`LATE`, never
 /// `LATE1`). The score is the month's online time in milliseconds.
 pub const LATE_TIME_AWARD_CATEGORY: &str = "late_time";
 /// The Top Drinkers board's monthly winner: whoever took the most buzz
@@ -99,11 +93,8 @@ pub fn is_milestone_award(category: &str) -> bool {
 /// shown only for the month after, like the ranked boards, but a `#1` on the
 /// badge would be noise. The badge legends are tested against this list
 /// alongside [`MILESTONE_AWARD_CATEGORIES`].
-pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 3] = [
-    CROWN_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY,
-    TOP_DRINKERS_AWARD_CATEGORY,
-];
+pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 2] =
+    [LATE_TIME_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY];
 
 /// The monthly ranked boards (`AW1`..`ART3`): the snapshot's `ranked` arms.
 pub static RANKED_AWARD_CATEGORIES: [&str; 6] = [
@@ -144,7 +135,7 @@ fn ladder_label(ladder: &[&str]) -> &'static str {
 /// If you can earn it, you can hide it.
 pub fn chat_badge_rows() -> Vec<ChatBadgeRow> {
     let mut rows = Vec::new();
-    for category in chat_award_categories() {
+    for category in all_award_categories() {
         match BADGE_LADDERS
             .iter()
             .find(|ladder| ladder.contains(&category))
@@ -173,8 +164,8 @@ pub fn chat_badge_rows() -> Vec<ChatBadgeRow> {
 }
 
 /// Every award category there is, in the order the chat label stacks them
-/// (`award_category_priority`). The profile lists all of them; the chat
-/// label shows [`chat_award_categories`].
+/// (`award_category_priority`). The profile and the chat label both list
+/// all of them.
 pub fn all_award_categories() -> Vec<&'static str> {
     let mut all: Vec<&'static str> = RANKED_AWARD_CATEGORIES
         .iter()
@@ -184,17 +175,6 @@ pub fn all_award_categories() -> Vec<&'static str> {
         .collect();
     all.sort_by_key(|category| award_category_priority(category));
     all
-}
-
-/// Every award category that can ever show in a chat label's `[...]` group,
-/// in stacking order. The crown is the one award left out: chat paints last
-/// month's crown as a glyph before the name (`CROWN_LAUREATE_GLYPH` in
-/// late-ssh, resolved from `crown_reigns`), so the code would say it twice.
-pub fn chat_award_categories() -> Vec<&'static str> {
-    all_award_categories()
-        .into_iter()
-        .filter(|category| *category != CROWN_AWARD_CATEGORY)
-        .collect()
 }
 
 /// Whether an award's badge is printed without a rank digit: every milestone
@@ -341,7 +321,6 @@ pub async fn list_profile_awards_for_user(
                         WHEN 'tetris' THEN 2
                         WHEN 'twenty_forty_eight' THEN 3
                         WHEN 'snake' THEN 4
-                        WHEN 'crown' THEN 5
                         WHEN 'artboard' THEN 6
                         WHEN 'late_time' THEN 7
                         WHEN 'top_drinkers' THEN 8
@@ -455,18 +434,6 @@ pub async fn snapshot_previous_month_profile_awards(
                 FROM score_events
                 GROUP BY user_id, game
              ),
-             -- The crown's month-end holder: the last reign taken inside
-             -- the month, whether or not it is still open. The rollover
-             -- itself needs no sweeper (a reign is current only while its
-             -- month is), so this reads the row rather than a closed flag.
-             crown_holder AS (
-                SELECT crown_reigns.holder_user_id AS user_id,
-                       crown_reigns.paid_chips AS value
-                FROM crown_reigns, bounds
-                WHERE crown_reigns.month = bounds.period_month
-                ORDER BY crown_reigns.taken_at DESC, crown_reigns.id DESC
-                LIMIT 1
-             ),
              -- The gallery: each hanger's best piece of the month by
              -- applause (earliest hang breaks a tie between their own),
              -- and only hangers whose best piece cleared the floor.
@@ -535,15 +502,6 @@ pub async fn snapshot_previous_month_profile_awards(
                        value,
                        RANK() OVER (PARTITION BY category ORDER BY value DESC) AS rank
                 FROM score_totals
-                UNION ALL
-                -- One holder, so the rank is a constant rather than a
-                -- window; `award_badge` prints this category without the
-                -- digit (`is_rankless_award`).
-                SELECT user_id,
-                       'crown'::text AS category,
-                       value,
-                       1::bigint AS rank
-                FROM crown_holder
                 UNION ALL
                 -- First place only; `award_badge` prints it bare.
                 SELECT user_id,
@@ -763,7 +721,6 @@ pub fn award_category_code(category: &str) -> &'static str {
         DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
         DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
         DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => "SIG",
-        CROWN_AWARD_CATEGORY => "CRWN",
         GALLERY_AWARD_CATEGORY => "ART",
         LATE_TIME_AWARD_CATEGORY => "LATE",
         TOP_DRINKERS_AWARD_CATEGORY => "DRNK",
@@ -792,7 +749,6 @@ pub fn award_category_label(category: &str) -> &'static str {
         DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
         DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
         DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => "Old Signal",
-        CROWN_AWARD_CATEGORY => "The Crown",
         GALLERY_AWARD_CATEGORY => "Artboard Gallery",
         LATE_TIME_AWARD_CATEGORY => "Late Time",
         TOP_DRINKERS_AWARD_CATEGORY => "Top Drinkers",
@@ -804,7 +760,6 @@ pub fn award_category_priority(category: &str) -> i32 {
     match category {
         "arcade_wins" => 0,
         "top_chips" => 1,
-        CROWN_AWARD_CATEGORY => 5,
         GALLERY_AWARD_CATEGORY => 6,
         LATE_TIME_AWARD_CATEGORY => 7,
         TOP_DRINKERS_AWARD_CATEGORY => 8,
@@ -861,8 +816,6 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         }
         // No chips: the score is the mark the badge was granted on.
         DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => format!("mark {value}"),
-        // The crown's score is what the final holder burned to take it.
-        CROWN_AWARD_CATEGORY => format!("{value} chips"),
         GALLERY_AWARD_CATEGORY => format!("{value} applause"),
         LATE_TIME_AWARD_CATEGORY => {
             let minutes = value / 60_000;

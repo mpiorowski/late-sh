@@ -296,10 +296,6 @@ fn labels(pages: &[&PaperRoomPage]) -> String {
         .join(", ")
 }
 
-/// The whole paper, top to bottom: byline, yesterday's announcements
-/// verbatim, your rooms in rail order, elsewhere, what we were reading,
-/// outside, and a footer naming the rooms that were quiet or still at
-/// the press.
 /// The NEW WORK section's body for one reader, one arm per card.
 fn work_lines(work: &PaperWork) -> Vec<PaperLine> {
     let count = posting_count_label(work.released);
@@ -358,6 +354,10 @@ fn work_lines(work: &PaperWork) -> Vec<PaperLine> {
     }
 }
 
+/// The whole paper, top to bottom: byline, yesterday's announcements
+/// verbatim, yesterday in numbers, new work, your rooms in rail order,
+/// elsewhere, what we were reading, outside, and a footer naming the
+/// rooms that were quiet or still at the press.
 pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
     let PaperLayout {
         edition,
@@ -392,6 +392,15 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
             ]);
             lines.extend(column_lines(&announcement.body));
         }
+    }
+
+    // YESTERDAY ON LATE.SH: the covered day in numbers, late.sh's own
+    // rows and nobody's prose, so it goes above the columns and is the
+    // first thing a newcomer reads of what the place does in a day.
+    if let Some(text) = edition.ready_text(PaperSectionKind::Yesterday) {
+        lines.push(PaperLine::new());
+        lines.push(heading(PaperSectionKind::Yesterday.heading()));
+        lines.extend(column_lines(text));
     }
 
     // NEW WORK: yesterday's releases, as they concern this reader. It
@@ -475,22 +484,12 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
         }
     }
 
-    for (kind, title) in [
-        (PaperSectionKind::Reading, "WHAT WE WERE READING"),
-        (PaperSectionKind::Outside, "OUTSIDE"),
-    ] {
-        let Some(section) = edition
-            .sections
-            .iter()
-            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
-        else {
-            continue;
-        };
-        let Some(text) = &section.text else {
+    for kind in [PaperSectionKind::Reading, PaperSectionKind::Outside] {
+        let Some(text) = edition.ready_text(kind) else {
             continue;
         };
         lines.push(PaperLine::new());
-        lines.push(heading(title));
+        lines.push(heading(kind.heading()));
         lines.extend(column_lines(text));
     }
 

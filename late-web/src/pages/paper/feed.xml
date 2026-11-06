@@ -4,7 +4,7 @@
 <title>The Late Edition</title>
 <link>{{ base_url }}/paper</link>
 <atom:link href="{{ base_url }}/paper/feed.xml" rel="self" type="application/rss+xml"/>
-<description>late.sh's daily paper: what the clubhouse was reading and a look outside, printed once a day.</description>
+<description>late.sh's daily paper: the day before in numbers, what the clubhouse was reading and a look outside, printed once a day.</description>
 <language>en</language>
 {% for item in items %}
 <item>

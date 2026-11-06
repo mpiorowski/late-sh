@@ -93,7 +93,7 @@ behind sticky sessions:
   per user or per world (a DM, a payout, a paid API call) wins a conditional
   `UPDATE ... WHERE <not yet> RETURNING` or a `pg_advisory_xact_lock` first and
   acts only on the win. Copy `User::claim_first_contact_invitation`,
-  `Pot::lock_open`, the crown take, `GamePayout::grant_multi`.
+  `Pot::lock_open`, `GamePayout::grant_multi`.
 - **Cross-session fan-out goes through `LISTEN/NOTIFY`.** One LISTEN
   connection per process (`late-ssh/src/pg_listener.rs`): add the channel to
   its closed `Channel` enum, subscribe it in `main.rs`, run
@@ -101,7 +101,7 @@ behind sticky sessions:
   the LISTEN is live (re-read there: it is the seed and the reconnect
   catch-up) and `Signal::Notify` per notify, and re-reads into a
   process-shared `watch`. Never open a domain-owned LISTEN connection. Copy news
-  and daily matches (re-read only), crown and pot (payload applied in order),
+  and daily matches (re-read only), the pot (payload applied in order),
   shop (several channels). Payloads carry ids, never state.
 - **Background work dedupes through the DB**: claim a row first, or be
   idempotent and cheap enough to run on every replica.
@@ -113,7 +113,7 @@ behind sticky sessions:
 Replica-ready, not over-engineered: one user's sessions on two replicas need
 not sync live; a list that refreshes when its page opens is replica-ready;
 only surfaces people sit and watch while others change them (News, chat, the
-crown, the pot) get a NOTIFY-fed shared `watch`. Pick the cheapest correct
+pot) get a NOTIFY-fed shared `watch`. Pick the cheapest correct
 shape: read on open, then a notify, then anything more.
 
 **Per-user state** (the bonsai, the pet, the tank, per-account settings)
@@ -155,7 +155,7 @@ Every chip movement is a `ChipMove` variant written through
 `app/leaderboard/CONTEXT.md` what counts on Top Chips,
 `app/door/ingest/CONTEXT.md` the door milestone prizes, `app/hub/CONTEXT.md` the quest amounts, `app/hub/shop/CONTEXT.md`
 the Shop prices, and each mechanic's own context its numbers (gilds, the
-crown, the round, the pot, invites).
+round, the pot, invites).
 
 ## 4. Pages
 
@@ -172,7 +172,8 @@ crown, the round, the pot, invites).
 
 `Tab`/`Shift+Tab` cycle the numbered pages. `users.settings.landing_page`
 picks Clubhouse, Home or Zen for returning sessions; a session with the tour
-still to walk always lands in the Clubhouse.
+still to walk always lands in the Clubhouse, and one a drain handoff moved
+off an updating pod lands on the page it left (`handoff`).
 
 Not in the cycle: the door screens (from the hub), the daily match board and
 house tables (from the Lobby), the Realm board, the paired Scratchpad, the
@@ -200,7 +201,6 @@ otherwise.
 | `chat/gild` | Gilds: chips paid to mark another user's message |
 | `chat/news` | Shared links, the News room, the reader, where a story's watch position is kept |
 | `chat/cyberspace` | The cyberspace.online client and its rail entry |
-| `crown` | The crown: one holder, the price ladder, the laureate |
 | `video` | The watch player: a News story or a chat YouTube link played in the terminal by the paired CLI's mpv, the setup box, the session's one play on the CLI |
 | `audio` | Radio, YouTube queue and booth, source selection, `/listen` snapshot; the queue service in `QUEUE.md`, the equalizer in `VIZ.md`, the sidebar stage in `STAGE.md`, the stations in `STATIONS.md` |
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
@@ -208,10 +208,12 @@ otherwise.
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
+| `herald` | The herald: two posts a day on the Fediverse and Bluesky, words and art, each slot's claim and post |
 | `usermap` | The People map |
 | `directory` | The People page and the profile editor |
 | `profile_modal` | The read-only profile modal and the chips ledger |
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
+| `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
 | `zen` | Zen (`Ctrl+F`): the tiling layout, the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Zen ascii tile, the away screensaver |
@@ -243,7 +245,7 @@ otherwise.
 | `door/nethack`, `door/dcss`, `door/brogue`, `door/usurper`, `door/dopewars`, `door/bashquest`, `door/codekeep`, `door/zork` | PTY doors and their host crates (build and deploy in `DEPLOY.md` for NetHack, DCSS, Brogue, dopewars and BashQuest; DCSS's public crawl files in `dcss/PUBLISH.md`, Brogue's grid fixes in `brogue/RENDER.md`, BashQuest's graduation pipeline in `bashquest/CERTIFICATE.md`) |
 | `door/spectate` | Watching live door games |
 | `door/ingest` | The door log pipe: host log files into `door_runs`/`door_milestones`, door badges and payouts |
-| `door/minecraft`, `door/vintagestory` | Info-only cards for the game servers, and the servers' operations |
+| `door/minecraft`, `door/vintagestory` | Info-only cards for the game servers, and the servers' operations (every Vintage Story world option in `vintagestory/WORLDCONFIG.md`) |
 
 No context of its own (read `late-ssh/CONTEXT.md` and the code): `activity`,
 `common`, `dashboard`, `files`, `help_modal`,
@@ -284,6 +286,21 @@ query gotchas: `infra/RUNBOOK.md`.
   localhost -p 2222`. The dev profiles pin compose hostnames, so the apps run
   only inside compose. Config is compiled per profile (`late-ssh/CONTEXT.md`,
   Config).
+- late-ssh runs locally the way prod runs it: pods behind a local copy of the
+  prod SSH edge (`docker-compose.yml` `service-ssh` and `ssh-pod`,
+  `scripts/fleet.sh`). `make start` builds the working tree as a generation,
+  then watches `late-ssh`, `late-core`, `assets` and the Cargo files: a
+  change that rebuilds the binary rolls out a new generation as a deploy
+  does, the new pod ready and routed by the edge before the old one gets
+  SIGTERM and drains, and a build, start or edge pickup that fails leaves the
+  old pod serving. An open session stays on the old code behind the update
+  banner until you reconnect, or until the native CLI moves it after 30 s
+  without input (`late-ssh/src/app/handoff/CONTEXT.md`). From another
+  terminal, `make fleet-rollout` rolls out even an unchanged binary, and
+  `make fleet-ps`, `fleet-logs` and `fleet-expire` (the 6 h grace deadline)
+  work the pods; `make stop` and `make down` refuse while a `make start`
+  runs, whose Ctrl-C stops the stack. `REPLICAS=2` reproduces the pair websocket misrouting in
+  `SCALE.md`, Pain Point 2.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's
   context. Chips for a local account come from the admin `/grant` command.

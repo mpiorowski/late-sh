@@ -62,7 +62,7 @@ The door is gated by the `bashquest_enabled` profile flag in `late-ssh/src/confi
 | `playname.rs` | `sanitize(username)`: keep `[A-Za-z0-9_]`, cap at 20 (matching the arcade handle's own `HANDLE_MAX_LEN`), fall back to `"player"`. Defense in depth on top of the already-validated arcade handle and bashquest.sh's own re-sanitizing `autologin()`. |
 
 Cross-module wiring (client side, outside this folder — mirrors dopewars/DCSS's ~10 touchpoints):
-- `app/common/primitives.rs`: `Screen::Bashquest` (+ `next`/`prev` fall back to `Games`, `draw_tabs`/page title label `"BashQuest"`).
+- `app/common/primitives.rs`: `Screen::Bashquest` (+ `Screen::page` puts it on `Games`, so `next`/`prev` fall back to the hub and its tab stays lit; `draw_tabs`/page title label `"BashQuest"`).
 - `app/door/arcade.rs`: shared `ArcadeHandleService`/`HandleFlow` (not BashQuest-specific; reused as-is).
 - `app/door/hub/state.rs`: `HubGame::Bashquest` + `ALL` (in the `Doors` group, after Dopewars) + label + `rc_game() -> None` (no pushed config file).
 - `app/door/hub/ui.rs`: `HubView.bashquest_enabled` + the landing match arm (no `bashquest_live`: this door has no detach/resume model).

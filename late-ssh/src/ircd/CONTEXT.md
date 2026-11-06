@@ -87,7 +87,7 @@ If IRC is split later, the split must include a cross-process event/control desi
 Config:
 - Every profile sets `irc.enabled = true`; there is no `Default` impl.
 - The dev profiles enable plaintext IRC on 6667 (6668 for dev2); the Makefile only keeps the matching compose port mapping.
-- Docker Compose publishes the IRC port on `service-ssh`.
+- Docker Compose publishes the IRC port on `service-ssh`, the local edge, which forwards it to the ready late-ssh pod (`docker/fleet/haproxy.cfg`).
 - TLS is enabled only when the profile sets both `tls_cert_path` and `tls_key_path` (prod: the mounted `irc-tls` secret, port 6697; dev: none, plaintext).
 - A partial TLS cert/key pair is rejected by `Config::validate()` only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
 
@@ -167,7 +167,7 @@ Behavior:
 Message send:
 - `PRIVMSG #channel ...` uses `ChatService::send_message_task`.
 - `PRIVMSG nick ...` resolves the late.sh username and uses/creates the normal DM room.
-- NOTICE uses the same send path as PRIVMSG but suppresses error replies. CTCP ACTION is converted to a conventional chat body like `*waves*`; late.sh chat has no separate `/me` concept. CTCP VERSION and PING get minimal NOTICE replies, and other CTCP messages are dropped.
+- NOTICE uses the same send path as PRIVMSG but suppresses error replies. CTCP ACTION maps onto the chat `/me` action body both ways: inbound ACTIONs are stored as action messages, and stored actions go out as CTCP ACTION (`proj::IrcBody::Action`, one ACTION per split line) so clients draw `* nick waves` without the nick repeated in the text. CTCP VERSION and PING get minimal NOTICE replies, and other CTCP messages are dropped.
 - IRC line length limits require splitting long late.sh messages into multiple IRC `PRIVMSG` lines.
 - Self-echo suppression applies only to the exact body sent by the same IRC connection; other clients/TUI sessions should still receive normal bouncer-like echoes.
 

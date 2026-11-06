@@ -3915,6 +3915,7 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
+ "cozy-chess",
  "deadpool-postgres",
  "getrandom 0.4.3",
  "hex",
@@ -4100,6 +4101,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -6686,6 +6688,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",

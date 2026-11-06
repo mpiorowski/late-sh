@@ -26,7 +26,7 @@ use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
 use raw_mode::{RawModeGuard, SessionModesGuard, enable_ansi_output_if_tty};
-use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
+use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_subprocess_ssh};
 use ws::{
     MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
     PairClientInfo, PairRetryPolicy, PairRuntime, PlaybackState, ReconnectPlan,
@@ -100,13 +100,140 @@ async fn main() -> Result<()> {
         info!("local audio disabled on this platform");
     }
     info!("starting ssh session");
+    let ssh_exit = match config.ssh_mode {
+        config::SshMode::Native => run_native_session(&config, &ssh_identity, &audio).await?,
+        config::SshMode::Subprocess => {
+            run_subprocess_session(&config, &ssh_identity, &audio).await?
+        }
+        config::SshMode::OpenSsh => unreachable!("openssh mode runs through run_openssh_mode"),
+    };
+
+    audio.stop.store(true, Ordering::Relaxed);
+    debug!(?ssh_exit, "ssh session ended");
+    ssh_exit.ensure_success()?;
+
+    Ok(())
+}
+
+/// Native mode: one SSH session after another on the same terminal. A drain
+/// handoff (`reconnect` from a server that is going away) dials the new
+/// server and opens the new session there while the old one is still on
+/// screen, then swaps them. The local audio runs underneath the whole time,
+/// so the radio never stops. A move that fails at any step before the swap
+/// leaves the session where it is, on the server's update banner.
+async fn run_native_session(
+    config: &Config,
+    ssh_identity: &std::path::Path,
+    audio: &AudioRuntime,
+) -> Result<ssh::SshExit> {
+    let (latency_sink, mut latency_samples) = latency::latency_queue();
+    let link = ssh::start_native_link(latency_sink);
+    let resize_task = tokio::spawn(forward_resize_events(link.resize_handle()));
+
+    let connection = ssh::connect_native(config, ssh_identity).await?;
+    let mut token = connection.token().to_string();
+    let mut shell = connection.open_shell(&link, ssh::ShellStart::Login).await?;
+    flush_stdin_input_queue();
+    link.input.attach(&shell);
+
+    let mut policy = PairRetryPolicy::new();
+    let exit = loop {
+        let (handoff_tx, mut handoff_rx) = tokio::sync::mpsc::channel(1);
+        // The pairing is held across a failed move: the old pod is out of the
+        // Service endpoints, so a fresh pair socket on this token would only
+        // reach the new pod and its 404 (SCALE.md, Pain Point 10).
+        let mut pairing = Box::pin(run_ws_pairing(
+            config,
+            token.clone(),
+            audio,
+            &mut latency_samples,
+            policy,
+            &handoff_tx,
+        ));
+        let moved = loop {
+            let resume = tokio::select! {
+                result = &mut shell.completion_task => break NativeTurn::Ended(join_ssh_exit(result)),
+                () = &mut pairing => unreachable!("the pair loop retries forever"),
+                Some(resume) = handoff_rx.recv() => resume,
+            };
+            info!("drain handoff: dialing the new server");
+            let dial = tokio::select! {
+                result = &mut shell.completion_task => break NativeTurn::Ended(join_ssh_exit(result)),
+                () = &mut pairing => unreachable!("the pair loop retries forever"),
+                dial = open_handoff_session(config, ssh_identity, &link, &resume) => dial,
+            };
+            match dial {
+                Ok((token, shell)) => break NativeTurn::Moved { token, shell },
+                Err(err) => {
+                    warn!(error = ?err, "drain handoff could not open a session on the new server; staying on this one");
+                }
+            }
+        };
+        drop(pairing);
+
+        let (next_token, next_shell) = match moved {
+            NativeTurn::Ended(exit) => break exit,
+            NativeTurn::Moved { token, shell } => (token, shell),
+        };
+        link.input.detach();
+        let old_shell = std::mem::replace(&mut shell, next_shell);
+        old_shell.retire().await;
+        shell.show();
+        token = next_token;
+        flush_stdin_input_queue();
+        link.input.attach(&shell);
+        link.input.resize_to_terminal();
+        // This process is running the audio the old server aligned; the new
+        // pairing must never treat the boot mute as still pending.
+        policy = PairRetryPolicy::after_handoff();
+        info!("drain handoff: session moved to the new server");
+    };
+
+    resize_task.abort();
+    exit
+}
+
+/// How one native session's turn ends: the session itself ended, or a drain
+/// handoff holds a session on the new server, its output not yet shown.
+enum NativeTurn {
+    Ended(Result<ssh::SshExit>),
+    Moved {
+        token: String,
+        shell: ssh::NativeShell,
+    },
+}
+
+/// A drain handoff's half of a move, run while the old session stays on
+/// screen and paired: dial and authenticate the new server, then open the
+/// session there with its output held. A failure at any step leaves the old
+/// session as it was.
+async fn open_handoff_session(
+    config: &Config,
+    ssh_identity: &std::path::Path,
+    link: &ssh::NativeLink,
+    resume: &str,
+) -> Result<(String, ssh::NativeShell)> {
+    let connection = ssh::connect_native(config, ssh_identity).await?;
+    let token = connection.token().to_string();
+    let shell = connection
+        .open_shell(link, ssh::ShellStart::Handoff { resume })
+        .await
+        .context("failed to open the session on the new server")?;
+    Ok((token, shell))
+}
+
+/// The legacy subprocess (`old`) mode: one session, no handoff.
+async fn run_subprocess_session(
+    config: &Config,
+    ssh_identity: &std::path::Path,
+    audio: &AudioRuntime,
+) -> Result<ssh::SshExit> {
     let (token_tx, token_rx) = oneshot::channel();
-    let (latency_sink, latency_samples) = latency::latency_queue();
     let SshProcess {
         completion_task,
         resize_handle,
         input_gate,
-    } = spawn_ssh(&config, &ssh_identity, token_tx, latency_sink).await?;
+    } = spawn_subprocess_ssh(config, ssh_identity, token_tx)?;
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
 
     let token = tokio::time::timeout(Duration::from_secs(10), token_rx)
@@ -118,16 +245,19 @@ async fn main() -> Result<()> {
         .context("ssh session token channel closed")?;
     flush_stdin_input_queue();
     input_gate.store(true, Ordering::Relaxed);
-    let ssh_exit =
-        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
-            .await?;
+    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, config, token, audio).await;
 
-    audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
-    debug!(?ssh_exit, "ssh session ended");
-    ssh_exit.ensure_success()?;
+    ssh_exit
+}
 
-    Ok(())
+fn join_ssh_exit(
+    result: Result<Result<ssh::SshExit>, tokio::task::JoinError>,
+) -> Result<ssh::SshExit> {
+    match result {
+        Ok(result) => result,
+        Err(err) => Err(anyhow::anyhow!("ssh session task join failed: {err}")),
+    }
 }
 
 fn install_rustls_crypto_provider() {
@@ -257,12 +387,7 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     }
     info!("starting OpenSSH interactive session");
     let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config)?;
-    // The ssh child owns the terminal here, so nothing samples; the held sink
-    // keeps the pair loop's queue open and quiet (`latency.rs`).
-    let (_latency_sink, latency_samples) = latency::latency_queue();
-    let ssh_exit =
-        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
-            .await?;
+    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     debug!(?ssh_exit, "ssh session ended");
@@ -271,31 +396,41 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     Ok(())
 }
 
+/// One session with its pairing, for the modes that cannot redial (OpenSSH,
+/// subprocess). They never advertise `reconnect`, so no handoff arrives, and
+/// they never sample latency (OpenSSH's ssh child owns the terminal, old mode
+/// is not wired): the held sink keeps the pair loop's queue open and quiet
+/// (`latency.rs`).
 async fn wait_for_ssh_with_ws_pairing(
     completion_task: tokio::task::JoinHandle<Result<ssh::SshExit>>,
     config: &Config,
     token: String,
     audio: &AudioRuntime,
-    latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
 ) -> Result<ssh::SshExit> {
+    let (handoff_tx, _handoff_rx) = tokio::sync::mpsc::channel(1);
+    let (_latency_sink, mut latency_samples) = latency::latency_queue();
     tokio::select! {
-        result = completion_task => {
-            match result {
-                Ok(result) => result,
-                Err(err) => Err(anyhow::anyhow!("ssh session task join failed: {err}")),
-            }
-        }
-        () = run_ws_pairing(config, token, audio, latency_samples) => {
-            std::future::pending::<Result<ssh::SshExit>>().await
-        }
+        result = completion_task => join_ssh_exit(result),
+        () = run_ws_pairing(
+            config,
+            token,
+            audio,
+            &mut latency_samples,
+            PairRetryPolicy::new(),
+            &handoff_tx,
+        ) => unreachable!("the pair loop retries forever"),
     }
 }
 
+/// Pair with the session on `token` and keep it paired, forever. A drain
+/// handoff's resume point goes out on `handoff`.
 async fn run_ws_pairing(
     config: &Config,
     token: String,
     audio: &AudioRuntime,
-    mut latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
+    latency_samples: &mut tokio::sync::mpsc::Receiver<latency::LatencySample>,
+    mut policy: PairRetryPolicy,
+    handoff: &tokio::sync::mpsc::Sender<String>,
 ) {
     info!("received session token and starting websocket pairing");
     let api_base_url = config.api_base_url.clone();
@@ -308,6 +443,7 @@ async fn run_ws_pairing(
         ssh_mode: config.ssh_mode.client_state_label(),
         platform: client_platform_label(),
         video_blockers: video_probe.blockers,
+        reconnect: config.ssh_mode == config::SshMode::Native,
     };
     let mut video = video::VideoPlayer::new(video_probe.tools);
     let played_samples = Arc::clone(&audio.played_samples);
@@ -349,7 +485,6 @@ async fn run_ws_pairing(
         icecast_stream_url: &icecast_stream_url,
         silenced_for_video: &silenced_for_video,
     };
-    let mut policy = PairRetryPolicy::new();
     loop {
         let attempt = match establish_pair_session(&api_base_url, &token, &client, &playback).await
         {
@@ -373,7 +508,8 @@ async fn run_ws_pairing(
                         desktop_media: &mut desktop_media,
                         desktop_commands: &mut desktop_commands,
                         viz_frames: &mut viz_frames,
-                        latency_samples: &mut latency_samples,
+                        latency_samples: &mut *latency_samples,
+                        handoff,
                     },
                 )
                 .await;

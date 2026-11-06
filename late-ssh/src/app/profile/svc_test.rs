@@ -16,7 +16,6 @@ use late_core::models::{
     chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
     chat_room::ChatRoom,
     chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
-    crown::{CROWN_MIN_PRICE, CrownReign, next_price},
     drink_round::{
         Bar, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON,
     },
@@ -318,8 +317,8 @@ async fn find_profile_names_the_game_behind_a_payout() {
 }
 
 /// The house rows resolve through their own tables: a round says how many
-/// patrons it reached, a pot buy how many tickets, a crown take who lost
-/// it, a queued song its title. Every source the service loads is exercised
+/// patrons it reached, a pot buy how many tickets, a queued song its
+/// title. Every source the service loads is exercised
 /// once, so a lookup left unwired shows up as a missing detail.
 #[tokio::test]
 async fn find_profile_resolves_the_house_rows() {
@@ -327,13 +326,9 @@ async fn find_profile_resolves_the_house_rows() {
     let mut client = test_db.db.get().await.expect("db client");
     let user = create_test_user(&test_db.db, "profile-house-user").await;
     let patron = create_test_user(&test_db.db, "profile-house-patron").await;
-    let loser = create_test_user(&test_db.db, "profile-house-loser").await;
     UserChips::ensure(&client, user.id)
         .await
         .expect("starting chips");
-    UserChips::ensure(&client, loser.id)
-        .await
-        .expect("loser's starting chips");
     // A payout tops the user up past the floor the house rows keep below.
     GamePayout::grant_daily(
         &client,
@@ -391,43 +386,6 @@ async fn find_profile_resolves_the_house_rows() {
     .expect("can afford a ticket");
     tx.commit().await.expect("commit");
 
-    let tx = client.transaction().await.expect("tx");
-    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
-    let first_reign = CrownReign::open_in_tx(&tx, loser.id, CROWN_MIN_PRICE, taken_at)
-        .await
-        .expect("first reign");
-    UserChips::apply(
-        &*tx,
-        loser.id,
-        ChipMove::CrownTaken,
-        CROWN_MIN_PRICE,
-        &first_reign.id.to_string(),
-    )
-    .await
-    .expect("loser's crown chips")
-    .expect("loser can afford the crown");
-    tx.commit().await.expect("commit");
-    let tx = client.transaction().await.expect("tx");
-    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
-    CrownReign::close_in_tx(&tx, first_reign.id, taken_at)
-        .await
-        .expect("close");
-    let price = next_price(Some(CROWN_MIN_PRICE));
-    let reign = CrownReign::open_in_tx(&tx, user.id, price, taken_at)
-        .await
-        .expect("reign");
-    UserChips::apply(
-        &*tx,
-        user.id,
-        ChipMove::CrownTaken,
-        price,
-        &reign.id.to_string(),
-    )
-    .await
-    .expect("crown chips")
-    .expect("can afford the crown");
-    tx.commit().await.expect("commit");
-
     MediaQueueItem::insert_youtube(
         &mut client,
         user.id,
@@ -459,9 +417,6 @@ async fn find_profile_resolves_the_house_rows() {
         vec![
             Some(LedgerDetail::Song {
                 title: "Never Gonna Give You Up".to_string()
-            }),
-            Some(LedgerDetail::CrownFrom {
-                username: "profile-house-loser".to_string()
             }),
             Some(LedgerDetail::PotTickets { count: 1 }),
             Some(LedgerDetail::RoundFor { patrons: 1 }),
@@ -534,8 +489,8 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             start_with_music_muted: false,
             landing_page: LandingPage::Zen,
             paper_at_login: true,
+            auto_restart: false,
             screensaver: late_core::models::user::Screensaver::Off,
-            show_watch_chat: true,
             artboard_disclaimer: false,
             terminal_images: TerminalImagesMode::Off,
             hidden_award_categories: hidden_awards.clone(),
@@ -573,6 +528,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
     assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
     assert_eq!(updated.hidden_award_categories, hidden_awards);
     assert!(!updated.artboard_disclaimer);
+    assert!(!updated.auto_restart);
     assert_eq!(
         updated.screensaver,
         late_core::models::user::Screensaver::Off
@@ -585,6 +541,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         serde_json::json!(false)
     );
     assert_eq!(saved.settings["screensaver"], serde_json::json!("off"));
+    assert_eq!(saved.settings["auto_restart"], serde_json::json!(false));
 }
 
 #[tokio::test]
@@ -633,8 +590,8 @@ async fn edit_profile_normalizes_username_before_persisting() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
-            show_watch_chat: true,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
@@ -710,8 +667,8 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
-            show_watch_chat: true,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
@@ -998,8 +955,8 @@ async fn edit_profile_snapshots_stay_per_user() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
-            show_watch_chat: true,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),

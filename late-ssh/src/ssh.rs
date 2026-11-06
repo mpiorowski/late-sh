@@ -167,6 +167,10 @@ struct ClientHandler {
     /// openssh CLI modes identify themselves this way and never send
     /// `LATE_CLI_MODE`.
     cli_token_served: bool,
+    /// The resume point a CLI carried back when it moved here, off a draining
+    /// pod or on a restart from the quit modal (`app/handoff`), sent as an env
+    /// before the pty request.
+    resume: Option<crate::app::handoff::state::ResumePoint>,
     /// `TERM` from the pty request, cleaned for the session wire summary.
     term: Option<String>,
     terminal_env_hints: Vec<(String, String)>,
@@ -473,6 +477,7 @@ impl Server {
             input_rx: None,
             cli_mode: false,
             cli_token_served: false,
+            resume: None,
             term: None,
             terminal_env_hints: Vec::new(),
             session_token: None,
@@ -719,7 +724,6 @@ impl russh::server::Handler for ClientHandler {
             user.username.clone(),
         );
 
-        let user_id = user.id;
         let username = user.username.clone();
 
         tracing::info!(
@@ -730,11 +734,9 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.auth_fingerprint = Some(fingerprint);
+        // Subscribed here, before `pty_request` publishes this session's own
+        // join, so the session hears it.
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        let _ = self
-            .state
-            .activity_feed
-            .send(ActivityEvent::joined(user_id, username));
         self.authed_at = Some(Instant::now());
         Ok(Auth::Accept)
     }
@@ -804,8 +806,18 @@ impl russh::server::Handler for ClientHandler {
             anyhow::anyhow!("unauthenticated pty request")
         })?;
 
+        let user_id = user.id;
+        // A CLI that moved this session already announced its login on the
+        // old pod. Subscribe at auth, but publish only for a fresh session.
+        let resume = self.resume.take();
+        if resume.is_none() {
+            let _ = self
+                .state
+                .activity_feed
+                .send(ActivityEvent::joined(user_id, user.username.clone()));
+        }
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let session_config = build_session_config(
+        let mut session_config = build_session_config(
             &self.state,
             SessionBootstrapInputs {
                 user,
@@ -822,8 +834,18 @@ impl russh::server::Handler for ClientHandler {
             },
         )
         .await;
+        session_config.resume = resume;
         let mut app = crate::app::state::App::new(session_config)
             .context("failed to initialize app for PTY session")?;
+        // Count a resumed session only once its app is ready.
+        if let Some(point) = resume {
+            metrics::record_drain_handoff(metrics::HandoffStage::Resumed);
+            tracing::info!(
+                user_id = %user_id,
+                page = ?point.page,
+                "resuming a session its cli moved here"
+            );
+        }
         for (name, value) in &self.terminal_env_hints {
             app.apply_terminal_env_hint(name, value);
         }
@@ -864,6 +886,19 @@ impl russh::server::Handler for ClientHandler {
                 cli_mode = self.cli_mode,
                 "updated cli mode from env request"
             );
+        } else if variable_name == crate::app::handoff::state::RESUME_ENV {
+            // `Resumed` waits for `pty_request` to build the session.
+            self.resume = crate::app::handoff::state::ResumePoint::parse(variable_value);
+            match self.resume {
+                Some(_) => {}
+                None => {
+                    metrics::record_drain_handoff(metrics::HandoffStage::Unparsed);
+                    tracing::warn!(
+                        len = variable_value.len(),
+                        "unreadable resume point; starting a fresh session"
+                    );
+                }
+            }
         } else if crate::app::files::terminal_image::protocol_from_env_hint(
             variable_name,
             variable_value,
@@ -1277,7 +1312,7 @@ async fn run_session_with_context<S: FrameSink>(
                     "disconnecting session, ssh output stalled past budget"
                 );
                 metrics::record_render_stall_disconnect();
-                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
+                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED, None).await;
                 break SessionEnd::Stalled;
             }
             // Re-poll the budget at the hot cadence; leaving the
@@ -1343,8 +1378,21 @@ async fn run_session_with_context<S: FrameSink>(
                     if let Some(probe) = ctx.probe.as_ref() {
                         settle_terminal_probe(probe).await;
                     }
-                    let close_code = app.lock().await.close_code();
-                    clean_disconnect(&ctx.sink, close_code).await;
+                    let (close_code, resume) = {
+                        let app = app.lock().await;
+                        let code = app.close_code();
+                        let resume = (code
+                            == late_core::tunnel_protocol::TUNNEL_CLOSE_RECONNECT_REQUESTED)
+                            .then(|| {
+                                crate::app::handoff::state::ResumePoint {
+                                    page: app.screen.page(),
+                                    room_id: app.chat.selected_room_id,
+                                }
+                                .encode()
+                            });
+                        (code, resume)
+                    };
+                    clean_disconnect(&ctx.sink, close_code, resume).await;
                     break SessionEnd::Closed;
                 }
                 drive_terminal_probe(&ctx, outcome.bytes_sent).await;
@@ -1360,7 +1408,7 @@ async fn run_session_with_context<S: FrameSink>(
             Err(err) => {
                 tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
                 let _ = ctx.sink.send_frame(App::leave_alt_screen()).await;
-                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
+                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED, None).await;
                 break SessionEnd::Failed;
             }
         }
@@ -1876,12 +1924,12 @@ pub(crate) fn session_client(cli_mode: bool, cli_token_served: bool) -> metrics:
     }
 }
 
-async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16) {
+async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16, resume: Option<String>) {
     let _ = sink.send_frame(App::leave_alt_screen()).await;
     if close_code == TUNNEL_CLOSE_SESSION_ENDED {
         let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
     }
-    sink.eof_close(close_code).await;
+    sink.eof_close(close_code, resume).await;
 }
 
 // Updated helper to take State

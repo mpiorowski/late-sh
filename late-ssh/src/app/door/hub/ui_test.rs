@@ -15,9 +15,9 @@ fn clicks_select_games_and_ignore_chrome() {
     // blank under it (y=2). Then "the house" header (y=3), Lateania (y=4),
     // Realm (y=5), blank (y=6), "roguelikes" header (y=7), DCSS (y=8),
     // NetHack (y=9), Brogue (y=10), blank (y=11), "remakes" header (y=12),
-    // A Dark Room (y=13), Zork Trilogy (y=14), blank (y=15), "servers"
-    // header (y=16), Minecraft (y=17), Vintage Story (y=18), blank (y=19),
-    // "doors" header (y=20), Green Dragon (y=21).
+    // A Dark Room (y=13), Zork Trilogy (y=14), BashQuest (y=15), blank
+    // (y=16), "servers" header (y=17), Minecraft (y=18), Vintage Story
+    // (y=19), blank (y=20), "doors" header (y=21), Green Dragon (y=22).
     let at = |y: u16| sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, y);
     assert_eq!(at(1), None);
     assert_eq!(at(2), None);
@@ -31,13 +31,14 @@ fn clicks_select_games_and_ignore_chrome() {
     assert_eq!(at(12), None);
     assert_eq!(at(13), Some(RailEntry::Card(5)));
     assert_eq!(at(14), Some(RailEntry::Card(6)));
-    assert_eq!(at(15), None);
+    assert_eq!(at(15), Some(RailEntry::Card(7)));
     assert_eq!(at(16), None);
-    assert_eq!(at(17), Some(RailEntry::Card(7)));
+    assert_eq!(at(17), None);
     assert_eq!(at(18), Some(RailEntry::Card(8)));
-    assert_eq!(at(19), None);
+    assert_eq!(at(19), Some(RailEntry::Card(9)));
     assert_eq!(at(20), None);
-    assert_eq!(at(21), Some(RailEntry::Card(9)));
+    assert_eq!(at(21), None);
+    assert_eq!(at(22), Some(RailEntry::Card(10)));
     // Last games: Rebels at y=25, CodeKeep at y=26.
     assert_eq!(at(25), Some(RailEntry::Card(13)));
     assert_eq!(at(26), Some(RailEntry::Card(14)));
@@ -72,15 +73,15 @@ fn hit_test_follows_the_scroll_window() {
     // Height 10: 8 sidebar rows visible of 26, selection on the last game
     // slides the window to the bottom of the list.
     let body = Rect::new(0, 0, 80, 10);
-    // Window starts at row 18 (the blank above "doors"), so y=1 is dead
-    // and y=3 lands on Green Dragon...
+    // Window starts at row 18 (Vintage Story), so y=2 (the blank above
+    // "doors") is dead and y=4 lands on Green Dragon...
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 14, 0, None, 5, 1),
+        sidebar_hit_test(body, HubGame::roster(false), 14, 0, None, 5, 2),
         None
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 14, 0, None, 5, 3),
-        Some(RailEntry::Card(9))
+        sidebar_hit_test(body, HubGame::roster(false), 14, 0, None, 5, 4),
+        Some(RailEntry::Card(10))
     );
     // ...and the selected CodeKeep row is visible at the window's bottom.
     assert_eq!(

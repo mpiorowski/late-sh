@@ -282,7 +282,61 @@ fn client_info(video_blockers: Vec<VideoBlocker>) -> PairClientInfo {
         ssh_mode: "native",
         platform: "linux",
         video_blockers,
+        reconnect: true,
     }
+}
+
+/// Only a mode that can redial asks the server for drain handoffs; the
+/// others stay on the update banner.
+#[test]
+fn client_state_advertises_reconnect_only_when_it_can_redial() {
+    let native = client_state_payload(&client_info(vec![]), false, 30);
+    assert!(
+        native["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("reconnect"))
+    );
+
+    let openssh = PairClientInfo {
+        ssh_mode: "openssh",
+        reconnect: false,
+        ..client_info(vec![])
+    };
+    let payload = client_state_payload(&openssh, false, 30);
+    assert!(
+        !payload["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("reconnect"))
+    );
+}
+
+/// The server's handoff carries an opaque resume point the CLI sends back
+/// untouched.
+#[test]
+fn a_reconnect_event_carries_its_resume_point() {
+    let control =
+        serde_json::from_str::<PairControlMessage>(r#"{"event":"reconnect","resume":"v1:arcade"}"#)
+            .unwrap();
+    let PairControlMessage::Reconnect { resume } = control else {
+        panic!("expected a reconnect");
+    };
+    assert_eq!(resume, "v1:arcade");
+}
+
+/// After a handoff the process is playing the audio the old server aligned,
+/// so no run of failed pairings on the new server may release the boot mute.
+#[test]
+fn a_handed_off_session_never_releases_the_mute() {
+    let mut policy = PairRetryPolicy::after_handoff();
+    let plans: Vec<ReconnectPlan> = (0..=MAX_CONSECUTIVE_FAILURES + 2)
+        .map(|_| policy.note_attempt(PairAttempt::NotEstablished))
+        .collect();
+
+    let mut expected = vec![ReconnectPlan::Soon; MAX_CONSECUTIVE_FAILURES as usize];
+    expected.extend([ReconnectPlan::Slow; 3]);
+    assert_eq!(plans, expected);
 }
 
 /// A CLI that can play advertises `video` and sends no blockers.

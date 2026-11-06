@@ -4,17 +4,15 @@
 //! instead of reaching the story. `App` only calls in.
 
 use super::state::Mode;
-use crate::app::common::primitives::{Banner, Screen};
+use crate::app::common::primitives::Screen;
 use crate::app::input::{ParsedInput, launcher_key_byte};
 use crate::app::state::{App, DOOR_DETACH_KEY};
 
 /// Enter on the Games card: the edition menu, keeping any live game open
-/// behind it (Continue on that edition resumes it).
+/// behind it (Continue on that edition resumes it). The hub has already
+/// gated on `zork_enabled` (`hub/input.rs`), so this never runs while the
+/// host is off.
 pub fn launch(app: &mut App) {
-    if !app.zork_enabled {
-        app.banner = Some(Banner::error("Zork Trilogy is currently unavailable."));
-        return;
-    }
     app.set_screen(Screen::Zork);
     if let Some(state) = app.zork_state.as_mut() {
         state.open_menu();
@@ -22,7 +20,7 @@ pub fn launch(app: &mut App) {
 }
 
 /// F3 in both encodings a terminal sends it (SS3 `ESC O R`, CSI
-/// `ESC [ 13 ~`), matched as a whole input chunk like the watch chat's F2.
+/// `ESC [ 13 ~`), matched as a whole input chunk like the watch chat's F4.
 /// Frotz ignores function keys at a V3 prompt, so the story loses nothing.
 pub fn is_f3(data: &[u8]) -> bool {
     data == b"\x1bOR" || data == b"\x1b[13~"

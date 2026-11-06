@@ -17,7 +17,7 @@ Naming note: `Artboard` is the user-facing name. Code and upstream crates still 
 - Session connection: created by `App::sync_dartboard_connection` (`disclaimer.rs`) once the page may show: on entry with the disclaimer off, on `V`/`A`/tour `S`, or on the tick that lands a saved tweak; a visitor on the prompt holds no seat. Dropped when leaving Artboard. `q` on the prompt is the global quit; `1`–`7`, Tab/Shift+Tab, and the clickable page numbers in the top bar keep working without granting consent or changing the preference, with `4` staying on the prompt.
 - Initial mode: `view`; `i`, `I`, `Enter`, or canvas left-click enters active edit mode.
 - Persistence: JSONB rows in `artboard_snapshots` through `late_core::models::artboard::Snapshot`.
-- Public gallery: `late-web/src/pages/gallery/`, read-only over saved DB snapshots, not live server memory. It does not list pieces yet.
+- Public gallery: `late-web/src/pages/gallery/`, read-only over saved DB snapshots, not live server memory. It does not list pieces; each piece still up has a page of its own (`/gallery/pieces/{id}`), which the herald's piece posts link to (`late-ssh/src/app/herald/CONTEXT.md`).
 - The gallery (`gallery/`): pieces hung off the live board, applause, the monthly `artboard` award, the page rail. See §Gallery below.
 
 Only canvas mutations are shared. Editor affordances stay local to the current SSH session.
@@ -146,7 +146,7 @@ Runtime behavior in `late-ssh/src/dartboard.rs`:
 - Failed saves mark the state dirty again and retry.
 
 Archive behavior:
-- Daily key: `daily:YYYY-MM-DD`.
+- Daily key: `daily:YYYY-MM-DD`, built by `Snapshot::daily_key` (the rollover, moderation and the herald all call it).
 - Daily rollover wakes at each UTC day boundary and archives the previous UTC day.
 - Daily retention keeps the newest 7 daily snapshots.
 - Monthly key: `monthly:YYYY-MM`.
@@ -207,6 +207,7 @@ Keyboard reference:
 | Shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip selection corner, draw border, smart-fill |
 | Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
 | Activate swatch brush | click swatch, `Ctrl+A/S/D/F/G` | Slots 1-5 on home row |
+| Paste from system clipboard | Terminal paste | Arms a transparent floating preview at the cursor (`Enter` / `Ctrl+V` stamps, `Esc` / `Space` dismisses) |
 | Stamp floating brush | `Enter`, `Ctrl+V` | Brush stays active |
 | Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
 | Toggle brush transparency | activate same swatch again | Floating preview reflects transparency |
@@ -238,7 +239,7 @@ Mouse-specific extras:
 Primary DB-backed tests (adjacent `_test.rs` files in this directory):
 - `test_support.rs` contains shared cfg(test) helpers.
 - `svc_test.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
-- `state_test.rs` covers multiline paste and the archive browser: keys list newest first without canvases, the cursor loads one board, read-only, the cache on the way back, Esc versus the Board row, curated names.
+- `state_test.rs` covers floating multiline paste and the archive browser: keys list newest first without canvases, the cursor loads one board, read-only, the cache on the way back, Esc versus the Board row, curated names.
 
 Related tests:
 - `late-ssh/src/app/input_flow_test.rs` covers Artboard screen switching, the rail landing, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, active `?` drawing behavior, and `artboard_archives_time_travel_from_the_rail` (Daily from the rail, the key lands on the board, Tab and the Board row bring live back).
@@ -247,7 +248,7 @@ Related tests:
 Inline module tests:
 - `common/color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking, the popup's hit tests and a click.
 - `provenance.rs`: paint/clear provenance and replace retagging.
-- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior, the picker applying or discarding a colour, bounded edits and brush strokes reaching the other half of a wide glyph (`edits_beside_wide_glyphs_reach_the_other_half`, `brush_strokes_beside_wide_glyphs_reach_the_other_half`).
+- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, floating system paste preview/stamp/dismiss, swatch/glyph behavior, the picker applying or discarding a colour, bounded edits and brush strokes reaching the other half of a wide glyph (`edits_beside_wide_glyphs_reach_the_other_half`, `brush_strokes_beside_wide_glyphs_reach_the_other_half`).
 - `input.rs`: mouse routing, raw control mapping, swatch interactions, double-click glyph brush, help/glyph picker routing, the colour picker keys and the palette click, selection, paste/stamp behavior.
 - `page.rs`: view-mode right-drag pan, non-canvas right-click handling, Alt-arrow pan.
 - `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker over the page area and its rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.

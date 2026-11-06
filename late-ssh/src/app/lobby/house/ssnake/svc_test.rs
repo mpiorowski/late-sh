@@ -101,28 +101,31 @@ fn only_moving_snakes_count_toward_the_multiplier() {
 
 #[test]
 fn food_pays_the_eater_scaled_by_moving_snakes() {
-    let (mut state, a, _, generation) = arena_state();
+    let (mut state, _, b, generation) = arena_state();
     state.points_left = 5;
     state.bonus_food = false;
-    state.point = Some(Pos { x: 6, y: 5 });
-    state.players[1].motion = Motion::Moving(Direction::Left);
-    state.steer(a, Direction::Right);
+    // The eater sits second: snakes step in seat order, so the food that
+    // respawns after the bite cannot land under a snake still to step this
+    // tick and feed it as well.
+    state.point = Some(Pos { x: 19, y: 10 });
+    state.players[0].motion = Motion::Moving(Direction::Right);
+    state.steer(b, Direction::Left);
 
     state.tick(generation);
     assert_eq!(
-        state.players[0].chips,
+        state.players[1].chips,
         SSNAKE_FOOD_CHIPS * 2,
         "two snakes moving"
     );
-    assert_eq!(state.players[0].last_chip, Some(SsnakeChipKind::Food));
-    assert_eq!(state.players[1].chips, 0, "only the eater is paid");
+    assert_eq!(state.players[1].last_chip, Some(SsnakeChipKind::Food));
+    assert_eq!(state.players[0].chips, 0, "only the eater is paid");
     assert_eq!(state.points_left, 4);
     // Nothing reaches the ledger mid-flight; the seat banks on the way out.
-    let visit_id = state.players[0].visit_id;
+    let visit_id = state.players[1].visit_id;
     assert_eq!(
-        state.leave(a, false),
+        state.leave(b, false),
         Some(Settlement {
-            user_id: a,
+            user_id: b,
             visit_id,
             chips: SSNAKE_FOOD_CHIPS * 2,
             chip_move: ChipMove::SsnakeArenaEarned,

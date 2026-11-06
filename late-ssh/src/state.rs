@@ -1,9 +1,12 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::ai::svc::AiService;
+use crate::app::arcade::chess_puzzle::svc::ChessPuzzleService;
 use crate::app::arcade::le_word::svc::LeWordService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
+use crate::app::arcade::netwalk::svc::NetwalkService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
+use crate::app::arcade::quartets::svc::QuartetsService;
 use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
 use crate::app::arcade::snake::svc::SnakeService;
@@ -12,6 +15,7 @@ use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::LaterisService;
 use crate::app::arcade::traffic::svc::TrafficService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
+use crate::app::arcade::word_wheel::svc::WordWheelService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
@@ -174,6 +178,7 @@ pub struct State {
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub summary_service: crate::app::ai::summary::SummaryService,
     pub paper_service: crate::app::paper::svc::PaperService,
+    pub herald_service: crate::app::herald::svc::HeraldService,
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
@@ -193,6 +198,10 @@ pub struct State {
     pub traffic_service: TrafficService,
     pub rubiks_cube_service: RubiksCubeService,
     pub sliding_puzzle_service: SlidingPuzzleService,
+    pub netwalk_service: NetwalkService,
+    pub chess_puzzle_service: ChessPuzzleService,
+    pub word_wheel_service: WordWheelService,
+    pub quartets_service: QuartetsService,
     pub le_word_service: LeWordService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,
@@ -209,6 +218,7 @@ pub struct State {
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     pub door_rc_service: crate::app::door::rc::DoorRcService,
+    pub games_hub_service: crate::app::door::hub::svc::GamesHubService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub realm_service: crate::app::door::realm::svc::RealmService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
@@ -239,7 +249,6 @@ pub struct State {
     /// Live 24h username effects (snapshot-swap; seeded and written by
     /// `ShopService`, resolved per session in the tick loop).
     pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
-    pub crown_service: crate::app::crown::svc::CrownService,
     pub pot_service: crate::app::pot::svc::PotService,
     pub referral_service: crate::app::referral::svc::ReferralService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,

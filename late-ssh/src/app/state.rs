@@ -23,7 +23,7 @@ use std::{
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, LeaderboardData};
 use late_core::models::profile::Profile;
 use late_core::models::user::{LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode};
 use late_core::models::user_ssh_key::KeyLayout;
@@ -156,19 +156,6 @@ impl ReconnectNotice {
     }
 }
 
-pub(crate) const GAME_SELECTION_2048: usize = 0;
-pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
-pub(crate) const GAME_SELECTION_LE_WORD: usize = 2;
-pub(crate) const GAME_SELECTION_SUDOKU: usize = 3;
-pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 4;
-pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 5;
-pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 6;
-pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
-pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
-pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
-pub(crate) const GAME_SELECTION_SLIDING_PUZZLE: usize = 10;
-pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_LE_WORD;
-
 /// Rail modes in force: this device's stored layout when its key has one, else
 /// the account default. Free-standing so `App::new` can seed the settings draft
 /// with it before the `App` itself exists.
@@ -270,6 +257,9 @@ pub struct SessionConfig {
     pub summary_service: crate::app::ai::summary::SummaryService,
     /// The Late Edition (`app/paper`): the newsstand this session reads from.
     pub paper_service: crate::app::paper::svc::PaperService,
+    /// The herald (`app/herald`): the social accounts' switch and press,
+    /// for an admin's `/herald`.
+    pub herald_service: crate::app::herald::svc::HeraldService,
     /// The job feed (`app/jobs`): the shelf snapshot this session copies.
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
@@ -291,6 +281,15 @@ pub struct SessionConfig {
     pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub sliding_puzzle_service: crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService,
     pub initial_sliding_puzzle_games: Vec<late_core::models::sliding_puzzle::Game>,
+    pub netwalk_service: crate::app::arcade::netwalk::svc::NetwalkService,
+    pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
+    pub chess_puzzle_service: crate::app::arcade::chess_puzzle::svc::ChessPuzzleService,
+    pub initial_chess_puzzle_today: Option<crate::app::arcade::chess_puzzle::svc::Today>,
+    pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
+    pub word_wheel_service: crate::app::arcade::word_wheel::svc::WordWheelService,
+    pub initial_word_wheel_today: Option<crate::app::arcade::word_wheel::svc::Today>,
+    pub quartets_service: crate::app::arcade::quartets::svc::QuartetsService,
+    pub initial_quartets_today: Option<crate::app::arcade::quartets::svc::Today>,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -298,8 +297,7 @@ pub struct SessionConfig {
     pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
     pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
     pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
-    pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
-    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
+    pub initial_le_word_today: Option<crate::app::arcade::le_word::svc::Today>,
     pub sudoku_service: crate::app::arcade::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::arcade::nonogram::svc::NonogramService,
@@ -393,6 +391,8 @@ pub struct SessionConfig {
     /// Accessor for the account's door rc files (.nethackrc / DCSS init.txt),
     /// edited from the Games hub config box and pushed to the hosts at launch.
     pub door_rc_service: crate::app::door::rc::DoorRcService,
+    /// The hub's door-opened write (`door_openings`), fired on every launch.
+    pub games_hub_service: crate::app::door::hub::svc::GamesHubService,
     /// The account's configured door rcs, preloaded at session init. Edits in
     /// this session update the in-App copy (`App::door_rcs`) alongside the DB.
     pub initial_door_rcs: Vec<(late_core::models::door_rc::DoorRcGame, String)>,
@@ -485,9 +485,6 @@ pub struct SessionConfig {
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
     /// `common/username_effect.rs`).
     pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    /// The crown, `/crown` and `/crown take`. `None` in test harnesses that
-    /// build an app without one; the glyph then simply never appears.
-    pub crown_service: Option<crate::app::crown::svc::CrownService>,
     /// The pot, `/pot` and `/pot buy N`. `None` in test harnesses that build
     /// an app without one; the panel then renders dashes and the commands
     /// say so.
@@ -533,6 +530,12 @@ pub struct SessionConfig {
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub supports_reconnect_on_drain: bool,
     pub reconnect_reason: Option<u16>,
+    /// How long this session goes quiet before a draining pod moves it
+    /// (`Config::handoff_idle`).
+    pub handoff_idle: std::time::Duration,
+    /// Where this session was on the pod a CLI or bastion moved it off
+    /// (`app/handoff`), read from its `LATE_RESUME` env. `None` is a login.
+    pub resume: Option<crate::app::handoff::state::ResumePoint>,
 }
 
 /// Main application state
@@ -602,6 +605,8 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The herald: the `/herald` drain and its answers.
+    pub(crate) herald: crate::app::herald::state::HeraldState,
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
@@ -710,11 +715,6 @@ pub struct App {
     /// every real change).
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
-    pub(super) crown_service: Option<crate::app::crown::svc::CrownService>,
-    /// The process-shared crown holder and laureate, read on the ~1s edge
-    /// and folded into `name_flair`, so no render ever queries for a glyph.
-    pub(super) crown_wearers_rx: Option<watch::Receiver<crate::app::crown::svc::CrownWearers>>,
-    pub(super) crown_events_rx: Option<broadcast::Receiver<crate::app::crown::svc::CrownEvent>>,
     pub(super) pot_service: Option<crate::app::pot::svc::PotService>,
     pub(super) referral_service: crate::app::referral::svc::ReferralService,
     pub(super) newcomer_clock: crate::app::referral::state::NewcomerClock,
@@ -885,9 +885,12 @@ pub struct App {
     pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
     pub(crate) usermap: crate::app::usermap::state::UserMapState,
 
-    /// Arcade Hub
-    pub(crate) game_selection: usize,
+    /// Arcade Hub: the lobby's selected game, and the open board while
+    /// `is_playing_game`.
+    pub(crate) game_selection: ArcadeGame,
     pub(crate) is_playing_game: bool,
+    /// The Arcade lobby's solvers roster (`o`) is open over the selected daily.
+    pub(crate) arcade_solvers_open: bool,
     pub(crate) door_delete_confirm: bool,
     /// Highlighted row on the Lateania character-select landing (0-based
     /// slot index). Also which slot a confirmed `d` delete targets.
@@ -953,14 +956,23 @@ pub struct App {
     pub(crate) away_watches: Vec<crate::app::door::spectate::state::State>,
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// This player's ties to the watch-chat rooms of their own running games,
-    /// one per watchable door with a game running, held while it runs and the
-    /// `show_watch_chat` setting is on (`door::spectate::chat`): the rooms
-    /// behind the read-only pane beside each game.
+    /// one per watchable door with a game running, held while it runs
+    /// (`door::spectate::chat`): the rooms behind the chat F4 opens over
+    /// each game.
     pub(crate) own_watch_chats: Vec<crate::app::door::spectate::state::ChatLink>,
-    /// The pane beside this player's own running game, as the last frame
-    /// drew it (`None` after a frame with the one-row form, or no chat):
-    /// where a click opens their composer (`door::spectate::input`).
+    /// The door whose running game has this player's watch chat open over
+    /// it, taking every key (`door::spectate::input`): opened and closed
+    /// with F4, also closed by Esc and by the game ending. `None`, the game
+    /// has the keys and the whole screen.
+    pub(crate) own_watch_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// The chat column over this player's own running game, as the last
+    /// frame drew it (`None` while it is closed): only a drawn column takes
+    /// the keys (`door::spectate::input::own_chat_takes_keys`).
     pub(crate) own_chat_hit: std::cell::Cell<Option<Rect>>,
+    /// The chat was opened since the last frame: it takes the keys before
+    /// any frame has drawn it, so nothing queued behind F4 reaches the game.
+    /// Every frame clears it.
+    pub(crate) own_chat_undrawn: std::cell::Cell<bool>,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
     /// host so curses gets a real terminfo entry.
@@ -972,6 +984,7 @@ pub struct App {
     pub(crate) brogue_secret: String,
     pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub(crate) door_rc_service: crate::app::door::rc::DoorRcService,
+    pub(crate) games_hub_service: crate::app::door::hub::svc::GamesHubService,
     /// The account's door rc files (.nethackrc / DCSS init.txt), keyed by
     /// game. Session-local copy of the DB truth: preloaded at init, updated by
     /// the hub config box, read at door launch. Another session's edits are
@@ -1042,6 +1055,10 @@ pub struct App {
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
     pub(crate) rubiks_cube_state: crate::app::arcade::rubiks_cube::state::State,
     pub(crate) sliding_puzzle_state: crate::app::arcade::sliding_puzzle::state::State,
+    pub(crate) netwalk_state: crate::app::arcade::netwalk::state::State,
+    pub(crate) chess_puzzle_state: crate::app::arcade::chess_puzzle::state::State,
+    pub(crate) word_wheel_state: crate::app::arcade::word_wheel::state::State,
+    pub(crate) quartets_state: crate::app::arcade::quartets::state::State,
     pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
@@ -1130,6 +1147,8 @@ pub struct App {
     pub(crate) supports_reconnect_on_drain: bool,
     pub(crate) requested_close_code: u16,
     pub(crate) reconnect_notice: Option<ReconnectNotice>,
+    /// The drain handoff to the new pod (`app/handoff`).
+    pub(crate) handoff: crate::app::handoff::state::HandoffState,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -1366,19 +1385,14 @@ impl App {
             // The world's chat, only while it is shown: hidden, it counts
             // what is said as unread.
             Screen::Realm => self.realm.shown_chat_room_id(),
-            // The watched player's chat, while this session watches one.
+            // The watched player's chat, while this session watches one with
+            // its column up: hidden, it counts what is said as unread.
             Screen::Games => self.spectate_chat_room_id(),
-            // The watchers' chat beside this player's own running game.
-            Screen::Dcss => {
-                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Dcss)
-            }
-            Screen::Nethack => self
-                .own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Nethack),
-            Screen::Brogue => {
-                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Brogue)
-            }
-            Screen::Zork => {
-                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Zork)
+            // The watchers' chat over this player's own running game, only
+            // while F4 has it open: closed, it counts what is said as unread.
+            Screen::Dcss | Screen::Nethack | Screen::Brogue | Screen::Zork => {
+                let game = crate::app::door::spectate::input::open_own_chat_game(self)?;
+                self.own_watch_chat_room_id(game)
             }
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
@@ -1524,11 +1538,31 @@ impl App {
             config.sliding_puzzle_service.clone(),
             config.initial_sliding_puzzle_games,
         );
+        let netwalk_state = crate::app::arcade::netwalk::state::State::new(
+            config.user_id,
+            config.netwalk_service.clone(),
+            config.initial_netwalk_games,
+        );
+        let chess_puzzle_state = crate::app::arcade::chess_puzzle::state::State::new(
+            config.user_id,
+            config.chess_puzzle_service.clone(),
+            config.initial_chess_puzzle_today,
+            config.initial_chess_puzzle_games,
+        );
+        let word_wheel_state = crate::app::arcade::word_wheel::state::State::new(
+            config.user_id,
+            config.word_wheel_service.clone(),
+            config.initial_word_wheel_today,
+        );
+        let quartets_state = crate::app::arcade::quartets::state::State::new(
+            config.user_id,
+            config.quartets_service.clone(),
+            config.initial_quartets_today,
+        );
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
             config.le_word_service.clone(),
-            config.initial_le_word_daily_word,
-            config.initial_le_word_game,
+            config.initial_le_word_today,
         );
         let nonogram_state = crate::app::arcade::nonogram::state::State::new(
             config.user_id,
@@ -1720,11 +1754,18 @@ impl App {
         // "Land on" tweak sends returning users to Home or Zen instead; a
         // session with the tour still to walk (a first-ever one, or any
         // account after a house-wide reset of the flag) always starts in the
-        // clubhouse so the tutorial runs.
-        let landing = if config.is_new_user || !config.clubhouse_tutorial_done {
-            LandingPage::Clubhouse
-        } else {
-            config.landing_page
+        // clubhouse so the tutorial runs. A session a CLI moved here off a
+        // draining pod (`app/handoff`) is not a login: it lands where it was,
+        // with no splash and no paper pop, unless the tour still has to run.
+        let tour_pending = config.is_new_user || !config.clubhouse_tutorial_done;
+        let resume = match tour_pending {
+            true => None,
+            false => config.resume,
+        };
+        let landing = match (tour_pending, resume) {
+            (true, _) => LandingPage::Clubhouse,
+            (false, Some(point)) => point.landing(),
+            (false, None) => config.landing_page,
         };
         let landing_screen = match landing {
             LandingPage::Clubhouse => Screen::Clubhouse,
@@ -1755,7 +1796,7 @@ impl App {
             ),
             banner: aquarium_loss_banner,
             show_settings: false,
-            show_splash: true,
+            show_splash: resume.is_none(),
             splash_ticks: 0,
             marquee_tick: 0,
             started_at: Instant::now(),
@@ -1784,9 +1825,10 @@ impl App {
             // to "is anyone here?" and doubles as the room directory.
             paper: crate::app::paper::state::PaperState::new(
                 config.paper_service,
-                config.paper_at_login,
+                config.paper_at_login && resume.is_none(),
             ),
             video: crate::app::video::state::State::default(),
+            herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
@@ -1861,15 +1903,6 @@ impl App {
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
-            crown_wearers_rx: config
-                .crown_service
-                .as_ref()
-                .map(crate::app::crown::svc::CrownService::subscribe_wearers),
-            crown_events_rx: config
-                .crown_service
-                .as_ref()
-                .map(crate::app::crown::svc::CrownService::subscribe_events),
-            crown_service: config.crown_service,
             pot_snapshot_rx: config
                 .pot_service
                 .as_ref()
@@ -2003,8 +2036,9 @@ impl App {
             ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
                 config.initial_ultimate_cooldowns,
             ),
-            game_selection: DEFAULT_GAME_SELECTION,
+            game_selection: ArcadeGame::Puzzle(DailyPuzzle::LeWord),
             is_playing_game: false,
+            arcade_solvers_open: false,
             door_delete_confirm: false,
             lateania_slot_cursor: 0,
             lateania_slots_seen: crate::app::door::lateania::svc::SlotList::Loading,
@@ -2039,7 +2073,9 @@ impl App {
             away_watches: Vec::new(),
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
+            own_watch_chat_open: None,
             own_chat_hit: std::cell::Cell::new(None),
+            own_chat_undrawn: std::cell::Cell::new(false),
             brogue_state: None,
             brogue_term: config.term.clone(),
             brogue_enabled: config.brogue_enabled,
@@ -2048,6 +2084,7 @@ impl App {
             brogue_secret: config.brogue_secret,
             arcade_handle_service: config.arcade_handle_service,
             door_rc_service: config.door_rc_service,
+            games_hub_service: config.games_hub_service,
             door_rcs: config.initial_door_rcs.into_iter().collect(),
             door_rc_modal: None,
             usurper_state: None,
@@ -2100,6 +2137,10 @@ impl App {
             snake_state,
             rubiks_cube_state,
             sliding_puzzle_state,
+            netwalk_state,
+            chess_puzzle_state,
+            word_wheel_state,
+            quartets_state,
             le_word_state,
             sudoku_state,
             nonogram_state,
@@ -2136,6 +2177,7 @@ impl App {
             is_draining: config.is_draining,
             supports_reconnect_on_drain: config.supports_reconnect_on_drain,
             reconnect_notice,
+            handoff: crate::app::handoff::state::HandoffState::new(config.handoff_idle),
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
@@ -2158,6 +2200,9 @@ impl App {
                 app.zen.enter(Instant::now(), &mut rand::thread_rng());
                 app.sync_aquarium_bounds();
             }
+        }
+        if let Some(point) = resume {
+            crate::app::handoff::svc::resume(&mut app, point);
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
@@ -2458,23 +2503,15 @@ impl App {
     /// outlive the pane it belonged to.
     fn clear_watch_chat_focus(&mut self) {
         if let Some(room_id) = self.spectate_chat_room_id() {
-            if self.chat.composer_room_id() == Some(room_id) {
-                self.chat.reset_composer();
-            }
-            if self.chat.selected_message_body_in_room(room_id).is_some() {
-                self.chat.clear_message_selection();
-            }
+            crate::app::door::spectate::input::drop_chat_focus(self, room_id);
         }
     }
 
     /// The chat room the open watch shows: the watched player's room, once
-    /// this session is in it. `None` for a preview, which has no chat.
+    /// this session is in it, while F4 leaves its column up. `None` for a
+    /// preview, which has no chat.
     pub(crate) fn spectate_chat_room_id(&self) -> Option<Uuid> {
-        let state = self
-            .spectate_state
-            .as_ref()
-            .filter(|state| state.is_open())?;
-        let room_id = state.chat().room_id()?;
+        let room_id = self.spectate_state.as_ref()?.shown_chat_room_id()?;
         self.chat.room_by_id(room_id).map(|room| room.id)
     }
 
@@ -3165,6 +3202,33 @@ impl App {
         Ok(())
     }
 
+    /// Whether an app-wide modal covers the screen this frame: the one list
+    /// the render (`render.rs`, where every one of these is drawn) and the
+    /// input paths that must not act under a modal read.
+    pub(crate) fn foreground_overlay_open(&self) -> bool {
+        self.calendar.modal.is_some()
+            || self.calendar.context_menu.is_some()
+            || self.show_settings
+            || self.show_quit_confirm
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_profile_modal
+            || self.show_poll_modal
+            || self.show_gild_modal
+            || self.chat.cyberspace.modal_active()
+            || self.show_bonsai_modal
+            || self.paper.modal.is_some()
+            || self.stream_modal.is_some()
+            || self.show_help
+            || self.show_ultimate_modal
+            || self.chat.reader().is_some()
+            || self.video.modal().is_some()
+            || self.room_search_modal_state.is_open()
+            || self.chat.history_modal.is_open()
+            || self.booth_modal_state.is_open()
+            || self.icon_picker_open
+    }
+
     pub fn handle_input(&mut self, data: &[u8]) {
         use crate::app::common::away::{PresenceInput, paste_end, presence_input};
         if !data.is_empty() {
@@ -3248,24 +3312,14 @@ impl App {
             state.forward_input(data);
             return;
         }
-        // The player's own watch chat (`door/spectate`): while its composer
-        // is open the keys are the composer's, not the running game's (Enter
-        // sends and hands them back, Esc discards), and F2 or a click on the
-        // pane opens it. Only where the last frame drew the pane: the one-row
-        // form stays read-only, and there F2 is the game's.
+        // The player's own watch chat over their running game
+        // (`door/spectate`): F4 and, while it is open, every key are the
+        // chat's, ahead of the game's passthrough below.
         if let Some(game) = crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
-            && let Some(room_id) = self.own_watch_chat_room_id(game)
+            && crate::app::door::spectate::chat::own_running_handle(self, game).is_some()
+            && crate::app::door::spectate::input::handle_own_raw(self, game, data)
         {
-            if self.chat.is_composing() && self.chat.composer_room_id() == Some(room_id) {
-                crate::app::input::handle(self, data);
-                return;
-            }
-            if let Some(pane) = self.own_chat_hit.get()
-                && crate::app::door::spectate::input::wants_own_chat(data, pane)
-            {
-                self.chat.start_composing_in_room(room_id);
-                return;
-            }
+            return;
         }
         // Same passthrough for the locally-hosted nethack process, except F1,
         // which late.sh remaps to nethack's own `?` help (so the raw F1 escape
@@ -4190,103 +4244,6 @@ impl App {
                 | StreamEvent::GoLiveObsReady { .. }
                 | StreamEvent::GoLiveFailed { .. }
                 | StreamEvent::ViewerJoined { .. } => {}
-            }
-        }
-
-        changed
-    }
-
-    /// The crown's commands and the answers to them. The glyph itself is
-    /// not handled here: it rides `name_flair`, resolved on the ~1s edge in
-    /// `tick.rs` from the process-shared holder, so a takeover on another
-    /// replica moves it with no event of any kind.
-    pub(crate) fn tick_crown(&mut self) -> bool {
-        let mut changed = false;
-
-        if let Some(command) = self.chat.take_requested_crown() {
-            changed = true;
-            match &self.crown_service {
-                // Only a test harness builds an app without one; saying so
-                // beats a command that silently does nothing.
-                None => {
-                    self.banner = Some(Banner::error("The crown is not available here."));
-                }
-                Some(service) => match command {
-                    crate::app::chat::state::CrownCommand::Status => {
-                        service.status_task(self.user_id);
-                    }
-                    crate::app::chat::state::CrownCommand::Take { bid } => {
-                        service.take_task(self.user_id, self.username.clone(), bid);
-                        self.banner = Some(Banner::success("Reaching for the crown..."));
-                    }
-                },
-            }
-        }
-
-        let mut events = Vec::new();
-        if let Some(rx) = &mut self.crown_events_rx {
-            loop {
-                match rx.try_recv() {
-                    Ok(event) => events.push(event),
-                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                        self.crown_events_rx = None;
-                        break;
-                    }
-                }
-            }
-        }
-
-        for event in events {
-            use crate::app::common::primitives::thousands;
-            use crate::app::crown::svc::CrownEvent;
-            match event {
-                CrownEvent::Status { user_id, line } if user_id == self.user_id => {
-                    changed = true;
-                    self.banner = Some(Banner::info(&line));
-                }
-                CrownEvent::Failed { user_id, message } if user_id == self.user_id => {
-                    changed = true;
-                    self.banner = Some(Banner::error(&message));
-                }
-                CrownEvent::Taken {
-                    taker_id,
-                    taker_balance,
-                    price,
-                    ref from,
-                } if taker_id == self.user_id => {
-                    changed = true;
-                    let cost = thousands(price);
-                    let balance = thousands(taker_balance);
-                    self.banner = Some(Banner::success(&match from {
-                        Some(from) => format!(
-                            "The crown is yours, taken from {from} for {cost} chips (balance {balance})"
-                        ),
-                        None => format!(
-                            "The crown is yours, claimed vacant for {cost} chips (balance {balance})"
-                        ),
-                    }));
-                }
-                // The deposed holder: a glyph vanishing off your own name
-                // with no explanation reads as a bug, so they are told who
-                // has it now. This arrives off the Postgres notify, so it
-                // lands whichever replica they are connected to.
-                CrownEvent::Deposed {
-                    user_id,
-                    ref taker_username,
-                    price,
-                } if user_id == self.user_id => {
-                    changed = true;
-                    self.banner = Some(Banner::error(&format!(
-                        "{taker_username} stole the crown from you for {} chips",
-                        thousands(price)
-                    )));
-                }
-                CrownEvent::Status { .. }
-                | CrownEvent::Failed { .. }
-                | CrownEvent::Taken { .. }
-                | CrownEvent::Deposed { .. } => {}
             }
         }
 

@@ -9,7 +9,7 @@ use late_core::models::{
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -27,7 +27,7 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
-    username_effect::{CROWN_GLYPH, CROWN_LAUREATE_GLYPH, ResolvedName},
+    username_effect::ResolvedName,
 };
 use crate::app::deadchannel::runner::state::PORTRAIT_WIDTH;
 use crate::app::files::{
@@ -167,7 +167,6 @@ pub struct DashboardChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
-    pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     /// The #lounge live strip (`app/live/`): one thing that just happened
     /// in the house, drawn above the poll strip. `None` when nothing is
@@ -227,6 +226,18 @@ pub(crate) struct ComposerBlockView<'a> {
     pub keep_composer_focused: bool,
     /// Whether the composer takes keys, and if not, what focuses it.
     pub inert: ComposerInert,
+    /// What the idle placeholder offers.
+    pub idle_hint: ComposerIdleHint,
+}
+
+/// What an idle composer's placeholder offers. A room's composer sits over
+/// its message list, so it names j/k selection; a scene's (the Clubhouse,
+/// the Nightcap) sits under a floor where those keys move you, so it names
+/// only how to start talking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerIdleHint {
+    Room,
+    Scene,
 }
 
 /// A composer that takes no keys keeps its strip so the rows never jump,
@@ -239,10 +250,6 @@ pub enum ComposerInert {
     /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
     /// the focused tile.
     ZenTile,
-    /// The pane beside a player's own running roguelike: every key is the
-    /// game's until F2 or a click on the pane opens the composer
-    /// (`door/spectate`).
-    OwnWatchChat,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -287,13 +294,6 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     match view.inert {
         ComposerInert::ZenTile => {
             return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
-        }
-        ComposerInert::OwnWatchChat => {
-            return pick_title_that_fits(
-                block_width,
-                &[" Compose (F2 or click) ", " (F2 or click) ", " F2 ", ""],
-            )
-            .to_string();
         }
         ComposerInert::No => {}
     }
@@ -515,13 +515,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
                 dim,
             )));
         }
-        ComposerInert::OwnWatchChat => {
-            return Paragraph::new(Line::from(Span::styled(
-                // Fits the 40-column pane: 38 cells of text.
-                "F2 or click: write to your watchers",
-                dim,
-            )));
-        }
         ComposerInert::No => {}
     }
 
@@ -545,10 +538,13 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
             dim,
         ))]
     } else {
-        vec![Line::from(Span::styled(
-            "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything",
-            dim,
-        ))]
+        let hint = match view.idle_hint {
+            ComposerIdleHint::Room => {
+                "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything"
+            }
+            ComposerIdleHint::Scene => "Press i to say something · Ctrl+] icon picker",
+        };
+        vec![Line::from(Span::styled(hint, dim))]
     };
 
     Paragraph::new(placeholder)
@@ -762,122 +758,6 @@ fn draw_activity_ticker(
         spans.push(Span::styled(stamp, faint));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
-    if effects.is_empty() || area.is_empty() {
-        return;
-    }
-    if has_room_effect(effects, "room_glow") {
-        draw_room_glow(frame, area);
-    }
-    if has_room_effect(effects, "room_pulse") {
-        draw_room_pulse(frame, area);
-    }
-    if has_room_effect(effects, "room_spark") {
-        draw_room_sparkles(frame, area);
-    }
-}
-
-fn draw_room_glow(frame: &mut Frame, area: Rect) {
-    if area.width < 4 || area.height < 2 {
-        return;
-    }
-    // A warm halo that breathes in from the edges. It only tints the
-    // background of the outer ring, never stamps glyphs, so text (including
-    // the first message) stays fully readable underneath the light.
-    let phase = Utc::now().timestamp_millis().rem_euclid(2600) as f32 / 2600.0;
-    let breath = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
-    let glow = theme::AMBER_GLOW();
-    let buf = frame.buffer_mut();
-    let max_x = area.right().saturating_sub(1);
-    let max_y = area.bottom().saturating_sub(1);
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            let left = x.saturating_sub(area.x);
-            let right = max_x.saturating_sub(x);
-            let top = y.saturating_sub(area.y);
-            let bottom = max_y.saturating_sub(y);
-            let edge_distance = left.min(right).min(top).min(bottom);
-            if edge_distance > 1 {
-                continue;
-            }
-            let base = if edge_distance == 0 { 0.30 } else { 0.14 };
-            let strength = base + 0.10 * breath;
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_bg(blend_room_glow(cell.bg, glow, strength));
-            }
-        }
-    }
-}
-
-fn blend_room_glow(base: Color, glow: Color, t: f32) -> Color {
-    let base = match base {
-        Color::Rgb(..) => base,
-        _ => theme::BG_CANVAS(),
-    };
-    match (base, glow) {
-        (Color::Rgb(br, bg, bb), Color::Rgb(gr, gg, gb)) => {
-            let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-            Color::Rgb(mix(br, gr), mix(bg, gg), mix(bb, gb))
-        }
-        _ => base,
-    }
-}
-
-fn draw_room_pulse(frame: &mut Frame, area: Rect) {
-    if area.width < 4 || area.height < 2 {
-        return;
-    }
-    let tick = Utc::now().timestamp_millis().div_euclid(120) as u16;
-    let wave_x = area.x + tick.wrapping_mul(3) % area.width;
-    let wave_y = area.y + tick % area.height;
-    let buf = frame.buffer_mut();
-    for x in area.x..area.right() {
-        if x.wrapping_add(tick) % 2 == 0
-            && let Some(cell) = buf.cell_mut((x, wave_y))
-        {
-            cell.set_symbol("·").set_fg(theme::SUCCESS());
-        }
-    }
-    for y in area.y..area.bottom() {
-        if y.wrapping_add(tick) % 2 == 0
-            && let Some(cell) = buf.cell_mut((wave_x, y))
-        {
-            cell.set_symbol("·").set_fg(theme::AMBER_DIM());
-        }
-    }
-}
-
-fn draw_room_sparkles(frame: &mut Frame, area: Rect) {
-    if area.width < 4 || area.height < 2 {
-        return;
-    }
-    const GLYPHS: [&str; 4] = ["*", "+", "✦", "·"];
-    let seed = Utc::now().timestamp_millis().div_euclid(180) as u64;
-    let cell_count = u64::from(area.width) * u64::from(area.height);
-    let sparkle_count = (cell_count / 70).clamp(8, 36);
-    let buf = frame.buffer_mut();
-    for index in 0..sparkle_count {
-        let mixed = seed
-            .wrapping_mul(1_103_515_245)
-            .wrapping_add(index.wrapping_mul(2_654_435_761))
-            .wrapping_add(12_345);
-        let x = area.x + (mixed % u64::from(area.width)) as u16;
-        let y = area.y + ((mixed / 97) % u64::from(area.height)) as u16;
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            let glyph = GLYPHS[(mixed as usize) % GLYPHS.len()];
-            cell.set_symbol(glyph).set_fg(room_sparkle_color(mixed));
-        }
-    }
-}
-
-fn room_sparkle_color(seed: u64) -> Color {
-    match seed % 3 {
-        0 => theme::AMBER_GLOW(),
-        1 => theme::SUCCESS(),
-        _ => theme::TEXT_BRIGHT(),
-    }
 }
 
 fn split_poll_and_messages(area: Rect, poll: Option<&ActiveChatPoll>) -> (Option<Rect>, Rect) {
@@ -1233,6 +1113,7 @@ pub fn draw_dashboard_chat_card(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: ComposerInert::No,
+                idle_hint: ComposerIdleHint::Room,
             },
             composer_text_width,
         ));
@@ -1366,7 +1247,6 @@ pub fn draw_dashboard_chat_card(
         draw_poll_strip(frame, poll_area, poll);
     }
     frame.render_widget(Paragraph::new(lines), messages_area);
-    draw_room_page_effects(frame, messages_area, view.active_room_effects);
     // Only publish the chat-scroll hit layout when nothing is painted on
     // top of the messages (overlay or image modal) — those intercept
     // clicks via their own input paths, so a stale layout here would
@@ -1403,6 +1283,7 @@ pub fn draw_dashboard_chat_card(
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
             inert: ComposerInert::No,
+            idle_hint: ComposerIdleHint::Room,
         },
     );
     record_composer_mouse_target(
@@ -1898,14 +1779,11 @@ fn ensure_chat_rows_cache(
             prefix,
             segments,
             author_range,
-            crown_range,
             title_range,
             runner_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
             is_friend,
             author: &author,
-            crown: flair.is_some_and(|flair| flair.crown),
-            laureate: flair.is_some_and(|flair| flair.laureate),
             title: flair.and_then(|flair| flair.title.as_deref()),
             milestone: flair.and_then(|flair| flair.milestone.as_deref()),
             special_badges: special_list,
@@ -1929,12 +1807,10 @@ fn ensure_chat_rows_cache(
         };
         let author_tint = (drunk_word.is_some()
             || name_style.is_some()
-            || crown_range.is_some()
             || title_range.is_some()
             || runner_tint.is_some())
         .then_some(AuthorTint {
             range: author_range,
-            crown_range,
             title_range,
             runner: runner_tint,
             word: drunk_word,
@@ -2804,8 +2680,6 @@ fn build_author_prefix_and_segments(
     let built = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend,
         author,
-        crown: false,
-        laureate: false,
         title: None,
         milestone: None,
         special_badges,
@@ -2824,14 +2698,10 @@ fn build_author_prefix_and_segments(
 struct AuthorPrefixInput<'a> {
     is_friend: bool,
     author: &'a str,
-    /// Whether this author currently wears the crown.
-    crown: bool,
-    /// Whether this author wore the crown when last month ended.
-    laureate: bool,
     title: Option<&'a str>,
     /// The dearest burn milestone this author owns. A badge, not a mark on
     /// the name, so it joins the badge stack rather than trailing the
-    /// username the way the crown and title do.
+    /// username the way the title does.
     milestone: Option<&'a str>,
     special_badges: &'a [&'a str],
     chat_badges: &'a [(HeaderTarget, &'a str)],
@@ -2846,15 +2716,13 @@ struct AuthorPrefixInput<'a> {
 
 /// The built author header prefix: the string, the clickable column
 /// segments, the bare username's byte range, and the byte ranges of the
-/// decorations that trail it. The crown follows the username directly, the
-/// title follows the crown, and the runner badge opens the badge stack
-/// after the title, so all four runs are adjacent and the painter can
-/// walk them in order.
+/// decorations that trail it. The title follows the username directly, and
+/// the runner badge opens the badge stack after the title, so all three
+/// runs are adjacent and the painter can walk them in order.
 struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
-    crown_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.
     runner_range: Option<(usize, usize)>,
@@ -2865,8 +2733,6 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let AuthorPrefixInput {
         is_friend,
         author,
-        crown,
-        laureate,
         title,
         milestone,
         special_badges,
@@ -2898,16 +2764,6 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         col += 1;
     }
 
-    // Last month's crown leads the name: a title held for the whole month,
-    // so it stands apart from the live holder's glyph that trails the name.
-    // Painted in the author style (an emoji keeps its own colors), and the
-    // name beside it opens the profile, so it carries no segment.
-    if laureate {
-        prefix.push_str(CROWN_LAUREATE_GLYPH);
-        prefix.push(' ');
-        col += UnicodeWidthStr::width(CROWN_LAUREATE_GLYPH) as u16 + 1;
-    }
-
     let author_w = UnicodeWidthStr::width(author) as u16;
     if author_w > 0 {
         segments.push(HeaderSegment {
@@ -2922,19 +2778,6 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     prefix.push_str(author);
     let author_range = (author_range_start, prefix.len());
     col += author_w;
-
-    // The crown follows the name after one space, ahead of the title and
-    // the badge stack: a mark on the person, not another badge. It carries
-    // no clickable segment of its own; the name beside it already opens the
-    // profile. The range starts at the space so it stays adjacent to the
-    // name for the painter, which walks the trailing runs in order.
-    let crown_range = crown.then(|| {
-        let crown_start = prefix.len();
-        prefix.push(' ');
-        prefix.push_str(CROWN_GLYPH);
-        col += 1 + UnicodeWidthStr::width(CROWN_GLYPH) as u16;
-        (crown_start, prefix.len())
-    });
 
     // The rented title reads as an aside on the name (`mira, the
     // insufferable`), so it sits between the name and the badge stack and is
@@ -3023,7 +2866,6 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         prefix,
         segments,
         author_range,
-        crown_range,
         title_range,
         runner_range,
     }
@@ -3518,6 +3360,7 @@ pub fn draw_embedded_room_chat(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: view.composer_inert,
+                idle_hint: ComposerIdleHint::Room,
             },
             composer_text_width,
         ));
@@ -3541,6 +3384,7 @@ pub fn draw_embedded_room_chat(
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
             inert: view.composer_inert,
+            idle_hint: ComposerIdleHint::Room,
         },
     );
     record_composer_mouse_target(
@@ -3766,6 +3610,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
                         inert: ComposerInert::No,
+                        idle_hint: ComposerIdleHint::Room,
                     },
                     composer_text_width,
                 ),
@@ -5600,14 +5445,7 @@ fn draw_selected_content(
         {
             draw_poll_strip(frame, poll_area, poll);
         }
-        let mut selected_room_effects: &[ActiveChatRoomEffect] = &[];
         let message_lines: Vec<Line> = if let Some((room, messages)) = selected_room {
-            let active_effects = view
-                .active_room_effects
-                .get(&room.id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            selected_room_effects = active_effects;
             let height = message_render_area.height.max(1) as usize;
             let width = message_render_area.width.max(1) as usize;
 
@@ -5677,7 +5515,6 @@ fn draw_selected_content(
 
         let messages_paragraph = Paragraph::new(message_lines);
         frame.render_widget(messages_paragraph, message_render_area);
-        draw_room_page_effects(frame, message_render_area, selected_room_effects);
         if let (Some(slot), Some(hits)) = (view.chat_hit_slot, chat_hits)
             && view.overlay.is_none()
             && view.image_modal.is_none()
@@ -5899,6 +5736,7 @@ fn draw_selected_content(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: ComposerInert::No,
+                idle_hint: ComposerIdleHint::Room,
             },
         );
         record_composer_mouse_target(

@@ -14,7 +14,7 @@
         <p class="text-xs text-gray-400 mt-2">{{ dateline }}</p>
         <p class="text-sm text-gray-300 mt-4 leading-relaxed">
             late.sh's daily paper, printed once a day by @graybeard and read at every login.
-            The operator's word, what the clubhouse was reading, and a look outside.
+            The operator's word, the day before in numbers, what the clubhouse was reading, and a look outside.
             <a href="/paper/feed.xml" class="text-gray-300 hover:text-green-400 underline underline-offset-2 transition-colors">RSS</a>
         </p>
     </div>
@@ -36,6 +36,15 @@
             </div>
             {% endfor %}
         </div>
+    </div>
+    {% endif %}
+
+    {% if !yesterday.is_empty() %}
+    <div class="mb-12">
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> yesterday on late.sh</div>
+        {% for p in yesterday %}
+        <p class="text-sm text-gray-300 leading-relaxed mb-1">{{ p }}</p>
+        {% endfor %}
     </div>
     {% endif %}
 

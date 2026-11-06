@@ -59,9 +59,12 @@ impl PaperStatus {
 }
 
 /// The edition-level sections. A new section means a new variant, a wider
-/// CHECK constraint in a migration, and a printer for it in the sweeper.
+/// CHECK constraint in a migration (173, then 258), and a printer for it
+/// in the sweeper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaperSectionKind {
+    /// The covered day in numbers, from late.sh's own rows and no model.
+    Yesterday,
     /// What the clubhouse shared into News that day.
     Reading,
     /// The grounded look at the outside world.
@@ -71,13 +74,35 @@ pub enum PaperSectionKind {
 impl PaperSectionKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Yesterday => "yesterday",
             Self::Reading => "reading",
             Self::Outside => "outside",
         }
     }
 
+    /// The section's heading as the paper prints it, in every surface's
+    /// capitals: the terminal page, the web page and its card.
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Yesterday => "YESTERDAY ON LATE.SH",
+            Self::Reading => "WHAT WE WERE READING",
+            Self::Outside => "OUTSIDE",
+        }
+    }
+
+    /// The heading in a sentence: the feed's column titles, the herald's
+    /// alt text.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Yesterday => "Yesterday on late.sh",
+            Self::Reading => "What we were reading",
+            Self::Outside => "Outside",
+        }
+    }
+
     fn parse(value: &str) -> Result<Self> {
         match value {
+            "yesterday" => Ok(Self::Yesterday),
             "reading" => Ok(Self::Reading),
             "outside" => Ok(Self::Outside),
             other => bail!("unknown paper section {other:?}"),
@@ -233,6 +258,17 @@ impl PaperEdition {
                 .sections
                 .iter()
                 .any(|section| section.status == PaperStatus::Ready)
+    }
+
+    /// The text of `kind`'s column when the press printed it, `None`
+    /// otherwise: the one rule for whether a column is out, for every
+    /// surface that shows one (the terminal paper, the web page and its
+    /// card, the herald).
+    pub fn ready_text(&self, kind: PaperSectionKind) -> Option<&str> {
+        self.sections
+            .iter()
+            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
+            .and_then(|section| section.text.as_deref())
     }
 
     /// True once the sweeper has reached this edition: at least one row,

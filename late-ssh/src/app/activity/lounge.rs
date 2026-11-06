@@ -177,11 +177,6 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // message forever, and keying on the author alone would swallow a
         // second message of theirs crossing the line in the same half hour.
         ActivityKind::MessageGilded { message_id, .. } => format!("gilded:{message_id}"),
-        // Keyed on the reign: one line per takeover, however fast they come.
-        // A war is the story, and the 1.5x ladder is what ends it. Keying on
-        // the user alone would swallow a re-take after someone else briefly
-        // held it.
-        ActivityKind::CrownTaken { reign_id, .. } => format!("crown-taken:{reign_id}"),
         ActivityKind::RoundBought { round_id, .. } => format!("round-bought:{round_id}"),
         // Keyed on the pot: there is one draw a week, already once-only in
         // the table, so the key only has to keep two pots' lines from

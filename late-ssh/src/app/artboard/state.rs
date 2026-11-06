@@ -382,23 +382,22 @@ impl State {
 
     pub fn paste_bytes(&mut self, bytes: &[u8], screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        let text = match std::str::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => return,
+        if self.is_archive_view_active() {
+            return;
+        }
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return;
         };
-
-        let start = self.editor.cursor;
-        let reach = EditReach::Within(text_block_bounds(start, text));
-        let _ = self.edit_canvas(reach, |editor, canvas, color| {
-            paste_text_block(editor, canvas, text, color)
-        });
-        self.editor.cursor = paste_cursor_end(
-            start,
+        let Some(clipboard) = clipboard_from_text(
             text,
             self.snapshot.canvas.width,
             self.snapshot.canvas.height,
-        );
-        self.editor.scroll_viewport_to_cursor(&self.snapshot.canvas);
+        ) else {
+            return;
+        };
+
+        self.drag_brush = None;
+        self.arm_transparent_floating(clipboard, None, None);
     }
 
     pub fn move_to_screen_point(&mut self, screen_size: (u16, u16), x: u16, y: u16) -> bool {
@@ -1239,19 +1238,11 @@ impl State {
             return false;
         }
         self.editor.cursor = glyph.pos;
-        self.editor.clear_selection();
-        self.editor.floating = Some(EditorFloatingSelection {
-            clipboard: capture_bounds(
-                &self.snapshot.canvas,
-                Bounds::single(glyph.pos).normalized_for_canvas(&self.snapshot.canvas),
-            ),
-            transparent: true,
-            source_index: None,
-        });
-        self.floating_source_selection = None;
-        self.floating_source_bounds = None;
-        self.active_brush = Some(Brush::Glyph(glyph.ch));
-        self.suppress_swatch_preview = false;
+        let clipboard = capture_bounds(
+            &self.snapshot.canvas,
+            Bounds::single(glyph.pos).normalized_for_canvas(&self.snapshot.canvas),
+        );
+        self.arm_transparent_floating(clipboard, None, Some(Brush::Glyph(glyph.ch)));
         // The sampler is the eyedropper too: the glyph's colour becomes the
         // paint colour, so Esc and typing carry it on.
         if let Some(fg) = self.snapshot.canvas.fg(glyph.pos) {
@@ -1613,17 +1604,28 @@ impl State {
         else {
             return false;
         };
+        self.arm_transparent_floating(clipboard, Some(idx), None);
+        true
+    }
+
+    /// Swatch, sampled-glyph and pasted brushes all float transparent with no
+    /// lifted source; only an opaque lift keeps its source selection.
+    fn arm_transparent_floating(
+        &mut self,
+        clipboard: Clipboard,
+        source_index: Option<usize>,
+        active_brush: Option<Brush>,
+    ) {
         self.editor.clear_selection();
         self.editor.floating = Some(EditorFloatingSelection {
             clipboard,
             transparent: true,
-            source_index: Some(idx),
+            source_index,
         });
         self.floating_source_selection = None;
         self.floating_source_bounds = None;
-        self.active_brush = None;
+        self.active_brush = active_brush;
         self.suppress_swatch_preview = false;
-        true
     }
 
     fn apply_brush(&mut self, brush: Brush) {
@@ -1937,6 +1939,93 @@ fn backspace_bounds(cursor: Pos) -> Bounds {
     )
 }
 
+/// The transparent stamp a terminal paste arms: spaces become blank cells,
+/// rows clip at the canvas size. The glyph picker writes its text straight
+/// to the canvas through `paste_text_block` instead, so a change to line or
+/// width handling here should check that path too.
+fn clipboard_from_text(text: &str, max_width: usize, max_height: usize) -> Option<Clipboard> {
+    if max_width == 0 || max_height == 0 {
+        return None;
+    }
+    let mut rows: Vec<Vec<Option<CellValue>>> = Vec::new();
+    let mut current_row: Vec<Option<CellValue>> = Vec::new();
+    let mut width = 0;
+    let mut has_glyph = false;
+    // Set once something on the row does not fit: the rest of the row is cut
+    // at the edge, so a narrow glyph never closes up behind a clipped wide one.
+    let mut row_clipped = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if matches!(chars.peek(), Some('\n')) {
+                    chars.next();
+                }
+                width = width.max(current_row.len());
+                rows.push(std::mem::take(&mut current_row));
+                row_clipped = false;
+                if rows.len() >= max_height {
+                    break;
+                }
+            }
+            '\n' => {
+                width = width.max(current_row.len());
+                rows.push(std::mem::take(&mut current_row));
+                row_clipped = false;
+                if rows.len() >= max_height {
+                    break;
+                }
+            }
+            ch if ch.is_control() => {}
+            _ if row_clipped => {}
+            ' ' => {
+                if current_row.len() < max_width {
+                    current_row.push(None);
+                } else {
+                    row_clipped = true;
+                }
+            }
+            ch => match Canvas::display_width(ch) {
+                0 => {}
+                2 => {
+                    if current_row.len() + 2 <= max_width {
+                        has_glyph = true;
+                        current_row.push(Some(CellValue::Wide(ch)));
+                        current_row.push(Some(CellValue::WideCont));
+                    } else {
+                        row_clipped = true;
+                    }
+                }
+                _ => {
+                    if current_row.len() < max_width {
+                        has_glyph = true;
+                        current_row.push(Some(CellValue::Narrow(ch)));
+                    } else {
+                        row_clipped = true;
+                    }
+                }
+            },
+        }
+    }
+    if rows.len() < max_height {
+        width = width.max(current_row.len());
+        rows.push(current_row);
+    }
+
+    if width == 0 || !has_glyph {
+        return None;
+    }
+
+    let height = rows.len();
+    let mut cells = Vec::with_capacity(width * height);
+    for mut row in rows {
+        row.resize(width, None);
+        cells.extend(row);
+    }
+    Some(Clipboard::new(width, height, cells))
+}
+
 /// The cells `paste_text_block` writes when `text` lands at `start`: one row
 /// per line, as wide as the widest line in display cells.
 fn text_block_bounds(start: Pos, text: &str) -> Bounds {
@@ -1980,21 +2069,15 @@ fn clear_bounds_on(canvas: &mut Canvas, bounds: Bounds) {
     }
 }
 
+/// Where the cursor lands after `paste_text_block` writes `text` at `start`.
 fn paste_cursor_end(start: Pos, text: &str, width: usize, height: usize) -> Pos {
     let mut cursor = start;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
+    for ch in text.chars() {
         if cursor.y >= height {
             break;
         }
         match ch {
-            '\r' => {
-                if matches!(chars.peek(), Some('\n')) {
-                    chars.next();
-                }
-                cursor.x = start.x;
-                cursor.y += 1;
-            }
+            '\r' => {}
             '\n' => {
                 cursor.x = start.x;
                 cursor.y += 1;

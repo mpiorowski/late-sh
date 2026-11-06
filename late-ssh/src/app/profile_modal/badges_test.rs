@@ -10,7 +10,7 @@ use late_core::models::profile_award::{
 };
 
 /// Every badge granted outside the ranked monthly boards. The milestones are
-/// one list already; the single-holder monthly awards (the crown, Late Time)
+/// one list already; the single-holder monthly awards (Late Time, Top Drinkers)
 /// are documented in the same two places, so they are checked alongside them.
 fn undocumentable_badges() -> Vec<String> {
     MILESTONE_AWARD_CATEGORIES
@@ -38,7 +38,7 @@ fn guide_text() -> String {
 }
 
 /// Every badge there is, ranked monthly boards included. The settings
-/// modal's Chat badges picker is built from the same list less the crown
+/// modal's Chat badges picker is built from the same list
 /// (`chat_badge_rows`), so it is never missing one; the guide is written by
 /// hand and this is what keeps it level with the awards.
 #[test]
@@ -57,7 +57,7 @@ fn the_leaderboards_guide_explains_every_badge() {
 }
 
 /// The guide reads in stacking order (the order a chat label stacks badges,
-/// and the picker's order with the crown skipped), so the lists line up.
+/// and the picker's order), so the lists line up.
 #[test]
 fn the_leaderboards_guide_lists_badges_in_the_pickers_order() {
     let guide = guide_text();

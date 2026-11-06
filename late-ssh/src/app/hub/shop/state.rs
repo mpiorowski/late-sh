@@ -56,7 +56,6 @@ pub(crate) struct PendingRoomEffect {
     pub effect_kind: Option<String>,
     pub room_id: Uuid,
     pub room_label: String,
-    pub daily_limited: bool,
 }
 
 /// The style picker armed by Enter on a username-effect item: cycle through
@@ -502,7 +501,6 @@ impl ShopState {
                     effect_kind: item.effect_kind,
                     room_id: room.room_id,
                     room_label: room.label,
-                    daily_limited: item.daily_limited,
                 });
                 return Some(Banner::success("Confirm room effect"));
             }

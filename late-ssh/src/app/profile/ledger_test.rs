@@ -31,8 +31,6 @@ fn every_pointer_kind_resolves_from_its_source() {
     let gild_id = Uuid::now_v7();
     let claim_id = Uuid::now_v7();
     let missing_claim_id = Uuid::now_v7();
-    let reign_id = Uuid::now_v7();
-    let first_reign_id = Uuid::now_v7();
     let open_pot_id = Uuid::now_v7();
     let drawn_pot_id = Uuid::now_v7();
     let assignment_id = Uuid::now_v7();
@@ -46,8 +44,7 @@ fn every_pointer_kind_resolves_from_its_source() {
         entry(-500, "chip_gild_sent", Some(&gild_id.to_string())),
         entry(100, "daily_puzzle_win", Some(&claim_id.to_string())),
         entry(400, "daily_chess_win", Some(&missing_claim_id.to_string())),
-        entry(-1000, "chip_crown_taken", Some(&reign_id.to_string())),
-        entry(-1000, "chip_crown_taken", Some(&first_reign_id.to_string())),
+        entry(-1000, "chip_crown_taken", Some(&Uuid::now_v7().to_string())),
         entry(-150, "pot_ticket", Some(&open_pot_id.to_string())),
         entry(1600, "pot_won", Some(&drawn_pot_id.to_string())),
         entry(-50, "pot_ticket", Some(&drawn_pot_id.to_string())),
@@ -73,7 +70,6 @@ fn every_pointer_kind_resolves_from_its_source() {
             counterparties: vec![alice, stranger],
             gilds: vec![gild_id, gild_id],
             payouts: vec![claim_id, missing_claim_id],
-            reigns: vec![reign_id, first_reign_id],
             pots: vec![open_pot_id, drawn_pot_id, drawn_pot_id],
             quests: vec![assignment_id],
             awards: vec![award_id],
@@ -109,7 +105,6 @@ fn every_pointer_kind_resolves_from_its_source() {
                 payout_kind: "daily_win_hard".to_string(),
             },
         )]),
-        deposed: HashMap::from([(reign_id, bob)]),
         pots: HashMap::from([
             (open_pot_id, pot(open_pot_id, PotStatus::Open, None)),
             (drawn_pot_id, pot(drawn_pot_id, PotStatus::Drawn, Some(40))),
@@ -145,13 +140,8 @@ fn every_pointer_kind_resolves_from_its_source() {
         usernames: HashMap::from([(alice, "alice".to_string()), (bob, "bob".to_string())]),
     };
     assert_eq!(
-        named_user_ids(
-            &refs,
-            &sources.gilds,
-            &sources.deposed,
-            &sources.gift_recipients
-        ),
-        vec![alice, stranger, alice, bob, stranger, bob, bob]
+        named_user_ids(&refs, &sources.gilds, &sources.gift_recipients),
+        vec![alice, stranger, alice, bob, stranger, bob]
     );
 
     let details: Vec<Option<LedgerDetail>> = resolve(entries.clone(), &sources)
@@ -179,10 +169,7 @@ fn every_pointer_kind_resolves_from_its_source() {
             }),
             // A claim that did not load says nothing.
             None,
-            Some(LedgerDetail::CrownFrom {
-                username: "bob".to_string()
-            }),
-            // The first take ever deposed nobody.
+            // A retired crown take points at nothing that still exists.
             None,
             Some(LedgerDetail::PotTickets { count: 3 }),
             Some(LedgerDetail::PotWon { tickets: 40 }),

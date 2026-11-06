@@ -150,7 +150,7 @@ fn month(year: i32, month: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, 1).expect("valid month")
 }
 
-/// The award snapshot gate: the hourly tick must query the DB only at startup,
+/// The award snapshot gate: the periodic tick must query the DB only at startup,
 /// on a UTC month rollover, or on the daily fallback.
 #[test]
 fn award_snapshot_runs_at_startup() {
@@ -186,6 +186,27 @@ fn award_snapshot_falls_back_to_daily() {
     ));
 }
 
+fn utc(day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
+    NaiveDate::from_ymd_opt(2026, 9, day)
+        .and_then(|d| d.and_hms_opt(hour, minute, 0))
+        .expect("valid time")
+        .and_utc()
+}
+
+#[test]
+fn award_roll_waits_for_the_posting_hour_on_the_first() {
+    assert!(!award_roll_due(utc(1, 0, 5)));
+    assert!(!award_roll_due(utc(1, AWARD_ROLL_HOUR_UTC - 1, 59)));
+    assert!(award_roll_due(utc(1, AWARD_ROLL_HOUR_UTC, 0)));
+}
+
+#[test]
+fn award_roll_catches_up_after_the_first() {
+    // A process that was down at the posting hour still posts the next day.
+    assert!(award_roll_due(utc(2, 0, 0)));
+    assert!(award_roll_due(utc(15, 3, 0)));
+}
+
 #[test]
 fn previous_utc_month_steps_back_within_a_year() {
     let today = NaiveDate::from_ymd_opt(2026, 9, 1).expect("valid date");
@@ -198,74 +219,148 @@ fn previous_utc_month_crosses_the_year_boundary() {
     assert_eq!(previous_utc_month(today), month(2025, 12));
 }
 
-fn increment_for(batch: &PreparedOnlineTimeBatch, user_id: Uuid, month_start: NaiveDate) -> i64 {
-    batch
+fn increment_for(
+    batch: &PreparedOnlineTimeBatch,
+    user_id: Uuid,
+    month_start: NaiveDate,
+) -> OnlineTimeIncrement {
+    *batch
         .batch
         .increments
         .iter()
-        .find_map(|value| {
-            (value.user_id == user_id && value.month_start == month_start)
-                .then_some(value.milliseconds)
-        })
+        .find(|value| value.user_id == user_id && value.month_start == month_start)
         .expect("user increment in batch")
+}
+
+fn at(day: u32, hour: u32, second: u32) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    let (month, day) = match day {
+        0 => (8, 31),
+        day => (9, day),
+    };
+    Utc.with_ymd_and_hms(2026, month, day, hour, 0, second)
+        .single()
+        .expect("fixture time")
 }
 
 #[test]
 fn online_time_checkpoints_one_continuous_presence_interval() {
     let tracker = OnlineTimeTracker::default();
     let user_id = Uuid::from_u128(10);
-    let start = Instant::now();
+    // Connected on the last evening of August.
+    let start = at(0, 23, 0);
     let august = month(2026, 8);
     let september = month(2026, 9);
 
-    tracker.connected_at(user_id, start, august);
-    // A defensive duplicate start cannot reset the first-online timestamp or
-    // move its elapsed time into another UTC month.
-    tracker.connected_at(user_id, start + Duration::from_secs(5), september);
+    tracker.connected_at(user_id, start);
+    // A defensive duplicate start cannot reset the first-online timestamp.
+    tracker.connected_at(user_id, start + chrono::Duration::seconds(5));
     let first = tracker
-        .begin_batch_at(start + Duration::from_secs(10), september)
+        .begin_batch_at(start + chrono::Duration::seconds(10))
         .expect("first checkpoint");
     assert!(!first.was_retry);
-    assert_eq!(increment_for(&first, user_id, august), 10_000);
+    assert_eq!(
+        increment_for(&first, user_id, august),
+        OnlineTimeIncrement {
+            user_id,
+            month_start: august,
+            span_start: start,
+            span_end: start + chrono::Duration::seconds(10),
+        }
+    );
 
     let retry = tracker
-        .begin_batch_at(start + Duration::from_secs(15), september)
+        .begin_batch_at(start + chrono::Duration::seconds(15))
         .expect("retained uncertain batch");
     assert!(retry.was_retry);
     assert_eq!(retry.batch.id, first.batch.id);
-    assert_eq!(increment_for(&retry, user_id, august), 10_000);
+    assert_eq!(retry.batch.increments, first.batch.increments);
 
     tracker.acknowledge(retry.batch.id);
     let follow_up = tracker
-        .begin_batch_at(start + Duration::from_secs(15), september)
+        .begin_batch_at(start + chrono::Duration::seconds(15))
         .expect("time accrued while batch was uncertain");
-    assert_eq!(increment_for(&follow_up, user_id, september), 5_000);
+    assert_eq!(
+        increment_for(&follow_up, user_id, august).span_start,
+        start + chrono::Duration::seconds(10),
+        "the next span starts where the checkpoint left off"
+    );
+    assert_eq!(
+        increment_for(&follow_up, user_id, august).span_end,
+        start + chrono::Duration::seconds(15)
+    );
     tracker.acknowledge(follow_up.batch.id);
 
-    tracker.disconnected_at(user_id, start + Duration::from_secs(20));
-    let final_batch = tracker
-        .begin_batch_at(start + Duration::from_secs(30), september)
-        .expect("completed interval");
-    assert_eq!(increment_for(&final_batch, user_id, september), 5_000);
+    // Past midnight: the next checkpoint's span begins in September.
+    let midnight = at(1, 0, 0);
+    tracker.disconnected_at(user_id, midnight + chrono::Duration::seconds(20));
+    let spill = tracker
+        .begin_batch_at(midnight + chrono::Duration::seconds(30))
+        .expect("the segment that crossed midnight");
+    assert_eq!(
+        increment_for(&spill, user_id, august),
+        OnlineTimeIncrement {
+            user_id,
+            month_start: august,
+            span_start: start + chrono::Duration::seconds(15),
+            span_end: midnight + chrono::Duration::seconds(20),
+        },
+        "a segment counts in the month it began"
+    );
+    tracker.acknowledge(spill.batch.id);
+
+    tracker.connected_at(user_id, midnight + chrono::Duration::seconds(40));
+    tracker.disconnected_at(user_id, midnight + chrono::Duration::seconds(45));
+    let september_batch = tracker
+        .begin_batch_at(midnight + chrono::Duration::seconds(50))
+        .expect("a September segment");
+    assert_eq!(
+        increment_for(&september_batch, user_id, september),
+        OnlineTimeIncrement {
+            user_id,
+            month_start: september,
+            span_start: midnight + chrono::Duration::seconds(40),
+            span_end: midnight + chrono::Duration::seconds(45),
+        }
+    );
     assert!(!tracker.is_active(user_id));
 }
 
+/// Two stretches with a gap between them are reported as two spans: the
+/// flush credits a span's whole wall clock, so the gap must not be inside
+/// one.
 #[test]
-fn online_time_adds_disjoint_reconnections() {
+fn online_time_reports_each_stretch_of_presence_as_its_own_span() {
     let tracker = OnlineTimeTracker::default();
     let user_id = Uuid::from_u128(11);
-    let start = Instant::now();
-    let august = month(2026, 8);
+    let start = at(2, 12, 0);
+    let september = month(2026, 9);
 
-    tracker.connected_at(user_id, start, august);
-    tracker.disconnected_at(user_id, start + Duration::from_secs(10));
-    tracker.connected_at(user_id, start + Duration::from_secs(20), august);
-    tracker.disconnected_at(user_id, start + Duration::from_secs(25));
+    tracker.connected_at(user_id, start);
+    tracker.disconnected_at(user_id, start + chrono::Duration::seconds(10));
+    tracker.connected_at(user_id, start + chrono::Duration::seconds(20));
+    tracker.disconnected_at(user_id, start + chrono::Duration::seconds(25));
 
     let batch = tracker
-        .begin_batch_at(start + Duration::from_secs(30), august)
+        .begin_batch_at(start + chrono::Duration::seconds(30))
         .expect("two completed intervals");
-    assert_eq!(increment_for(&batch, user_id, august), 15_000);
+    assert_eq!(
+        batch.batch.increments,
+        vec![
+            OnlineTimeIncrement {
+                user_id,
+                month_start: september,
+                span_start: start,
+                span_end: start + chrono::Duration::seconds(10),
+            },
+            OnlineTimeIncrement {
+                user_id,
+                month_start: september,
+                span_start: start + chrono::Duration::seconds(20),
+                span_end: start + chrono::Duration::seconds(25),
+            },
+        ]
+    );
 }
 
 fn placement(username: &str, category: &str, rank: i32, score_value: i64) -> AwardRollEntry {
@@ -279,8 +374,8 @@ fn placement(username: &str, category: &str, rank: i32, score_value: i64) -> Awa
 
 /// The whole #lounge roll from a fixed month: boards in badge order whatever
 /// order the rows came in, medals in rank order, a shared first place shown
-/// twice, the gallery's prizes, the single-holder awards (the crown, Late
-/// Time, Top Drinkers) worded as such, and
+/// twice, the gallery's prizes, the single-holder awards (Late Time, Top
+/// Drinkers) worded as such, and
 /// a board nobody placed on (Snake) left out.
 #[test]
 fn award_roll_body_reads_as_one_message_per_month() {
@@ -292,7 +387,6 @@ fn award_roll_body_reads_as_one_message_per_month() {
             placement("kai", "arcade_wins", 1, 340),
             placement("rex", "tetris", 1, 45_000),
             placement("ada", "artboard", 1, 12),
-            placement("pip", "crown", 1, 7_500),
             placement("owl", "late_time", 1, 133_979_000),
             placement("barfly", "top_drinkers", 1, 12_400),
             placement("bo", "top_chips", 2, 98_000),
@@ -309,7 +403,6 @@ fn award_roll_body_reads_as_one_message_per_month() {
          Top Chips: \u{1F947} @mira 120,500 chips \u{00B7} \u{1F948} @bo 98,000 chips \u{00B7} \u{1F949} @cy 50,000 chips\n\
          Lateris: \u{1F947} @rex 45,000\n\
          2048: \u{1F948} @zed 2,048\n\
-         The Crown: \u{1F451} @pip took it last for 7,500 chips\n\
          Artboard Gallery: \u{1F947} @ada 12 applause (+40,000 chips) \u{00B7} \u{1F948} @kai 9 applause (+15,000 chips)\n\
          Late Time: \u{1F319} @owl with 37h 12m online\n\
          Top Drinkers: \u{1F37A} @barfly with 12,400 buzz\n\

@@ -22,10 +22,10 @@ use crate::app::files::terminal_image::{
     TerminalImageData, TerminalImageProtocol, terminal_image_from_bytes,
 };
 
-/// Display footprint — the quit-confirm modal is 60×9 cells with one
-/// prompt row + one footer row + a flexible spacer in between, so a
-/// 40×4 scene anchors comfortably in the middle without crowding either
-/// the question or the two key hints.
+/// Display footprint: the quit-confirm modal is 60 cells wide with one
+/// prompt row + the key rows + a six-row spacer in between, so a 40×4
+/// scene anchors comfortably in the middle without crowding either the
+/// question or the key hints.
 pub(crate) const SAYONARA_DISPLAY_COLS: u16 = 40;
 pub(crate) const SAYONARA_DISPLAY_ROWS: u16 = 4;
 

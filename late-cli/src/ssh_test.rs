@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use crate::config::SshMode;
 
 // The banner parser and the openssh command specs are Unix-only, so the tests
 // covering them compile only there. parse_session_token_response and
@@ -73,6 +75,10 @@ fn openssh_master_command_uses_control_master_and_identity() {
             "/home/alice/.ssh/id_ed25519_sk",
             "-o",
             "StrictHostKeyChecking=accept-new",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
             "-p",
             "2222",
             "-l",

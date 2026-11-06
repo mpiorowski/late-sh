@@ -23,7 +23,7 @@ badges are in [`AWARDS.md`](AWARDS.md).
 - `state.rs`: `Board` (the closed page-board enum; page order: Top Drinkers, Top Chips, Arcade Wins, Late Time, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`, `MonthlyYearly`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
-- `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, process-local online-time accumulator/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
+- `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, online-time accumulator (wall-clock spans)/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
 - Data model: `late-core/src/models/leaderboard.rs` (rosters, queries, `LeaderboardData`); awards in `late-core/src/models/profile_award.rs`.
 - Read-only from here: `app/door/ingest/` (the pipe filling `door_runs`/`door_milestones`; `door/ingest/CONTEXT.md`).
 
@@ -62,29 +62,46 @@ The one surface that does not wait is the Arcade lobby card's own-user
 ✓/✗ tier marks: `App.session_daily_wins` (`arcade/daily.rs::SessionDailyWins`)
 is marked from the session's own `GameWon` Activity events, which the daily
 services publish only after the win row commits, and the card ORs it with the
-snapshot's `user_daily_statuses`. Other players' standings still wait.
+snapshot's `user_daily_statuses`, which also feeds the Arcade card's `N solved`
+count and its `o` roster (`arcade/solvers.rs`, named through the app's username
+directory). Other players' standings still wait. The statuses carry the UTC
+day they were read for (`DailyStatuses`), and every reader goes through
+`DailyStatuses::on(today)`, which is empty once the day has moved on: for the
+few minutes after midnight before the next pass, every card shows today's
+puzzles open rather than yesterday's ticks.
 
 ### Late Time persistence
 
 Late Time counts authenticated human presence across SSH and IRC, including
 idle/AFK time. `active_users` remains the authoritative cross-protocol
-connection ref-count: only its 0→1 transition starts a monotonic `Instant`, and
-only 1→0 stops it, so overlapping sessions for one user count once. Ghost users
-never enter this path.
+connection ref-count: only its 0→1 transition starts the clock, and only 1→0
+stops it, so overlapping sessions for one user on one process count once.
+Ghost users never enter this path.
 
-The accumulator checkpoints on the same five-minute timer as the leaderboard.
-It performs no DB work on connect/disconnect and writes every changed user in
-one `UNNEST` statement that atomically updates `user_online_time` (one all-time
-row per user) and `user_online_time_monthly` (one row per user and UTC month);
-no pending time means no statement. A retained flush UUID and month make an
-uncertain retry idempotent, and shutdown performs a final serialized flush.
-Tracking starts with migrations 142-143 and has no invented historical
-backfill. A connected segment is attributed to the UTC month in which that
-segment began; the regular checkpoint bounds month-boundary spill to five
+The accumulator keeps wall-clock spans: each closed or checkpointed interval
+is one span of presence, in the UTC month it began. It checkpoints on the same
+five-minute timer as the leaderboard, performs no DB work on
+connect/disconnect, and hands every span to `apply_online_time_batch`
+(`late-core/src/models/leaderboard.rs`) in one transaction; no pending time
+means no transaction. Shutdown performs a final serialized flush.
+
+Every pod counts its own sessions, and a deploy keeps the old pod's sessions
+up for hours (the 6 h grace) beside the new pod's, so two pods report the same
+minutes for one user. The flush dedupes in the database: it locks the user's
+`user_online_time` row, credits only the part of each span outside the row's
+`counted_spans` (`fold_online_time_credits`, the pure rule), then joins the
+span into them. Whichever pod lands second earns only what the first did not
+cover, in whatever order the batches arrive: the old pod's last minutes still
+count when they land after the new pod's first. A user's credited time never
+exceeds the wall clock, and a resent batch earns nothing its first attempt
+committed. Counted spans are kept for a day and merged when they touch, so a
+row holds a handful; a batch older than a day is past deduplication.
+
+Tracking starts with migrations 142-143, the counted spans with 274; neither
+has an invented backfill, and the totals counted before 274 keep the old
+overlap overcount. The regular checkpoint bounds month-boundary spill to five
 minutes while Postgres is healthy. A hard process crash can lose the current
-interval since the last checkpoint. Deduplication is process-local, matching
-the one-replica service; a rolling deployment's brief old/new-pod overlap may
-overcount.
+interval since the last checkpoint.
 
 ## Data model (roster-generated)
 
@@ -94,10 +111,14 @@ roster automatically joins its boards without a page change (the `roster!`
 macro guarantees an `ALL` entry per variant, and `Board::all()` iterates the
 rosters).
 
-- `DailyPuzzle` (Sudoku, Nonogram, Minesweeper, Solitaire, LeWord, RubiksCube, SlidingPuzzle): iterating `ALL` generates the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, per-user daily completion statuses, and the month-end `arcade_wins` profile award snapshot (`profile_award.rs::snapshot_previous_month_profile_awards` builds its union from the roster with `points_sql`, so the persisted award scores the same games as the page). The one thing the roster cannot enforce: a new game's win-insert statement must compose `bump_daily_win_total_sql`, or its all-time board stays empty. Monthly boards count win rows in the month window; all-time reads the `daily_win_totals` rollup (migration 131; the bump rides the win insert's own statement, gated to fresh inserts, so same-day replays never double-count and the refresh stays O(players)).
-- `ScoreGame` (Lateris, TwentyFortyEight, Snake, Traffic): monthly boards union `game_score_events` with legacy best-score rows whose best was set this month (`updated`); all-time boards read only the legacy tables of record. `updated` is when the best was set, not when the player last played: `HighScore::update_score_if_higher` (Lateris, 2048, Snake) moves it only when the submitted score beats the stored one, otherwise anyone who played this month would carry their all-time best onto the monthly board and into the month's awards. A best that no score event reached (one set before score events existed) has nothing to date it by, so its `updated` can be later than when it was set. Traffic is the exception: every track finish rewrites `traffic_high_scores` and records the aggregate total as the score event, so its monthly board lists the all-time total of whoever finished a track this month.
+- `DailyPuzzle` (declared in the Arcade lobby's order, so the per-game boards on this page, the week card's Arcade section and the paper's tie-breaks follow the lobby): iterating `ALL` generates the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, per-user daily completion statuses, and the month-end `arcade_wins` profile award snapshot (`profile_award.rs::snapshot_previous_month_profile_awards` builds its union from the roster with `points_sql`, so the persisted award scores the same games as the page). The one thing the roster cannot enforce: a new game's win-insert statement must compose `bump_daily_win_total_sql`, or its all-time board stays empty. Monthly boards count win rows in the month window; all-time reads the `daily_win_totals` rollup (migration 131; the bump rides the win insert's own statement, gated to fresh inserts, so same-day replays never double-count and the refresh stays O(players)).
+- `ScoreGame` (TwentyFortyEight, Lateris, Snake, Traffic, the lobby's order too): monthly boards union `game_score_events` with legacy best-score rows whose best was set this month (`updated`); all-time boards read only the legacy tables of record. `updated` is when the best was set, not when the player last played: `HighScore::update_score_if_higher` (Lateris, 2048, Snake) moves it only when the submitted score beats the stored one, otherwise anyone who played this month would carry their all-time best onto the monthly board and into the month's awards. A best that no score event reached (one set before score events existed) has nothing to date it by, so its `updated` can be later than when it was set. Traffic is the exception: every track finish rewrites `traffic_high_scores` and records the aggregate total as the score event, so its monthly board lists the all-time total of whoever finished a track this month.
 - `DoorGame` (Dcss, Nethack, Brogue): the uniform board triple over the log-pipe fact tables — Wins (all-time count of `DoorRunResult::WINS` results, single window by design, `Standings::AllTimeOnly`), Deepest Dive, and Top Score (monthly + all-time). `WINS` is win + mastery, so a Brogue escape and a Brogue mastery both count once each on its wins board. The dive board unions end-of-run depth with the depth snapshot on every tracked milestone line, because crawl stamps the *final* place on the logfile line and a winner ends at the surface; NetHack's `maxlvl` and Brogue's `deepestLevel` are already run maximums, so their milestone rows contribute nothing to the union (Brogue writes no milestone rows at all: it logs only at end of game).
-- `Top Chips` (monthly sum over `chip_ledger` of the moves whose `ChipMove::counts_as_earnings` is true, exclusions derived from `ChipMove::excluded_earning_reasons()`: only credits count, and of those the house tables (bets, payouts, floor restores), gifts, the starting stipend, the two referral payouts and every monthly prize (the gallery's `ArtboardPrize`, and any month-end prize added later) are out, so a colluding table cannot fold one seat to the top, nobody can be funnelled up, nobody is on the board for signing up, and no single invite or month-end win decides the board; gilds received, the pot, the bonsai drip, Super Snake winnings and every game prize count as they land; no debit ever counts, so spending cannot lower a place or push a player off the board; admin `/grant` chips never reach the ledger; the rule and its reasoning live on `counts_as_earnings` in `late-core/src/models/chips.rs`) and `Arcade Wins` are bespoke monthly-only boards. Arcade Wins weights come from `Difficulty::points` (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5; Sliding Puzzle uses all three tiers, Le Word fixed Easy, Rubik's fixed Medium), the same enum whose `chips()` carries the daily-win payout tiers, so points and payouts cannot drift apart. Unknown difficulty keys score 0, never a default.
+- `LobbyGame` (the Lobby's thirteen correspondence games, by `daily_matches.game_kind`): no board of its own; it names the Lobby's games for the week. It mirrors late-ssh's `DailyGame`, and `lobby/daily/games_test.rs` fails until the two agree on kind and name.
+- The week (`week_tallies`, `WEEK_DAYS`): outside the page, everyone's plays per game over the seven UTC days ending on a day, added up: the same query as `day_tallies` over a wider span (every daily solve by finish time, every finished score run, every finished Lobby match, every hub card opening), a game without plays in the week left off. Totals, never anyone's best and never who, since the card is public and nobody opted into being posted; `DayTally::shown_plays` prints them (`1 play`, `1,234 plays`). Read by late-web's `/games/week/{last}/image.png` card, the herald's Sunday post (`late-ssh/src/app/herald/CONTEXT.md`).
+- The day (`day_tallies`, `DayGame`, `DayTally`): one tally per game anyone played on a UTC day, plays and wins, from the same rosters counted instead of ranked: the daily puzzles' finishes, the score games' runs, the Lobby's finished matches, and the hub's doors by openings (`door_openings`, every `DoorCard`, with the roguelikes' won runs beside them; `DoorGame::card` ties the three to their cards). Beside it, `day_lobby_starts` (`LobbyStarts`): the Lobby's matches started on the day, per game, by `daily_matches.started_at` (stamped by the claim, migration 272). Both read by the paper's YESTERDAY column (`late-ssh/src/app/paper/CONTEXT.md`).
+- `Shelf` (Arcade, Lobby, Doors) is the one grouping of the rosters, `DayGame::shelf`: the sections of the week's card and the lines of the paper's column.
+- `Top Chips` (monthly sum over `chip_ledger` of the moves whose `ChipMove::counts_as_earnings` is true, exclusions derived from `ChipMove::excluded_earning_reasons()`: only credits count, and of those the house tables (bets, payouts, floor restores), gifts, the starting stipend, the two referral payouts and every monthly prize (the gallery's `ArtboardPrize`, and any month-end prize added later) are out, so a colluding table cannot fold one seat to the top, nobody can be funnelled up, nobody is on the board for signing up, and no single invite or month-end win decides the board; gilds received, the pot, the bonsai drip, Super Snake winnings and every game prize count as they land; no debit ever counts, so spending cannot lower a place or push a player off the board; admin `/grant` chips never reach the ledger; the rule and its reasoning live on `counts_as_earnings` in `late-core/src/models/chips.rs`) and `Arcade Wins` are bespoke monthly-only boards. Arcade Wins weights come from `Difficulty::points` over each board's tier in `DailyPuzzle::tiers` (easy = 1, medium/draw-1 = 3, hard/draw-3 = 5; the three-tier games use all three, Le Word is a single Easy board, Rubik's a single Medium one), the same tier whose `chips()` is the daily-win payout, so points and payouts cannot drift apart. `points_sql` is generated from the tiers and pinned whole by `leaderboard_test.rs::points_sql_follows_each_puzzles_tiers`. Unknown difficulty keys score 0, never a default.
 - `Late Time` is a bespoke paired board over the current-month and all-time online-time rollups. It ranks exact milliseconds and renders the largest two useful units. Last month's first place gets the rankless `LATE` badge (see Monthly profile awards); no chips are attached.
 - The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short). Experience keeps accruing at the level cap, so past 100 the value keeps counting **paragon levels**, one per 75k xp beyond the cap's threshold (the summit's own per-level price), rendered `lvl 100 +37`; the curve numbers are restated in `leaderboard.rs` (`LATEANIA_LEVEL_CAP`, `LATEANIA_XP_AT_LEVEL_CAP`, `LATEANIA_XP_PER_PARAGON_LEVEL`) and pinned to the game's `xp_for_level` by `lateania/classes_test.rs`, so a rebalance that forgets them fails there. `lateania_pvp` ranks the blob's lifetime `pvp_kills` (rivals slain in the Wildbound Waste); characters with no kills stay off it. A reset character leaves both boards; the page shows one "right now" window (`Standings::Snapshot`).
 - `Top Drinkers` is a bespoke monthly + yearly board (`Standings::MonthlyYearly`, the one board with a yearly window) over `drink_pours`, the per-drink log written by `UserDrinks::record_pour` in the same statement as the buzz (`late-core/src/models/drinks.rs`): the sum of each drink's buzz points in the UTC month and the UTC year. What counts is the drink taken, never the chips: a paid drink, a round credit cashed and the round buyer's own drink all count their points (a tavern round's 400, a Nightcap round's 100), buying for others counts nothing, and the newcomer's welcome pour is never logged. Points are the drink's full worth before the `MAX_DRUNK_POINTS` cap. Last month's first place gets the rankless `DRNK` badge (see Monthly profile awards); no chips, and the yearly window awards nothing.
@@ -128,9 +149,9 @@ standings through every loaded rank (see Page navigation).
 `LeaderboardService::start_profile_award_snapshot_loop` freezes last UTC
 month's top 3 per awarded board into `profile_awards` (migrations 077, 081),
 and every board is settled by the first pass that writes a row for it. The
-gallery award pays chips; the crown, Late Time and Top Drinkers are
+gallery award pays chips; Late Time and Top Drinkers are
 single-holder and rankless; one-time milestone badges share the table; the roll
-is announced in #lounge once per month. **A new badge has to be added to the
+is announced in #lounge once per month at 18:00 UTC on the 1st. **A new badge has to be added to the
 Leaderboards guide (`app/profile_modal/badges.rs::guide_lines`) and the help
 modal (`app/help_modal/data.rs`) by hand.** The full rules are in
 [`AWARDS.md`](AWARDS.md).
@@ -164,4 +185,4 @@ pass a username to target that enrichment explicitly.
 ## Known gaps
 
 - No notify-driven refresh; up to one `REFRESH_INTERVAL` of staleness by design (see Refresh model).
-- Online-time crash loss is bounded by the last successful five-minute checkpoint while the DB is healthy; cross-pod overlap is intentionally not deduplicated.
+- Online-time crash loss is bounded by the last successful five-minute checkpoint while the DB is healthy. Totals written before migration 274 include the old cross-pod overcount.

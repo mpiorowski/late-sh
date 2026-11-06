@@ -39,7 +39,6 @@ use crate::app::common::{
     composer, mentions,
     primitives::{Banner, Screen},
 };
-use crate::app::crown::svc::CrownBid;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::app::video::state::{WatchRequest, WatchSource};
@@ -357,47 +356,6 @@ fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
 
 /// Longest `/golive` title kept; the rest is cut at the parse boundary.
 const GOLIVE_TITLE_MAX_CHARS: usize = 80;
-
-/// The crown, requested from the composer. `App` owns the crown service, so
-/// the composer just records the intent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CrownCommand {
-    /// `/crown`: who wears it, for how long, and what taking it costs.
-    Status,
-    /// `/crown take`: buy it at whatever the ladder says right now.
-    /// `/crown take N`: bid N, which the service checks against the price.
-    Take { bid: CrownBid },
-}
-
-/// `Some(Some(command))` on `/crown`, `/crown take` or `/crown take N`,
-/// `Some(None)` on anything else after `/crown` (usage banner), `None` when
-/// the line is not a crown command at all. A bid must be a positive whole
-/// number of chips; whether it beats the price is the service's call, under
-/// the lock, since the price can move between typing and landing.
-fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
-    let rest = body.trim().strip_prefix("/crown")?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let rest = rest.trim();
-    if rest.is_empty() {
-        return Some(Some(CrownCommand::Status));
-    }
-    if rest == "take" {
-        return Some(Some(CrownCommand::Take {
-            bid: CrownBid::AtPrice,
-        }));
-    }
-    let Some(offer) = rest.strip_prefix("take ") else {
-        return Some(None);
-    };
-    match offer.trim().parse::<i64>() {
-        Ok(offer) if offer > 0 => Some(Some(CrownCommand::Take {
-            bid: CrownBid::Offer(offer),
-        })),
-        Ok(_) | Err(_) => Some(None),
-    }
-}
 
 /// The pot, requested from the composer. `App` owns the pot service, so the
 /// composer just records the intent.
@@ -925,7 +883,16 @@ pub struct ChatState {
     refresh_tx: mpsc::UnboundedSender<()>,
     refresh_room_id: Option<Uuid>,
     loading_tail_rooms: HashSet<Uuid>,
+    /// Tails that landed before the room list named their room: a join
+    /// fires the list refresh and the tail load together, and the tail is
+    /// the lighter query. Held here and merged when the room arrives, since
+    /// nothing asks for the tail again.
+    early_tails: HashMap<Uuid, Vec<ChatMessage>>,
     pub(crate) selected_room_id: Option<Uuid>,
+    /// The room a session its CLI moved here had selected
+    /// (`app/handoff`). Taken by the first `sync_selection` that has a room
+    /// list, which picks it only when it is one of this user's rooms.
+    resume_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -986,6 +953,9 @@ pub struct ChatState {
     /// fire-and-forget contract as translation.
     summary_service: SummaryService,
     summary_rx: tokio::sync::broadcast::Receiver<SummaryEvent>,
+    /// This session's `/summary` requests still waiting for an answer. The
+    /// feed carries every session's results; only these are taken.
+    pub(crate) summary_requests: HashSet<Uuid>,
     /// This session's translations for the current target language, keyed by
     /// message id. Cleared when the target language changes.
     pub(crate) translations: HashMap<Uuid, TranslationDisplay>,
@@ -1098,7 +1068,6 @@ pub struct ChatState {
     requested_voice_command: Option<VoiceCommand>,
     /// Set by /golive; consumed by `App` (which owns the stream service).
     requested_golive: Option<GoLiveCommand>,
-    requested_crown: Option<CrownCommand>,
     requested_pot: Option<PotCommand>,
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper).
@@ -1113,6 +1082,8 @@ pub struct ChatState {
     hits_on: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
+    /// Set by `/herald` (admins only); consumed by `herald::svc::tick`.
+    requested_herald: Option<crate::app::herald::state::HeraldCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
     /// The just-landed echo of this session's own send, and the room it
     /// landed in, for the stage-2 name flicker; consumed by
@@ -1364,7 +1335,9 @@ impl ChatState {
             refresh_tx,
             refresh_room_id: None,
             loading_tail_rooms: HashSet::new(),
+            early_tails: HashMap::new(),
             selected_room_id: None,
+            resume_room_id: None,
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -1390,6 +1363,7 @@ impl ChatState {
             translation_service,
             summary_rx: summary_service.subscribe(),
             summary_service,
+            summary_requests: HashSet::new(),
             translations: HashMap::new(),
             translation_hidden: HashSet::new(),
             translation_manual: HashSet::new(),
@@ -1456,12 +1430,12 @@ impl ChatState {
             requested_quit: false,
             requested_voice_command: None,
             requested_golive: None,
-            requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
             requested_hit: false,
             hits_on: false,
             requested_paper: None,
+            requested_herald: None,
             requested_jobs: None,
             own_message_landed: None,
             own_send_succeeded: false,
@@ -1504,6 +1478,14 @@ impl ChatState {
 
     pub(crate) fn composer(&self) -> &TextArea<'static> {
         &self.composer
+    }
+
+    /// Text typed and not yet sent, in the chat composer or the News one:
+    /// what a session moved to another pod would lose (`app/handoff`).
+    pub(crate) fn has_unsent_draft(&self) -> bool {
+        [&self.composer, self.news.composer()]
+            .into_iter()
+            .any(|composer| composer.lines().iter().any(|line| !line.trim().is_empty()))
     }
 
     pub(crate) fn refresh_composer_theme(&mut self) {
@@ -1566,10 +1548,25 @@ impl ChatState {
         }
     }
 
+    /// Select `room_id` once the room list confirms it is one of this user's
+    /// rooms (`app/handoff`, a session its CLI moved here).
+    pub(crate) fn resume_room(&mut self, room_id: Uuid) {
+        self.resume_room_id = Some(room_id);
+    }
+
     pub fn sync_selection(&mut self) {
         if self.rooms.is_empty() {
             self.selected_room_id = None;
             self.room_jump_active = false;
+            return;
+        }
+
+        // A moved session's room wins the first selection that has a list to
+        // check it against; a room the user cannot see falls through.
+        if let Some(resume_id) = self.resume_room_id.take()
+            && self.lists_room(resume_id)
+        {
+            self.selected_room_id = Some(resume_id);
             return;
         }
 
@@ -1580,11 +1577,7 @@ impl ChatState {
             if self.stream_for_room(selected_id).is_some() {
                 return;
             }
-            if self
-                .rooms
-                .iter()
-                .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
-            {
+            if self.lists_room(selected_id) {
                 return;
             }
         }
@@ -1893,7 +1886,8 @@ impl ChatState {
     /// (the `/rules` surface); when another overlay is already up it waits
     /// in `pending_summary_overlay` instead of clobbering it, and takes the
     /// surface here as soon as it frees. Every other outcome banners. The
-    /// broadcast carries all users' results, so foreign events are dropped.
+    /// broadcast carries every session's results, so only this session's
+    /// own requests are taken.
     /// Returns the banner plus whether a waiting summary was promoted (a
     /// render-visible change `tick` cannot see from the queues).
     fn drain_summary_events(&mut self) -> (Option<Banner>, bool) {
@@ -1912,7 +1906,8 @@ impl ChatState {
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
-            if event.user_id != self.user_id {
+            // Another session's answer, the same account's included.
+            if !self.summary_requests.remove(&event.request_id) {
                 continue;
             }
             match event.outcome {
@@ -2230,14 +2225,16 @@ impl ChatState {
         self.requested_golive.take()
     }
 
-    pub(crate) fn take_requested_crown(&mut self) -> Option<CrownCommand> {
-        self.requested_crown.take()
-    }
-
     pub(crate) fn take_requested_paper(
         &mut self,
     ) -> Option<crate::app::paper::state::PaperCommand> {
         self.requested_paper.take()
+    }
+
+    pub(crate) fn take_requested_herald(
+        &mut self,
+    ) -> Option<crate::app::herald::state::HeraldCommand> {
+        self.requested_herald.take()
     }
 
     pub(crate) fn take_requested_jobs(&mut self) -> Option<crate::app::jobs::state::JobsCommand> {
@@ -2635,7 +2632,12 @@ impl ChatState {
         }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
-        self.composer.insert_str(body);
+        // An action line is stored CTCP-wrapped; it edits as the command
+        // that wrote it, and submitting that command rewrites it in place.
+        match super::action::parse_action_body(body) {
+            Some(action) => self.composer.insert_str(format!("/me {action}")),
+            None => self.composer.insert_str(body),
+        };
         self.composing = true;
         self.composer_room_id = Some(room_id);
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
@@ -3333,10 +3335,14 @@ impl ChatState {
             return None;
         }
         let room_id = self.selected_room_id?;
+        self.lists_room(room_id).then_some(room_id)
+    }
+
+    /// Whether `room_id` is one of this user's rooms on the chat list.
+    fn lists_room(&self, room_id: Uuid) -> bool {
         self.rooms
             .iter()
             .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
-            .then_some(room_id)
     }
 
     /// Build the flat visual navigation order.
@@ -3965,7 +3971,10 @@ impl ChatState {
                 }
             };
             let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+            let request_id = Uuid::now_v7();
+            self.summary_requests.insert(request_id);
             self.summary_service.request(
+                request_id,
                 self.user_id,
                 room_id,
                 self.history_room_label(room_id),
@@ -4012,17 +4021,6 @@ impl ChatState {
             return None;
         }
 
-        if let Some(parsed) = parse_crown_command(&body) {
-            self.clear_composer_after_submit();
-            let Some(command) = parsed else {
-                return Some(Banner::error(
-                    "Usage: /crown, /crown take, or /crown take N",
-                ));
-            };
-            self.requested_crown = Some(command);
-            return None;
-        }
-
         // `/paper` opens The Late Edition for anyone; the press commands after it
         // are admin-only and say so, unlike `/haunt`, which hides.
         if let Some(parsed) = crate::app::paper::state::parse_paper_command(&body) {
@@ -4036,6 +4034,22 @@ impl ChatState {
                 return Some(Banner::error("Only admins can touch the presses"));
             }
             self.requested_paper = Some(command);
+            return None;
+        }
+
+        // `/herald` is the operator's switch and press for the social
+        // accounts: admin-only in every form, and says so.
+        if let Some(parsed) = crate::app::herald::state::parse_herald_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("Only admins can run the herald"));
+            }
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /herald on|off|status|preview words|art|post words|art",
+                ));
+            };
+            self.requested_herald = Some(command);
             return None;
         }
 
@@ -4325,6 +4339,33 @@ impl ChatState {
             return None;
         }
 
+        // #bugs and #suggestions take report cards only. A regular user's
+        // plain message there is the report, filed as if typed after `/bug`
+        // or `/suggest`, instead of being refused by the send gate after the
+        // composer already cleared. A reply, or text too short to be a
+        // report, is refused here with the composer kept: reports get
+        // reactions, not threads, and a draft is never lost to a command
+        // the user never typed.
+        let body = match (self.report_room_kind(), is_command_draft(&body)) {
+            (Some(kind), false) if self.reply_target.is_some() => {
+                return Some(Banner::error(
+                    &super::svc::SendRefusal::ReportOnly(kind).message(),
+                ));
+            }
+            (Some(kind), false)
+                if !body.trim().is_empty() && body.trim().chars().count() < REPORT_MIN_CHARS =>
+            {
+                return Some(Banner::error(&format!(
+                    "#{} takes reports: describe it in a few words or more",
+                    kind.slug()
+                )));
+            }
+            (Some(kind), false) if !body.trim().is_empty() => {
+                format!("{} {}", kind.command(), body.trim())
+            }
+            (Some(_), _) | (None, _) => body,
+        };
+
         if let Some((kind, text)) = parse_report_command(&body) {
             self.clear_composer_after_submit();
             let Some(text) = text else {
@@ -4357,6 +4398,35 @@ impl ChatState {
                 return Some(Banner::error("No member-list room selected"));
             };
             self.service.list_room_members_task(self.user_id, room_id);
+            return None;
+        }
+
+        // `/buy` posts the bar's own spending phrase to @bartender, so the
+        // purchase, its price, refusals and his answer all run exactly as if
+        // the phrase had been typed. Only where he sits: he is joined to the
+        // auto-join public rooms and no others (`auto_join_public_rooms`),
+        // and anywhere else the order would go unanswered.
+        if let Some(parsed) = parse_buy_command(&body) {
+            let room = self
+                .composer_room_id
+                .and_then(|room_id| self.room_by_id(room_id))
+                .map(|room| (room.id, room.visibility == "public" && room.auto_join));
+            self.clear_composer_after_submit();
+            let order = match parsed {
+                BuyParse::Invalid => {
+                    return Some(Banner::error("Usage: /buy round, or /buy @user"));
+                }
+                BuyParse::Order(order) => buy_order_body(order),
+            };
+            let room_id = match room {
+                Some((room_id, true)) => room_id,
+                Some((_, false)) | None => {
+                    return Some(Banner::error(
+                        "Use /buy from a room @bartender is in, like #lounge",
+                    ));
+                }
+            };
+            self.send_command_message(room_id, order);
             return None;
         }
 
@@ -4743,11 +4813,25 @@ impl ChatState {
                 return Some(Banner::error("Usage: /me <action>"));
             };
             let room_id = self.composer_room_id;
+            let edited_message_id = self.edited_message_id;
             self.clear_composer_after_submit();
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Send actions from inside a room"));
             };
-            self.send_command_message(room_id, action_body);
+            match edited_message_id {
+                Some(message_id) => {
+                    let request_id = Uuid::now_v7();
+                    self.service.edit_message_task(
+                        self.user_id,
+                        message_id,
+                        action_body,
+                        request_id,
+                        self.permissions,
+                    );
+                    self.pending_send_notices.push_back(request_id);
+                }
+                None => self.send_command_message(room_id, action_body),
+            }
             return None;
         }
 
@@ -4815,6 +4899,17 @@ impl ChatState {
             self.clear_composer_after_submit();
         }
         cooldown_banner
+    }
+
+    /// The report kind the composer's room enforces on this user: `None` for
+    /// staff (they reply under reports in free text), while editing, and
+    /// outside the public #bugs and #suggestions.
+    fn report_room_kind(&self) -> Option<ReportKind> {
+        if self.is_admin || self.is_moderator || self.edited_message_id.is_some() {
+            return None;
+        }
+        let room = self.room_by_id(self.composer_room_id?)?;
+        ReportKind::for_room(room)
     }
 
     /// Posts a command's generated body to `room_id` as a plain message
@@ -6032,6 +6127,17 @@ impl ChatState {
         let previous_rooms_meta: Vec<ChatRoom> =
             self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        let arrived: Vec<Uuid> = self
+            .rooms
+            .iter()
+            .map(|(room, _)| room.id)
+            .filter(|room_id| self.early_tails.contains_key(room_id))
+            .collect();
+        for room_id in arrived {
+            if let Some(messages) = self.early_tails.remove(&room_id) {
+                self.merge_room_tail(room_id, messages);
+            }
+        }
         changed |= self.rooms.len() != previous_rooms_meta.len()
             || self
                 .rooms
@@ -7121,6 +7227,7 @@ impl ChatState {
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
         self.note_activity_ticker_from(&messages);
         let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
+            self.early_tails.insert(room_id, messages);
             return;
         };
 
@@ -8279,6 +8386,53 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
 /// Minimum characters of report text, so `/bug lol` bounces with usage help
 /// instead of posting a useless card.
 const REPORT_MIN_CHARS: usize = 10;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyParse<'a> {
+    Invalid,
+    Order(BuyOrder<'a>),
+}
+
+/// What `/buy` asked the bar for.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyOrder<'a> {
+    /// `/buy round`: a round for the house.
+    Round,
+    /// `/buy @user`: one drink on that user's tab.
+    Gift(&'a str),
+}
+
+/// Parse `/buy round` or `/buy @user`. `None` means not a `/buy` command.
+pub(crate) fn parse_buy_command(input: &str) -> Option<BuyParse<'_>> {
+    let rest = input.trim().strip_prefix("/buy")?;
+    if !(rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+        return None;
+    }
+    let mut words = rest.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(word), None) if word.eq_ignore_ascii_case("round") => {
+            Some(BuyParse::Order(BuyOrder::Round))
+        }
+        (Some(word), None) => match word.strip_prefix('@') {
+            Some(username) if !username.is_empty() => {
+                Some(BuyParse::Order(BuyOrder::Gift(username)))
+            }
+            Some(_) | None => Some(BuyParse::Invalid),
+        },
+        (Some(_), Some(_)) | (None, _) => Some(BuyParse::Invalid),
+    }
+}
+
+/// The message `/buy` posts: @bartender plus one of the bar's own spending
+/// phrases (`late_core::models::drink_round`), which he rings up exactly as
+/// if it had been typed.
+pub(crate) fn buy_order_body(order: BuyOrder<'_>) -> String {
+    let bartender = crate::app::ai::ladder::LadderBot::Bartender.handle();
+    match order {
+        BuyOrder::Round => format!("@{bartender} round for everyone"),
+        BuyOrder::Gift(username) => format!("@{bartender} buy @{username} a drink"),
+    }
+}
 
 /// Parse `/bug <text>` or `/suggest <text>` from the composer. Outer `None`
 /// means not a report command; inner `None` means missing or too-short text

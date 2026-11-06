@@ -41,6 +41,19 @@ A person with one session in a week is not necessarily a drive-by: a
 regular who leaves one session open all week also counts once. Session
 counts measure reconnects, not visits.
 
+The CLI is the regulars' client. Per person, over the session summaries
+from 2026-10-20 to 2026-10-25 joined to lifetime `user_online_time`
+(connected time, not keyboard time):
+
+| People in the window | CLI only | Plain ssh only | Both | Mostly CLI, by time | Hours CLI / ssh |
+|---|---|---|---|---|---|
+| All 327 | 95 | 216 | 16 | 107 | 1,266 / 1,006 |
+| The 81 with 24 h or more lifetime | 43 | 27 | 11 | 52 | 1,177 / 917 |
+
+156 accounts have 24 h or more lifetime; the other 75 did not connect in
+the window. Which client a session used is in the logs only, so the split
+cannot reach further back than log retention.
+
 ## 2. Where the time goes
 
 Attention is counted once a second per session, split by screen and by
@@ -256,59 +269,192 @@ Live, in order of evidence behind them:
   Mastodon profile shows late.sh verified, and every page unfurls into a
   preview card: a profile into its runner's poster, a gallery link into
   its snapshot, both drawn server-side as PNG (`late-web/CONTEXT.md`).
-  None of it is measured yet beyond page views. Post, do not federate: a
+  The paper opens with YESTERDAY ON LATE.SH, the covered day in numbers
+  (the radio's top stations by paired listener, the tracks queued, the
+  games finished in the arcade, the Lobby's matches started and
+  finished, the doors opened), drawn
+  from the rows and no model
+  (`late-ssh/src/app/paper/CONTEXT.md`): the one paper section that
+  answers a newcomer's "is anyone here?", on the web and on the herald's
+  paper card too. Unmeasured: whether the paper's on-purpose opens (7 a
+  day) move; nothing else here is measured beyond page views. Post, do
+  not federate: a
   bot account on an existing instance is
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
-- **The herald: one picture a day on the Fediverse.** An ordinary account
-  on an existing Mastodon instance (fosstodon.org: FOSS-leaning, a local
-  timeline that gives a new account readers on day one, bots welcome
-  when marked), flagged as automated, `https://late.sh` in its profile
-  links, and an application token with `write:media` and
-  `write:statuses` only. The Fediverse is every server speaking
-  ActivityPub (Mastodon, Pixelfed, PeerTube, Lemmy, Threads in part);
-  one Mastodon account is addressable from all of it. Bluesky is a
-  different network and would be a second client, later.
-  - **What it posts.** One picture a day, rotating so the slot never
-    repeats: yesterday's Artboard snapshot (tagged #ASCIIart and
-    #MastoArt, the communities that boost strangers' art), a runner's
-    poster the day it is painted at PRINTS with the member's handle, the
-    day's best share card rendered as a picture with the `ssh late.sh`
-    footer, a frame of the tavern or the night city. Each with alt text,
-    a link to that day's `/paper` or the gallery, and the same four tags
-    (#tildeverse #pubnix #ssh #terminal). The rare headline events the
-    #lounge feed already treats as stories (the pot drawn, the crown
-    taken, the monthly awards) may take the slot. Every picture comes
-    through the front door's cell renderer
-    (`late-web/src/pages/shared/board_png.rs`), so anything the terminal
-    draws can be posted once it has a route; today only the poster and
-    the gallery snapshot have one.
+- **The herald: two posts a day on the Fediverse and Bluesky.** Built
+  (`late-ssh/src/app/herald/CONTEXT.md`) and live: both accounts post,
+  and the `herald_settings` row is on in prod (`/herald off` stops it).
+  Each post is delivered to every network the herald has an account
+  on. The
+  Fediverse: an ordinary account on an existing Mastodon instance
+  (fosstodon.org: FOSS-leaning, a local timeline that gives a new account
+  readers on day one; invite-only, and its rule for automated accounts
+  is that an active member runs them and answers replies), flagged as
+  automated, `https://late.sh` in its profile links, and an application
+  token with `write:media` and `write:statuses` only. The Fediverse is
+  every server speaking ActivityPub (Mastodon, Pixelfed, PeerTube, Lemmy,
+  Threads in part); one Mastodon account is addressable from all of it.
+  Bluesky: a different network, so its own account, flagged with the
+  `bot` self-label, posting through an app password; it asks that a bot
+  never likes, reposts or replies unprompted, so the human half there is
+  done from a person's own account.
+  - **What it posts.** Two slots a day, five hours apart, each with its
+    own kinds. Words at 15:00 UTC: the operator's word first, a day whose
+    edition carries `#announcements` posts going out as words alone, the
+    note compressed by the model into one post that links the edition for
+    the note in full, whatever the weekday. Else by the week: a member's
+    project on Monday, moving along to Friday if the operator's word or a
+    failed write-up bumped it; the Late Edition's front page as a card on
+    Wednesday and Saturday (the most played arcade game with its ASCII
+    picture, the day in numbers, then the heads of the prose columns;
+    linking the edition), and on a Monday with no project; on Sunday the
+    week in every game (a scoreboard card, one line per game anyone played
+    with everyone's plays added up and no name: the arcade's daily puzzles
+    solved and score runs finished, the Lobby's chess, pool and card games
+    by matches finished, the doors by every hub card's openings), else the
+    paper. Tuesday, Thursday and Friday post no
+    words with nothing owed and nothing announced. Art at 20:00 UTC: on
+    Monday yesterday's Artboard snapshot cropped to what is drawn, once it
+    has enough ink to be a picture (linking the gallery); every other day
+    the piece over the door, the splash wall's piece of the day (credited
+    `~name`, linking the piece's page; the wall is one queue in hang order,
+    so the post and the login screen show the same piece). One candidate a
+    day and no fallback: a bare board, an empty wall or a picture the look
+    did not clear is no art that day. The wall moves on every day whatever
+    the herald posts, so Monday's piece hangs over the door unposted, and
+    no piece is posted twice. Alt text and the kind's tags. The first
+    design alternated the board with members' PRINTS posters, each once;
+    dropped before launch, since a few new posters a month cannot carry a
+    slot.
+  - **A member's project.** One a week, drawn at random from the projects
+    of members who logged in in the last 7 days, none posted in the last 60
+    days. A grounded model call reads the project's page (Google fetches
+    it, no server of ours ever fetches a URL a member typed) and writes one
+    or two plain sentences, or turns it down as commercial (Fosstodon bans
+    commercial promotion), unfit or unclear, and the next one drawn is
+    tried, three at most. With none written, or the model down, no project
+    goes out that day: a member's words never reach the official account
+    unchecked. Sharing a project is a public act the way hanging a piece
+    is, so it earns its `~name`, with its own link the one address the
+    herald carries that is not late.sh's.
+  - **The tags.** Four at most, two that bring readers and two that
+    bring members, chosen per kind so a tag never sits on a post its
+    followers did not come for (a mismatched tag is how an account gets
+    muted). The art tags (#ASCIIart, the one people follow even though
+    the board is colour and Unicode, not strict ASCII; #MastoArt) bring
+    views; #tildeverse (pubnix people, the likeliest to run `ssh late.sh`)
+    and #terminal (terminal culture; #ssh was dropped, it is sysadmin and
+    security talk) bring members. Per kind: the board and gallery pieces
+    `#ASCIIart #MastoArt #tildeverse #terminal`;
+    the weekly scoreboard `#puzzles #sudoku #tildeverse #terminal`; the paper
+    `#tildeverse #terminal #TUI #smolweb`, never #MastoArt; an announcement
+    `#tildeverse #terminal #TUI`, no art tags on a post with no art; a
+    project `#tildeverse #terminal`, since no subject tag fits everything a
+    member makes.
+    Candidates not taken: #ANSIart (the BBS and coloured-terminal
+    tradition, a smaller crowd), #TextArt. Unmeasured: compare recent posters on each
+    tag's page on the instance before changing a set.
+  - **The kinds.** Built (`late-ssh/src/app/herald/CONTEXT.md`, "The
+    post"). Each picture kind is one PNG route on the front door
+    (late-web's piece page and PNG, the week's games card, the paper's
+    front-page card, all through `late-web/src/pages/shared/board_png.rs`),
+    one candidate read, one text, and one variant of the herald's
+    picture, which breaks the build until every match knows it; the
+    announcement and the project have no route, words alone. A piece is the
+    best supply of art the server has: a real picture a member made and
+    chose to hang, immutable, credited, with applause. The scoreboard is
+    the one kind that shows the whole shelf of games, weekly so it never
+    reads as a daily brag feed, and nameless so it is never a brag at
+    all: hanging a piece is a public act and earns its `~name`, winning
+    Sudoku is not, and nobody opted into being posted; the names stay on
+    the terminal's boards. The paper's post text names the edition
+    only and drops `#MastoArt` (art communities dislike model-written
+    text); its columns stay inside the picture, never in the text, since
+    a list of links is what instance rules call spam. The cards are drawn
+    from late.sh's own rows and never shown to the model. Ruled out: room
+    summaries (a model's account of what people said in a room they took
+    for a clubhouse, pointed outward) and a card of new profile slugs
+    (dull, a handful a month). Further out, each behind a PNG route:
+    share cards with the `ssh late.sh` footer, a frame of the tavern or
+    the night city, the rare headline events the #lounge feed treats as
+    stories. How many pieces wait is the wall's queue depth
+    (`late_ssh_artboard_gallery_splash_queue_depth`), which decides how
+    many art slots stay quiet.
   - **What it never posts.** Chat. A frame of #lounge is people's
     messages on the public web; the Artboard, posters and cards are
     things people made to be seen, messages are not.
-  - **The rhythm.** One post a day, at most two when both are pictures.
-    A muted account never recovers; the variety above is so one slot
-    never repeats, not so there are more slots.
-  - **The shape.** A small late-ssh domain built like the paper's press:
-    a sweeper on every replica, a `herald_posts` row per UTC day claimed
-    by conditional insert so several replicas post exactly once, the
-    picture fetched over `web_url` from the front door's PNG routes
-    (`/profiles/{slug}/poster.png`, `/gallery/{key}/image.png`), a
-    media upload then a status call with an idempotency key so a retry
-    never double-posts, a `posted / skipped / failed` counter on the
-    Grafana board. Config off in dev and required in prod, so the first
-    prod deploy after it merges needs the token secret in place (wired
-    like `LATE_AI_API_KEY` in `infra/service-ssh.tf`) or the service
-    refuses to start.
+  - **The rhythm.** Two posts a day at most, five hours apart, never
+    three. A muted account never recovers, so the second slot came with
+    fewer kinds in it, not more: the paper stayed at two days a week, some
+    days post art alone, and art goes out clean or not at all. Whether two
+    is too many is unmeasured; watch the follower count and mutes.
+  - **The shape.** A late-ssh domain built like the paper's press: a
+    checker on every replica, a `herald_posts` row per slot of a UTC day
+    claimed by conditional insert so several replicas post exactly once, the picture
+    picked once and stored on the row, fetched from the front door's PNG
+    routes over the cluster service, then one delivery per network
+    recorded as it lands (a retry sends only to the networks still
+    missing). On Mastodon the status call carries the row's id as its
+    idempotency key; on Bluesky the record key is derived from it, so a
+    retry never double-posts on either. Counters
+    `late_ssh_herald_posts_total` (posted, skipped, lost, failed) and
+    `late_ssh_herald_deliveries_total` by network, on the Grafana board's
+    Herald row. Going live on a network is a profile change: pin the
+    instance or the handle, require its secret, ship the `-infra` release
+    that injects it before the ssh image that needs it. Dev posts only
+    with a network's pair in `.env.local`, unlisted on Mastodon (Bluesky
+    has no unlisted).
   - **The human half.** The account follows a few people, answers
     replies, and boosts members who post their own profile or card. A
-    bot that only broadcasts gets muted; an account that posts once a
+    bot that only broadcasts gets muted; an account that posts twice a
     day and otherwise behaves like a person gets followed.
   - **When.** It is an arrivals lever, and the funnel in section 3 says
-    arrivals leak at 94% on day two. Build it, flip it on once the first
-    hour has moved, so the first thing new followers find is a place
-    that holds them.
+    arrivals leak at 94% on day two. Flip the row on once the first hour
+    has moved, so the first thing new followers find is a place that
+    holds them. Not measured yet beyond the counter.
+  - **What is left.** The herald is live and documented in
+    `late-ssh/src/app/herald/CONTEXT.md` (the post, the switches, the
+    account setup by hand, the telemetry); its two secrets went out
+    under the deploy skew rule in `infra/RUNBOOK.md`. Bluesky's
+    automation label is on (Settings, "Show automation label"), and the
+    landing page links both accounts with `rel="me"`, which is what makes
+    the Mastodon profile's `https://late.sh` link show verified. Open:
+    the human half above, daily.
+  - **The look: alt text and the gate, before every picture a member
+    drew.** Built (`late-ssh/src/app/herald/CONTEXT.md`, "The look"),
+    from a Fediverse member's note on the first post: describe every
+    image, and keep nudity off the timeline. One Gemini vision call at pick
+    time writes the alt text and picks one warning from a closed set, for
+    the board and pieces. Anything flagged stays off every network and the
+    slot rests for the day, and so does a picture the call could not check.
+    Removal of a post already out stays a hand job from the account.
+    - **What the hand run measured.** The gallery's 16 archived boards
+      (7 dailies, 6 monthlies, 3 curated, on 2026-10-25), each asked
+      three to five times. The descriptions are good: positioned,
+      specific, no member names; one poster was named wrongly (Austin
+      Powers as Rick Astley). The first prompt warned on 15 of 16
+      boards, set by small words ("the art board needs boobs") and
+      possibly by a pride flag; the prompt now labels what is drawn,
+      never words or identity. The whole board alone missed a drawn
+      penis on the 18 and 19 October dailies in every run; with the
+      four quarters beside it the model found it in every run, for
+      about 6,000 input tokens a call. A 4,096-token cap left 7 of 48
+      answers empty (thinking spent the budget); at 16,384, none of 32.
+      Labels still drift between runs on the same board (nudity, then
+      suggestive). Every daily from 18 to 24 October carries a warning:
+      a nude cyborg figure stays on the live board until the monthly
+      wipe.
+    - **Instance rules.** Fosstodon's rules, read 2026-10-25 from its
+      API and its code of conduct (`hub.fosstodon.org/coc`): "DO NOT
+      post adult or age-restricted content. This includes nudity and
+      other sexualized or violent content", with no exception for a
+      content warning, and no slurs. Every warning the look gives runs
+      into one of them, which is why a flagged picture stays off and is
+      not posted behind a mark. The boards the hand run marked for 18 to
+      24 October were posted there before any of this; check the account
+      for them.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to
@@ -368,6 +514,9 @@ curl -s http://127.0.0.1:19428/select/logsql/query \
 # session lengths (summaries are written for a subset of sessions)
 curl -s http://127.0.0.1:19428/select/logsql/query \
   --data-urlencode 'query=_time:7d "session wire summary" | stats by (client) count() n, quantile(0.5, secs) p50, quantile(0.9, secs) p90'
+# the per-person client split: join this on user_id to user_online_time
+curl -s http://127.0.0.1:19428/select/logsql/query \
+  --data-urlencode 'query=_time:7d "session wire summary" | stats by (user_id, client) count() n, sum(secs) secs' --data-urlencode 'limit=100000'
 ```
 
 The newcomer funnel comes from the database, not the logs: the referral
@@ -409,7 +558,11 @@ labels, so the series count cannot grow with the crowd):
   `user_aquarium_care` by `last_fed`; `user_online_time` as the lifetime
   distribution (`total_milliseconds` per `user_id`); `chat_messages` by
   `room_id` and distinct `user_id` per day; `deadchannel_runners` rows
-  with `left_at` null.
+  with `left_at` null. The doors are the exception: `door_openings` holds
+  one row per Enter on a hub card (`late-ssh/src/app/door/CONTEXT.md`),
+  so distinct `user_id` per `card` per day is one query, and the counts
+  alone are on the Grafana Games row ("Doors Opened by Card") and in the
+  paper's YESTERDAY line, every card.
 - What a newcomer does on day one, per person. The counters split it by
   tenure (`day_one`, `first_week`, `regular` on the attention, visit and
   session-start series), count each first-visit tour stop reached, the

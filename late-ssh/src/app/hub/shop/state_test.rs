@@ -119,7 +119,6 @@ fn glow_item() -> ShopCatalogItem {
         consumable_category: Some("identity".to_string()),
         effect_kind: Some("username_effect".to_string()),
         requires_room: false,
-        daily_limited: false,
         username_effect_variant: Some("glow".to_string()),
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         badge_slot: None,

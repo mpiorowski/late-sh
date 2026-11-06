@@ -75,7 +75,8 @@ impl HubGame {
     /// the runners' own card, sliced off for everyone else by
     /// [`HubGame::roster`], then Lateania, ours from the ground up, then the
     /// Realm, the house's one standing world), the roguelikes by stature, the remakes (our own build of A Dark Room,
-    /// then the Zork Trilogy behind our own edition and save menus), the
+    /// then the Zork Trilogy behind our own edition and save menus, then
+    /// BashQuest), the
     /// servers we host and you play from a game client (Minecraft, Vintage
     /// Story), then the
     /// doors: Green Dragon (our native LORD remake, filed with the BBS doors
@@ -90,12 +91,12 @@ impl HubGame {
         HubGame::Brogue,
         HubGame::Darkroom,
         HubGame::Zork,
+        HubGame::Bashquest,
         HubGame::Minecraft,
         HubGame::VintageStory,
         HubGame::GreenDragon,
         HubGame::Usurper,
         HubGame::Dopewars,
-        HubGame::Bashquest,
         HubGame::Rebels,
         HubGame::Codekeep,
     ];
@@ -131,16 +132,40 @@ impl HubGame {
         }
     }
 
+    /// The stored card an Enter on this one writes down
+    /// (`late_core::models::door_opening::DoorCard`, through
+    /// `svc::GamesHubService`); the two server cards launch nothing and
+    /// write nothing.
+    pub fn card(self) -> Option<late_core::models::door_opening::DoorCard> {
+        use late_core::models::door_opening::DoorCard;
+        match self {
+            HubGame::NightCity => Some(DoorCard::NightCity),
+            HubGame::Lateania => Some(DoorCard::Lateania),
+            HubGame::Realm => Some(DoorCard::Realm),
+            HubGame::Minecraft | HubGame::VintageStory => None,
+            HubGame::Rebels => Some(DoorCard::Rebels),
+            HubGame::Nethack => Some(DoorCard::Nethack),
+            HubGame::Dcss => Some(DoorCard::Dcss),
+            HubGame::Brogue => Some(DoorCard::Brogue),
+            HubGame::Usurper => Some(DoorCard::Usurper),
+            HubGame::GreenDragon => Some(DoorCard::GreenDragon),
+            HubGame::Dopewars => Some(DoorCard::Dopewars),
+            HubGame::Bashquest => Some(DoorCard::Bashquest),
+            HubGame::Codekeep => Some(DoorCard::Codekeep),
+            HubGame::Zork => Some(DoorCard::Zork),
+            HubGame::Darkroom => Some(DoorCard::Darkroom),
+        }
+    }
+
     pub fn group(self) -> HubGroup {
         match self {
             HubGame::NightCity | HubGame::Lateania | HubGame::Realm => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::Darkroom | HubGame::Zork => HubGroup::Remakes,
+            HubGame::Darkroom | HubGame::Zork | HubGame::Bashquest => HubGroup::Remakes,
             HubGame::Minecraft | HubGame::VintageStory => HubGroup::Servers,
             HubGame::GreenDragon
             | HubGame::Usurper
             | HubGame::Dopewars
-            | HubGame::Bashquest
             | HubGame::Rebels
             | HubGame::Codekeep => HubGroup::Doors,
         }

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
-use crate::app::common::username_effect::{CROWN_GLYPH, NameStyle, ResolvedName, char_color};
+use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
@@ -220,7 +220,7 @@ fn project_hit(
 type Cells = Vec<Vec<(char, Style)>>;
 
 /// The second cell of a double-width glyph. The floor is one char per cell,
-/// so a wide char (the crown emoji) takes its own cell plus this one; the
+/// so a wide char (an emoji) takes its own cell plus this one; the
 /// flush skips it, which keeps the rest of the row aligned to the walls.
 const WIDE_TAIL: char = '\0';
 
@@ -884,10 +884,6 @@ fn draw_presence(
     // `put_label`), so the clickable box tracks the drawn label width.
     let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
     let name_len = truncate_name(username).chars().count();
-    // The crown sits one space after the name (`clubhouse_label`).
-    let crown_at = flair
-        .is_some_and(|flair| flair.crown)
-        .then_some(name_len + 1);
     let label_span = |center: u16| {
         let x0 = center.saturating_sub(label_w / 2);
         (x0, x0 + label_w.saturating_sub(1))
@@ -912,7 +908,6 @@ fn draw_presence(
                 label_y,
                 &label,
                 name_len,
-                crown_at,
                 label_style,
                 name_style,
             );
@@ -940,16 +935,7 @@ fn draw_presence(
                 draw_figure(cells, x, y, head, style);
             }
             let label_y = y.saturating_sub(3).max(1);
-            put_label_styled(
-                cells,
-                x,
-                label_y,
-                &label,
-                name_len,
-                crown_at,
-                label_style,
-                name_style,
-            );
+            put_label_styled(cells, x, label_y, &label, name_len, label_style, name_style);
             let (lx0, lx1) = label_span(x);
             // Figure body is `x-1..=x+1`; the box unions it with the label.
             let hit = (lx0.min(x.saturating_sub(1)), label_y, lx1.max(x + 1), y);
@@ -2163,25 +2149,20 @@ fn put_if_floor(cells: &mut Cells, x: u16, y: u16, ch: char, color: ratatui::sty
 
 /// Write a name centered on `x_center`, clamped inside the walls.
 fn put_label(cells: &mut Cells, x_center: u16, y: u16, label: &str, style: Style) {
-    put_label_styled(cells, x_center, y, label, 0, None, style, None);
+    put_label_styled(cells, x_center, y, label, 0, style, None);
 }
 
 /// Paints a floor label. `name_len` is how many leading characters of `label`
 /// are the username: only those take the bought color effect, so a trailing
-/// `, title` stays in the dim label color, exactly as in chat. `crown_at` is
-/// the char index of the crown glyph, painted in the same amber chat uses
-/// (`push_author_prefix_spans`) rather than the name's effect or the dim
-/// label color. Cells are one column each; a double-width char
-/// (the crown) takes its cell plus a `WIDE_TAIL`, so the label is placed by
-/// display width, not char count.
-#[allow(clippy::too_many_arguments)]
+/// `, title` stays in the dim label color, exactly as in chat. Cells are one
+/// column each; a double-width char takes its cell plus a `WIDE_TAIL`, so
+/// the label is placed by display width, not char count.
 fn put_label_styled(
     cells: &mut Cells,
     x_center: u16,
     y: u16,
     label: &str,
     name_len: usize,
-    crown_at: Option<usize>,
     style: Style,
     name_style: Option<NameStyle>,
 ) {
@@ -2196,7 +2177,6 @@ fn put_label_styled(
     let mut col = start;
     for (i, ch) in label.chars().enumerate() {
         let cell_style = match name_style {
-            _ if crown_at == Some(i) => style.fg(theme::AMBER_GLOW()),
             Some(name_style) if i < name_len => style.fg(char_color(name_style, i, name_len)),
             Some(_) | None => style,
         };
@@ -2209,18 +2189,10 @@ fn put_label_styled(
     }
 }
 
-/// The floor label for one patron: the truncated name, the crown glyph when
-/// they wear it, then `, <title>` when a title is rented, itself truncated to
-/// `LABEL_MAX`. The glyph follows the name after one space exactly as it does
-/// in chat, so the two surfaces read the same; it is the one wide char a label can hold
-/// (names and titles are folded to single width), and `put_label_styled`
-/// spends two cells on it.
+/// The floor label for one patron: the truncated name, then `, <title>` when
+/// a title is rented, itself truncated to `LABEL_MAX`.
 pub(crate) fn clubhouse_label(username: &str, flair: Option<&ResolvedName>) -> String {
     let mut label = truncate_name(username);
-    if flair.is_some_and(|flair| flair.crown) {
-        label.push(' ');
-        label.push_str(CROWN_GLYPH);
-    }
     if let Some(title) = flair.and_then(|flair| flair.title.as_deref()) {
         label.push_str(&format!(", {}", truncate_name(title)));
     }

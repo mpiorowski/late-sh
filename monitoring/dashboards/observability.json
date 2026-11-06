@@ -1476,6 +1476,126 @@
       }
     },
     {
+      "type": "bargauge",
+      "title": "Listeners by Station",
+      "description": "Online accounts (bots excluded) on the radio source at each called roll call (late-ssh app/audio, every 10 minutes per replica), by station, with the YouTube source as its own bar: it counts who is tuned in, paired or not, muted or not, the same roster as the sidebar's source counts. A listener is one account on one station, so divide by six for listener-hours. The paper's YESTERDAY column prints the distinct accounts per day from radio_listens and youtube_listens.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (station) (increase(late_ssh_radio_listeners_total[$__range]))",
+          "legendFormat": "{{station}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(late_ssh_youtube_listeners_total[$__range]))",
+          "legendFormat": "youtube",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 127
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Radio Roll Calls",
+      "description": "Roll calls by result: called (this replica's online radio and YouTube listeners written to radio_listens and youtube_listens for the day) and failed (stopped at the first listener it could not write, the ones before it are in and the next call fills the gap; the radio_roll_call_failed error in the logs).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_radio_roll_calls_total[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 127
+      }
+    },
+    {
       "type": "row",
       "title": "Games",
       "collapsed": false,
@@ -1488,7 +1608,64 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 127
+        "y": 135
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Doors Opened by Card",
+      "description": "Enters on a Games hub card that launches (late-ssh app/door/hub), by card: a member who quits and comes back opens the door again. The paper's YESTERDAY column prints the roguelikes' openings per day from door_openings. Only rows that were written count here; a row that was not is result=failed on the same counter and the door_opening_failed error in the logs.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (card) (increase(late_ssh_door_openings_total{result=\"recorded\"}[$__range]))",
+          "legendFormat": "{{card}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 136
       }
     },
     {
@@ -1534,7 +1711,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 128
+        "y": 144
       },
       "description": "Boards solved on a session over the range, daily and personal apart. Counted where the board ends, so personal boards (never a GameWon) show here too."
     },
@@ -1581,7 +1758,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 128
+        "y": 144
       },
       "description": "Solved boards by difficulty, both modes. Le Word and Rubik's Cube have one board a day and are left out."
     },
@@ -1628,7 +1805,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 136
+        "y": 152
       },
       "description": "Share cards copied per fresh daily win. The number that says which daily people brag about."
     },
@@ -1675,7 +1852,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 136
+        "y": 152
       },
       "description": "Won over finished boards for the two dailies that can be lost (Le Word out of guesses, Minesweeper out of lives)."
     },
@@ -1722,7 +1899,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 144
+        "y": 160
       },
       "description": "Session time on each screen with a key pressed in the last five minutes. Idle terminals left open are counted apart (presence=idle)."
     },
@@ -1769,7 +1946,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 144
+        "y": 160
       },
       "description": "Active session time with a game open, by game: Arcade boards (dailies and score runs) and House Table games (poker, blackjack, asterion, tron, ssnake). Door games are screens of their own, in Active Time by Screen."
     },
@@ -1807,7 +1984,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 152
+        "y": 168
       },
       "description": "Seconds of active attention per second: the average number of active sessions looking at each screen."
     },
@@ -1854,7 +2031,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 152
+        "y": 168
       },
       "description": "Wins outside the Arcade dailies. Lateania is left out: its GameWon fires per mob kill (family=lateania), which would drown the rest."
     },
@@ -1897,7 +2074,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 160
+        "y": 176
       },
       "description": "Arrivals on each screen (and place inside it: Home room kind, Arcade board or House Table game, Profiles shelf, Artboard canvas or gallery) over the range, top 15. Sampled on the 1Hz edge, so a place passed through in under a second is not a visit."
     },
@@ -1940,7 +2117,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 160
+        "y": 176
       },
       "description": "Active seconds over arrivals, per screen and place, for places with at least 5 visits in the range. How long a stop lasts once someone is there."
     },
@@ -1983,7 +2160,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 160
+        "y": 176
       },
       "description": "Active time on the two shelves of Profiles (people, jobs) and the two halves of the Artboard (canvas, gallery). The Jobs number is the reach the nightly press pays for."
     },
@@ -2026,7 +2203,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 168
+        "y": 184
       },
       "description": "Active time on Home by what the chat pane shows: #lounge (the Home card), a kind of room (language, public or private topic, DM, deadchannel), or a rail entry (feeds, news, cyberspace, notifications, discover, showcase, work)."
     },
@@ -2069,7 +2246,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 168
+        "y": 184
       },
       "description": "Arrivals on each Home room kind or rail entry over the range. Switching between two rooms of the same kind is no new arrival."
     },
@@ -2086,7 +2263,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 176
+        "y": 192
       }
     },
     {
@@ -2143,7 +2320,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 177
+        "y": 193
       }
     },
     {
@@ -2200,7 +2377,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 177
+        "y": 193
       }
     },
     {
@@ -2269,7 +2446,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 177
+        "y": 193
       }
     },
     {
@@ -2318,7 +2495,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 185
+        "y": 201
       }
     },
     {
@@ -2329,7 +2506,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 193
+        "y": 209
       },
       "panels": []
     },
@@ -2369,7 +2546,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 194
+        "y": 210
       }
     },
     {
@@ -2405,7 +2582,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 194
+        "y": 210
       }
     },
     {
@@ -2439,7 +2616,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 202
+        "y": 218
       }
     },
     {
@@ -2483,7 +2660,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 202
+        "y": 218
       }
     },
     {
@@ -2494,7 +2671,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 210
+        "y": 226
       },
       "panels": []
     },
@@ -2534,7 +2711,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 211
+        "y": 227
       }
     },
     {
@@ -2601,7 +2778,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 211
+        "y": 227
       }
     },
     {
@@ -2645,7 +2822,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 219
+        "y": 235
       }
     },
     {
@@ -2689,7 +2866,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 219
+        "y": 235
       }
     },
     {
@@ -2723,7 +2900,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 227
+        "y": 243
       }
     },
     {
@@ -2802,7 +2979,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 227
+        "y": 243
       }
     },
     {
@@ -2862,7 +3039,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 235
+        "y": 251
       }
     },
     {
@@ -2912,7 +3089,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 235
+        "y": 251
       }
     },
     {
@@ -2973,7 +3150,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 243
+        "y": 259
       }
     },
     {
@@ -3034,7 +3211,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 243
+        "y": 259
       }
     },
     {
@@ -3050,7 +3227,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 251
+        "y": 267
       }
     },
     {
@@ -3085,7 +3262,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 252
+        "y": 268
       }
     },
     {
@@ -3124,7 +3301,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 252
+        "y": 268
       }
     },
     {
@@ -3174,7 +3351,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 252
+        "y": 268
       }
     },
     {
@@ -3190,7 +3367,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 260
+        "y": 276
       }
     },
     {
@@ -3247,7 +3424,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 261
+        "y": 277
       }
     },
     {
@@ -3334,7 +3511,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 261
+        "y": 277
       }
     },
     {
@@ -3391,7 +3568,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 261
+        "y": 277
       }
     },
     {
@@ -3464,7 +3641,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 269
+        "y": 285
       }
     },
     {
@@ -3480,7 +3657,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 277
+        "y": 293
       }
     },
     {
@@ -3537,7 +3714,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 278
+        "y": 294
       }
     },
     {
@@ -3594,7 +3771,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 278
+        "y": 294
       }
     },
     {
@@ -3651,7 +3828,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 278
+        "y": 294
       }
     },
     {
@@ -3704,7 +3881,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 286
+        "y": 302
       }
     },
     {
@@ -3841,7 +4018,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 294
+        "y": 310
       }
     },
     {
@@ -3927,7 +4104,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 303
+        "y": 319
       }
     },
     {
@@ -3959,7 +4136,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 313
+        "y": 329
       }
     },
     {
@@ -4016,7 +4193,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 325
+        "y": 341
       }
     },
     {
@@ -4085,7 +4262,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 325
+        "y": 341
       }
     },
     {
@@ -4142,7 +4319,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 325
+        "y": 341
       }
     },
     {
@@ -4199,7 +4376,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 325
+        "y": 341
       }
     },
     {
@@ -4215,7 +4392,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 333
+        "y": 349
       }
     },
     {
@@ -4272,7 +4449,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 334
+        "y": 350
       }
     },
     {
@@ -4329,7 +4506,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 334
+        "y": 350
       }
     },
     {
@@ -4386,7 +4563,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 334
+        "y": 350
       }
     },
     {
@@ -4428,7 +4605,149 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 342
+        "y": 358
+      }
+    },
+    {
+      "type": "row",
+      "title": "Herald",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 366
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Daily Posts and Deliveries",
+      "description": "The herald's two posts a day (late-ssh app/herald), words and art, over the range: posted, skipped (nothing to post, or nothing clean), lost (another replica had the slot), failed (retried up to three times, then the slot rests), each by slot; and each network's leg of it, delivered or failed. One 'posted' or 'skipped' a day for each of words and art is the healthy line; a 'failed' with no 'posted' after it is a post missed, and the network rows say which leg.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot, result) (increase(late_ssh_herald_posts_total[$__range]))",
+          "legendFormat": "{{slot}} {{result}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (network, result) (increase(late_ssh_herald_deliveries_total[$__range]))",
+          "legendFormat": "{{network}} {{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 367
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "The Look and the Projects",
+      "description": "What the herald's look (late-ssh app/herald/look.rs) made of each picture it was shown, a fresh pick or an admin's /herald preview: clean (no warning), warned (stays unposted), unseen (AI is off; stays unposted), drawn (a card, no call), failed (the call failed: the post fails with nothing sent and the next check asks again; the herald_post_failed error in the logs). A retry with a stored look reuses it and is not counted. The project rows are the write-up (app/herald/writeup.rs), per project asked about: written, refused (commercial, unfit or unclear; the next is tried), ai_off, failed (the herald_writeup_failed error; the week still owes a project).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_herald_looks_total[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (result) (increase(late_ssh_herald_projects_total[$__range]))",
+          "legendFormat": "project {{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 367
       }
     }
   ]

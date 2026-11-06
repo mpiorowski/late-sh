@@ -14,6 +14,7 @@
 //! loaded, and an idle deadline in `App::tick` ends the visit for a player
 //! who never comes back.
 
+use late_core::models::leaderboard::DailyPuzzle;
 use uuid::Uuid;
 
 use crate::app::{
@@ -21,7 +22,7 @@ use crate::app::{
     door::spectate::state::LiveGameKey,
     lobby::{daily::state::BoardEntry, house::tables::HouseTable},
     state::App,
-    workspace::arcade::{ArcadeStop, active_daily_stop, open_stop, unfinished_daily_stops},
+    workspace::arcade::{active_daily_stop, open_stop, unfinished_daily_stops},
 };
 
 /// One stop on the backtick cycle: the base page, a daily board where it's
@@ -35,7 +36,7 @@ pub(crate) enum GameWorkspace {
     Base,
     DailyBoard(Uuid),
     HouseTable(HouseTable),
-    Arcade(ArcadeStop),
+    Arcade(DailyPuzzle),
     /// A live door game, identified by its live-game screen. For the
     /// roguelikes (Nethack/Dcss/Brogue) the turn-based child idles on its
     /// host while detached, so hopping in resumes exactly where the player
@@ -375,7 +376,7 @@ fn watch_keys(app: &App) -> Vec<LiveGameKey> {
 fn next_workspace(
     my_turn_ids: &[Uuid],
     seated_tables: &[HouseTable],
-    arcade_stops: &[ArcadeStop],
+    arcade_stops: &[DailyPuzzle],
     door_stops: &[Screen],
     watches: &[LiveGameKey],
     current: GameWorkspace,

@@ -62,7 +62,7 @@ The door is gated by the `dopewars_enabled` profile flag in `late-ssh/src/config
 | `identity.rs` | `derive_client_key(secret)` — identical to the client copy. |
 
 Cross-module wiring (client side, outside this folder — the ~10 door touchpoints):
-- `app/common/primitives.rs`: `Screen::Dopewars` (+ `next`/`prev` fall back to `Games`, `draw_tabs`/`page_title` label `"dopewars"`).
+- `app/common/primitives.rs`: `Screen::Dopewars` (+ `Screen::page` puts it on `Games`, so `next`/`prev` fall back to the hub and its tab stays lit; `draw_tabs`/`page_title` label `"dopewars"`).
 - `app/door/hub/state.rs`: `HubGame::Dopewars` + `ALL` (last card) + label.
 - `app/door/hub/ui.rs`: `HubView.dopewars_enabled` + the landing match arm.
 - `app/state.rs`: `App::dopewars_state`/`dopewars_term`/`dopewars_enabled`/`dopewars_host`/`dopewars_port`/`dopewars_secret`, `enter_dopewars`/`leave_dopewars`, `set_screen` enter/leave arms, and the Running-mode passthrough + exit-grace swallow in `App::handle_input`.
@@ -154,7 +154,7 @@ Inline pure tests cover:
 - Client `identity.rs` / host `late-dopewars/src/identity.rs`: derivation determinism. (A cross-crate known-answer fingerprint test like nethack's is still missing.)
 - Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; exit-grace opens on close and counts down.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
-- `app/door/hub/state.rs` + `app/common/primitives.rs`: selector ordering and screen `next`/`prev` place `Dopewars` correctly.
+- `app/door/hub/state.rs` + `app/common/primitives.rs`: selector ordering, and `Screen::page` places `Dopewars` on the Games page.
 
 The PTY bridge (`host.rs`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/play/quit manually against a real host.
 

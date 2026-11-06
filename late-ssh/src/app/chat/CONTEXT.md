@@ -5,7 +5,7 @@
 Chat in the SSH app: Home chat rooms, DMs, public/private topic rooms, game-backed room chat, the Home/Dashboard chat center and room rail, and the embedded game-chat surfaces (house tables, daily match boards, the door watch view). Also message actions, reactions, ignores, overlays, the service's refresh/tail/event contracts and the DB model constraints.
 
 - Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles keep their feed services and state here, but their UI and their editor (`app/directory/editor`) live on Profiles page 5.
-- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, `news/`, and `../crown/`; the round, translation and `/summary` are `../ai/CONTEXT.md`. A YouTube link in a message opens the watch player, `../video/CONTEXT.md`.
+- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, and `news/`; the round, translation and `/summary` are `../ai/CONTEXT.md`. A YouTube link in a message opens the watch player, `../video/CONTEXT.md`.
 - The session shell, global keys and notifications are in `late-ssh/CONTEXT.md`; repo-wide rules in the root `CONTEXT.md`.
 
 ---
@@ -48,7 +48,7 @@ Tests live beside the file they exercise as `<file>_test.rs`, wired with
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`chat_message_gild.rs`, `crown.rs`,
+`chat_message_gild.rs`,
 `notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_read.rs`, `cyberspace_account.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
@@ -95,7 +95,7 @@ Normal display flow:
    - The `· ` activity lines are excluded by comparing the author id against the system bot id that `ChatService::set_system_user_id` receives from the #lounge feed task at startup. Do not go back to reading `users.settings->>'system'` per message: that made Postgres hash the whole users table per query.
 3. Snapshots intentionally carry empty message vectors. They do not load history; activity timestamps are summary metadata used for stable room ordering.
 4. Visible-room changes call `App::sync_visible_chat_room()`, which stores `visible_room_id`, marks the room read, and requests a room tail.
-5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
+5. `load_room_tail_task` fetches the newest 500 messages, reaction summaries, author usernames, and author bonsai glyphs. A tail that lands before the snapshot naming its room (a game-room join fires both loads at once, and the tail is the lighter query) is held in `ChatState::early_tails` and merged when the room arrives; nothing asks for a tail twice. Render-time display names prefer the app-wide username directory over this per-session chat cache when both know the same UUID.
 6. Broadcast `MessageCreated`/`MessageEdited`/`MessageDeleted`/reaction events patch local state; tail/search/discover results arrive on the per-session targeted channel. Broadcast lag triggers a tail reload for the visible room (the targeted mpsc is unbounded and cannot lag).
 
 Room tails deliberately carry **no** read cursor. Render inserts one synthetic `new messages` divider before the first message from someone else past this session's **AFK line** (`ChatState::afk_lines`), and one dim `you left` divider before the first past the **left-app mark** (`ChatState::device_left_at`), never past `chat_room_members.last_read_at`; see `MARKS.md` for why. The divider is render-only state in the chat row cache; do not persist it or count it as a chat message.
@@ -179,10 +179,9 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 ---
 
-## 9b. Gilds, the Crown, the Round
+## 9b. Gilds, the Round
 
 - Gilds, the paid name colour for a public message: `gild/CONTEXT.md`.
-- The Crown, the one-holder 💎 slot bought with `/crown take`: `../crown/CONTEXT.md`. Chat owns only the command and the glyph.
 - The Round, a drink or a whole-bar round from @bartender (the chips, the pour, the drunk points, the trigger phrase): `../ai/ROUND.md`, beside the bartender that runs it.
 
 ## 9e. Bartender Memory
@@ -334,7 +333,7 @@ Scroll-driven room history (`history_modal/`), opened by `/history` or by a sear
 
 ### Room Membership Commands
 
-1. `/public #room` gets or creates a public topic room, forces `auto_join=false`, and joins only caller. `/join #room` is an alias for it, parsed in the same `parse_public_room_command` so the two can never drift; it exists because IRC users type `/join` first. Public rooms are hosted, not owned: opening one grants nothing, and a brand-new one posts two plain system-bot lines (deliberately without the system-line prefix, so they render as messages), one in the room asking the creator to describe it and one in #moderators reporting it.
+1. `/public #room` gets or creates a public topic room and joins only the caller. A new room starts with `auto_join=false`; an existing room keeps its flag, so `/join` on a room a mod filled never unfills it. `/join #room` is an alias for it, parsed in the same `parse_public_room_command` so the two can never drift; it exists because IRC users type `/join` first. Public rooms are hosted, not owned: opening one grants nothing, and a brand-new one posts two plain system-bot lines (deliberately without the system-line prefix, so they render as messages), one in the room asking the creator to describe it and one in #moderators reporting it.
 2. `/private #room` opens the room-info form (`app/room_info_modal`) and creates the room with its topic/rules and `created_by` in one go.
 3. `/roominfo` opens the same form for the selected room. Authority is decided once in `ChatService::set_room_info`: mods for any room, otherwise the derived owner of a private topic room. `ChatState::room_info_authority` mirrors the rule for what the UI offers (and what the refusal banner says); DMs and game rooms have no info at all. A successful write broadcasts `RoomInfoUpdated`, which banners for the editor and refreshes the room list of every session sitting in that room, so no header waits on the 10s snapshot.
 4. `/rules` shows the selected room's rules in the shared overlay (`Overlay`, the same surface `/active` uses), titled `#slug rules`, one entry per stored line: rules are multi-line and a banner is one line. A room with no rules answers with a banner instead of an empty overlay.

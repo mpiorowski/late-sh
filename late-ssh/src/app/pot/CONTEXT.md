@@ -4,7 +4,7 @@
 - Domain: the weekly pot, late.sh's parimutuel raffle and its largest concurrency-safe chip sink
 - Scope: `late-ssh/src/app/pot/`, `late-core/src/models/pot.rs`, migration 160, the status HUD badge, the `/pot` composer commands
 - Read this before: changing the ticket price or the cap, the draw hour, the payout split, the sweeper, or anything that reads `pots` / `pot_tickets`
-- Related: root `CONTEXT.md` (routing, chips), `late-ssh/src/app/crown/svc.rs` (the service shape this copies)
+- Related: root `CONTEXT.md` (routing, chips)
 
 ## 1. Summary
 
@@ -32,7 +32,7 @@ There is no house wallet and no stored running total. A live pot's size is
 
 Commands are parsed in `late-ssh/src/app/chat/state.rs` (`parse_pot_command`,
 `PotCommand`) and carried out in `App::tick_pot`
-(`late-ssh/src/app/state.rs`), the same shape as the crown.
+(`late-ssh/src/app/state.rs`).
 
 ## 3. The fixed numbers
 
@@ -101,8 +101,7 @@ re-evaluates its `WHERE status = 'open'`, finds nothing, and refuses with
   a buy committed during the gap is not lost.
 - The **winner's banner** rides the notify, not the sweeping replica's own
   broadcast, so it reaches the winner on whichever replica they are connected
-  to and there is one code path for it. Same reasoning as the crown's deposed
-  banner.
+  to and there is one code path for it.
 - The buyer's own receipt is sent by the replica that ran the buy
   (`PotEvent::Bought`), because that is the only replica the buyer is on.
 
@@ -145,8 +144,8 @@ A user who turns the pot on in their bottom status bar moves it there
 Three `ActivityKind` arms, all explicit in `filter::lounge_includes`:
 
 - `PotDrawn { pot_id, payout, winner_tickets, total_tickets }` -> "mira won
-  67,360 chips from the pot on 3 of 312 tickets". It is also the second arm of
-  `filter::lounge_headline` (the crown is the first): a headline is a real
+  67,360 chips from the pot on 3 of 312 tickets". It is also an arm of
+  `filter::lounge_headline`: a headline is a real
   #lounge row rather than a ticker line that is gone by the time an offline
   winner reconnects. The headline names the winner as `@mira` so the draw
   also reaches them as a mention notification; the ticker line keeps the

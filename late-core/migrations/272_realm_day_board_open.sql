@@ -1,0 +1,13 @@
+-- The board each realm night opened on, beside the board it closed on.
+--
+-- A campaign resolves every order at once when the day turns over, so the
+-- closing board alone shows where everybody ended up and never how: the
+-- replay steps through the night's fights one at a time, and each step has
+-- to be drawn over the board as it stood before any of them landed.
+--
+-- Written by the same upsert as `board`, under the same rule: only the write
+-- that turns a day over passes it, and `COALESCE` keeps a later write that
+-- has no board from wiping it. Nullable because every day archived before
+-- this column existed, and every day of an instant game, has none; those days
+-- simply offer no replay.
+ALTER TABLE realm_days ADD COLUMN board_open JSONB;

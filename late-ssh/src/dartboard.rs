@@ -18,7 +18,6 @@ use crate::app::artboard::provenance::{
 pub const CANVAS_WIDTH: usize = 384;
 pub const CANVAS_HEIGHT: usize = 192;
 const DEFAULT_PERSIST_INTERVAL: Duration = Duration::from_secs(5 * 60);
-const DAILY_SNAPSHOT_PREFIX: &str = "daily:";
 const MONTHLY_SNAPSHOT_PREFIX: &str = "monthly:";
 const MAX_DAILY_SNAPSHOTS: usize = 7;
 const SYSTEM_ROLLOVER_USER_ID: u64 = 0;
@@ -273,10 +272,6 @@ fn blank_canvas() -> Canvas {
     Canvas::with_size(CANVAS_WIDTH, CANVAS_HEIGHT)
 }
 
-fn daily_board_key(date: NaiveDate) -> String {
-    format!("{DAILY_SNAPSHOT_PREFIX}{date}")
-}
-
 fn monthly_board_key(date: NaiveDate) -> String {
     format!(
         "{MONTHLY_SNAPSHOT_PREFIX}{:04}-{:02}",
@@ -326,7 +321,7 @@ pub async fn rollover_daily_snapshot_for_day(
     let archived_day = rollover_day
         .pred_opt()
         .context("failed to compute previous UTC date for artboard rollover")?;
-    let daily_key = daily_board_key(archived_day);
+    let daily_key = Snapshot::daily_key(archived_day);
 
     let daily = {
         let client = db.get().await.context("failed to get db client")?;
@@ -527,7 +522,7 @@ async fn prune_daily_snapshots(db: &Db, keep: usize) -> anyhow::Result<()> {
         .get()
         .await
         .context("failed to get db client for daily artboard prune")?;
-    let snapshots = Snapshot::list_by_board_key_prefix(&client, DAILY_SNAPSHOT_PREFIX)
+    let snapshots = Snapshot::list_by_board_key_prefix(&client, Snapshot::DAILY_PREFIX)
         .await
         .context("failed to list daily artboard snapshots")?;
     for snapshot in snapshots.into_iter().skip(keep) {

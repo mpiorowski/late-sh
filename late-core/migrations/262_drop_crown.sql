@@ -1,0 +1,11 @@
+-- The crown is gone: no `/crown`, no glyphs, no monthly `crown` badge.
+--
+-- Its badges go with it, since nothing can name or render the category any
+-- more. The `chip_crown_taken` ledger rows stay: the ledger has to keep
+-- summing to each balance, and the reason stays retired in `ChipMove` so
+-- those debits remain off the Top Chips board.
+--
+-- `crown_reigns` is not dropped here: the previous binary reads it on every
+-- profile load, and drained pods live for hours after a deploy. The drop
+-- waits in `deferred/drop_crown_reigns.sql`.
+DELETE FROM profile_awards WHERE category = 'crown';

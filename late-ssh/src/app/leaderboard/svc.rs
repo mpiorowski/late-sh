@@ -5,16 +5,16 @@ use std::{
 };
 
 use anyhow::Result;
-use chrono::{Datelike, Months, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Timelike, Utc};
 use late_core::db::Db;
 use late_core::models::leaderboard::{
     LeaderboardData, OnlineTimeIncrement, apply_online_time_batch, fetch_leaderboard_data,
 };
 use late_core::models::profile_award::{
-    AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, all_award_categories,
-    award_category_label, claim_previous_month_award_announcement, format_score_value,
-    gallery_prize_chips, is_milestone_award, snapshot_previous_month_profile_awards,
+    AwardRoll, AwardRollEntry, GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY,
+    TOP_DRINKERS_AWARD_CATEGORY, all_award_categories, award_category_label,
+    claim_previous_month_award_announcement, format_score_value, gallery_prize_chips,
+    is_milestone_award, snapshot_previous_month_profile_awards,
 };
 use late_core::models::user::User;
 use tokio::sync::{Notify, watch};
@@ -23,7 +23,6 @@ use uuid::Uuid;
 use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
-use crate::app::common::username_effect::CROWN_LAUREATE_GLYPH;
 use crate::metrics;
 
 /// How often the leaderboard is rebuilt from the DB while at least one session
@@ -51,22 +50,31 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 /// How often the award snapshot loop checks whether a pass is due. The check
 /// itself is a clock read; the DB pass runs only on a UTC month rollover or
 /// the fallback below, so this cadence bounds how long freshly-completed
-/// monthly badges stay missing after the 1st, not how often we query.
-const AWARD_SNAPSHOT_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// monthly badges stay missing after the 1st and how late after
+/// `AWARD_ROLL_HOUR_UTC` the #lounge roll goes out, not how often we query.
+const AWARD_SNAPSHOT_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// UTC hour on the 1st from which last month's roll is posted to #lounge.
+/// 18:00 UTC is the overlap of US and European waking hours: 19:00-20:00 in
+/// Central Europe, 13:00-14:00 on the US East Coast, 10:00-11:00 on the West
+/// Coast. The badges themselves still land at the rollover; only the
+/// announcement waits.
+const AWARD_ROLL_HOUR_UTC: u32 = 18;
 
 /// Fallback cadence for the award snapshot when no rollover happened. Existing
 /// rows are frozen, so this pass is a cheap re-confirmation kept as a safety
 /// net against a missed rollover check (clock skew, a long stall).
 const AWARD_SNAPSHOT_FALLBACK: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How a pass's #lounge award roll ended, for the metric. A pass whose month
-/// was already announced records nothing: that is every pass but one a month.
+/// How a #lounge award roll claim ended, for the metric. A claim that finds
+/// the month already claimed or empty records nothing, and neither does a tick
+/// that makes no claim (before the posting hour, or with the month marked done).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AwardAnnouncementOutcome {
     /// Claimed and posted to #lounge.
     Posted,
     /// The system user lookup or the claim errored; nothing was claimed, so
-    /// the next hourly tick retries.
+    /// the next tick retries.
     ClaimFailed,
     /// Claimed, but the post to #lounge errored. The claim is spent, so
     /// nobody retries and the month's roll is lost.
@@ -103,17 +111,13 @@ struct OnlineTimeState {
     /// The first authenticated connection's start time. The shared
     /// `active_users` map owns connection ref-counting; this map only sees its
     /// zero-to-one and one-to-zero transitions.
-    active_since: HashMap<Uuid, ActiveOnlineTime>,
-    pending_milliseconds: HashMap<(Uuid, NaiveDate), i64>,
-    /// Retained until Postgres confirms it. A retry uses the same id so the
-    /// upsert can distinguish it from a new increment.
+    active_since: HashMap<Uuid, DateTime<Utc>>,
+    /// Closed intervals not yet flushed, one per stretch of presence, in
+    /// the UTC month it began.
+    pending: Vec<OnlineTimeIncrement>,
+    /// Retained until Postgres confirms it. A retry resends the same spans,
+    /// which earn nothing the first attempt committed (`counted_spans`).
     in_flight: Option<OnlineTimeBatch>,
-}
-
-#[derive(Clone, Copy)]
-struct ActiveOnlineTime {
-    since: Instant,
-    month_start: NaiveDate,
 }
 
 #[derive(Clone, Default)]
@@ -123,48 +127,35 @@ struct OnlineTimeTracker {
 
 impl OnlineTimeTracker {
     fn connected(&self, user_id: Uuid) {
-        self.connected_at(user_id, Instant::now(), current_month_start());
+        self.connected_at(user_id, Utc::now());
     }
 
-    fn connected_at(&self, user_id: Uuid, now: Instant, month_start: NaiveDate) {
+    fn connected_at(&self, user_id: Uuid, now: DateTime<Utc>) {
         self.state
             .lock()
             .expect("online time tracker poisoned")
             .active_since
             .entry(user_id)
-            .or_insert(ActiveOnlineTime {
-                since: now,
-                month_start,
-            });
+            .or_insert(now);
     }
 
     fn disconnected(&self, user_id: Uuid) {
-        self.disconnected_at(user_id, Instant::now());
+        self.disconnected_at(user_id, Utc::now());
     }
 
-    fn disconnected_at(&self, user_id: Uuid, now: Instant) {
+    fn disconnected_at(&self, user_id: Uuid, now: DateTime<Utc>) {
         let mut state = self.state.lock().expect("online time tracker poisoned");
-        let Some(active) = state.active_since.remove(&user_id) else {
+        let Some(since) = state.active_since.remove(&user_id) else {
             return;
         };
-        add_elapsed(
-            &mut state.pending_milliseconds,
-            user_id,
-            active.month_start,
-            active.since,
-            now,
-        );
+        add_interval(&mut state.pending, user_id, since, now);
     }
 
     fn begin_batch(&self) -> Option<PreparedOnlineTimeBatch> {
-        self.begin_batch_at(Instant::now(), current_month_start())
+        self.begin_batch_at(Utc::now())
     }
 
-    fn begin_batch_at(
-        &self,
-        now: Instant,
-        month_start: NaiveDate,
-    ) -> Option<PreparedOnlineTimeBatch> {
+    fn begin_batch_at(&self, now: DateTime<Utc>) -> Option<PreparedOnlineTimeBatch> {
         let mut state = self.state.lock().expect("online time tracker poisoned");
         if let Some(batch) = state.in_flight.clone() {
             return Some(PreparedOnlineTimeBatch {
@@ -174,38 +165,19 @@ impl OnlineTimeTracker {
         }
 
         let mut checkpoints = Vec::with_capacity(state.active_since.len());
-        for (&user_id, active) in &mut state.active_since {
-            checkpoints.push((user_id, *active));
-            *active = ActiveOnlineTime {
-                since: now,
-                month_start,
-            };
+        for (&user_id, since) in &mut state.active_since {
+            checkpoints.push((user_id, *since));
+            *since = now;
         }
-        for (user_id, active) in checkpoints {
-            add_elapsed(
-                &mut state.pending_milliseconds,
-                user_id,
-                active.month_start,
-                active.since,
-                now,
-            );
+        for (user_id, since) in checkpoints {
+            add_interval(&mut state.pending, user_id, since, now);
         }
 
-        let pending = std::mem::take(&mut state.pending_milliseconds);
-        let mut increments: Vec<_> = pending
-            .into_iter()
-            .filter_map(|((user_id, month_start), milliseconds)| {
-                (milliseconds > 0).then_some(OnlineTimeIncrement {
-                    user_id,
-                    month_start,
-                    milliseconds,
-                })
-            })
-            .collect();
+        let mut increments = std::mem::take(&mut state.pending);
         if increments.is_empty() {
             return None;
         }
-        increments.sort_unstable_by_key(|value| (value.user_id, value.month_start));
+        increments.sort_unstable_by_key(|value| (value.user_id, value.span_start));
 
         let batch = OnlineTimeBatch {
             id: Uuid::now_v7(),
@@ -239,24 +211,31 @@ impl OnlineTimeTracker {
     }
 }
 
-fn current_month_start() -> NaiveDate {
-    let today = Utc::now().date_naive();
-    today.with_day(1).expect("every UTC month has a first day")
+fn month_start_of(at: DateTime<Utc>) -> NaiveDate {
+    at.date_naive()
+        .with_day(1)
+        .expect("every UTC month has a first day")
 }
 
-fn add_elapsed(
-    pending: &mut HashMap<(Uuid, NaiveDate), i64>,
+/// Queue the interval `since..now` as one stretch of presence in the UTC
+/// month it began in, so a segment that crosses midnight at a month's end
+/// counts in the month it started (a checkpoint bounds that spill to one
+/// flush interval).
+fn add_interval(
+    pending: &mut Vec<OnlineTimeIncrement>,
     user_id: Uuid,
-    month_start: NaiveDate,
-    since: Instant,
-    now: Instant,
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
 ) {
-    let milliseconds = now.saturating_duration_since(since).as_millis();
-    let milliseconds = i64::try_from(milliseconds).unwrap_or(i64::MAX);
-    if milliseconds > 0 {
-        let total = pending.entry((user_id, month_start)).or_default();
-        *total = total.saturating_add(milliseconds);
+    if now <= since {
+        return;
     }
+    pending.push(OnlineTimeIncrement {
+        user_id,
+        month_start: month_start_of(since),
+        span_start: since,
+        span_end: now,
+    });
 }
 
 /// What woke the refresh loop.
@@ -287,8 +266,8 @@ fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> b
     }
 }
 
-/// The award snapshot loop's entire decision, extracted so it is testable
-/// without a runtime, a DB, or a clock.
+/// The award loop's snapshot decision, extracted so it is testable without a
+/// runtime, a DB, or a clock.
 ///
 /// `target_month` is the previous completed UTC month a pass would write rows
 /// for; `last_run` is the month the last successful pass wrote and how long
@@ -307,6 +286,13 @@ fn should_snapshot_awards(
         // Same month already written: rows are frozen, a pass is a no-op.
         Some((_, elapsed)) => elapsed >= AWARD_SNAPSHOT_FALLBACK,
     }
+}
+
+/// Whether last month's #lounge roll may go out at `now`: from
+/// `AWARD_ROLL_HOUR_UTC` on the 1st, and any time later in the month so a
+/// process that was down at that hour still catches up.
+fn award_roll_due(now: DateTime<Utc>) -> bool {
+    now.day() > 1 || now.hour() >= AWARD_ROLL_HOUR_UTC
 }
 
 /// A month's roll this process won the claim for, with the author to post
@@ -360,12 +346,6 @@ fn award_roll_placement(entry: &AwardRollEntry) -> String {
     let value = entry.score_value;
     let medal = award_roll_medal(entry.rank);
     match entry.category.as_str() {
-        CROWN_AWARD_CATEGORY => {
-            format!(
-                "{CROWN_LAUREATE_GLYPH} @{name} took it last for {} chips",
-                thousands(value)
-            )
-        }
         LATE_TIME_AWARD_CATEGORY => format!(
             "\u{1F319} @{name} with {}",
             format_score_value(LATE_TIME_AWARD_CATEGORY, value)
@@ -486,12 +466,12 @@ impl LeaderboardService {
             return Ok(());
         };
         let retrying = prepared.was_retry;
-        let client = self.db.get().await?;
-        self.apply_online_time_batch(&client, prepared.batch)
+        let mut client = self.db.get().await?;
+        self.apply_online_time_batch(&mut client, prepared.batch)
             .await?;
 
         if retrying && let Some(follow_up) = self.online_time.begin_batch() {
-            self.apply_online_time_batch(&client, follow_up.batch)
+            self.apply_online_time_batch(&mut client, follow_up.batch)
                 .await?;
         }
         Ok(())
@@ -499,16 +479,16 @@ impl LeaderboardService {
 
     async fn apply_online_time_batch(
         &self,
-        client: &tokio_postgres::Client,
+        client: &mut tokio_postgres::Client,
         batch: OnlineTimeBatch,
     ) -> Result<()> {
         let rows = batch.increments.len();
         let milliseconds: i64 = batch
             .increments
             .iter()
-            .map(|value| value.milliseconds)
+            .map(|value| (value.span_end - value.span_start).num_milliseconds())
             .sum();
-        apply_online_time_batch(client, batch.id, &batch.increments).await?;
+        apply_online_time_batch(client, batch.id, Utc::now(), &batch.increments).await?;
         self.online_time.acknowledge(batch.id);
         tracing::debug!(rows, milliseconds, "flushed online time");
         Ok(())
@@ -572,34 +552,49 @@ impl LeaderboardService {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut last_run: Option<(NaiveDate, Instant)> = None;
+            // The month whose roll needs no more claims until the next
+            // successful snapshot pass: posted, claimed elsewhere, lost to a
+            // failed post, or no award rows yet.
+            let mut announced: Option<NaiveDate> = None;
             let mut interval = tokio::time::interval(AWARD_SNAPSHOT_CHECK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 // The first tick completes immediately, so startup snapshots.
                 interval.tick().await;
-                let target_month = previous_utc_month(Utc::now().date_naive());
+                let now = Utc::now();
+                let target_month = previous_utc_month(now.date_naive());
                 let due = should_snapshot_awards(
                     target_month,
                     last_run.map(|(month, at)| (month, at.elapsed())),
                 );
-                if !due {
-                    continue;
-                }
-                match self.snapshot_profile_awards().await {
-                    Ok(()) => {}
-                    // `last_run` is untouched, so the next hourly tick retries
-                    // instead of waiting out the fallback.
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "profile award snapshot failed");
-                        continue;
+                if due {
+                    match self.snapshot_profile_awards().await {
+                        // New rows may have landed, so the roll gets another
+                        // look. The claim keeps that from double-posting.
+                        Ok(()) => {
+                            last_run = Some((target_month, Instant::now()));
+                            announced = None;
+                        }
+                        // `last_run` is untouched, so the next tick retries
+                        // instead of waiting out the fallback.
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "profile award snapshot failed");
+                            continue;
+                        }
                     }
                 }
+                // The roll needs this month's rows, and waits for the posting
+                // hour so it lands while both the US and Europe are awake.
+                let snapshotted = last_run.is_some_and(|(month, _)| month == target_month);
+                if !snapshotted || announced == Some(target_month) || !award_roll_due(now) {
+                    continue;
+                }
                 match self.announce_award_roll().await {
-                    Ok(None) => last_run = Some((target_month, Instant::now())),
+                    Ok(None) => announced = Some(target_month),
                     Ok(Some(claimed)) => {
-                        // The month is claimed whatever the post does, so the
-                        // pass is done either way: a retry could not post it.
-                        last_run = Some((target_month, Instant::now()));
+                        // The month is claimed whatever the post does, so this
+                        // roll is done either way: a retry could not post it.
+                        announced = Some(target_month);
                         let posted = chat
                             .send_lounge_message(
                                 claimed.system_user_id,
@@ -630,8 +625,7 @@ impl LeaderboardService {
                             }
                         }
                     }
-                    // Unclaimed, so the next hourly tick retries the roll; the
-                    // snapshot above is idempotent and re-runs harmlessly.
+                    // Unclaimed, so the next tick retries the roll.
                     Err(e) => {
                         metrics::record_award_announcement(AwardAnnouncementOutcome::ClaimFailed);
                         tracing::warn!(error = ?e, "monthly award roll claim failed");

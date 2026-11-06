@@ -117,6 +117,9 @@ Every track playing or queued is a candidate for the live strip (`../live/CONTEX
 - Off when `LATE_YOUTUBE_API_KEY` is unset: nothing can be queued then, and tests never reach the network.
 - `late_ssh_booth_thumbnails_total{outcome}` counts `fetched` and `failed`; a failure is logged with the video id.
 
+### The roll call
+Who is tuned in, written down: every `ROLL_CALL_INTERVAL` (10 minutes) each replica's `start_background_task` runs `roll_call`, which takes the humans online on that replica (`state::online_human_ids` over `active_users`, the roster the sidebar's `radio`/`youtube` counts read; bots have no fingerprint and are left out), reads each one's source and station from their settings (`User::audio_tunings_by_ids`), and writes an account on the radio as a `radio_listens` row under its station (`RadioListen::record`) and an account on YouTube as a `youtube_listens` row (`YoutubeListen::record`), both for today, UTC. It counts who has the source picked, not who is audible: an account with no paired CLI, a muted one and an IRC-only one all count, as on the sidebar. A listener already written is a no-op, so a day's rows are its distinct listeners, never minutes. A listener gone inside one interval is missed, which keeps a station flipped through from counting. Each replica calls its own roster, and the upsert makes the replicas' overlap harmless. The paper's YESTERDAY column reads the covered day's top stations and the booth's listeners (`../paper/CONTEXT.md`). `late_ssh_radio_roll_calls_total{result}` counts `called` and `failed` (a failed call is the `radio_roll_call_failed` error: it stopped at the first listener it could not write, the ones before it are in, and the next call fills the gap); `late_ssh_radio_listeners_total{station}` and `late_ssh_youtube_listeners_total` add each called roll call's listeners, a failed call's none.
+
 ### Submission reward
 Queueing a track pays the person who brought it `SONG_QUEUE_REWARD_CHIPS`
 (100), minted through `ChipMove::SongQueued`. The gate lives in
@@ -384,6 +387,14 @@ In `STAGE.md`: the fixed-height accordion, the active-source rule, title-bar sou
 - History has no votes; it is a pure recency list.
 - History is listed and pruned to `HISTORY_LIMIT = 200` rows by `last_played_at` descending, then `created` descending. `idx_media_history_last_played` covers that sort.
 
+### `radio_listens` (migration `259`)
+- One row per account, station (the catalogue key) and UTC day, `PRIMARY KEY (user_id, station, day)`, `ON DELETE CASCADE` from `users`; `first_heard` is the first roll call that found them.
+- Written only by the roll call (§4); read by the paper. Index `(day, station)` for the paper's grouped read.
+
+### `youtube_listens` (migration `264`)
+- One row per account and UTC day, `PRIMARY KEY (user_id, day)`, `ON DELETE CASCADE` from `users`; `first_heard` is the first roll call that found them on YouTube.
+- Written only by the roll call (§4); read by the paper's booth line. Index `(day)` for the paper's count.
+
 ### `media_favorites` (migration `251`)
 - One row per listener per track, unique by `(user_id, media_kind, external_id)`, `ON DELETE CASCADE` from `users`.
 - Carries its own copy of the validated metadata (`title`, `channel`, `duration_ms`, `is_stream`), with no reference to `media_history_items`, so the History prune and a staff History delete never take a favorite with it.
@@ -394,6 +405,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
 - `MediaHistoryItem::{record_play_from_queue_item, list_recent, prune_to_limit, delete_by_id, find_by_id}`.
 - `MediaFavorite::{add_from_history, list_for_user, get_by_user_id, delete_by_user_id}` (`media_favorite.rs`), every one scoped by `user_id` in SQL. `add_from_history` takes the id the session already shows the favorite under.
+- `RadioListen::{record, top_stations_on}` (`radio_listen.rs`) and `YoutubeListen::{record, listeners_on}` (`youtube_listen.rs`): the roll call's writes and the paper's reads. `User::audio_tunings_by_ids` is the roll call's read of the roster's sources and stations. `MediaQueueItem::count_queued_between` is the rest of the paper's booth line.
 
 ---
 

@@ -10,7 +10,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::app::common::{theme, username_effect::CROWN_LAUREATE_GLYPH};
+use crate::app::common::theme;
 
 pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'static>> {
     let badge_style = Style::default()
@@ -63,10 +63,8 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
 
     let mut lines = vec![
         Line::from(Span::styled(
-            format!(
-                "Every code below also shows in your profile's Badges list and in your chat username \
-                 stack, except CRWN: chat paints last month's crown as a {CROWN_LAUREATE_GLYPH} before the name."
-            ),
+            "Every code below also shows in your profile's Badges list and in your chat username \
+             stack.",
             dim,
         )),
         Line::from(""),
@@ -74,7 +72,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         Line::from(Span::styled(
             "Snapshotted at month end from last month's totals on the boards to the left. Top 3 only, \
              rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own, with two \
-             exceptions: the crown and Late Time each have one holder, so no digit; and the Artboard \
+             exceptions: Late Time has one holder, so no digit; and the Artboard \
              gallery pays its three places 40,000 / 15,000 / 10,000 chips.",
             dim,
         )),
@@ -94,11 +92,6 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         ("LA", "Lateris", "best Tetris score last month"),
         ("24#", "2048", "best 2048 score last month"),
         ("SN", "Snake", "best Snake score last month"),
-        (
-            "CRWN",
-            "The Crown",
-            "wore the crown when last month ended (/crown)",
-        ),
         (
             "ART",
             "Artboard Gallery",

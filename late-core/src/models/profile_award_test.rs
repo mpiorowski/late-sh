@@ -1,15 +1,14 @@
-use chrono::{Datelike, Duration, Months, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
 
 use crate::models::artboard_piece::{ApplauseOutcome, ArtboardPiece, HangOutcome, PieceListing};
 use crate::models::artboard_piece_test::hang_params;
 use crate::models::chips::{ChipMove, Difficulty, UserChips};
-use crate::models::crown::CrownReign;
 use crate::models::drink_round::Bar;
 use crate::models::drinks::UserDrinks;
 use crate::models::leaderboard::{OnlineTimeIncrement, apply_online_time_batch};
 use crate::models::profile_award::{
-    AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY,
-    GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    AwardRoll, AwardRollEntry, DARKROOM_BEACON_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
+    LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
     NETHACK_ASCENSION_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, award_badge,
@@ -22,9 +21,25 @@ use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
 use crate::models::sudoku::DailyWin as SudokuDailyWin;
 use crate::models::tetris::HighScore as LaterisHighScore;
 use crate::test_utils::{
-    create_test_user, roll_artboard_pieces_back_a_month, roll_crown_reigns_back_a_month,
-    roll_drink_pours_back_a_month, roll_high_scores_back_a_month, test_db,
+    create_test_user, roll_artboard_pieces_back_a_month, roll_drink_pours_back_a_month,
+    roll_high_scores_back_a_month, test_db,
 };
+
+/// Online time for a fixture: `milliseconds` of unbroken presence from
+/// `start`. The month is the board's, whatever `start` says.
+fn online(
+    user_id: uuid::Uuid,
+    month_start: NaiveDate,
+    start: DateTime<Utc>,
+    milliseconds: i64,
+) -> OnlineTimeIncrement {
+    OnlineTimeIncrement {
+        user_id,
+        month_start,
+        span_start: start,
+        span_end: start + Duration::milliseconds(milliseconds),
+    }
+}
 
 #[test]
 fn lateania_boss_awards_have_profile_badge_codes() {
@@ -117,87 +132,6 @@ fn chat_labels_keep_only_the_top_badge_of_each_game() {
     );
 }
 
-/// The crown's badge is the one monthly award without a rank digit: it has
-/// exactly one holder, so `CRWN1` would be noise. It is also not a
-/// milestone, which is what keeps it from showing forever.
-#[test]
-fn the_crown_badge_carries_no_rank_digit_and_is_not_a_milestone() {
-    assert_eq!(award_badge(CROWN_AWARD_CATEGORY, 1), "CRWN");
-    assert_eq!(award_category_label(CROWN_AWARD_CATEGORY), "The Crown");
-    assert_eq!(
-        format_score_value(CROWN_AWARD_CATEGORY, 57_000),
-        "57000 chips"
-    );
-    assert!(is_rankless_award(CROWN_AWARD_CATEGORY));
-    assert!(!is_milestone_award(CROWN_AWARD_CATEGORY));
-}
-
-/// The month's badge goes to whoever held the crown last, not to whoever
-/// held it longest or paid most, and the snapshot loop runs daily so it must
-/// grant exactly once however many times it runs.
-#[tokio::test]
-async fn the_months_last_crown_holder_gets_the_badge_once() {
-    let test_db = test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let first = create_test_user(&test_db.db, "crown-award-first").await;
-    let last = create_test_user(&test_db.db, "crown-award-last").await;
-
-    let tx = client.transaction().await.expect("tx");
-    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
-    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000, taken_at)
-        .await
-        .expect("open");
-    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock replacement");
-    CrownReign::close_in_tx(&tx, opened.id, taken_at)
-        .await
-        .expect("close");
-    CrownReign::open_in_tx(&tx, last.id, 7_500, taken_at)
-        .await
-        .expect("open");
-    tx.commit().await.expect("commit");
-    // The snapshot only ever looks at last month, so stand on the far side
-    // of the rollover the way a real month end does.
-    roll_crown_reigns_back_a_month(&client).await;
-
-    snapshot_previous_month_profile_awards(&mut client)
-        .await
-        .expect("snapshot");
-    snapshot_previous_month_profile_awards(&mut client)
-        .await
-        .expect("snapshot again");
-
-    let awards = list_profile_awards_for_user(&client, last.id)
-        .await
-        .expect("awards");
-    let crowns: Vec<_> = awards
-        .iter()
-        .filter(|award| award.category == CROWN_AWARD_CATEGORY)
-        .collect();
-    assert_eq!(crowns.len(), 1, "the daily snapshot must grant once");
-    assert_eq!(crowns[0].rank, 1);
-    assert_eq!(crowns[0].score_value, 7_500);
-    assert_eq!(crowns[0].badge(), "CRWN");
-
-    // The profile keeps it, the chat label does not: chat paints last
-    // month's crown as a glyph before the name, so `[CRWN]` would say it
-    // twice.
-    let chat = crate::models::user::User::list_chat_author_metadata(&client, &[last.id])
-        .await
-        .expect("chat metadata");
-    assert_eq!(chat.len(), 1);
-    assert_eq!(chat[0].profile_award_badges, None);
-
-    let earlier = list_profile_awards_for_user(&client, first.id)
-        .await
-        .expect("awards");
-    assert!(
-        !earlier
-            .iter()
-            .any(|award| award.category == CROWN_AWARD_CATEGORY),
-        "only the month's last holder is crowned"
-    );
-}
-
 /// The #lounge roll is posted by whichever replica claims the month first,
 /// and never again. A month whose snapshot wrote nothing stays unclaimed, so
 /// the announcement is not spent on an empty roll.
@@ -218,13 +152,19 @@ async fn the_award_announcement_is_claimed_once_per_month() {
         "a month with no awards must not spend the claim"
     );
 
-    let tx = client.transaction().await.expect("tx");
-    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
-    CrownReign::open_in_tx(&tx, holder.id, 7_500, taken_at)
-        .await
-        .expect("open");
-    tx.commit().await.expect("commit");
-    roll_crown_reigns_back_a_month(&client).await;
+    apply_online_time_batch(
+        &mut client,
+        uuid::Uuid::now_v7(),
+        Utc::now(),
+        &[online(
+            holder.id,
+            last_month,
+            Utc::now() - Duration::days(40),
+            7_500,
+        )],
+    )
+    .await
+    .expect("online time");
     snapshot_previous_month_profile_awards(&mut client)
         .await
         .expect("snapshot");
@@ -237,7 +177,7 @@ async fn the_award_announcement_is_claimed_once_per_month() {
             period_month: last_month,
             entries: vec![AwardRollEntry {
                 username: holder.username.clone(),
-                category: CROWN_AWARD_CATEGORY.to_string(),
+                category: LATE_TIME_AWARD_CATEGORY.to_string(),
                 rank: 1,
                 score_value: 7_500,
             }],
@@ -280,26 +220,16 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .checked_sub_months(Months::new(1))
         .expect("previous month");
     let hours = |count: i64| count * 3_600_000;
+    let at = |hour: i64| Utc::now() - Duration::days(60) + Duration::hours(hour);
     apply_online_time_batch(
-        &client,
+        &mut client,
         uuid::Uuid::now_v7(),
+        Utc::now(),
         &[
-            OnlineTimeIncrement {
-                user_id: leader.id,
-                month_start: last_month,
-                milliseconds: hours(40),
-            },
-            OnlineTimeIncrement {
-                user_id: runner_up.id,
-                month_start: last_month,
-                milliseconds: hours(30),
-            },
+            online(leader.id, last_month, at(0), hours(40)),
+            online(runner_up.id, last_month, at(0), hours(30)),
             // This month's time is not last month's standings.
-            OnlineTimeIncrement {
-                user_id: runner_up.id,
-                month_start: this_month,
-                milliseconds: hours(100),
-            },
+            online(runner_up.id, this_month, at(31), hours(100)),
         ],
     )
     .await
@@ -310,13 +240,10 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .expect("snapshot");
     // The runner-up overtakes in last month's post-rollover spill.
     apply_online_time_batch(
-        &client,
+        &mut client,
         uuid::Uuid::now_v7(),
-        &[OnlineTimeIncrement {
-            user_id: runner_up.id,
-            month_start: last_month,
-            milliseconds: hours(20),
-        }],
+        Utc::now(),
+        &[online(runner_up.id, last_month, at(140), hours(20))],
     )
     .await
     .expect("spill");
@@ -686,13 +613,9 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
 
 /// The Settings badge picker covers every badge a label can show, each
 /// category exactly once, with every game ladder folded into a single row.
-/// The crown is not one of them: chat shows it as a glyph, not a code, so
-/// there is nothing to hide.
 #[test]
 fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
-    use crate::models::profile_award::{
-        BADGE_LADDERS, all_award_categories, chat_award_categories, chat_badge_rows,
-    };
+    use crate::models::profile_award::{BADGE_LADDERS, all_award_categories, chat_badge_rows};
 
     let rows = chat_badge_rows();
     let mut covered: Vec<&str> = rows
@@ -700,11 +623,9 @@ fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
         .flat_map(|row| row.categories.iter().copied())
         .collect();
     covered.sort_unstable();
-    let mut on_chat = chat_award_categories();
+    let mut on_chat = all_award_categories();
     on_chat.sort_unstable();
     assert_eq!(covered, on_chat);
-    assert!(!covered.contains(&CROWN_AWARD_CATEGORY));
-    assert!(all_award_categories().contains(&CROWN_AWARD_CATEGORY));
 
     for ladder in BADGE_LADDERS {
         let owning: Vec<_> = rows
@@ -726,9 +647,8 @@ fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
 #[tokio::test]
 async fn hidden_award_categories_leave_the_chat_label() {
     use crate::models::profile_award::{
-        CROWN_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
-        LATEANIA_FRONTIER_KING_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
-        grant_unique_milestone_award,
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY, LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+        NETHACK_AMULET_AWARD_CATEGORY, grant_unique_milestone_award,
     };
     use crate::models::user::User;
 
@@ -768,7 +688,6 @@ async fn hidden_award_categories_leave_the_chat_label() {
                     LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
                     "lateania_sundering_deep",
                     "lateania_kaethyr_ascendant",
-                    CROWN_AWARD_CATEGORY,
                 ]),
             ],
         )

@@ -75,7 +75,6 @@ fn bonsai_shield_item() -> ShopCatalogItem {
         consumable_category: Some("bonsai".to_string()),
         effect_kind: Some("bonsai_decay_protection".to_string()),
         requires_room: false,
-        daily_limited: false,
         username_effect_variant: None,
         rental_duration_secs: None,
         badge_slot: None,
@@ -186,12 +185,12 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
         sprout: false,
         ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
     };
-    let spark = chat_item("chat_room_spark", CHAT_CONSUMABLE_ITEM_KIND);
+    let bump = chat_item("chat_room_bump", CHAT_CONSUMABLE_ITEM_KIND);
 
     // Items arrive in `visible_items` order: effects, titles, consumables.
     let rows = item_list_rows(
         ShopCategory::Chat,
-        &[&glow_day, &glow_month, &title_day, &title_month, &spark],
+        &[&glow_day, &glow_month, &title_day, &title_month, &bump],
     );
     assert_eq!(
         row_labels(&rows),
@@ -202,16 +201,16 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
             "[Title]",
             "2:title_custom_day",
             "3:title_custom_month",
-            "[Consumables]",
-            "4:chat_room_spark",
+            "[Room]",
+            "4:chat_room_bump",
         ]
     );
 
     // The tabs without groups list their items bare.
-    let rows = item_list_rows(ShopCategory::Flags, &[&glow_day, &spark]);
+    let rows = item_list_rows(ShopCategory::Flags, &[&glow_day, &bump]);
     assert_eq!(
         row_labels(&rows),
-        vec!["0:username_glow_day", "1:chat_room_spark"]
+        vec!["0:username_glow_day", "1:chat_room_bump"]
     );
 }
 

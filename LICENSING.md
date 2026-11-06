@@ -98,6 +98,20 @@ input/output and process controls; it does not link Frotz. Keep the interpreter'
 exact corresponding source, notices, and build scripts with distributed binaries.
 See `vendor/frotz/LATE-ZORK.md` for the pinned base and local changes.
 
+The Chess Puzzle pack in `late-ssh/assets/chess_puzzles` is cut from the
+Lichess puzzle database (https://database.lichess.org/#puzzles), which Lichess
+releases under CC0. CC0 asks for no attribution; the game credits Lichess on
+its screen and in its guide anyway. `late-core/src/bin/gen_chess_puzzles.rs`
+rebuilds the pack from the dump; the dump itself is never vendored.
+
+The Word Wheel pack in `late-ssh/assets/word_wheel` is derived from SCOWL
+(http://wordlist.aspell.net/), Copyright 2000-2018 Kevin Atkinson and the
+other holders it names, under a permissive notice that must travel with
+lists made from it: the notice ships verbatim beside the pack as
+`SCOWL-COPYRIGHT`, and [`NOTICE`](NOTICE) has the entry.
+`late-core/src/bin/gen_word_wheel.rs` rebuilds the pack from the SCOWL
+release; the word list itself is never vendored.
+
 One component is not a bundled program but source we derived from: the A Dark
 Room door is our own port of an MPL-2.0 web game. MPL-2.0 is *file-level*
 copyleft, so the files carrying material derived from upstream

@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::leaderboard::DailyPuzzle;
 use uuid::Uuid;
 
 use crate::metrics;
@@ -13,6 +14,15 @@ pub enum ActivityCategory {
     /// The pet and the aquarium: private daily care, like the bonsai.
     Companion,
     Quest,
+}
+
+/// Who took a realm, and how the headline says they took it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RealmWinner {
+    pub username: String,
+    /// The realm's own words for how it was won ("conquered the realm"), so
+    /// this domain never has to know its rules.
+    pub took_it: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,19 +111,6 @@ pub enum ActivityKind {
         message_id: Uuid,
         count: i64,
         room_slug: Option<String>,
-    },
-    /// Someone took the crown. Both players are named because that is the
-    /// whole story: a takeover is one person outbidding another in public.
-    /// `reign_id` keys the #lounge repeat throttle, so back-to-back
-    /// takeovers each post (the 1.5x price ladder is the real throttle).
-    CrownTaken {
-        reign_id: Uuid,
-        price: i64,
-        /// What the next take costs, so the #lounge headline can quote it
-        /// without every reader re-deriving the ladder.
-        next_price: i64,
-        /// The deposed holder, absent when the crown was vacant.
-        from: Option<String>,
     },
     /// Someone bought the house a round. The buyer is the whole story, so the
     /// line names them and the size of their gesture, never the patrons who
@@ -240,12 +237,12 @@ pub enum ActivityKind {
         season: i32,
         opens_in: String,
     },
-    /// The world ended: conquered by `winner`, or dissolved when nobody held
+    /// The world ended: taken by `winner`, or dissolved when nobody held
     /// it. `pot` is what the conquest paid in all, 0 when it paid nothing.
     RealmSeasonEnded {
         game_id: Uuid,
         season: i32,
-        winner: Option<String>,
+        winner: Option<RealmWinner>,
         pot: i64,
         players: u8,
     },
@@ -269,7 +266,6 @@ impl ActivityKind {
             | Self::TitleApplied { .. }
             | Self::BurnMilestone { .. }
             | Self::MessageGilded { .. }
-            | Self::CrownTaken { .. }
             | Self::RoundBought { .. }
             | Self::PotDrawn { .. }
             | Self::PotClosing { .. }
@@ -310,6 +306,7 @@ pub enum ActivityGame {
     Blackjack,
     Brogue,
     Chess,
+    ChessPuzzle,
     Darkroom,
     Dcss,
     GreenDragon,
@@ -317,6 +314,7 @@ pub enum ActivityGame {
     Minesweeper,
     Mud,
     Nethack,
+    Netwalk,
     Nonogram,
     Poker,
     Realm,
@@ -332,6 +330,8 @@ pub enum ActivityGame {
     Tron,
     Snake,
     Traffic,
+    WordWheel,
+    Quartets,
 }
 
 /// Which shelf a game sits on, for splitting its wins on the dashboard.
@@ -357,8 +357,12 @@ pub enum GameFamily {
 impl ActivityGame {
     pub fn family(self) -> GameFamily {
         match self {
-            Self::LeWord
+            Self::ChessPuzzle
+            | Self::WordWheel
+            | Self::Quartets
+            | Self::LeWord
             | Self::Minesweeper
+            | Self::Netwalk
             | Self::Nonogram
             | Self::RubiksCube
             | Self::SlidingPuzzle
@@ -380,12 +384,53 @@ impl ActivityGame {
         }
     }
 
+    /// The Arcade daily this game is, `None` off that shelf. The inverse of
+    /// `arcade::daily::activity_game`; the chip payout reads it to find the
+    /// reward template of a `GameWon`.
+    pub const fn daily_puzzle(self) -> Option<DailyPuzzle> {
+        match self {
+            Self::LeWord => Some(DailyPuzzle::LeWord),
+            Self::RubiksCube => Some(DailyPuzzle::RubiksCube),
+            Self::SlidingPuzzle => Some(DailyPuzzle::SlidingPuzzle),
+            Self::Sudoku => Some(DailyPuzzle::Sudoku),
+            Self::Nonogram => Some(DailyPuzzle::Nonogram),
+            Self::Minesweeper => Some(DailyPuzzle::Minesweeper),
+            Self::Solitaire => Some(DailyPuzzle::Solitaire),
+            Self::Netwalk => Some(DailyPuzzle::Netwalk),
+            Self::ChessPuzzle => Some(DailyPuzzle::ChessPuzzle),
+            Self::WordWheel => Some(DailyPuzzle::WordWheel),
+            Self::Quartets => Some(DailyPuzzle::Quartets),
+            Self::Asterion
+            | Self::Blackjack
+            | Self::Brogue
+            | Self::Chess
+            | Self::Darkroom
+            | Self::Dcss
+            | Self::GreenDragon
+            | Self::Mud
+            | Self::Nethack
+            | Self::Poker
+            | Self::Realm
+            | Self::Sshattrick
+            | Self::Ssnake
+            | Self::TicTacToe
+            | Self::Lateris
+            | Self::TwentyFortyEight
+            | Self::Tron
+            | Self::Snake
+            | Self::Traffic => None,
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
             Self::Brogue => "brogue",
             Self::Chess => "chess",
+            Self::ChessPuzzle => "chess_puzzle",
+            Self::WordWheel => "word_wheel",
+            Self::Quartets => "quartets",
             Self::Darkroom => "darkroom",
             Self::Dcss => "dcss",
             Self::GreenDragon => "greendragon",
@@ -393,6 +438,7 @@ impl ActivityGame {
             Self::Minesweeper => "minesweeper",
             Self::Mud => "mud",
             Self::Nethack => "nethack",
+            Self::Netwalk => "netwalk",
             Self::Nonogram => "nonogram",
             Self::Poker => "poker",
             Self::Realm => "realm",
@@ -417,6 +463,9 @@ impl ActivityGame {
             Self::Blackjack => "Blackjack",
             Self::Brogue => "Brogue",
             Self::Chess => "Chess",
+            Self::ChessPuzzle => "Chess Puzzle",
+            Self::WordWheel => "Word Wheel",
+            Self::Quartets => "Quartets",
             Self::Darkroom => "A Dark Room",
             Self::Dcss => "DCSS",
             Self::GreenDragon => "Green Dragon",
@@ -424,6 +473,7 @@ impl ActivityGame {
             Self::Minesweeper => "Minesweeper",
             Self::Mud => "Lateania",
             Self::Nethack => "NetHack",
+            Self::Netwalk => "Netwalk",
             Self::Nonogram => "Nonogram",
             Self::Poker => "Poker",
             Self::Realm => "Realm",
@@ -494,6 +544,9 @@ impl ActivityEvent {
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Brogue => "conquered Brogue",
             ActivityGame::Chess => "won Chess game",
+            ActivityGame::ChessPuzzle => "solved Chess Puzzle",
+            ActivityGame::WordWheel => "ranked on Word Wheel",
+            ActivityGame::Quartets => "solved Quartets",
             ActivityGame::Darkroom => "flew out of A Dark Room",
             ActivityGame::Dcss => "escaped DCSS with the Orb of Zot",
             ActivityGame::GreenDragon => "prevailed in the Green Dragon",
@@ -501,6 +554,7 @@ impl ActivityEvent {
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Mud => "triumphed in Lateania",
             ActivityGame::Nethack => "conquered NetHack",
+            ActivityGame::Netwalk => "solved Netwalk",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
             ActivityGame::Realm => "conquered the Realm",
@@ -583,8 +637,12 @@ impl ActivityEvent {
             ActivityGame::Asterion
             | ActivityGame::Blackjack
             | ActivityGame::Chess
+            | ActivityGame::ChessPuzzle
+            | ActivityGame::WordWheel
+            | ActivityGame::Quartets
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
+            | ActivityGame::Netwalk
             | ActivityGame::Nonogram
             | ActivityGame::Poker
             | ActivityGame::Realm
@@ -646,12 +704,12 @@ impl ActivityEvent {
     pub fn realm_season_ended(
         game_id: Uuid,
         season: i32,
-        winner: Option<String>,
+        winner: Option<RealmWinner>,
         pot: i64,
         players: u8,
     ) -> Self {
-        let action = match winner.as_deref() {
-            Some(winner) => format!("has fallen: season {season} is {winner}'s"),
+        let action = match winner.as_ref() {
+            Some(winner) => format!("has fallen: season {season} is {}'s", winner.username),
             None => format!("fell silent: season {season} ended with nobody holding it"),
         };
         Self::new(
@@ -803,37 +861,6 @@ impl ActivityEvent {
                 message_id,
                 count,
                 room_slug,
-            },
-            action,
-        )
-    }
-
-    /// A takeover. Unlike the gild line this one names the loser on purpose:
-    /// the crown is a single slot, so "stole it from mira" is the event, and
-    /// nothing about it is a private embarrassment. A vacant crown reads
-    /// "claimed the vacant crown for 500". This is the ticker line; the
-    /// full #lounge headline is `filter::lounge_headline`.
-    pub fn crown_taken(
-        taker_id: Uuid,
-        taker: impl Into<String>,
-        reign_id: Uuid,
-        price: i64,
-        next_price: i64,
-        from: Option<String>,
-    ) -> Self {
-        let price_text = crate::app::common::primitives::thousands(price);
-        let action = match &from {
-            Some(from) => format!("stole the crown from {from} for {price_text}"),
-            None => format!("claimed the vacant crown for {price_text}"),
-        };
-        Self::new(
-            Some(taker_id),
-            taker,
-            ActivityKind::CrownTaken {
-                reign_id,
-                price,
-                next_price,
-                from,
             },
             action,
         )

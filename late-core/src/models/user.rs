@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
 use super::profile_award::{
-    CROWN_AWARD_CATEGORY, MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
+    MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
 };
 use super::statusline::{
     StatusComponentSetting, default_statusline_components, parse_statusline_components,
@@ -746,7 +746,7 @@ const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
 const SCREENSAVER_KEY: &str = "screensaver";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
-const SHOW_WATCH_CHAT_KEY: &str = "show_watch_chat";
+const AUTO_RESTART_KEY: &str = "auto_restart";
 const TERMINAL_IMAGES_KEY: &str = "terminal_images";
 /// Award categories the user keeps off their chat label. Read by the chat
 /// label SQL straight from `users.settings`, so the key is spelled there too.
@@ -1069,10 +1069,6 @@ impl User {
                       -- (`extract_hidden_award_categories`). Hiding the top
                       -- rung of a game ladder lets the next one show.
                       AND NOT (COALESCE(u.settings->'hidden_award_categories', '[]'::jsonb) ? pa.category)
-                      -- The crown never joins the group: chat paints last
-                      -- month's winner as a glyph before the name instead
-                      -- (`profile_award::chat_award_categories`).
-                      AND pa.category <> $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
                         OR pa.category = ANY($5)
@@ -1085,7 +1081,6 @@ impl User {
                     &CHAT_FLAG_SLOT,
                     &PROFILE_AWARD_RANK_LIMIT,
                     &milestone_categories,
-                    &CROWN_AWARD_CATEGORY,
                 ],
             )
             .await?;
@@ -1246,6 +1241,35 @@ impl User {
     pub async fn radio_station(client: &Client, user_id: Uuid) -> Result<RadioStation> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_radio_station(&settings))
+    }
+
+    /// The audio source and radio station each of `user_ids` has picked, read
+    /// from their settings as `audio_source` and `radio_station` read them.
+    /// An id with no account is left out.
+    pub async fn audio_tunings_by_ids(
+        client: &impl GenericClient,
+        user_ids: &[Uuid],
+    ) -> Result<Vec<AudioTuning>> {
+        if user_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query(
+                "SELECT id, settings FROM users WHERE id = ANY($1)",
+                &[&user_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let settings: Value = row.get("settings");
+                AudioTuning {
+                    user_id: row.get("id"),
+                    source: extract_audio_source(&settings),
+                    station: extract_radio_station(&settings),
+                }
+            })
+            .collect())
     }
 
     pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
@@ -1959,6 +1983,15 @@ impl User {
     }
 }
 
+/// What one account has picked to hear: its source, and the station it
+/// would be on whenever that source is the radio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioTuning {
+    pub user_id: Uuid,
+    pub source: AudioSource,
+    pub station: RadioStation,
+}
+
 #[derive(Clone, Debug)]
 pub struct ChatAuthorMetadata {
     pub user_id: Uuid,
@@ -2324,20 +2357,20 @@ pub fn extract_paper_at_login(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-/// Ask before displaying Artboard content on each visit. Enabled by default.
-pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
+/// Tweak: during a server update, move an idle `late` CLI session to the new
+/// version on its own (late-ssh `app/handoff`). Defaults to true; off keeps
+/// the update banner and the manual reconnect.
+pub fn extract_auto_restart(settings: &Value) -> bool {
     settings
-        .get("artboard_disclaimer")
+        .get(AUTO_RESTART_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
 
-/// Whether a player sees their watchers' chat beside a running door game
-/// (toggled from the door's landing). Defaults to true; off hides it from
-/// the player only, the watchers keep talking.
-pub fn extract_show_watch_chat(settings: &Value) -> bool {
+/// Ask before displaying Artboard content on each visit. Enabled by default.
+pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
     settings
-        .get(SHOW_WATCH_CHAT_KEY)
+        .get("artboard_disclaimer")
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }

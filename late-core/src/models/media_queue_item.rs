@@ -257,6 +257,24 @@ impl MediaQueueItem {
         Ok(row.get(0))
     }
 
+    /// How many tracks were queued inside `[floor, ceiling)`, whatever
+    /// became of them since: the paper's booth line.
+    pub async fn count_queued_between(
+        client: &Client,
+        floor: DateTime<Utc>,
+        ceiling: DateTime<Utc>,
+    ) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT count(*)::bigint AS queued
+                 FROM media_queue_items
+                 WHERE created >= $1 AND created < $2",
+                &[&floor, &ceiling],
+            )
+            .await?;
+        Ok(row.get("queued"))
+    }
+
     pub async fn first_queued(client: &Client) -> Result<Option<(Self, i32)>> {
         let row = client
             .query_opt(

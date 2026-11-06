@@ -1077,10 +1077,9 @@ impl ChatRoom {
 
     /// Create a permanent public room. Permanent rooms are auto-joined by all
     /// users on connect and cannot be left. Re-running this on a room that is
-    /// already permanent is a no-op, so the caller can retry safely; an
-    /// existing *non*-permanent room is left alone and the call fails, because
-    /// promoting it would bulk-add every user to an unleaveable room with no
-    /// undo — a mistyped slug must not do that.
+    /// already permanent is a no-op, so the caller can retry safely. An
+    /// existing *non*-permanent public topic room is promoted in place to
+    /// permanent and auto-join.
     pub async fn ensure_permanent(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 

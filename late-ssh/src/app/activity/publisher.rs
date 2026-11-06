@@ -138,7 +138,7 @@ impl ActivityPublisher {
         &self,
         game_id: Uuid,
         season: i32,
-        winner: Option<String>,
+        winner: Option<crate::app::activity::event::RealmWinner>,
         pot: i64,
         players: u8,
     ) {
@@ -235,26 +235,6 @@ impl ActivityPublisher {
                 message_id,
                 count,
                 room_slug,
-            ));
-        });
-    }
-
-    /// `from` is the deposed holder's username, already resolved by the
-    /// crown service: it reads the previous reign inside the take
-    /// transaction, so there is nothing left here to look up.
-    pub fn crown_taken_task(
-        &self,
-        taker_id: Uuid,
-        reign_id: Uuid,
-        price: i64,
-        next_price: i64,
-        from: Option<String>,
-    ) {
-        let publisher = self.clone();
-        tokio::spawn(async move {
-            let username = publisher.username_for(taker_id).await;
-            let _ = publisher.tx.send(ActivityEvent::crown_taken(
-                taker_id, username, reign_id, price, next_price, from,
             ));
         });
     }

@@ -278,3 +278,96 @@ fn pair_radio_tracks_adds_the_house_mounts_to_the_radio_meta() {
         ])
     );
 }
+
+/// The roll call writes every human online down for the day by the source
+/// they picked, once however many times it is called: an account on the
+/// radio under its station with no paired CLI at all, an account on YouTube
+/// once, and a bot (online with no fingerprint) not at all.
+#[tokio::test]
+async fn the_roll_call_writes_each_online_listener_down_once_a_day() {
+    use crate::app::audio::svc::RollCall;
+    use crate::state::ActiveUser;
+    use late_core::models::{
+        radio_listen::{RadioListen, StationListeners},
+        user::{AudioSource, RadioStation, User},
+        youtube_listen::YoutubeListen,
+    };
+
+    let test = test_db().await;
+    let listener = create_test_user(&test.db, "roll-call-listener").await;
+    let watcher = create_test_user(&test.db, "roll-call-watcher").await;
+    let bot = create_test_user(&test.db, "roll-call-bot").await;
+    let nightride = RadioStation::from_key("nightride").expect("nightride");
+    let client = test.db.get().await.expect("db client");
+    User::set_radio_station(&client, listener.id, nightride)
+        .await
+        .expect("tune the listener");
+    User::set_audio_source(&client, watcher.id, AudioSource::Youtube)
+        .await
+        .expect("move the watcher to youtube");
+    let active_users = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        PairedClientRegistry::new("https://audio.late.sh"),
+        active_users.clone(),
+    );
+    let now = chrono::Utc::now();
+    assert_eq!(
+        service.roll_call(now).await.expect("an empty roll call"),
+        RollCall::default()
+    );
+
+    let online = |name: &str, fingerprint: Option<&str>, audio_source| ActiveUser {
+        username: name.to_string(),
+        fingerprint: fingerprint.map(str::to_string),
+        audio_source,
+        sessions: Vec::new(),
+        connection_count: 1,
+        last_login_at: std::time::Instant::now(),
+    };
+    active_users.lock().expect("roster").extend([
+        (
+            listener.id,
+            online(
+                "roll-call-listener",
+                Some("SHA256:listener"),
+                AudioSource::Radio,
+            ),
+        ),
+        (
+            watcher.id,
+            online(
+                "roll-call-watcher",
+                Some("SHA256:watcher"),
+                AudioSource::Youtube,
+            ),
+        ),
+        (bot.id, online("roll-call-bot", None, AudioSource::Radio)),
+    ]);
+
+    for _ in 0..2 {
+        assert_eq!(
+            service.roll_call(now).await.expect("roll call"),
+            RollCall {
+                stations: vec![(nightride, 1)],
+                youtube: 1,
+            }
+        );
+    }
+    assert_eq!(
+        RadioListen::top_stations_on(&client, now.date_naive(), 3)
+            .await
+            .expect("stations"),
+        vec![StationListeners {
+            station: "nightride".to_string(),
+            listeners: 1,
+        }]
+    );
+    assert_eq!(
+        YoutubeListen::listeners_on(&client, now.date_naive())
+            .await
+            .expect("youtube listeners"),
+        1
+    );
+}

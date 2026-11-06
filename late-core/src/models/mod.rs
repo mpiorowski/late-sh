@@ -58,12 +58,12 @@ mod chat_room_member_test;
 #[cfg(test)]
 mod chat_room_test;
 pub mod chat_slow_mode;
+pub mod chess_puzzle;
+#[cfg(test)]
+mod chess_puzzle_test;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;
-pub mod crown;
-#[cfg(test)]
-mod crown_test;
 pub mod cyberspace_account;
 pub mod daily_match;
 #[cfg(test)]
@@ -78,6 +78,9 @@ pub mod deadchannel_runner;
 pub mod deadchannel_spawn;
 pub mod door_log_cursor;
 pub mod door_milestone;
+pub mod door_opening;
+#[cfg(test)]
+mod door_opening_test;
 pub mod door_rc;
 #[cfg(test)]
 mod door_rc_test;
@@ -98,6 +101,9 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+pub mod herald;
+#[cfg(test)]
+mod herald_test;
 pub mod irc_history;
 #[cfg(test)]
 mod irc_history_test;
@@ -140,6 +146,9 @@ mod minesweeper_test;
 pub mod moderation_audit_log;
 pub mod mud_character;
 pub mod mud_world_state;
+pub mod netwalk;
+#[cfg(test)]
+mod netwalk_test;
 pub mod nightcap_carving;
 pub mod nonogram;
 pub mod notification;
@@ -157,7 +166,13 @@ pub mod profile;
 pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
+pub mod quartets;
+#[cfg(test)]
+mod quartets_test;
 pub mod quest;
+pub mod radio_listen;
+#[cfg(test)]
+mod radio_listen_test;
 pub mod realm_game;
 pub mod referral;
 #[cfg(test)]
@@ -177,6 +192,8 @@ pub mod server_ban;
 pub mod shop_consumable_effect;
 pub mod showcase;
 pub mod showcase_feed_read;
+#[cfg(test)]
+mod showcase_test;
 pub mod sliding_puzzle;
 #[cfg(test)]
 mod sliding_puzzle_test;
@@ -199,7 +216,13 @@ mod user_ssh_key_test;
 mod user_test;
 pub mod username_effect;
 pub mod voice_channel;
+pub mod word_wheel;
+#[cfg(test)]
+mod word_wheel_test;
 pub mod work_feed_read;
 pub mod work_profile;
 #[cfg(test)]
 mod work_profile_test;
+pub mod youtube_listen;
+#[cfg(test)]
+mod youtube_listen_test;

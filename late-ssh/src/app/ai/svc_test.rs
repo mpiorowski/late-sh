@@ -72,3 +72,114 @@ fn extract_json_object_survives_prose_around_the_fence() {
 
     assert_eq!(extract_json_object(reply), "{\"summary\": \"x\"}");
 }
+
+/// A fake Gemini on a local port: records the body and the key header of
+/// every call, answers `reply` as the first candidate's text.
+async fn fake_gemini(
+    reply: &'static str,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
+) {
+    use axum::extract::State;
+    use axum::http::HeaderMap;
+
+    type Calls = std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>;
+    let calls: Calls = Default::default();
+    async fn answer(
+        State((calls, reply)): State<(Calls, &'static str)>,
+        headers: HeaderMap,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::Json<serde_json::Value> {
+        let key = headers
+            .get("x-goog-api-key")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        calls.lock().expect("calls").push((key, body));
+        axum::Json(serde_json::json!({
+            "candidates": [{"content": {"parts": [{"text": reply}]}}]
+        }))
+    }
+    let app = axum::Router::new()
+        .route("/v1beta/models/{call}", axum::routing::post(answer))
+        .with_state((calls.clone(), reply));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    (format!("http://{addr}"), calls)
+}
+
+/// The pictures go first as inline PNGs, the prompt after them, the
+/// schema enforced, no temperature, and the cap that leaves thinking over
+/// images room to finish.
+#[tokio::test]
+async fn generate_json_with_images_sends_the_pictures_before_the_prompt() {
+    use base64::Engine;
+
+    let (endpoint, calls) = fake_gemini(r#"{"alt": "a cat"}"#).await;
+    let ai = AiService::at_endpoint(true, Some("test-key".to_string()), format!("{endpoint}/"));
+    let schema = serde_json::json!({"type": "object"});
+
+    let reply = ai
+        .generate_json_with_images(
+            "a-model",
+            "you look at pictures",
+            &[b"first".as_slice(), b"second".as_slice()],
+            "what is this?",
+            schema.clone(),
+        )
+        .await
+        .expect("call");
+
+    assert_eq!(reply, Some(r#"{"alt": "a cat"}"#.to_string()));
+    let calls = calls.lock().expect("calls");
+    assert_eq!(calls.len(), 1);
+    let (key, body) = &calls[0];
+    assert_eq!(key, "test-key");
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    assert_eq!(
+        body["contents"][0]["parts"],
+        serde_json::json!([
+            {"inlineData": {"mimeType": "image/png", "data": encode(b"first")}},
+            {"inlineData": {"mimeType": "image/png", "data": encode(b"second")}},
+            {"text": "what is this?"},
+        ])
+    );
+    assert_eq!(
+        body["systemInstruction"]["parts"],
+        serde_json::json!([{"text": "you look at pictures"}])
+    );
+    assert_eq!(
+        body["generationConfig"],
+        serde_json::json!({
+            "maxOutputTokens": 16384,
+            "responseMimeType": "application/json",
+            "responseSchema": schema,
+        })
+    );
+}
+
+#[tokio::test]
+async fn generate_json_with_images_is_none_with_ai_off() {
+    let (endpoint, calls) = fake_gemini("{}").await;
+    let ai = AiService::at_endpoint(false, Some("test-key".to_string()), endpoint);
+
+    let reply = ai
+        .generate_json_with_images(
+            "a-model",
+            "system",
+            &[b"png".as_slice()],
+            "prompt",
+            serde_json::json!({}),
+        )
+        .await
+        .expect("call");
+
+    assert_eq!(reply, None);
+    assert!(calls.lock().expect("calls").is_empty());
+}

@@ -11,5 +11,3 @@ mod art_test;
 mod input_test;
 #[cfg(test)]
 mod state_test;
-#[cfg(test)]
-mod svc_test;

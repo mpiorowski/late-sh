@@ -57,3 +57,33 @@ async fn the_win_card_waits_for_the_cascade() {
     let landed = rendered(&state);
     assert!(landed.contains("YOU WON!"), "{landed}");
 }
+
+/// Cells drawn as the cursor: the amber fill `block_style` gives the focused
+/// card or slot.
+fn cursor_cells(state: &State) -> usize {
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+    terminal
+        .draw(|frame| draw_game(frame, frame.area(), state, true))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    buffer
+        .content()
+        .iter()
+        .filter(|cell| {
+            cell.fg == crate::app::common::theme::AMBER()
+                && cell.modifier.contains(ratatui::style::Modifier::REVERSED)
+        })
+        .count()
+}
+
+/// The cursor fill would sit under the bouncing cards, so it hides while the
+/// cascade plays and comes back once the cards have landed.
+#[tokio::test]
+async fn the_cursor_hides_while_the_cascade_plays() {
+    let mut state = almost_won_state();
+    assert!(cursor_cells(&state) > 0, "no cursor before the win");
+
+    state.auto_move();
+    assert!(state.win_cascade_running());
+    assert_eq!(cursor_cells(&state), 0);
+}

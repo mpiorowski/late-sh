@@ -1,10 +1,8 @@
 use late_core::MutexRecover;
+use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, ScoreGame};
 use std::time::{Duration, Instant};
 
-use super::state::{
-    App, GAME_SELECTION_SLIDING_PUZZLE, GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE,
-    GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
-};
+use super::state::App;
 use crate::app::activity::event::ActivityKind;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
@@ -104,6 +102,10 @@ impl App {
         // The Late Edition: the login pop once the splash is down, `/paper`,
         // and the results of both.
         changed |= crate::app::paper::svc::tick(self);
+        // The drain handoff: move a quiet CLI session to the new pod.
+        crate::app::handoff::svc::tick(self);
+        // The herald: an admin's `/herald` and its answer.
+        changed |= crate::app::herald::svc::tick(self);
         // The job feed: the shelf snapshot copy, `/jobs`, and the admin's
         // press banners.
         changed |= crate::app::jobs::svc::tick(self);
@@ -258,7 +260,7 @@ impl App {
         self.chat.poll_inline_images(inline_image_render_settings);
         if self.screen == Screen::Arcade
             && self.is_playing_game
-            && self.game_selection == GAME_SELECTION_SLIDING_PUZZLE
+            && self.game_selection == ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle)
         {
             changed |= self.sliding_puzzle_state.poll_art();
         }
@@ -312,7 +314,6 @@ impl App {
         changed |= self.voice.tick();
         changed |= self.drain_voice_join_results();
         changed |= self.tick_stream();
-        changed |= self.tick_crown();
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
@@ -352,8 +353,7 @@ impl App {
         changed |= self
             .chat
             .set_translate_settings(translate_to, auto_translate);
-        changed |= self.sudoku_state.poll_daily_generation();
-        changed |= self.le_word_state.poll_word_reload();
+        changed |= crate::app::arcade::daily::poll_daily_loads(self);
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
         if let Some(b) = settings_tick.banner {
@@ -498,21 +498,38 @@ impl App {
 
         if self.screen == Screen::Arcade && self.is_playing_game {
             match self.game_selection {
-                GAME_SELECTION_TETRIS => {
+                ArcadeGame::Score(ScoreGame::Lateris) => {
                     changed |= self.tetris_state.tick();
                 }
-                GAME_SELECTION_SNAKE => {
+                ArcadeGame::Score(ScoreGame::Snake) => {
                     changed |= self.snake_state.tick();
                 }
-                GAME_SELECTION_TRAFFIC => {
+                ArcadeGame::Score(ScoreGame::Traffic) => {
                     changed |= self.traffic_state.tick();
                 }
                 // Solitaire is otherwise event-driven; only the win cascade
                 // has frames to spend, and it stops asking once it lands.
-                GAME_SELECTION_SOLITAIRE => {
+                ArcadeGame::Puzzle(DailyPuzzle::Solitaire) => {
                     changed |= self.solitaire_state.tick_win_animation();
                 }
-                _ => (),
+                // The opponent's reply lands a few frames after the
+                // player's move, so the move shows before the answer.
+                ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle) => {
+                    changed |= self.chess_puzzle_state.tick();
+                }
+                // Turn-based boards move only on input.
+                ArcadeGame::Score(ScoreGame::TwentyFortyEight)
+                | ArcadeGame::Puzzle(
+                    DailyPuzzle::LeWord
+                    | DailyPuzzle::RubiksCube
+                    | DailyPuzzle::SlidingPuzzle
+                    | DailyPuzzle::Sudoku
+                    | DailyPuzzle::Nonogram
+                    | DailyPuzzle::Minesweeper
+                    | DailyPuzzle::Netwalk
+                    | DailyPuzzle::WordWheel
+                    | DailyPuzzle::Quartets,
+                ) => {}
             }
         }
         let reading = self.lounge_card_shown() && self.chat.selected_message_id.is_some();
@@ -933,19 +950,8 @@ impl App {
             if let Some(directory) = &self.flair_directory {
                 let now = chrono::Utc::now();
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
-                // The crown rides the same map, and lapses the same way: an
-                // entry from a finished UTC month resolves to nobody, which
-                // is what empties the slot at the rollover with no sweeper,
-                // and the same rollover hands the laureate's crown on.
-                let crown_wearers = match self.crown_wearers_rx.as_mut() {
-                    Some(rx) => *rx.borrow_and_update(),
-                    // Only a test harness builds an app without the crown.
-                    None => crate::app::crown::svc::CrownWearers::default(),
-                };
                 let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
-                    crown_wearers.holder(now),
-                    crown_wearers.laureate(now),
                     phase,
                     now,
                 );
@@ -1253,9 +1259,7 @@ impl App {
                         detail: Some(difficulty),
                         ..
                     } if user_id == self.user_id => {
-                        if let Some(puzzle) =
-                            late_core::models::leaderboard::DailyPuzzle::from_key(game.key())
-                        {
+                        if let Some(puzzle) = game.daily_puzzle() {
                             changed |= self.session_daily_wins.note_win(
                                 event.occurred_at.date_naive(),
                                 puzzle,

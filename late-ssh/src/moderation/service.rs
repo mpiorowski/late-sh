@@ -1630,7 +1630,7 @@ impl ModerationService {
             .artboard_handles()
             .ok_or_else(|| anyhow::anyhow!("artboard restore is unavailable"))?;
         let date = date.unwrap_or_else(previous_utc_day);
-        let source_key = daily_artboard_key(date);
+        let source_key = ArtboardSnapshot::daily_key(date);
         let backup_key = format!(
             "restore-backup:main:{}:{}",
             Utc::now().format("%Y%m%dT%H%M%S%.fZ"),
@@ -1828,7 +1828,7 @@ impl ModerationService {
                     Utc::now().date_naive(),
                 )
             }
-            ArtboardCurateSource::Daily(date) => (daily_artboard_key(date), date),
+            ArtboardCurateSource::Daily(date) => (ArtboardSnapshot::daily_key(date), date),
         };
 
         let mut client = self.db.get().await?;
@@ -2360,10 +2360,6 @@ fn previous_utc_day() -> NaiveDate {
         .date_naive()
         .pred_opt()
         .expect("UTC date overflow")
-}
-
-fn daily_artboard_key(date: NaiveDate) -> String {
-    format!("daily:{date}")
 }
 
 fn page_offset(page: i64) -> i64 {

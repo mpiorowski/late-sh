@@ -6,10 +6,14 @@ use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => app.stations_modal_state.close(),
-        ParsedInput::Arrow(b'A') | ParsedInput::Byte(0x0B) => {
+        ParsedInput::Arrow(b'A')
+        | ParsedInput::Byte(0x0B | b'k' | b'K')
+        | ParsedInput::Char('k' | 'K') => {
             app.stations_modal_state.move_selection(-1);
         }
-        ParsedInput::Arrow(b'B') | ParsedInput::Byte(0x0A) => {
+        ParsedInput::Arrow(b'B')
+        | ParsedInput::Byte(0x0A | b'j' | b'J')
+        | ParsedInput::Char('j' | 'J') => {
             app.stations_modal_state.move_selection(1);
         }
         ParsedInput::PageUp => app.stations_modal_state.move_selection(-8),

@@ -31,7 +31,7 @@ late-ssh/src/
   app/
     state.rs input.rs tick.rs render.rs   root glue: hold domain state, delegate
     terminal_backend.rs                   GlyphIsolatingBackend
-    activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ crown/ ...
+    activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ pot/ ...
 ```
 
 Root glue rule: a root file holds a domain's state and delegates to it. The
@@ -75,13 +75,21 @@ sequenceDiagram
 - The SSH login name is ignored except `invite-<code>` on the connect that
   creates an account (`app/referral`). New accounts get a generated username
   (`usernames::next_generated_username`), retried on a unique violation.
-- The activity receiver is created in `auth_publickey` (before the login event
-  is published), stored on `ClientHandler`, and taken into `SessionConfig` in
-  `pty_request`. Creating it later misses the user's own login event.
+- The activity receiver is created in `auth_publickey`, stored on
+  `ClientHandler`, and taken into `SessionConfig` in `pty_request`. The login
+  event is published in `pty_request`, the first point that knows whether
+  the session's CLI moved it here, off a draining pod or on a quit-modal
+  restart (`LATE_RESUME`); a moved session publishes none. Creating the receiver after the publish misses the user's
+  own login event.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
 - SSH compression is pinned to `NONE`: a client that negotiates zlib drops
   mid-session on the first keystroke that moves a character.
+- A draining pod (shutdown signal, `is_draining`) keeps its sessions behind
+  the "Server updating!" banner, except a quiet native-mode CLI session: it
+  is asked to redial the new pod and sends back `LATE_RESUME` (read in
+  `env_request` into `SessionConfig::resume`), which lands it on the page it
+  left. Flow, rules and gaps: `app/handoff/CONTEXT.md`.
 
 ## 3. Sync/async boundary
 
@@ -218,7 +226,11 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
   holds, so a re-placement is an `a=p` of a few dozen bytes. iTerm2 and Sixel
   have no delete-by-id, so `pre_frame_persistent_raster_wipe_bytes` writes wipe
   spaces ahead of the frame on transitions (modal closed, image swapped,
-  overlay opened, screen changed, protocol changed). A timed-out side-channel
+  overlay opened, screen changed, protocol changed). Inside the draw,
+  `redraw_vacated_persistent_raster` marks the cells under last frame's
+  iTerm2/Sixel images that this frame places none on as
+  `CellDiffOption::AlwaysUpdate`, so the diff rewrites a cell drawn the same
+  (a square a chess piece left, a board dealt fresh). A timed-out side-channel
   write calls `force_full_repaint` and abandons the batch.
 - **Video never passes through the server:** the paired CLI's mpv draws to
   the user's tty; the server paints the player black and sends the CLI the
@@ -264,8 +276,11 @@ Pair WS, client to server: `heartbeat`; `viz` (16 bands; older CLIs send 8 and
 mute, volume; legacy `browser`/`webview` spellings still parse); `latency`
 (telemetry only, `late_ssh_cli_latency_seconds{kind,platform}`; deploy the
 server before a CLI that sends a new event). Server to client: `toggle_mute`,
-`volume_up`, `volume_down`, plus the audio-source, clipboard, YouTube and voice
-messages owned by `app/audio`, `app/voice` and `late-cli`.
+`volume_up`, `volume_down`, `reconnect` (a drain handoff or the quit modal's
+`r restart`, only to a CLI that advertises the `reconnect` capability;
+`app/handoff`), plus the audio-source,
+clipboard, YouTube and voice messages owned by `app/audio`, `app/voice` and
+`late-cli`.
 
 Pairing flow:
 
@@ -319,7 +334,10 @@ Keyless sessions (ghost bots, tests) apply a change for the session only.
 error). The only other env reads are secrets (DB, LiveKit, door secrets) and
 dev opt-ins keyed on presence: `LATE_AI_API_KEY`, the R2 pair
 `LATE_FILES_S3_ACCESS_KEY_ID`/`..._SECRET_ACCESS_KEY` (half set is an error),
-`LATE_YOUTUBE_API_KEY`. `Config::validate()` checks cross-field invariants at
+`LATE_YOUTUBE_API_KEY`, the herald's pairs `LATE_HERALD_MASTODON_INSTANCE`/
+`..._MASTODON_TOKEN` and `LATE_HERALD_BLUESKY_IDENTIFIER`/`..._BLUESKY_PASSWORD`
+(half a pair is an error; prod pins both accounts and requires both secrets).
+`Config::validate()` checks cross-field invariants at
 boot. Tests in `config_test.rs`. Dev profiles pin compose hostnames, so the
 apps only run inside `docker compose`. Shipping a config change that adds or
 removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
@@ -458,6 +476,9 @@ a no-op twin when built without `otel`.
   a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
   row (`monitoring/dashboards/observability.json`) reads these plus the
   day-one slice of the attention counter.
+- Drain handoff: `late_ssh_drain_handoffs_total{stage}` (`sent`, `requested`
+  for the quit modal's `r restart`, `resumed`, `unparsed`;
+  `app/handoff/CONTEXT.md`).
 - Connections: `late_ssh_connections_total`,
   `late_ssh_connections_rejected_total{reason}`, `late_ssh_sessions_active`,
   `late_ssh_session_start_seconds{stage,user,tenure}` (`user` is whether the

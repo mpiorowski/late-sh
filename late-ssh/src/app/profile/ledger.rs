@@ -3,7 +3,7 @@
 //! A ledger row is a pointer: `reason` says what happened, `source_ref` names
 //! the row it happened to. Most refs are ids only the database cares about.
 //! The ones a person can read (the other side of a gift or gild, the game a
-//! payout was for, who lost the crown, how many pot tickets, the quest, the
+//! payout was for, how many pot tickets, the quest, the
 //! gallery place, the round's size, who a gifted drink was for, the song, a
 //! drink, a SKU, a link) are
 //! followed here into a
@@ -45,10 +45,6 @@ pub enum LedgerDetail {
     GamePayout {
         game: String,
         payout_kind: String,
-    },
-    /// Who lost the crown to this take. Absent on the first take ever.
-    CrownFrom {
-        username: String,
     },
     /// How many tickets one buy bought: the row's chips over the pot's price.
     PotTickets {
@@ -102,8 +98,6 @@ pub struct LedgerRow {
 pub struct LedgerSources {
     pub gilds: HashMap<Uuid, GildParties>,
     pub payouts: HashMap<Uuid, GamePayoutSource>,
-    /// Reign id to the user it took the crown from.
-    pub deposed: HashMap<Uuid, Uuid>,
     pub pots: HashMap<Uuid, Pot>,
     /// Assignment id to the quest's title.
     pub quests: HashMap<Uuid, String>,
@@ -135,8 +129,6 @@ enum Pointer {
     Gild(Side),
     /// A `game_payout_claims` row.
     PayoutClaim,
-    /// A `crown_reigns` row.
-    Reign,
     /// A `pots` row, from the ticket side or the payout side.
     PotTicket,
     PotWon,
@@ -168,7 +160,6 @@ const fn pointer(mv: ChipMove) -> Pointer {
         ChipMove::ShopPurchase => Pointer::Sku,
         ChipMove::NewsShared => Pointer::Link,
         ChipMove::DailyQuestStreakReward => Pointer::StreakDay,
-        ChipMove::CrownTaken => Pointer::Reign,
         ChipMove::PotTicket => Pointer::PotTicket,
         ChipMove::PotWon => Pointer::PotWon,
         ChipMove::QuestReward => Pointer::QuestAssignment,
@@ -211,6 +202,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::OldSignalSlain => Pointer::PayoutClaim,
         ChipMove::LegacyTableCredit
         | ChipMove::LegacyTableDebit
+        | ChipMove::CrownTaken
         | ChipMove::BlackjackBet
         | ChipMove::BlackjackPayout
         | ChipMove::PokerBet
@@ -235,8 +227,6 @@ pub struct LedgerRefs {
     pub gilds: Vec<Uuid>,
     /// `game_payout_claims` ids.
     pub payouts: Vec<Uuid>,
-    /// `crown_reigns` ids.
-    pub reigns: Vec<Uuid>,
     /// `pots` ids, from tickets and payouts alike.
     pub pots: Vec<Uuid>,
     /// `quest_assignments` ids.
@@ -273,7 +263,6 @@ pub fn refs(entries: &[ChipLedgerEntry]) -> LedgerRefs {
             Pointer::Counterparty(_) | Pointer::Referral(_) => refs.counterparties.push(id),
             Pointer::Gild(_) => refs.gilds.push(id),
             Pointer::PayoutClaim => refs.payouts.push(id),
-            Pointer::Reign => refs.reigns.push(id),
             Pointer::PotTicket | Pointer::PotWon => refs.pots.push(id),
             Pointer::QuestAssignment => refs.quests.push(id),
             Pointer::Award => refs.awards.push(id),
@@ -290,12 +279,11 @@ pub fn refs(entries: &[ChipLedgerEntry]) -> LedgerRefs {
     refs
 }
 
-/// Every user the loaded gilds, reigns and gift drinks name, on top of the
+/// Every user the loaded gilds and gift drinks name, on top of the
 /// gift counterparties, so the service can load their names in one query.
 pub fn named_user_ids(
     refs: &LedgerRefs,
     gilds: &HashMap<Uuid, GildParties>,
-    deposed: &HashMap<Uuid, Uuid>,
     gift_recipients: &HashMap<Uuid, Uuid>,
 ) -> Vec<Uuid> {
     let mut ids = refs.counterparties.clone();
@@ -303,7 +291,6 @@ pub fn named_user_ids(
         ids.push(parties.author_user_id);
         ids.extend(parties.buyer_user_ids.iter().copied());
     }
-    ids.extend(deposed.values().copied());
     ids.extend(gift_recipients.values().copied());
     ids
 }
@@ -367,13 +354,6 @@ fn detail(entry: &ChipLedgerEntry, sources: &LedgerSources) -> Option<LedgerDeta
             Some(LedgerDetail::GamePayout {
                 game: source.game.clone(),
                 payout_kind: source.payout_kind.clone(),
-            })
-        }
-        Pointer::Reign => {
-            let reign_id: Uuid = source_ref.parse().ok()?;
-            let deposed = *sources.deposed.get(&reign_id)?;
-            Some(LedgerDetail::CrownFrom {
-                username: username(deposed)?,
             })
         }
         Pointer::PotTicket => {

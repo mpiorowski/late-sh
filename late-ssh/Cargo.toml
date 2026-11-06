@@ -71,7 +71,7 @@ russh.workspace = true
 
 # Web / HTTP
 axum = { workspace = true, features = ["ws"] }
-reqwest = { workspace = true, features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["json", "multipart", "stream"] }
 image.workspace = true
 # Readability (article body extraction for the News reader) and the DOM it
 # hands back, walked into reader lines by `app/chat/news/body.rs`.

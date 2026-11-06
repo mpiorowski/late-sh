@@ -81,6 +81,14 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
                 status: PaperStatus::Ready,
                 text: Some("- someone shared a thing".to_string()),
             },
+            PaperSection {
+                section: PaperSectionKind::Yesterday,
+                status: PaperStatus::Ready,
+                text: Some(
+                    "Radio: chillsynth 2 listeners\nArcade: 3 games finished, all Sudoku"
+                        .to_string(),
+                ),
+            },
         ],
     };
     // The reader is in lounge, rust, quietroom, slow, and broken; the rail
@@ -135,6 +143,11 @@ fn the_paper_follows_the_rail_then_elsewhere_then_the_back_pages() {
             "",
             "@mat · 23:40",
             "back up, thanks for waiting",
+            "",
+            // The day in numbers comes before anything graybeard wrote.
+            "YESTERDAY ON LATE.SH",
+            "Radio: chillsynth 2 listeners",
+            "Arcade: 3 games finished, all Sudoku",
             "",
             "YOUR ROOMS",
             "",

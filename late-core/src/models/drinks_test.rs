@@ -17,16 +17,16 @@ fn decayed_points_wears_off_linearly() {
     assert_eq!(decayed_points(2_000, 0), 2_000);
     assert_eq!(decayed_points(2_000, 3600), 2_000 - DRUNK_DECAY_PER_HOUR);
     assert_eq!(
-        decayed_points(2_000, 3 * 3600),
-        2_000 - 3 * DRUNK_DECAY_PER_HOUR
+        decayed_points(2_000, 2 * 3600),
+        2_000 - 2 * DRUNK_DECAY_PER_HOUR
     );
     assert_eq!(decayed_points(2_000, 24 * 3600), 0);
 }
 
 #[test]
-fn a_full_binge_sobers_up_in_half_a_day() {
-    // The product dial: a maxed-out night is gone by the next evening, not a
-    // full day later, and merely reaching "wasted" clears in half of that.
+fn a_full_binge_sobers_up_in_six_hours() {
+    // The product dial: a maxed-out night is gone by morning, and merely
+    // reaching "wasted" clears in half of that.
     assert!(decayed_points(MAX_DRUNK_POINTS, (DRUNK_SOBER_UP_HOURS - 1) * 3600) > 0);
     assert_eq!(
         decayed_points(MAX_DRUNK_POINTS, DRUNK_SOBER_UP_HOURS * 3600),
@@ -85,13 +85,13 @@ fn effective_points_uses_last_drink_at() {
     let now = Utc::now();
     let drinks = UserDrinks {
         user_id: Uuid::nil(),
-        drunk_points: 600,
-        lifetime_spent: 600,
+        drunk_points: 1_000,
+        lifetime_spent: 1_000,
         drink_count: 1,
         last_drink_at: now - chrono::Duration::hours(1),
     };
-    assert_eq!(drinks.effective_points(now), 600 - DRUNK_DECAY_PER_HOUR);
-    assert_eq!(drinks.level(now), 1);
+    assert_eq!(drinks.effective_points(now), 1_000 - DRUNK_DECAY_PER_HOUR);
+    assert_eq!(drinks.level(now), 2);
 }
 
 #[tokio::test]
@@ -100,11 +100,11 @@ async fn record_purchase_creates_then_decays_and_accumulates() {
     let client = test_db.db.get().await.expect("client");
     let user = create_test_user(&test_db.db, "drinks-decay").await;
 
-    let first = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 600, true)
+    let first = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 1_000, true)
         .await
         .expect("first purchase");
-    assert_eq!(first.drunk_points, 600);
-    assert_eq!(first.lifetime_spent, 600);
+    assert_eq!(first.drunk_points, 1_000);
+    assert_eq!(first.lifetime_spent, 1_000);
     assert_eq!(first.drink_count, 1);
 
     // Backdate the last drink by one hour; the next purchase must apply
@@ -122,8 +122,8 @@ async fn record_purchase_creates_then_decays_and_accumulates() {
     let second = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 100, true)
         .await
         .expect("second purchase");
-    assert_eq!(second.drunk_points, 600 - DRUNK_DECAY_PER_HOUR + 100);
-    assert_eq!(second.lifetime_spent, 700);
+    assert_eq!(second.drunk_points, 1_000 - DRUNK_DECAY_PER_HOUR + 100);
+    assert_eq!(second.lifetime_spent, 1_100);
     assert_eq!(second.drink_count, 2);
 }
 

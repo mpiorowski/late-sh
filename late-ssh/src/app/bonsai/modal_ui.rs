@@ -173,6 +173,9 @@ fn draw_footer(frame: &mut Frame, area: Rect) {
         key("←↓↑→/hjkl"),
         text(" steer"),
         gap(),
+        key("y/u"),
+        text(" up-left/right"),
+        gap(),
         key("x"),
         text(" cut"),
     ])

@@ -1,0 +1,35 @@
+{% extends "pages/layout.html" %}
+{% import "pages/shared/meta.html" as meta %}
+
+{% block title %}{{ title }} by ~{{ artist }} - late.sh{% endblock %}
+{% block meta %}{% call meta::card(og_title, og_description, page_url, og_image, og_image_alt) %}{% endcall %}{% endblock %}
+
+{% block page %}
+<style>
+    .gallery-piece canvas { display: block; max-width: 100%; height: auto; }
+    .gallery-piece a:not([hidden]) { display: inline-block; margin-top: 0.5rem; font-size: 0.7rem; color: #9ca3af; }
+</style>
+<div class="max-w-2xl mx-auto pt-8 sm:pt-16 pb-24">
+
+    <div class="mb-10">
+        <a href="/gallery" class="text-xs text-gray-400 hover:text-green-400 underline underline-offset-2 transition-colors">&larr;
+            the Artboard</a>
+        <h1 class="text-2xl sm:text-3xl text-green-500 tracking-tight mt-4">{{ title }}</h1>
+        <p class="text-xs text-gray-400 mt-2">by ~{{ artist }}, hung {{ hung }} &middot; {{ applause }} applause</p>
+    </div>
+
+    <link rel="stylesheet" href="/static/board.css">
+    <div class="gallery-piece mb-12">
+        <canvas id="profile-poster" role="img" aria-label="{{ title }}, by ~{{ artist }}"></canvas>
+        <a id="poster-png" download="{{ file_name }}" hidden>save PNG</a>
+    </div>
+    <script id="poster-data" type="application/json">{{ piece_json|safe }}</script>
+    <script src="/static/board.js"></script>
+    <script src="/static/poster.js"></script>
+
+    <p class="text-sm text-gray-300 leading-relaxed">
+        Drawn on the late.sh Artboard, a shared canvas in the terminal, and hung in its gallery
+        by the member who made it. <code class="text-green-400">ssh late.sh</code> to pick up a brush.
+    </p>
+</div>
+{% endblock %}

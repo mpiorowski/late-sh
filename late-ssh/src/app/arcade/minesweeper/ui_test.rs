@@ -76,3 +76,24 @@ fn hit_test_rejects_non_cell_area() {
         "bottom-right corner"
     );
 }
+
+/// The cursor is a solid amber fill like Solitaire's; on a hidden block cell
+/// it draws blank so the fill is not punched out by the blocks.
+#[test]
+fn cursor_on_a_hidden_block_cell_is_solid_amber() {
+    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
+    let mut state = State::new(
+        uuid::Uuid::nil(),
+        super::super::svc::MinesweeperService::new(db, tokio::sync::broadcast::channel(1).0),
+        Vec::new(),
+    );
+    state.use_dot_style = false;
+    state.cursor = (0, 0);
+
+    let span = cell_span(&state, 0, 0);
+    assert_eq!(span.content, "   ");
+    assert_eq!(
+        span.style,
+        theme::punch_through(theme::AMBER()).add_modifier(Modifier::BOLD)
+    );
+}

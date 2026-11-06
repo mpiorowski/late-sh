@@ -100,7 +100,7 @@ pub fn at_empty_prompt(screen: &vt100::Screen) -> bool {
 }
 
 /// The suggestion waiting beside this session's own Zork game: its watch
-/// chat is joined (the `show_watch_chat` setting is on) and a watcher
+/// chat is joined (shown, not hidden with F4) and a watcher
 /// suggested something fresh.
 pub fn waiting(app: &App) -> Option<Suggestion> {
     let state = app.zork_state.as_ref()?;
