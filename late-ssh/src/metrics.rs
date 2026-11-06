@@ -2,6 +2,7 @@ use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
 use late_core::models::chat_room::WatchDoor;
 use late_core::models::chips::Difficulty;
+use late_core::models::daily_streak::StreakDay;
 use late_core::models::door_opening::DoorCard;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
@@ -823,6 +824,7 @@ mod inner {
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
+    use super::StreakDay;
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
@@ -3041,6 +3043,30 @@ mod inner {
         share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
     }
 
+    fn daily_streak_days_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_daily_streak_days_total")
+                .with_description(
+                    "Days kept on the daily streak by a daily board win: the run's first, or one more",
+                )
+                .build()
+        })
+    }
+
+    fn streak_day_label(day: StreakDay) -> &'static str {
+        match day {
+            StreakDay::First => "first",
+            StreakDay::Kept { .. } => "kept",
+        }
+    }
+
+    /// A daily board win kept the day on the streak.
+    pub fn record_daily_streak_day(day: StreakDay) {
+        daily_streak_days_total().add(1, &[KeyValue::new("day", streak_day_label(day))]);
+    }
+
     fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
         match load {
             SlidingPuzzleArtLoad::Featured => "featured",
@@ -4516,6 +4542,7 @@ mod inner {
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
+    use super::StreakDay;
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
@@ -4631,6 +4658,7 @@ mod inner {
     ) {
     }
     pub fn record_share_card(_kind: ShareCardKind) {}
+    pub fn record_daily_streak_day(_day: StreakDay) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}

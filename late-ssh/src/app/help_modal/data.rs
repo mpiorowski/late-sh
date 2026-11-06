@@ -10,7 +10,6 @@ use late_core::models::{
     leaderboard::DailyPuzzle,
     media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS},
     pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE},
-    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 use qrcodegen::{QrCode, QrCodeEcc};
 
@@ -379,8 +378,6 @@ fn chips_help_lines() -> Vec<String> {
     let floor = CHIP_FLOOR;
     let water = crate::app::bonsai::svc::WATER_CHIP_BONUS;
     let asterion = ASTERION_DAILY_ESCAPE_PAYOUT;
-    let streak_step = DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL;
-    let streak_max = i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL) * streak_step;
 
     let mut lines = vec![
         "Late Chips".to_string(),
@@ -412,8 +409,7 @@ fn chips_help_lines() -> Vec<String> {
         "  hard weekly        750 chips".to_string(),
         "  Rewards pay automatically the moment the target completes; there is nothing to claim.".to_string(),
         "  A quest reward stacks with the daily-puzzle payout above, so one solve can pay twice.".to_string(),
-        format!("  Finishing any one daily quest advances your daily streak: +{streak_step} chips on the second consecutive day, climbing by {streak_step} per day up to +{streak_max}."),
-        "  Weekly quests do not advance the daily streak.".to_string(),
+        "  The daily streak above the quests pays no chips: any daily board won that day keeps it, and the count is the reward.".to_string(),
         "".to_string(),
         "3. Bonsai (w)".to_string(),
         format!("  Watering pays {water} chips once per UTC day."),

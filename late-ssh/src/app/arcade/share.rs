@@ -177,7 +177,7 @@ pub const fn icon(puzzle: DailyPuzzle) -> &'static str {
 
 /// The day card: one glyph per daily in lobby order (`DailyPuzzle::ALL`),
 /// filled for each won today, with each daily's icon beneath its box, plus
-/// the daily-quest streak. `won` answers for each puzzle.
+/// the daily streak. `won` answers for each puzzle.
 pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: i32) -> ShareCard {
     let marks: Vec<Glyph> = DailyPuzzle::ALL
         .iter()

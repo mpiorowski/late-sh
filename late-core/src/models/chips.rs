@@ -191,6 +191,8 @@ chip_moves!(
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
+    /// History only: the daily streak paid chips once. Nothing writes this
+    /// reason any more; the rows it left stay readable.
     DailyQuestStreakReward,
     DailyPuzzleWin,
     AsterionEscape,

@@ -37,12 +37,10 @@ The design reasoning behind it, every decision and the ones turned
 down, is in Claude Code session `2fc40c39-0365-400e-b8c0-dd75cbf98223`
 (`claude --resume` in this repo). What is left of the step:
 
-- **The streak.** The first session's win is day one of a streak only
-  when Netwalk is a drawn quest. "Any daily win advances the streak"
-  (step 2) was not shipped with the tour: it is a late-core change in
-  `quest.rs` beside `record_daily_quest_streak_if_complete`, called from
-  the Arcade's daily win path, with its own tests. Do it first in step 2
-  so the next cohort's day-one win starts a streak it can see.
+- **The streak.** The first session's win is day 1 of the streak, now
+  that any daily win keeps the day (step 2's first piece, built). The
+  send-off's "tomorrow" line moves from a time to the rung ("tomorrow
+  is your first star: Sudoku") when step 2's rung ships.
 - **Measure, then gate.** Deploy, wait seven days for a full weekly
   cohort, wait seven more for its first week, then run the funnel
   queries in `AUDIENCE.md` section 6 and read the Newcomers row
@@ -59,49 +57,92 @@ Half of it is built (`late-ssh/src/app/hub/CONTEXT.md`): two daily
 quests and a weekly, `user_daily_quest_streaks`, a six-slot streak meter
 with a chip bonus at the top of the Arcade lobby. It holds 52 to 64
 completers a week, flat since September, and 35 live streaks. The gap is
-visibility and the day-one handshake, not more quest kinds.
+visibility and the day-one handshake, not more quest kinds. The quest
+slots, their templates and their chips stay as they are; the ladder is
+built beside them, and the one thing it takes from them is the streak.
+Decided, in the order it ships; each piece has its own number to read:
 
-- **Any daily win advances the streak.** Step 1 did not do it; it goes
-  first here. The quest slots stay as the chip-paying layer on top.
-- **The streak is visible.** On the profile; beside the name in the
-  Arcade solvers roster (`arcade/solvers.rs`); on the share card, where
-  "day 12" is the Wordle line and travels outside the house for free.
-  People want to be seen (`AUDIENCE.md` section 4): standing in the
-  message line and on the profile gets used, a meter on one page does
-  not.
-- **The keypress-return moment says what it is at.** When a session
-  wakes after hours idle (the AFK edge in `app/state.rs`), one private
-  line: the streak's day and that today's boards are open. Private, so
-  the feed budget does not apply.
-- **The reward is standing, not chips.** The streak bonus pays about
-  46,000 chips a week to 33 to 36 people, a faucet into an economy whose
-  median balance is the stipend; with every daily win counting it would
-  pay 85. Decision: stop the chip bonus when the mark exists, or cap it
-  at the first week. Chips cannot be what the ladder is for.
-- **"Did you know", one line per login.** Selling the house to someone
-  who came back, not to a stranger. On the second login and the few
-  after it, one dim sentence in a place the screen already has, chosen
-  by login count and shown once each, never a modal: the paper already
-  owns the login modal and a second box behind it is the one people
-  learn to Esc through. The order follows what predicts return: login
-  two, a new board is up and the streak is at one; login three, the
-  radio plays in the `late` CLI, one line to install, or in a browser at
-  `late.sh/listen`; login four, the people, the map, the profile; later
-  the booth, the Artboard, the Nightcap. Never two lines at once.
-- **The radio nudge where the hand already is.** A plain-ssh session
-  that opens the Stations modal or presses the music keys is told right
-  there that nothing plays over plain ssh and where it can. This beats
-  any schedule: the person is already reaching for it. Measured by the
-  share of second-week newcomers on the CLI (16% today) and the listen
-  page's views (147 in 25 days). Before the radio line is written,
-  read whether newcomers who arrive on the CLI come back more than the
-  plain-ssh ones (logs keep a week, so a rough read on the latest
-  cohort); if they do not, the line moves later in the series.
-- **Not built:** XP, levels, leagues. A league needs cohorts of similar
-  players; 85 weekly players is one league.
-- Measure: live streaks (35, six past 30 days) and weekly distinct daily
-  players (85). The ladder has worked if both move, not if wins per
-  player moves alone.
+1. **The streak: any daily win keeps the day, no chips.** Built; what
+   it is lives in `late-ssh/src/app/hub/CONTEXT.md` (Quests). The
+   floor is deliberately one minute: a streak's job is tomorrow, not
+   depth, and a bad night at 23:50 has to be able to keep the day. The
+   tour's Netwalk win is day 1 with no tour code knowing. The
+   `bonus_level` column drop sits in `late-core/migrations/deferred/`
+   until the release after this one ships. Measure: live streaks (35,
+   six past 30 days), two-day return.
+2. **The rung: one board a day, the same for everyone, and the star.**
+   A fixed rotation keyed to the calendar, never the person, so the
+   solvers roster for the rung is the day's crowd and the chat has one
+   board to argue about. Never repeats a game inside a week. The knob
+   is time, not the difficulty label (medium Netwalk is three minutes,
+   medium Sudoku can be thirty): a rung is a board a regular finishes
+   in five to fifteen minutes, the rotation picks per game whichever
+   difficulty lands there, and a true hard board at most once a week
+   on a fixed night. Winning the rung on its day earns the star; there
+   is no catching up on yesterday's. The tour's easy Netwalk is not a
+   star, on purpose: the send-off says "tomorrow is your first star:
+   Sudoku", which is tomorrow named with a prize instead of a time.
+   Measure: the rung's roster size against the other boards, active
+   minutes on rung days.
+3. **The marks beside the name.** The chat author label already carries
+   the bonsai glyph, the country and the allowlisted badges; the ladder
+   adds at most two cells and keeps that budget. The streak is a moon
+   that fills, slow, so a one-day streak is not a badge: nothing under
+   three days, `☽` at 3, `◑` at 7, `●` at 30, `◉` at 100; break the run
+   and it is gone until day 3 again. The rung is `✦` in amber (the
+   tour's own glyph), beside the name today only, gone at 00:00 UTC:
+   the live signal that makes someone in chat do the board. No number
+   in the line; the count lives on the profile and the share card,
+   where "day 12" is the Wordle line and travels outside the house
+   for free. Single-cell glyphs, no emoji; the label's wide-glyph path
+   covers ambiguous-width terminals. People want to be seen
+   (`AUDIENCE.md` section 4): standing in the message line gets used,
+   a meter on one page does not.
+4. **The week, the rung's surface.** One widget, built in the Arcade,
+   drawn twice. In the Arcade lobby, above the game cards: seven days,
+   each a small ASCII badge for its rung (about 9 by 5 so seven fit in
+   80 columns), today starred if won, tomorrow highlighted, the day's
+   roster count under it, one line under the row: "12 boards, one a
+   day, all new at 00:00 UTC". Time-ordered, where the cards below stay
+   game-ordered. On the tour, as the fifth stop after the board: today's
+   badge starred, tomorrow's badge large (about 20 by 8) with its name,
+   the other five as names, look only, Enter to the chat; it gets its
+   own funnel label so its cost is a number. Tomorrow large and the
+   rest small, because seven big badges to a newcomer is a menu. Twelve
+   small badges and twelve large ones are one-off art. The week cannot
+   ship before the rotation: until then it has nothing honest to show.
+5. **The keypress-return moment says what it is at.** When a session
+   wakes after hours idle (the AFK edge in `app/state.rs`), one private
+   line: the streak's day, today's rung and that it is open. Private,
+   so the feed budget does not apply.
+6. **"Did you know", one line per login.** Selling the house to someone
+   who came back, not to a stranger. On the second login and the few
+   after it, one dim sentence in a place the screen already has, chosen
+   by login count and shown once each, never a modal: the paper already
+   owns the login modal and a second box behind it is the one people
+   learn to Esc through. The order follows what predicts return: login
+   two, the rung is up and the streak is at one; login three, the
+   radio plays in the `late` CLI, one line to install, or in a browser
+   at `late.sh/listen`; login four, the people, the map, the profile;
+   later the booth, the Artboard, the Nightcap. Never two lines at once.
+7. **The radio nudge where the hand already is.** A plain-ssh session
+   that opens the Stations modal or presses the music keys is told right
+   there that nothing plays over plain ssh and where it can. This beats
+   any schedule: the person is already reaching for it. Measured by the
+   share of second-week newcomers on the CLI (16% today) and the listen
+   page's views (147 in 25 days). Before the radio line is written,
+   read whether newcomers who arrive on the CLI come back more than the
+   plain-ssh ones (logs keep a week, so a rough read on the latest
+   cohort); if they do not, the line moves later in the series.
+
+- **Not built:** XP, levels, leagues, rerolls or skips. A league needs
+  cohorts of similar players; 85 weekly players is one league. Rerolls
+  exist only when a prescribed board can be unwanted; with any board
+  keeping the day and the rung a bonus on top, there is nothing to
+  reroll.
+- Measure, for the step as a whole: live streaks (35, six past 30 days)
+  and weekly distinct daily players (85). The ladder has worked if both
+  move, not if wins per player moves alone.
 
 ## Step 3: the post
 

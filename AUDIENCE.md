@@ -156,7 +156,7 @@ Per person, 2026-10-23 to 2026-11-06 (14 days, database unless stated):
 | Chat messages per day | 1,030 to 1,450 (740 to 1,020 in the three weeks before); the 10 busiest authors write 80% of them, the 20 busiest 90% |
 | Daily quests completed per week | 250 to 280 by 52 to 64 people, flat since the week of 2026-09-28; weekly quests by 5 to 19 people |
 | Daily quest streaks alive (a completion today or yesterday) | 35: 15 at 1 or 2 days, 10 at 3 to 6, 3 at 7 to 13, 1 at 14 to 29, 6 at 30 or more |
-| Streak bonus paid | 33 to 36 people and about 46,000 chips a week |
+| Streak bonus paid, before the bonus was removed | 33 to 36 people and about 46,000 chips a week |
 | People who completed a daily quest | 64 in 7 days, 106 in 28, 524 ever |
 | Doors, distinct people (openings) | the Realm 24 (254), Lateania 22 (148), A Dark Room 14 (132), night city 11 (110), NetHack 10 (68), Brogue 7 (53), DCSS 6 (72) |
 | Lateania fights won | 63,000, 24,000 of them on 2026-10-30, from two level-100 characters at 212 M and 104 M xp: scripted, and it inflates the Games row, the paper's YESTERDAY line and the herald's Sunday card |
@@ -299,12 +299,12 @@ which the room sees after the public flip.
   measured server-side for third-party streams (the CLI plays them
   direct), so the pick is the best read there is.
 - **The quest strip is a progression system nobody is shown.** Two daily
-  quests, a weekly, a six-slot streak meter and a chip bonus already run
-  at the top of the Arcade lobby: 52 to 64 people a week complete one,
-  flat since September, and 35 streaks are alive, six of them past 30
-  days. It pays chips into a deflated economy, it is visible on one
-  screen and in no message line or profile, and the tour gives it half a
-  sentence. The streak is the strongest "tomorrow" the site owns and the
+  quests, a weekly and a streak (now kept by any daily board win, with
+  no chips) already run at the top of the Arcade lobby: 52 to 64 people
+  a week complete a quest, flat since September, and 35 streaks are
+  alive, six of them past 30 days. The quests pay chips into a deflated
+  economy, the strip is visible on one screen and in no message line or
+  profile, and the tour gives it half a sentence. The streak is the strongest "tomorrow" the site owns and the
   newcomer never meets it.
 - **deadchannel works for everyone in it and is out of people.** Thirteen
   of sixteen runners touch it on a given day, the wire doubled Home's
@@ -400,8 +400,8 @@ Live, in order of evidence behind them:
   completion from 46% to 80%. One cohort to read. The steps, the ladder
   that follows and the post after that: `devdocs/PLAN-FIRST-HOUR.md`.
   - **A ladder on the dailies (the Duolingo shape).** Half of it is
-    built: daily and weekly quests, a streak with a chip bonus, a strip
-    at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What
+    built: daily and weekly quests, a streak any daily win keeps, a
+    strip at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What
     Duolingo has that the strip does not: the streak is the first thing
     you see and the thing you are warned about losing, others can see
     it, the reward is standing rather than currency, and day one ends

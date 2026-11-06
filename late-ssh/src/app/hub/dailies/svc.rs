@@ -8,9 +8,12 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::{
     MutexRecover,
     db::Db,
-    models::quest::{
-        DailyQuestStreakSnapshot, QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
-        ensure_current_assignments, get_daily_quest_streak_snapshot, list_active_snapshot_rows,
+    models::{
+        daily_streak::{DailyStreakSnapshot, get_daily_streak_snapshot, record_daily_win},
+        quest::{
+            QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
+            ensure_current_assignments, list_active_snapshot_rows,
+        },
     },
 };
 use serde_json::Value;
@@ -29,7 +32,7 @@ pub struct QuestSnapshot {
     pub user_id: Option<Uuid>,
     pub daily: Vec<QuestItem>,
     pub weekly: Vec<QuestItem>,
-    pub daily_streak: DailyQuestStreakSnapshot,
+    pub daily_streak: DailyStreakSnapshot,
 }
 
 #[derive(Clone, Debug)]
@@ -62,8 +65,6 @@ pub enum QuestEvent {
         user_id: Uuid,
         title: String,
         reward_chips: i64,
-        streak_reward_chips: i64,
-        streak_bonus_level: Option<i32>,
     },
 }
 
@@ -158,7 +159,7 @@ impl QuestService {
         ensure_current_assignments(&mut client, now).await?;
         let today = now.date_naive();
         let rows = list_active_snapshot_rows(&client, user_id, today).await?;
-        let daily_streak = get_daily_quest_streak_snapshot(&client, user_id, today).await?;
+        let daily_streak = get_daily_streak_snapshot(&**client, user_id, today).await?;
         Ok(snapshot_from_rows(user_id, rows, daily_streak))
     }
 
@@ -211,30 +212,32 @@ impl QuestService {
                 continue;
             };
             if outcome.completed_now {
-                completed.push((
-                    row.template.title.clone(),
-                    outcome.rewarded_chips,
-                    outcome
-                        .streak_reward
-                        .as_ref()
-                        .map(|reward| (reward.reward_chips, reward.bonus_level)),
-                ));
+                completed.push((row.template.title.clone(), outcome.rewarded_chips));
             }
         }
 
-        if !completed.is_empty() {
-            self.refresh_user_if_active(user_id).await?;
-            for (title, reward_chips, streak_reward) in completed {
-                self.publish_event(QuestEvent::Completed {
-                    user_id,
-                    title,
-                    reward_chips,
-                    streak_reward_chips: streak_reward
-                        .map(|(reward_chips, _)| reward_chips)
-                        .unwrap_or(0),
-                    streak_bonus_level: streak_reward.map(|(_, bonus_level)| bonus_level),
-                });
+        // Any daily board win keeps the day on the streak, whatever the
+        // quests drew; the win's own UTC date so it rolls with the boards.
+        let mut streak_day = None;
+        if let ActivityKind::GameWon { game, .. } = &event.kind
+            && game.daily_puzzle().is_some()
+        {
+            streak_day =
+                record_daily_win(&**client, user_id, event.occurred_at.date_naive()).await?;
+            if let Some(day) = streak_day {
+                crate::metrics::record_daily_streak_day(day);
             }
+        }
+
+        if !completed.is_empty() || streak_day.is_some() {
+            self.refresh_user_if_active(user_id).await?;
+        }
+        for (title, reward_chips) in completed {
+            self.publish_event(QuestEvent::Completed {
+                user_id,
+                title,
+                reward_chips,
+            });
         }
 
         Ok(())
@@ -291,7 +294,7 @@ impl QuestService {
 fn snapshot_from_rows(
     user_id: Uuid,
     rows: Vec<QuestSnapshotRow>,
-    daily_streak: DailyQuestStreakSnapshot,
+    daily_streak: DailyStreakSnapshot,
 ) -> QuestSnapshot {
     let mut snapshot = QuestSnapshot {
         user_id: Some(user_id),
