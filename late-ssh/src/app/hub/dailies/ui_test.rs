@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use late_core::models::quest::DailyQuestStreakSnapshot;
+use late_core::models::daily_streak::DailyStreakSnapshot;
 use ratatui::text::Line;
 
 use super::{
@@ -30,39 +30,34 @@ fn quest_item(title: &str, difficulty: &str, target: i32, progress: i32) -> Ques
 }
 
 #[test]
-fn heading_shows_streak_meter_and_next_bonus() {
-    let streak = DailyQuestStreakSnapshot {
+fn heading_shows_the_streak_day_and_what_keeps_it() {
+    let today = NaiveDate::from_ymd_opt(2026, 8, 2).unwrap();
+    let kept_yesterday = DailyStreakSnapshot {
         consecutive_days: 3,
-        bonus_level: 2,
         last_completed_date: NaiveDate::from_ymd_opt(2026, 8, 1),
-        current_bonus_chips: 200,
-        next_bonus_chips: 300,
     };
-    let rendered = text(&heading_line(&streak, true));
-    assert!(
-        rendered.contains("▰▰▰▱▱▱"),
-        "3-day streak fills 3 of 6 slots: {rendered}"
+    assert_eq!(
+        text(&heading_line(&kept_yesterday, true, today)),
+        "─── Quests ───  streak day 3 · any daily board today keeps it"
     );
-    assert!(rendered.contains("3 days"), "{rendered}");
-    assert!(rendered.contains("next daily +300 bonus"), "{rendered}");
 
-    let empty = text(&heading_line(&DailyQuestStreakSnapshot::default(), true));
-    assert!(empty.contains("▱▱▱▱▱▱"), "{empty}");
-    assert!(empty.contains("win any daily quest"), "{empty}");
-
-    let capped = DailyQuestStreakSnapshot {
-        consecutive_days: 9,
-        bonus_level: 5,
-        last_completed_date: NaiveDate::from_ymd_opt(2026, 8, 1),
-        current_bonus_chips: 500,
-        next_bonus_chips: 500,
+    let kept_today = DailyStreakSnapshot {
+        consecutive_days: 4,
+        last_completed_date: Some(today),
     };
-    let rendered = text(&heading_line(&capped, true));
-    assert!(
-        rendered.contains("▰▰▰▰▰▰"),
-        "capped streak fills the meter: {rendered}"
+    assert_eq!(
+        text(&heading_line(&kept_today, true, today)),
+        "─── Quests ───  streak day 4 · any daily board tomorrow keeps it"
     );
-    assert!(rendered.contains("max bonus +500/day"), "{rendered}");
+
+    assert_eq!(
+        text(&heading_line(&DailyStreakSnapshot::default(), true, today)),
+        "─── Quests ───  no streak · win any daily board to start one"
+    );
+    assert_eq!(
+        text(&heading_line(&DailyStreakSnapshot::default(), false, today)),
+        "─── Quests ───  loading"
+    );
 }
 
 #[test]
@@ -135,7 +130,8 @@ fn strip_height_matches_rendered_lines_plus_separator() {
             quest_item("Score 10,000 in Snake", "medium", 10_000, 0),
         ],
         weekly: vec![quest_item("Win draw-3 Solitaire", "hard", 1, 0)],
-        daily_streak: DailyQuestStreakSnapshot::default(),
+        daily_streak: DailyStreakSnapshot::default(),
+        rung_stars: 0,
     };
     let lines = strip_lines(&snapshot, true, today, 90);
     assert_eq!(strip_height_for(&snapshot, true), lines.len() as u16 + 1);
@@ -156,7 +152,8 @@ fn weekly_reset_note_counts_days_to_exclusive_period_end() {
                 user_id: None,
                 daily: Vec::new(),
                 weekly: vec![item],
-                daily_streak: DailyQuestStreakSnapshot::default(),
+                daily_streak: DailyStreakSnapshot::default(),
+                rung_stars: 0,
             },
             true,
             today,

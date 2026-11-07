@@ -14,7 +14,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{Side, State, source_index};
+use super::state::{LENT_DIFFICULTY, Side, State, board_dimension, source_index};
 use crate::app::{
     arcade::ui::{
         GameBottomBar, OverlayAnchor, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame,
@@ -243,6 +243,14 @@ fn tile_area(grid: Rect, size: TileSize, dimension: usize, index: usize) -> Rect
         size.width,
         size.height,
     )
+}
+
+/// Whether the board the first-visit tour lends draws at all in the Arcade
+/// page `area`: the same frame and layout `draw_game` uses, at the lent
+/// board's size, so the tour's gate and its header agree with the frame.
+pub fn lent_board_fits(area: Rect) -> bool {
+    let board_area = game_content_area(area, true, SHOW_GAME_BOTTOM_BAR);
+    board_layout(board_area, board_dimension(LENT_DIFFICULTY)).is_some()
 }
 
 /// The tile under a zero-based terminal cell, for the Arcade page `area`.

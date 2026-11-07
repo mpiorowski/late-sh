@@ -24,7 +24,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 | `state.rs` | Per-session state: this session's own stand (its part of its presence record), `settle` (follow a newer stand on another device, pick again after losing a spot or when a seat frees), the derived `Crowd`, camera target, animation clock, arrival/departure door events, the `Tutorial` state machine. |
 | `fight.rs` | The tour's dungeon stop: a scripted fight as pure data (`BEATS`) plus its renderer. Not a game; see §5. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, `n` out back to Nightcap (the avatar first steps onto `map::BACK_DOOR_MAT`, in its published stand too, so the room sees them leave by the door), Enter on landmarks/dog/the back door, tutorial Enter. Returns `false` for globals. |
-| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
+| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays (the boxes, the table, fight and board headers), prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
 | `nightcap/` | Nightcap, the small bar out back (`n` from the tavern or Enter at the back door, `map::BACK_DOOR`, past the end of the counter; Esc back): its own `Screen::Nightcap`, the stools from presence (`stools.rs`), `SharedWall`, and `CONTEXT.md`. A sub-slice, not a sibling domain. The generator script carries the door art (`back_door`), but `RUST_TEMPLATE` still lacks the `BACK_DOOR` zone and the `Interactive::BackDoor` arm, same drift as the rest. |
 
 ## 3. The crowd (multiplayer contract)
@@ -108,7 +108,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   into the tavern plus the shared `ComposerBlockView` footer (same block the
   dashboard card uses; grows while typing, shows placeholder hints idle).
   Its idle hint is the scene's (`ComposerIdleHint::Scene`, the Nightcap's
-  too): j/k walk here, so it never offers them as message selection.
+  too): j/k walk here, so it never offers them as message selection. The
+  keypress-return push (`hub/CONTEXT.md`) takes the row over the hint here
+  as everywhere.
 - `i` (or Enter in the open) composes into #lounge through the normal global
   composer pipeline; image paste works (Clubhouse is a
   `is_chat_composer_context` screen in `app::input`). Slash commands are
@@ -161,6 +163,37 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 ## 5. First-visit tour
 
+- **Two routes, one switch.** `state::TourRoute` names them and
+  `state::TOUR_ROUTE` picks the one every session walks; flipping it is
+  the whole revert. `House` is the original walk, every bullet below
+  describes it unless it says otherwise. `Board` is the second version
+  (`devdocs/PLAN-FIRST-HOUR.md`, step 1), the first session built around
+  today's board: `Welcome` -> `VisitChat` (Home) -> `VisitTable` (the
+  practice table, the same stop as below) -> `VisitBoard` (The Arcade:
+  today's Netwalk daily at its easiest difficulty, opened as the active
+  Arcade game by `arcade/input.rs::open_lent_board`, the way Enter on
+  its lobby card opens it, so the win is the Arcade's own: the win task
+  runs, the chips land, the quest ticks when Netwalk is drawn, the
+  solvers roster gains the name) -> `VisitWeek` (still The Arcade, its
+  lobby: today and tomorrow's rungs in a box, look only). Enter at the board moves
+  on only once `netwalk_state.is_solved()`, or through the skip: `s` on
+  the open board asks (`BoardStop::SkipAsked`, `State::board_skip_asked`,
+  the header turns into the question), Esc takes it back, Enter on it
+  leaves the board unsolved (counted on a first visit by
+  `late_ssh_tour_board_skips_total`, to read against the `week` stop).
+  Either Enter puts the board away (`arcade/input.rs::close_lent_board`,
+  `TourMove::Week`), and the Enter at the week finishes the tour (`Done`
+  persisted, `TourMove::FinishedAtChat`) and lands the session on Home,
+  in the chat, input free. No Stations stop (84% of newcomers are on
+  plain ssh with nothing to hear), no homecoming box: the solved board's
+  header is the send-off and names tomorrow (a new board at 00:00 UTC
+  with the hours left, the board kept in the Arcade under `2`, `?` the
+  guide). The two
+  routes share every stop, the gate and the headers; the route only
+  decides where Enter goes from the chat stop and from the table
+  (`State::tutorial_advance`), and the welcome box's and the chat and
+  table stops' "next" copy. `State::tour_route` holds it per session so
+  a test can walk the other.
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
   (`users.settings.clubhouse_tutorial_done`, late-core). While armed the
   session lands in the Clubhouse whatever the "Land on" tweak says
@@ -192,7 +225,8 @@ room is the chat surface, and the full history lives in #lounge on Home.
   returns a `TourMove` telling the gate where the next stop lives.
   `Homecoming`'s Enter finishes the tour in place and frees input. On a
   first visit's tour every stop reached counts once on
-  `late_ssh_tour_stops_total{stop}`, the welcome box included (`enter_screen`
+  `late_ssh_tour_stops_total{stop}` (on the `Board` route: `welcome`,
+  `chat`, `table`, `board`, `week`, `done`), the welcome box included (`enter_screen`
   returns true when it began the tour; `State::tour_start` says how the one
   in progress began, so a `/onboard` rerun counts nothing). The counting
   happens in `App::enter_clubhouse` and `app/input.rs::tour_advance`, never
@@ -213,7 +247,8 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `sync_tour_modal` in `app/input.rs`); both modals take the header as an
   argument and drop their own footer, because none of its keys work
   mid-tour. Nothing in a held modal moves on its own.
-- **The practice table.** Enter at the lobby stop opens `VisitTable`: a
+- **The practice table.** Enter at the lobby stop (on the `Board`
+  route, at the chat stop) opens `VisitTable`: a
   pool table that exists only in this session
   (`DailyState::open_practice_table`, see `app/lobby/daily/CONTEXT.md`),
   with the same header drawn above the board. The break is part of the
@@ -238,12 +273,47 @@ room is the chat surface, and the full history lives in #lounge on Home.
   across the top (`TourHeader::draw_above`) and the fight in the rest of
   the content area instead of the hub. Enter or Space is a blow
   (`TourStep::Fight`), and Enter moves on only once the dragon is down.
+- **The board stop** (`Board` route). `VisitBoard` takes the Arcade page
+  over the same way: `render.rs` draws the header across the top and the
+  Arcade draws the board in the room left under it. It stands in one of
+  three places, `ui::board_stop` (`BoardStop`): `Open`, the header asks
+  for the board's keys and Enter is one of them (it turns the tile);
+  `Solved`, the send-off, which names tomorrow's rung as the first star
+  (`late_core::models::daily_rung::rung_for` on the next UTC day; the
+  tour's own easy Netwalk is never a rung, so day one's win is never a
+  star and tomorrow's can be the first), Enter moves on to the week; `TooSmall`, a terminal the
+  board does not fit under the header
+  (`arcade/netwalk/ui.rs::lent_board_fits` on the room left under it),
+  where the header says so and Enter walks on, so nobody is held at a
+  board they cannot see and nobody skips one they can. The gate and the
+  renderer both read `board_stop`, so they cannot disagree; a solved
+  board stays solved whatever the terminal does afterwards. The gate
+  hands the board's own keys and arrows to the Arcade
+  (`arcade/input.rs::lent_board_key`, `lent_board_arrow`: moving,
+  turning, locking, reset; never the keys that swap the board for
+  another), and the practice table is dropped on the way in
+  (`leave_board`). A rerun whose easy Netwalk is already solved today
+  meets the board solved and Enter moves on.
+- **The week stop** (`Board` route). `VisitWeek` is a boxed stop over
+  the Arcade lobby, the board put away under it: today's badge, starred
+  once today's rung is won, tomorrow's large with its name, and beside
+  them three lines, that it is up at 00:00 UTC and the first star, that
+  it is one board a day, the same for everyone, won on its day for the
+  star, and that the days after sit on the lobby's week. The rest of the
+  week is the lobby's, visible around the box. Look only: the gate
+  swallows every key but Enter and `q`, and its breaker reads `finish
+  the tour · into the chat`, the one stop whose Enter is not a "next".
+  The widget is the Arcade's (`arcade/week.rs`, `arcade/CONTEXT.md`, the
+  week); `render.rs` reads the `Week` for the frame and hands it to
+  `ui::draw_tour_overlay`, which only places it.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
   `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
   below the quit-confirm modal) swallows every input, mouse and chords
-  included, except Enter, Space at the practice table and the fight, and `q` (quitting always works). A lone Esc reaches
+  included, except Enter, Space at the practice table and the fight, the board's keys at the board stop, and `q` (quitting always works). A lone Esc reaches
   `dispatch_escape` without passing the gate, so that returns early while a
-  stop is up, after the quit-confirm arm. There is no skip. Completion
+  stop is up, after the quit-confirm arm, taking back the board stop's
+  skip question on its way. No stop can be skipped but the board, and
+  that one asks first. Completion
   persists once via `ProfileService::set_clubhouse_tutorial_done`
   (fire-and-forget, failure only logged: worst case the tour runs again
   next session).
@@ -251,7 +321,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   commands (so not the Lounge's): the chat state raises a request,
   `start_tour` in `app/input.rs` walks to the tavern and calls
   `State::begin_tutorial` with `TourStart::Rerun`, the same route the first
-  visit gets (welcome box at the door, a fresh fight). It is just as
+  visit gets on the route in force (welcome box at the door, a fresh fight). It is just as
   forced. Only `TourStart::FirstVisit` offers the welcome pour, so a
   regular's rerun ends with no glow and no scripted greeting.
 - **The hidden treasure:** the bartender is deliberately absent from the
@@ -261,7 +331,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   their first visit (`State::welcome_pour_due`); since walking is gated until the homecoming
   Enter, in practice that is after the send-off. The homecoming box ends
   with a whispered pointer at it, and the bar sign pulses until the pour is
-  claimed (`State::bar_glow`). The once-ever guarantee is
+  claimed (`State::bar_glow`). On the `Board` route, which ends in the
+  chat, the glow is the only pointer, on the first walk back to the
+  tavern. The once-ever guarantee is
   `UserDrinks::record_welcome_pour`, an insert-only comp that returns
   `None` for anyone who has ever drunk, so tour reruns after a mid-tour
   disconnect can't double-comp.

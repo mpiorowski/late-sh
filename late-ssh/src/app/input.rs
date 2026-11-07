@@ -1865,9 +1865,11 @@ fn dispatch_escape(app: &mut App) {
         quit_confirm::input::handle_escape(app);
         return;
     }
-    // A lone Esc skips the tour gate the same way, and would close the modal
-    // or the practice table a stop is holding open.
+    // A lone Esc skips the tour gate the same way, and would close the modal,
+    // the practice table or the board a stop is holding open. The one thing
+    // it does there is take back the board stop's skip question.
     if app.clubhouse.tutorial_forced_step().is_some() {
+        app.clubhouse.board_skip_asked = false;
         return;
     }
     if app.show_help {
@@ -3514,11 +3516,12 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 
 /// The forced first-visit tour: while a stop is up
 /// (`clubhouse::state::State::tutorial_forced_step`), Enter moves it on and
-/// quitting is the way out. Everything else, mouse, arrows, and chords
-/// included, dies here so no modal, composer, or game can hijack a newcomer
-/// mid-route. Returns true when the event was consumed.
+/// quitting is the way out. At the board stop the board's own keys reach
+/// the Arcade; everything else, mouse, chords and pastes included, dies
+/// here so no modal, composer, or game can hijack a newcomer mid-route.
+/// Returns true when the event was consumed.
 fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::clubhouse::state::{TableStop, TourStep};
+    use crate::app::clubhouse::state::{BoardStop, TableStop, TourStart, TourStep};
 
     let Some(step) = app.clubhouse.tutorial_forced_step() else {
         return false;
@@ -3526,7 +3529,17 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
     let byte = match event {
         ParsedInput::Byte(byte) => *byte,
         ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
-        // Arrows, mouse, pastes: swallowed while the tour runs.
+        // The board takes the arrows; nowhere else does.
+        ParsedInput::Arrow(key) => {
+            match step {
+                TourStep::Board => {
+                    crate::app::arcade::input::lent_board_arrow(app, *key);
+                }
+                TourStep::Enter | TourStep::Table | TourStep::Fight => {}
+            }
+            return true;
+        }
+        // Mouse, pastes, chords: swallowed while the tour runs.
         _ => return true,
     };
     match (step, byte) {
@@ -3555,14 +3568,57 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
         // The fight is the same: every press is the next blow until it is won.
         (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
         (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
+        // The board has to be solved: until then Enter is one of its keys
+        // (it turns the tile), and only a solved board lets it move on. A
+        // terminal the board does not fit has nothing to solve, so Enter
+        // walks on from there.
+        (TourStep::Board, b'\r' | b'\n') => {
+            match board_stop_now(app) {
+                BoardStop::Open => {
+                    crate::app::arcade::input::lent_board_key(app, byte);
+                }
+                // The skip, confirmed: the board goes unsolved, and that is
+                // counted on a first visit the way the stops are.
+                BoardStop::SkipAsked => {
+                    match app.clubhouse.tour_start() {
+                        TourStart::FirstVisit => crate::metrics::record_tour_board_skip(),
+                        TourStart::Rerun => {}
+                    }
+                    tour_advance(app);
+                }
+                BoardStop::TooSmall | BoardStop::Solved { .. } => tour_advance(app),
+            }
+        }
+        // `s` on the open board asks before it lets the board go.
+        (TourStep::Board, b's' | b'S') => match board_stop_now(app) {
+            BoardStop::Open => app.clubhouse.board_skip_asked = true,
+            BoardStop::SkipAsked | BoardStop::TooSmall | BoardStop::Solved { .. } => {}
+        },
         // The way out is always open.
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, b'q' | b'Q') => {
+        (TourStep::Enter | TourStep::Table | TourStep::Fight | TourStep::Board, b'q' | b'Q') => {
             trigger_global_quit(app)
         }
+        // While the stop asks, the board does not move.
+        (TourStep::Board, _) => match board_stop_now(app) {
+            BoardStop::SkipAsked => {}
+            BoardStop::Open | BoardStop::TooSmall | BoardStop::Solved { .. } => {
+                crate::app::arcade::input::lent_board_key(app, byte);
+            }
+        },
         (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
     }
     sync_tour_modal(app);
     true
+}
+
+/// Where the board stop stands this frame.
+fn board_stop_now(app: &App) -> crate::app::clubhouse::state::BoardStop {
+    crate::app::clubhouse::ui::board_stop(
+        app.content_area(),
+        app.netwalk_state.is_solved(),
+        app.clubhouse.board_skip_asked,
+        chrono::Utc::now(),
+    )
 }
 
 /// `/onboard`: the first-visit tour from the top, for anyone who asks.
@@ -3602,6 +3658,13 @@ fn tour_advance(app: &mut App) {
             app.daily.open_practice_table(Screen::Arcade, &username);
             app.set_screen(Screen::DailyMatch);
         }
+        // Today's board, opened on the Arcade the way its lobby card opens
+        // it (the practice table left behind is dropped on the way): a real
+        // daily, a real win.
+        TourMove::Board => {
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Arcade);
+            crate::app::arcade::input::open_lent_board(app);
+        }
         // Home with its stock second layout up, the street: a device that
         // deleted it gets the missing-name banner under the stop.
         TourMove::Layouts => {
@@ -3620,6 +3683,14 @@ fn tour_advance(app: &mut App) {
             crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
         }
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
+        // The won board is put away; the week's box draws over the lobby.
+        TourMove::Week => crate::app::arcade::input::close_lent_board(app),
+        // The session lands in the chat, the place the route pitched first
+        // and where everyone is.
+        TourMove::FinishedAtChat => {
+            app.set_screen(Screen::Dashboard);
+            app.persist_clubhouse_tutorial_done();
+        }
     }
     // The stop just reached, on a first visit's tour only (its welcome box
     // is counted where the tour began, `App::enter_clubhouse`): a rerun is

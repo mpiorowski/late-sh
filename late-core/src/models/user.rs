@@ -98,6 +98,7 @@ crate::model! {
     struct User {
         @generated
         pub last_seen: DateTime<Utc>,
+        pub login_count: i32,
         pub is_admin: bool,
         pub is_moderator: bool;
 
@@ -564,6 +565,24 @@ impl User {
             )
             .await?;
         Ok(row.map(Self::from))
+    }
+
+    /// One more login for the account: the count after it. A drain handoff
+    /// resuming on another pod is not a login and does not call this.
+    pub async fn note_login(client: &Client, user_id: Uuid) -> Result<i32> {
+        let row = client
+            .query_opt(
+                &format!(
+                    "UPDATE {} SET login_count = login_count + 1 WHERE id = $1 RETURNING login_count",
+                    Self::TABLE
+                ),
+                &[&user_id],
+            )
+            .await?;
+        match row {
+            Some(row) => Ok(row.get("login_count")),
+            None => bail!("user not found"),
+        }
     }
 
     pub async fn update_last_seen(&mut self, client: &Client) -> Result<()> {

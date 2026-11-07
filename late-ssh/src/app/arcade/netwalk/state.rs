@@ -26,6 +26,11 @@ use super::svc::NetwalkService;
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
+/// The board the first-visit tour borrows (`arcade/input.rs::open_lent_board`):
+/// today's daily at its easiest, the 5x5 a newcomer finishes in a few
+/// minutes.
+pub const LENT_DIFFICULTY: Difficulty = Difficulty::Easy;
+
 /// One side of a tile: a bit of its connection mask, and a step on the grid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Side {
@@ -276,6 +281,15 @@ impl State {
         self.mode = Mode::Daily;
         self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
         self.message = self.board_message();
+    }
+
+    /// Today's daily at [`LENT_DIFFICULTY`], for the first-visit tour.
+    pub fn open_lent_daily(&mut self) {
+        let index = DIFFICULTIES
+            .iter()
+            .position(|difficulty| *difficulty == LENT_DIFFICULTY)
+            .expect("the lent difficulty is one of the dailies");
+        self.open_daily(index);
     }
 
     /// Roll the dailies forward when the UTC date changes under a live

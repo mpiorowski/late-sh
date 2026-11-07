@@ -73,7 +73,8 @@ sequenceDiagram
   event is published in `pty_request`, the first point that knows whether
   the session's CLI moved it here, off a draining pod or on a quit-modal
   restart (`LATE_RESUME`); a moved session publishes none. Creating the receiver after the publish misses the user's
-  own login event.
+  own login event. The same point counts the login (`users.login_count`,
+  `User::note_login`); a moved session keeps the count it arrived with.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
 - SSH compression is pinned to `NONE`: a client that negotiates zlib drops
@@ -393,7 +394,10 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   support list per terminal, why there is no OSC 8, Shift+drag to select past
   mouse reporting, OSC 777/9 notification support (tmux needs
   `allow-passthrough`). Splash tips live in
-  `late-ssh/assets/splash_tips/*.json`.
+  `late-ssh/assets/splash_tips/*.json`; on logins two to seven the tip is
+  the "did you know" series instead (`common/splash_tips.rs`
+  `DidYouKnow`, one line per login by `login_count`, the radio first,
+  counted by `late_ssh_did_you_know_total{line}`).
 
 ## 11. Global keys
 
@@ -460,7 +464,10 @@ a no-op twin when built without `otel`.
 - Newcomers: `late_ssh_tour_stops_total{stop}` (a first-visit tour stop
   reached: the welcome box when the tour begins, `App::enter_clubhouse`,
   then each stop an Enter at the one before reaches, `input.rs::tour_advance`;
-  the drop between two stops is where they leave the tour. A tour left
+  the drop between two stops is where they leave the tour. The route in
+  force (`clubhouse::state::TOUR_ROUTE`) reaches `welcome`, `chat`,
+  `table`, `board`, `week`, `done`, and `board` against `week` is what
+  the board costs. A tour left
   midway starts over at the welcome box next session, a new attempt;
   `/onboard` reruns are not counted) and
   `late_ssh_session_ends_total{tenure,screen}` (the screen that was up when

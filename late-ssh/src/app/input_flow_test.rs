@@ -3679,6 +3679,7 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
     // Arm the tour the way a first-ever session does: land in the tavern
     // with the walkthrough pending.
     app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tour_route = crate::app::clubhouse::state::TourRoute::House;
     app.clubhouse.tutorial = Tutorial::Pending;
     app.clubhouse
         .enter_screen(crate::app::presence::svc::now_ms());
@@ -3877,6 +3878,7 @@ async fn forced_tour_skips_the_practice_table_on_a_small_terminal() {
     app.resize(80, 24).unwrap();
 
     app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tour_route = crate::app::clubhouse::state::TourRoute::House;
     app.clubhouse.tutorial = Tutorial::Pending;
     app.clubhouse
         .enter_screen(crate::app::presence::svc::now_ms());
@@ -3923,6 +3925,7 @@ async fn forced_tour_quit_confirm_shows_over_the_held_stations_modal() {
     app.resize(80, 24).unwrap();
 
     app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tour_route = crate::app::clubhouse::state::TourRoute::House;
     app.clubhouse.tutorial = Tutorial::Pending;
     app.clubhouse
         .enter_screen(crate::app::presence::svc::now_ms());
@@ -3948,6 +3951,362 @@ async fn forced_tour_quit_confirm_shows_over_the_held_stations_modal() {
     );
     assert!(frame.contains("the tour · the radio"), "frame={frame:?}");
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitMusic);
+}
+
+/// The `Board` route, the one every session walks: the gate swallows every
+/// key the route does not take, Enter walks the door to the chat stop, the
+/// practice table's break has to be played, and today's board has to be
+/// won, for real, before the last Enter lands the session in the chat.
+#[tokio::test]
+async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
+    use crate::app::arcade::netwalk::state::{self as netwalk, LENT_DIFFICULTY, Turn};
+    use crate::app::clubhouse::state::{TOUR_ROUTE, TourRoute, Tutorial};
+    use crate::app::common::primitives::Screen;
+    use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle};
+    use late_core::models::netwalk::DailyWin;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-board-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-board-flow-it");
+    // Room for the practice table under its header.
+    app.resize(160, 50).unwrap();
+    assert_eq!(TOUR_ROUTE, TourRoute::Board);
+    assert_eq!(app.clubhouse.tour_route, TourRoute::Board);
+
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("three stops, then the board is yours"),
+        "frame={frame:?}"
+    );
+
+    // The gate swallows everything but Enter: no page hopping, no Tab, no
+    // help modal, no reserved chords, no composer, no arrows.
+    for bytes in [
+        &b"2"[..],
+        b"\t",
+        b"?",
+        b"\x0f",
+        b"\x07",
+        b"\x05",
+        b"i",
+        b"\x1b[B",
+    ] {
+        app.handle_input(bytes);
+    }
+    assert_eq!(app.screen, Screen::Clubhouse);
+    assert!(!app.show_help);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
+
+    // Enter walks to Home for the chat stop, which leads to the table.
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
+    app.handle_input(b"i");
+    assert!(!app.chat.composing);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("[Enter] next: one shot of pool"),
+        "frame={frame:?}"
+    );
+
+    // Enter leads to the practice table, where the break has to be played.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
+    assert_eq!(app.screen, Screen::DailyMatch);
+    assert!(!app.stations_modal_state.is_open());
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            app.daily
+                .board
+                .as_ref()
+                .is_some_and(|board| board.detail.is_some())
+        },
+        "practice table racked",
+    )
+    .await;
+    assert!(!app.daily.practice_played());
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
+    wait_for_esc_effect(&mut app, |app| app.daily.practice_played(), "break struck").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("[Enter] next: today's board"),
+        "frame={frame:?}"
+    );
+
+    // Enter leaves the table behind and opens today's board on the Arcade:
+    // the Netwalk daily at its easiest, the real one, under the tour's
+    // header.
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(app.daily.board.is_none());
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert!(app.is_playing_game);
+    assert_eq!(app.game_selection, ArcadeGame::Puzzle(DailyPuzzle::Netwalk));
+    assert_eq!(app.netwalk_state.difficulty(), LENT_DIFFICULTY);
+    assert!(app.netwalk_state.is_daily_active());
+    let today = chrono::Utc::now().date_naive();
+    assert_eq!(app.netwalk_state.puzzle_date(), today);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("the tour · today's board"),
+        "frame={frame:?}"
+    );
+    assert!(
+        frame.contains("[hjkl/arrows] move · [Space] turn · [f] lock"),
+        "frame={frame:?}"
+    );
+
+    // Nothing leaves the board before the win: Esc, the page keys and the
+    // board-switching keys stay with the gate, and Enter is a turn, not a
+    // way past.
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    app.handle_input(b"1\tp]\r");
+    assert_eq!(app.screen, Screen::Arcade);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert!(app.is_playing_game);
+    assert!(app.netwalk_state.is_daily_active());
+    assert_eq!(app.netwalk_state.difficulty(), LENT_DIFFICULTY);
+
+    // One tile from done: an end of the network turned off its line. The
+    // board's keys walk the cursor there and turn it back, the real win.
+    let solution =
+        netwalk::generate(LENT_DIFFICULTY, netwalk::daily_seed(today, LENT_DIFFICULTY)).solution;
+    let leaf = solution
+        .iter()
+        .position(|mask| mask.count_ones() == 1)
+        .expect("a spanning tree has an end");
+    let mut tiles = solution.clone();
+    tiles[leaf] = netwalk::rotate(tiles[leaf], Turn::Clockwise);
+    app.netwalk_state
+        .set_board_for_test(LENT_DIFFICULTY, tiles, 3);
+    assert!(!app.netwalk_state.is_solved());
+    let dimension = app.netwalk_state.dimension();
+    let (row, column) = (leaf / dimension, leaf % dimension);
+    let cursor = app.netwalk_state.cursor();
+    let (cursor_row, cursor_column) = (cursor / dimension, cursor % dimension);
+    for _ in cursor_row..row {
+        app.handle_input(b"j");
+    }
+    for _ in row..cursor_row {
+        app.handle_input(b"k");
+    }
+    for _ in cursor_column..column {
+        app.handle_input(b"l");
+    }
+    for _ in column..cursor_column {
+        app.handle_input(b"\x1b[D");
+    }
+    assert_eq!(app.netwalk_state.cursor(), leaf);
+    app.handle_input(b"x");
+    assert!(app.netwalk_state.is_solved());
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("connected. that was day one."),
+        "frame={frame:?}"
+    );
+    assert!(frame.contains("[Enter] next: the week"), "frame={frame:?}");
+
+    // The win is the Arcade's own: it lands in the day's wins.
+    let client = test_db.db.get().await.expect("db client");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let win = DailyWin::find(&client, user.id, LENT_DIFFICULTY.key(), today)
+            .await
+            .expect("query the win");
+        if win.is_some() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the lent board's win never landed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Enter puts the board away and boxes the week over the Arcade lobby:
+    // today's rung starred once won, tomorrow's large, look only.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(!app.is_playing_game);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("the tour · the week"), "frame={frame:?}");
+    assert!(frame.contains("tomorrow"), "frame={frame:?}");
+    assert!(
+        frame.contains("[Enter] finish the tour · into the chat"),
+        "frame={frame:?}"
+    );
+    app.handle_input(b"o]");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert!(!app.arcade_solvers_open);
+
+    // Enter lands in the chat: the tour is done, input is free again, and
+    // the Arcade still holds the won board.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(!app.is_playing_game);
+    app.handle_input(b"i");
+    assert!(app.chat.composing, "input is free: i composes");
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    app.handle_input(b"2");
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(!app.is_playing_game);
+    assert!(app.netwalk_state.is_solved());
+}
+
+/// On the `Board` route a terminal too small for the table or the board
+/// under its header has nothing to play: each stop says so and Enter walks
+/// on, with no break struck blind.
+/// `s` at the board asks first; Esc takes the question back, Enter on it
+/// leaves the board unsolved and goes on to the week.
+#[tokio::test]
+async fn forced_tour_board_can_be_skipped_after_a_confirmation() {
+    use crate::app::clubhouse::state::{TourRoute, Tutorial};
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-skip-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-skip-flow-it");
+    app.resize(160, 50).unwrap();
+    assert_eq!(app.clubhouse.tour_route, TourRoute::Board);
+
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            app.daily
+                .board
+                .as_ref()
+                .is_some_and(|board| board.detail.is_some())
+        },
+        "practice table racked",
+    )
+    .await;
+    app.handle_input(b"\r");
+    wait_for_esc_effect(&mut app, |app| app.daily.practice_played(), "break struck").await;
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert!(app.is_playing_game);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("[s] skip"), "frame={frame:?}");
+
+    // `s` asks; the board's keys and Enter do not move the board meanwhile.
+    app.handle_input(b"s");
+    assert!(app.clubhouse.board_skip_asked);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("leave the board unsolved?"),
+        "frame={frame:?}"
+    );
+    assert!(
+        frame.contains("[Enter] skip to the week · [Esc] back to the board"),
+        "frame={frame:?}"
+    );
+    let cursor = app.netwalk_state.cursor();
+    app.handle_input(b"l");
+    assert_eq!(app.netwalk_state.cursor(), cursor);
+
+    // Esc takes the question back: the board is open again, nothing moved.
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.clubhouse.board_skip_asked);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert!(app.is_playing_game);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("solve it, then we go."), "frame={frame:?}");
+
+    // Asked again and confirmed: the board goes unsolved, the week is up.
+    app.handle_input(b"s\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert!(!app.clubhouse.board_skip_asked);
+    assert!(!app.netwalk_state.is_solved());
+    assert!(!app.is_playing_game);
+    assert_eq!(app.screen, Screen::Arcade);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("the tour · the week"), "frame={frame:?}");
+    assert!(
+        frame.contains("up at 00:00 UTC: your first star."),
+        "frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn forced_tour_board_route_walks_past_what_a_small_terminal_cannot_show() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-small-board-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-small-board-flow-it");
+    app.resize(80, 12).unwrap();
+
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
+    app.handle_input(b"\r\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
+    assert_eq!(app.screen, Screen::DailyMatch);
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            app.daily
+                .board
+                .as_ref()
+                .is_some_and(|board| board.detail.is_some())
+        },
+        "practice table racked",
+    )
+    .await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("this table needs a bigger window"),
+        "frame={frame:?}"
+    );
+    assert!(
+        frame.contains("[Enter] next: today's board"),
+        "frame={frame:?}"
+    );
+
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(app.daily.board.is_none());
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("this board needs a bigger window"),
+        "frame={frame:?}"
+    );
+    assert!(frame.contains("[Enter] next: the week"), "frame={frame:?}");
+
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(!app.is_playing_game);
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
+    assert_eq!(app.screen, Screen::Dashboard);
 }
 
 /// `/onboard` from Home puts anyone back at the tavern door with the tour

@@ -937,6 +937,7 @@ pub struct ChatState {
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
+    pub(crate) ladder_marks: HashMap<Uuid, String>,
     pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1356,6 +1357,7 @@ impl ChatState {
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
+            ladder_marks: HashMap::new(),
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
@@ -5905,6 +5907,10 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn ladder_marks(&self) -> &HashMap<Uuid, String> {
+        &self.ladder_marks
+    }
+
     pub fn chat_badges(&self) -> &HashMap<Uuid, String> {
         &self.chat_badges
     }
@@ -5915,6 +5921,13 @@ impl ChatState {
 
     fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
         let changed = set_context_value(&mut self.bonsai_glyphs, user_id, glyph);
+        if changed {
+            self.context_epoch += 1;
+        }
+    }
+
+    fn set_ladder_marks(&mut self, user_id: Uuid, marks: Option<&str>) {
+        let changed = set_context_value(&mut self.ladder_marks, user_id, marks);
         if changed {
             self.context_epoch += 1;
         }
@@ -6092,6 +6105,9 @@ impl ChatState {
             if !snapshot.bonsai_glyphs.contains_key(user_id) {
                 context_changed |= self.bonsai_glyphs.remove(user_id).is_some();
             }
+            if !snapshot.ladder_marks.contains_key(user_id) {
+                context_changed |= self.ladder_marks.remove(user_id).is_some();
+            }
             if !snapshot.chat_badges.contains_key(user_id) {
                 context_changed |= self.chat_badges.remove(user_id).is_some();
             }
@@ -6194,6 +6210,7 @@ impl ChatState {
             changed = true;
         }
         context_changed |= extend_changed(&mut self.bonsai_glyphs, snapshot.bonsai_glyphs);
+        context_changed |= extend_changed(&mut self.ladder_marks, snapshot.ladder_marks);
         context_changed |= extend_changed(&mut self.chat_badges, snapshot.chat_badges);
         context_changed |= extend_changed(
             &mut self.profile_award_badges,
@@ -6246,6 +6263,7 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_ladder_marks,
                     author_chat_badge,
                     author_profile_award_badges,
                 } => {
@@ -6294,6 +6312,7 @@ impl ChatState {
                         self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
+                    self.set_ladder_marks(message.user_id, author_ladder_marks.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
@@ -6361,6 +6380,7 @@ impl ChatState {
                     message_gilds,
                     usernames,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                 } if self.user_id == user_id => {
@@ -6372,6 +6392,9 @@ impl ChatState {
                             context_changed |=
                                 self.bonsai_glyphs.remove(&message.user_id).is_some();
                         }
+                        if !ladder_marks.contains_key(&message.user_id) {
+                            context_changed |= self.ladder_marks.remove(&message.user_id).is_some();
+                        }
                         if !chat_badges.contains_key(&message.user_id) {
                             context_changed |= self.chat_badges.remove(&message.user_id).is_some();
                         }
@@ -6381,6 +6404,7 @@ impl ChatState {
                         }
                     }
                     context_changed |= extend_changed(&mut self.bonsai_glyphs, bonsai_glyphs);
+                    context_changed |= extend_changed(&mut self.ladder_marks, ladder_marks);
                     context_changed |= extend_changed(&mut self.chat_badges, chat_badges);
                     context_changed |=
                         extend_changed(&mut self.profile_award_badges, profile_award_badges);
@@ -6577,6 +6601,7 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_ladder_marks,
                     author_chat_badge,
                     author_profile_award_badges,
                 } => {
@@ -6589,6 +6614,7 @@ impl ChatState {
                         self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
+                    self.set_ladder_marks(message.user_id, author_ladder_marks.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,

@@ -156,7 +156,7 @@ Per person, 2026-10-23 to 2026-11-06 (14 days, database unless stated):
 | Chat messages per day | 1,030 to 1,450 (740 to 1,020 in the three weeks before); the 10 busiest authors write 80% of them, the 20 busiest 90% |
 | Daily quests completed per week | 250 to 280 by 52 to 64 people, flat since the week of 2026-09-28; weekly quests by 5 to 19 people |
 | Daily quest streaks alive (a completion today or yesterday) | 35: 15 at 1 or 2 days, 10 at 3 to 6, 3 at 7 to 13, 1 at 14 to 29, 6 at 30 or more |
-| Streak bonus paid | 33 to 36 people and about 46,000 chips a week |
+| Streak bonus paid, before the bonus was removed | 33 to 36 people and about 46,000 chips a week |
 | People who completed a daily quest | 64 in 7 days, 106 in 28, 524 ever |
 | Doors, distinct people (openings) | the Realm 24 (254), Lateania 22 (148), A Dark Room 14 (132), night city 11 (110), NetHack 10 (68), Brogue 7 (53), DCSS 6 (72) |
 | Lateania fights won | 63,000, 24,000 of them on 2026-10-30, from two level-100 characters at 212 M and 104 M xp: scripted, and it inflates the Games row, the paper's YESTERDAY line and the herald's Sunday card |
@@ -212,10 +212,11 @@ most active minutes on, ahead of Home (metrics, `tenure="first_week"`,
 
 **The first session is the tour.** Every first visit lands in the
 Clubhouse and runs the forced tour (`late-ssh/src/app/clubhouse/CONTEXT.md`
-§5): 18 stops over every page, Enter the only key that works, a pool
-break and a scripted dungeon fight that must be played, the daily board a
-stop that is looked at and not played, and nothing in the route that
-names tomorrow. Stops reached, 14 days to 2026-11-06:
+§5). The route these numbers measure is the `House` one, 18 stops over
+every page: Enter the only key that works, a pool break and a scripted
+dungeon fight that must be played, the daily board a stop that is looked
+at and not played, and nothing in the route that names tomorrow. Stops
+reached on it, 14 days to 2026-11-06:
 
 | Stop | Reached |
 |---|---|
@@ -230,7 +231,12 @@ names tomorrow. Stops reached, 14 days to 2026-11-06:
 46% finish. The biggest single drop is the Stations modal into the
 Arcade page, on sessions that are 84% plain ssh with nothing to hear.
 40% of day-one sessions end with the Clubhouse on screen
-(`late_ssh_session_ends_total{tenure="day_one"}`).
+(`late_ssh_session_ends_total{tenure="day_one"}`). The route in force
+now is the `Board` one (`TOUR_ROUTE`, one line to go back): five stops,
+welcome, chat, one shot of pool, today's board, the week of rungs ahead,
+the board played for real and won before the week; its funnel is
+`welcome`, `chat`, `table`, `board`, `week`, `done`, read against the
+targets in section 5 on the first cohort that meets it.
 
 **deadchannel**, switched on 2026-10-21, read 16 days later (2026-11-06):
 16 runners, 13 of them touched the game that day and 15 in the week,
@@ -293,12 +299,12 @@ which the room sees after the public flip.
   measured server-side for third-party streams (the CLI plays them
   direct), so the pick is the best read there is.
 - **The quest strip is a progression system nobody is shown.** Two daily
-  quests, a weekly, a six-slot streak meter and a chip bonus already run
-  at the top of the Arcade lobby: 52 to 64 people a week complete one,
-  flat since September, and 35 streaks are alive, six of them past 30
-  days. It pays chips into a deflated economy, it is visible on one
-  screen and in no message line or profile, and the tour gives it half a
-  sentence. The streak is the strongest "tomorrow" the site owns and the
+  quests, a weekly and a streak (now kept by any daily board win, with
+  no chips) already run at the top of the Arcade lobby: 52 to 64 people
+  a week complete a quest, flat since September, and 35 streaks are
+  alive, six of them past 30 days. The quests pay chips into a deflated
+  economy, the strip is visible on one screen and in no message line or
+  profile, and the tour gives it half a sentence. The streak is the strongest "tomorrow" the site owns and the
   newcomer never meets it.
 - **deadchannel works for everyone in it and is out of people.** Thirteen
   of sixteen runners touch it on a given day, the wire doubled Home's
@@ -380,21 +386,22 @@ Live, in order of evidence behind them:
   the daily board.** The funnel says the next ritual, surface or launch
   post lands on people who are gone by day two, and the day-one reads
   (section 3) say what holds them: a finished daily, a quest ticked, a
-  reason named for tomorrow. The design that follows, in the tour's own
-  terms (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): three or four stops
-  instead of 18 (what this is, the chat, today's board, see you
-  tomorrow); today's daily as the one play the route requires, in place
-  of the pool break and the scripted fight; no Stations stop on plain
-  ssh, where there is nothing to hear; a send-off that names tomorrow
-  (the board resets at 00:00 UTC, the streak that starts tonight, the
-  paper at the door). Measure it on the next cohort with the queries in
-  section 6. Targets: newcomers who win a daily on day one from 7% to 25%
-  or more, two-day return from 5% to 9%, tour completion from 46% to 80%.
-  Two to three weeks of work and one cohort to read. The steps, the
-  ladder that follows and the post after that: `devdocs/PLAN-FIRST-HOUR.md`.
+  reason named for tomorrow. Built as the tour's `Board` route, beside
+  the old `House` one and one line to revert
+  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): four stops instead of
+  18 (what this is, the chat, the pool break, today's board); today's
+  Netwalk daily as the play the route ends on, played for real and won
+  before the tour lets go, in place of the scripted fight; no Stations
+  stop on plain ssh, where there is nothing to hear; the solved board's
+  header as the send-off, naming tomorrow (a new board at 00:00 UTC with
+  the hours left), and the chat as where the tour lands. Measure it on the next cohort
+  with the queries in section 6. Targets: newcomers who win a daily on
+  day one from 7% to 25% or more, two-day return from 5% to 9%, tour
+  completion from 46% to 80%. One cohort to read. The steps, the ladder
+  that follows and the post after that: `devdocs/PLAN-FIRST-HOUR.md`.
   - **A ladder on the dailies (the Duolingo shape).** Half of it is
-    built: daily and weekly quests, a streak with a chip bonus, a strip
-    at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What
+    built: daily and weekly quests, a streak any daily win keeps, a
+    strip at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What
     Duolingo has that the strip does not: the streak is the first thing
     you see and the thing you are warned about losing, others can see
     it, the reward is standing rather than currency, and day one ends
@@ -756,6 +763,19 @@ WHERE p.completed_at >= now() - interval '42 days'
 GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT consecutive_days, count(*) FROM user_daily_quest_streaks
 WHERE last_completed_date >= current_date - 1 GROUP BY 1 ORDER BY 1;
+```
+
+The rung: stars a day, against the day's other boards (each
+`<game>_daily_wins` table, by its day column, is the roster of one
+board), and how many of a day's starrers star again the next day:
+
+```sql
+SELECT day, count(*) AS stars,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM daily_rung_stars n
+         WHERE n.user_id = s.user_id AND n.day = s.day + 1)) AS back_tomorrow
+FROM daily_rung_stars s
+WHERE day >= current_date - 28 GROUP BY 1 ORDER BY 1;
 ```
 
 deadchannel's eligible pool: the people seen this week with the hours

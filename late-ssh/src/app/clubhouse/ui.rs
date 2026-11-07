@@ -19,11 +19,13 @@ use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
+use crate::app::arcade::week::Week;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
+use late_core::models::daily_rung::rung_for;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 use late_core::models::user::{RADIO_SLOTS, RadioStation};
 
@@ -31,7 +33,7 @@ use late_core::models::presence::Emote;
 
 use super::crowd::Placement;
 use super::map;
-use super::state::{BannerLine, ClubhouseHit, State, TableStop, Tutorial};
+use super::state::{BannerLine, BoardStop, ClubhouseHit, State, TableStop, TourRoute, Tutorial};
 use crate::app::lobby::daily::pool_ui;
 
 const LABEL_MAX: usize = 10;
@@ -1245,110 +1247,141 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
     let text = Style::default().fg(theme::TEXT());
     let dim = Style::default().fg(theme::TEXT_DIM());
 
-    let (title, lines, next_label): (&str, Vec<Line>, &str) = match view.state.tutorial {
-        Tutorial::Welcome => (
-            " ☾ welcome to the late lounge ☽ ",
-            vec![
-                Line::from(vec![
-                    Span::styled(
-                        "late.sh",
-                        Style::default()
-                            .fg(theme::TEXT_BRIGHT())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(" is a late-night clubhouse in a terminal.", text),
-                ]),
-                Line::from(Span::styled(
-                    "this tavern, plus seven pages: chat, games, a canvas,",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "people, scores, events. everyone here is a real person.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(Span::styled(
-                    "this is the welcome mat. let's walk through the house.",
-                    text,
-                )),
-            ],
-            "first stop: the chat",
-        ),
-        Tutorial::Homecoming => (
-            " ☾ make yourself at home ☽ ",
-            vec![
-                Line::from(Span::styled(
-                    "that was the house. this room is the hub.",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "walk up to anything and press Enter to step through.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[arrows/hjkl] ", key),
-                    Span::styled("walk around", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("say something, it floats over your head", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[w] ", key),
-                    Span::styled("wave · ", text),
-                    Span::styled("[x] ", key),
-                    Span::styled("dance · ", text),
-                    Span::styled("[Ctrl+G] ", key),
-                    Span::styled("the lobby", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Ctrl+O] ", key),
-                    Span::styled("settings and your profile · ", text),
-                    Span::styled("[?] ", key),
-                    Span::styled("the full guide", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[5] ", key),
-                    Span::styled("the people: the map, the profiles, the jobs", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[n] ", key),
-                    Span::styled("Nightcap, the small bar out back", text),
-                ]),
-                Line::default(),
-                Line::from(Span::styled(
-                    "the bar is glowing, up and to the left. walk over.",
-                    dim,
-                )),
-                Line::from(Span::styled(
-                    "the bartender pours new faces their first drink.",
-                    dim,
-                )),
-            ],
-            "settle in",
-        ),
-        // Mid-loop stages never render in the tavern: the forced gate only
-        // lets the route's keys through, and the last stop's Enter lands
-        // straight on Homecoming.
-        Tutorial::VisitChat
-        | Tutorial::VisitMusic
-        | Tutorial::VisitArcade
-        | Tutorial::VisitLobby
-        | Tutorial::VisitTable
-        | Tutorial::VisitGames
-        | Tutorial::VisitDungeon
-        | Tutorial::VisitArtboard
-        | Tutorial::VisitMap
-        | Tutorial::VisitProfiles
-        | Tutorial::VisitJobs
-        | Tutorial::VisitLeaderboard
-        | Tutorial::VisitCalendar
-        | Tutorial::VisitLayouts
-        | Tutorial::Off
-        | Tutorial::Pending
-        | Tutorial::Done => return false,
-    };
+    let (title, lines, next_label): (&str, Vec<Line>, &str) =
+        match (view.state.tutorial, view.state.tour_route) {
+            (Tutorial::Welcome, TourRoute::Board) => (
+                " ☾ welcome to the late lounge ☽ ",
+                vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "late.sh",
+                            Style::default()
+                                .fg(theme::TEXT_BRIGHT())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" is a late-night clubhouse in a terminal.", text),
+                    ]),
+                    Line::from(Span::styled(
+                        "this tavern, a chat, and a new board every day.",
+                        text,
+                    )),
+                    Line::from(Span::styled("everyone here is a real person.", text)),
+                    Line::default(),
+                    Line::from(Span::styled(
+                        "this is the welcome mat. three stops, then the board is yours.",
+                        text,
+                    )),
+                ],
+                "first stop: the chat",
+            ),
+            (Tutorial::Welcome, TourRoute::House) => (
+                " ☾ welcome to the late lounge ☽ ",
+                vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "late.sh",
+                            Style::default()
+                                .fg(theme::TEXT_BRIGHT())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" is a late-night clubhouse in a terminal.", text),
+                    ]),
+                    Line::from(Span::styled(
+                        "this tavern, plus seven pages: chat, games, a canvas,",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "people, scores, events. everyone here is a real person.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(Span::styled(
+                        "this is the welcome mat. let's walk through the house.",
+                        text,
+                    )),
+                ],
+                "first stop: the chat",
+            ),
+            (Tutorial::Homecoming, TourRoute::House | TourRoute::Board) => (
+                " ☾ make yourself at home ☽ ",
+                vec![
+                    Line::from(Span::styled(
+                        "that was the house. this room is the hub.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "walk up to anything and press Enter to step through.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[arrows/hjkl] ", key),
+                        Span::styled("walk around", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[i] ", key),
+                        Span::styled("say something, it floats over your head", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[w] ", key),
+                        Span::styled("wave · ", text),
+                        Span::styled("[x] ", key),
+                        Span::styled("dance · ", text),
+                        Span::styled("[Ctrl+G] ", key),
+                        Span::styled("the lobby", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[Ctrl+O] ", key),
+                        Span::styled("settings and your profile · ", text),
+                        Span::styled("[?] ", key),
+                        Span::styled("the full guide", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[5] ", key),
+                        Span::styled("the people: the map, the profiles, the jobs", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[n] ", key),
+                        Span::styled("Nightcap, the small bar out back", text),
+                    ]),
+                    Line::default(),
+                    Line::from(Span::styled(
+                        "the bar is glowing, up and to the left. walk over.",
+                        dim,
+                    )),
+                    Line::from(Span::styled(
+                        "the bartender pours new faces their first drink.",
+                        dim,
+                    )),
+                ],
+                "settle in",
+            ),
+            // Mid-loop stages never render in the tavern: the forced gate only
+            // lets the route's keys through, and the last stop's Enter lands
+            // straight on Homecoming (the `Board` route ends in the chat).
+            (
+                Tutorial::VisitChat
+                | Tutorial::VisitMusic
+                | Tutorial::VisitArcade
+                | Tutorial::VisitLobby
+                | Tutorial::VisitTable
+                | Tutorial::VisitBoard
+                | Tutorial::VisitWeek
+                | Tutorial::VisitGames
+                | Tutorial::VisitDungeon
+                | Tutorial::VisitArtboard
+                | Tutorial::VisitMap
+                | Tutorial::VisitProfiles
+                | Tutorial::VisitJobs
+                | Tutorial::VisitLeaderboard
+                | Tutorial::VisitCalendar
+                | Tutorial::VisitLayouts
+                | Tutorial::Off
+                | Tutorial::Pending
+                | Tutorial::Done,
+                TourRoute::House | TourRoute::Board,
+            ) => return false,
+        };
 
     TourHeader {
         title: title.trim(),
@@ -1367,13 +1400,17 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
 /// forced gate guarantees the current screen is the stop's own page, so a
 /// mismatch, like off-tour stages, draws nothing. The Artboard stop lands
 /// behind the content disclaimer (`artboard_hidden`): it offers to show the
-/// art or skip ahead, and reads as a normal stop once shown.
-pub fn draw_tour_overlay(
+/// art or skip ahead, and reads as a normal stop once shown. `route` names
+/// what the chat stop leads to; `week` builds what the week stop shows,
+/// called at that stop only, since it scans the day's marks.
+pub(crate) fn draw_tour_overlay(
     frame: &mut Frame,
     area: Rect,
     stage: Tutorial,
+    route: TourRoute,
     screen: Screen,
     artboard_hidden: bool,
+    week: impl FnOnce() -> Week,
 ) {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
@@ -1418,7 +1455,10 @@ pub fn draw_tour_overlay(
                     Span::styled(" is in the rail on the left", text),
                 ]),
             ],
-            "the music",
+            match route {
+                TourRoute::House => "the music",
+                TourRoute::Board => "one shot of pool",
+            },
         ),
         Tutorial::VisitArcade => (
             Screen::Arcade,
@@ -1695,14 +1735,24 @@ pub fn draw_tour_overlay(
             ],
             "home to the lounge",
         ),
-        // The music, lobby, practice-table and dungeon stops write their
-        // pitch into the real surface they hold open: see `tour_header`.
+        // The week, over the Arcade lobby: today starred once its rung is
+        // won, tomorrow large, the five after as names. Look only.
+        Tutorial::VisitWeek => (
+            Screen::Arcade,
+            " ✦ the tour · the week ",
+            week().tour_lines(),
+            "into the chat",
+        ),
+        // The music, lobby, practice-table, dungeon and board stops write
+        // their pitch into the real surface they hold open: see
+        // `tour_header`.
         Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Welcome
         | Tutorial::VisitMusic
         | Tutorial::VisitLobby
         | Tutorial::VisitTable
+        | Tutorial::VisitBoard
         | Tutorial::VisitDungeon
         | Tutorial::Homecoming
         | Tutorial::Done => return,
@@ -1711,16 +1761,20 @@ pub fn draw_tour_overlay(
     if screen != home {
         return;
     }
+    // The last stop of the route says so: the newcomer learns the tour is
+    // over, not that one more page follows.
     let mut keys = Vec::new();
-    let enter_verb = if stage == Tutorial::VisitArtboard && artboard_hidden {
+    let enter = if stage == Tutorial::VisitArtboard && artboard_hidden {
         keys.push(Span::styled("[S] ", key));
         keys.push(Span::styled("show · ", text));
-        "skip"
+        format!("skip: {next_label}")
+    } else if stage == Tutorial::VisitWeek {
+        format!("finish the tour · {next_label}")
     } else {
-        "next"
+        format!("next: {next_label}")
     };
     keys.push(Span::styled("[Enter] ", key));
-    keys.push(Span::styled(format!("{enter_verb}: {next_label}"), text));
+    keys.push(Span::styled(enter, text));
     TourHeader {
         title: title.trim(),
         lines: pitch,
@@ -1733,7 +1787,8 @@ pub fn draw_tour_overlay(
 /// then a breaker carrying the only keys the stop takes, flush right. The
 /// surface stops write it into the top of the real surface they hold open
 /// (the Stations modal, the Lobby modal) or across the top of the page
-/// they take over (the practice table, the dungeon fight: `draw_above`);
+/// they take over (the practice table, the dungeon fight, today's board:
+/// `draw_above`);
 /// every other stop gets it in a box of its own (`draw_box`).
 pub(crate) struct TourHeader {
     title: &'static str,
@@ -1784,7 +1839,7 @@ impl TourHeader {
     }
 
     /// The stop across the top of a page it takes over (the practice table,
-    /// the dungeon fight), with a breathing row either side like the modals
+    /// the dungeon fight, today's board), with a breathing row either side like the modals
     /// give it. Returns the room left under it for the page.
     pub(crate) fn draw_above(&self, frame: &mut Frame, area: Rect) -> Rect {
         let [above, below] = self.split_above(area);
@@ -1828,8 +1883,9 @@ impl TourHeader {
 /// afterwards; until then the table has to fit under its header to be
 /// played.
 pub(crate) fn table_stop(content_area: Rect, played: bool) -> TableStop {
-    // Every table header is the same height, so any of them measures.
-    let [_, table] = table_header(TableStop::Racked).split_above(content_area);
+    // Every table header is the same height, on either route, so any of
+    // them measures.
+    let [_, table] = table_header(TableStop::Racked, TourRoute::House).split_above(content_area);
     match (played, pool_ui::fits(table)) {
         (true, true | false) => TableStop::Played,
         (false, true) => TableStop::Racked,
@@ -1837,21 +1893,26 @@ pub(crate) fn table_stop(content_area: Rect, played: bool) -> TableStop {
     }
 }
 
-fn table_header(table: TableStop) -> TourHeader {
+/// `route` names what the table leads to: the games, or today's board.
+fn table_header(table: TableStop, route: TourRoute) -> TourHeader {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
     let next = |label: &'static str| vec![Span::styled("[Enter] ", key), Span::styled(label, text)];
+    let onward = match route {
+        TourRoute::House => "next: the games",
+        TourRoute::Board => "next: today's board",
+    };
     let (line, keys) = match table {
         TableStop::TooSmall => (
             "this table needs a bigger window. the lobby has one waiting.",
-            next("next: the games"),
+            next(onward),
         ),
         TableStop::Racked => ("a table just for you. take the break.", next("break")),
         TableStop::Played => (
             "that was real physics. the lobby has real tables waiting.",
-            next("next: the games"),
+            next(onward),
         ),
     };
     TourHeader {
@@ -1861,13 +1922,132 @@ fn table_header(table: TableStop) -> TourHeader {
     }
 }
 
+/// Where the board stop stands on a page whose content area is
+/// `content_area`. A solved board stays solved whatever the terminal does
+/// afterwards; until then the board has to fit under its header (measured
+/// with the open stop's, the one it is played under) to be played.
+pub(crate) fn board_stop(
+    content_area: Rect,
+    solved: bool,
+    skip_asked: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> BoardStop {
+    let [_, page] = board_header(BoardStop::Open).split_above(content_area);
+    match (
+        solved,
+        crate::app::arcade::netwalk::ui::lent_board_fits(page),
+        skip_asked,
+    ) {
+        (true, true | false, true | false) => BoardStop::Solved {
+            hours_left: hours_to_rollover(now),
+            tomorrow: rung_for(now.date_naive() + chrono::Duration::days(1)),
+        },
+        (false, true, true) => BoardStop::SkipAsked,
+        (false, true, false) => BoardStop::Open,
+        (false, false, true | false) => BoardStop::TooSmall,
+    }
+}
+
+/// Whole hours until the next 00:00 UTC, rounded up, so the send-off never
+/// promises a board sooner than it comes.
+fn hours_to_rollover(now: chrono::DateTime<chrono::Utc>) -> u32 {
+    use chrono::Timelike;
+    let minutes_into_day = now.hour() * 60 + now.minute();
+    (24 * 60 - minutes_into_day).div_ceil(60)
+}
+
+fn board_header(board: BoardStop) -> TourHeader {
+    let key = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text = Style::default().fg(theme::TEXT());
+    let to_week = || {
+        vec![
+            Span::styled("[Enter] ", key),
+            Span::styled("next: the week", text),
+        ]
+    };
+    let (lines, keys) = match board {
+        BoardStop::TooSmall => (
+            vec![Line::from(Span::styled(
+                "this board needs a bigger window. it waits for you in the Arcade, under [2].",
+                text,
+            ))],
+            to_week(),
+        ),
+        BoardStop::Open => (
+            vec![
+                Line::from(Span::styled(
+                    "everyone here gets this same board today. turn the tiles until one network lights every one.",
+                    text,
+                )),
+                Line::from(Span::styled("solve it, then we go.", text)),
+            ],
+            vec![
+                Span::styled("[hjkl/arrows] ", key),
+                Span::styled("move · ", text),
+                Span::styled("[Space] ", key),
+                Span::styled("turn · ", text),
+                Span::styled("[f] ", key),
+                Span::styled("lock · ", text),
+                Span::styled("[s] ", key),
+                Span::styled("skip", text),
+            ],
+        ),
+        BoardStop::SkipAsked => (
+            vec![Line::from(Span::styled(
+                "leave the board unsolved? it waits in the Arcade, under [2], and a win there today still counts as day one.",
+                text,
+            ))],
+            vec![
+                Span::styled("[Enter] ", key),
+                Span::styled("skip to the week · ", text),
+                Span::styled("[Esc] ", key),
+                Span::styled("back to the board", text),
+            ],
+        ),
+        BoardStop::Solved {
+            hours_left,
+            tomorrow,
+        } => (
+            vec![
+                Line::from(Span::styled("connected. that was day one.", text)),
+                Line::from(Span::styled(
+                    format!(
+                        "tomorrow is your first star: {}, up at 00:00 UTC, in {hours_left} h.",
+                        tomorrow.label()
+                    ),
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("it stays in the Arcade, under ", text),
+                    Span::styled("[2]", key),
+                    Span::styled(", with who else solved it. ", text),
+                    Span::styled("[?]", key),
+                    Span::styled(" is the guide, anywhere.", text),
+                ]),
+            ],
+            to_week(),
+        ),
+    };
+    TourHeader {
+        title: "✦ the tour · today's board",
+        lines,
+        keys,
+    }
+}
+
 /// The header for the stops that live inside a real surface, `None` for
-/// every other stage. `table` is where the practice table stop stands,
-/// `fight_won` whether the dungeon's dragon is down.
+/// every other stage. `route` names what the table leads to, `table` is
+/// where the practice table stop stands, `fight_won` whether the dungeon's
+/// dragon is down, `board` where the board stop stands.
 pub(crate) fn tour_header(
     stage: Tutorial,
+    route: TourRoute,
     table: TableStop,
     fight_won: bool,
+    board: BoardStop,
 ) -> Option<TourHeader> {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
@@ -1930,7 +2110,8 @@ pub(crate) fn tour_header(
             ],
             keys: next("next: one shot of pool"),
         }),
-        Tutorial::VisitTable => Some(table_header(table)),
+        Tutorial::VisitTable => Some(table_header(table, route)),
+        Tutorial::VisitBoard => Some(board_header(board)),
         Tutorial::VisitDungeon => Some(TourHeader {
             title: "✦ the tour · a taste of the dungeon",
             lines: vec![Line::from(vec![
@@ -1951,6 +2132,7 @@ pub(crate) fn tour_header(
         | Tutorial::Welcome
         | Tutorial::VisitChat
         | Tutorial::VisitArcade
+        | Tutorial::VisitWeek
         | Tutorial::VisitGames
         | Tutorial::VisitArtboard
         | Tutorial::VisitMap

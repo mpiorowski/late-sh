@@ -790,6 +790,10 @@ fn make_app_with_chat_service_and_permissions(
         account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: world.is_new_user,
+        login_count: match world.is_new_user {
+            true => 1,
+            false => 8,
+        },
         landing_page: match world.landing_page {
             Some(page) => page,
             None => late_core::models::user::LandingPage::Clubhouse,
@@ -1095,6 +1099,7 @@ pub fn make_app_with_paired_client(
         account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: false,
+        login_count: 8,
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),

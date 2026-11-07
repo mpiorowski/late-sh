@@ -12,6 +12,8 @@ use ratatui::{
 };
 use uuid::Uuid;
 
+use late_core::models::daily_rung::{Rung, STAR_GLYPH};
+
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
     app::{
@@ -59,6 +61,10 @@ pub fn single_board_chips(puzzle: DailyPuzzle) -> i64 {
 /// Narrower lobbies drop the `[o who]` hint from the selected card; the
 /// count stays, the key is still in the guide.
 const SOLVERS_HINT_MIN_WIDTH: u16 = 62;
+
+/// Columns the list keeps for itself before the week gets a panel beside
+/// it: its longest intro line, unwrapped, plus its padding.
+const LIST_WIDTH_BESIDE_WEEK: u16 = 112;
 
 // ── Arcade game frame ─────────────────────────────────────────
 
@@ -402,6 +408,32 @@ pub fn draw_arcade_hub(
         return;
     }
 
+    // The week: today's rung and the six after it. A terminal with the
+    // room gets it as a panel down the right, beside the quests and the
+    // list; the rest get it in the list above the daily cards.
+    let today = chrono::Utc::now().date_naive();
+    let week = super::week::Week::today(
+        today,
+        view.today_statuses,
+        view.session_daily_completion,
+        view.user_id,
+    );
+    let (area, week_inline) = if area.width >= LIST_WIDTH_BESIDE_WEEK + super::week::PANEL_WIDTH
+        && area.height >= super::week::PANEL_HEIGHT
+    {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(LIST_WIDTH_BESIDE_WEEK),
+                Constraint::Length(super::week::PANEL_WIDTH),
+            ])
+            .split(area);
+        frame.render_widget(Paragraph::new(week.panel_lines()), columns[1]);
+        (columns[0], None)
+    } else {
+        (area, Some(&week))
+    };
+
     // Quests live at the top of the lobby, not in a modal: they are all
     // arcade quests, so they belong where the games are launched. Short
     // terminals drop the strip before the game list loses room.
@@ -419,7 +451,7 @@ pub fn draw_arcade_hub(
 
     // No banner art above the list: with the quest strip on top, every row
     // belongs to the games, and small terminals never had the headroom.
-    draw_game_list(frame, content_area, view);
+    draw_game_list(frame, content_area, view, week.days[0].rung, week_inline);
 
     if view.show_solvers
         && let ArcadeGame::Puzzle(game) = view.game_selection
@@ -626,13 +658,29 @@ fn wrap_names(names: &[String], width: usize) -> Vec<Vec<String>> {
     rows
 }
 
-fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
+/// The lobby's list, today's `rung` starred on its card, with the week in
+/// it above the daily cards when the lobby has no panel for it
+/// (`week_inline`).
+fn draw_game_list(
+    frame: &mut Frame,
+    area: Rect,
+    view: &ArcadeHubView<'_>,
+    rung: Rung,
+    week_inline: Option<&super::week::Week>,
+) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
 
     push_game_section(&mut lines, "─── Daily Games ───");
     lines.push(Line::from(""));
+
+    // The week, time-ordered above the game-ordered cards. The list sits
+    // four columns in from `area`.
+    if let Some(week) = week_inline {
+        lines.extend(week.lobby_lines(area.width.saturating_sub(4)));
+        lines.push(Line::from(""));
+    }
 
     lines.push(Line::from(vec![
         Span::raw("  "),
@@ -683,7 +731,20 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_MUTED())
         };
         let status = if card.available {
-            card_status_spans(view, &today, puzzle, show_hint && game == selection)
+            let mut status = Vec::new();
+            if puzzle == rung.puzzle {
+                status.push(Span::styled(
+                    format!("{STAR_GLYPH} "),
+                    Style::default().fg(theme::AMBER()),
+                ));
+            }
+            status.extend(card_status_spans(
+                view,
+                &today,
+                puzzle,
+                show_hint && game == selection,
+            ));
+            status
         } else {
             vec![Span::styled(
                 "Coming Soon",
