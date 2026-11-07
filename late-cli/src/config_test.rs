@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn explicit_config_errors_do_not_fall_back_to_default_connection() {
+    let path = std::env::temp_dir().join(format!(
+        "late-config-test-{}-{}.toml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let args = || ["--config".to_string(), path.to_string_lossy().into_owned()];
+    assert!(
+        Config::from_args(args()).is_err(),
+        "missing explicit file was ignored"
+    );
+    fs::write(&path, "ssh_target = \"127.0.0.1\"\n").unwrap();
+    let result = Config::from_args(args());
+    fs::remove_file(path).unwrap();
+    assert!(result.is_err(), "invalid explicit file was ignored");
+}
+
+#[test]
 fn from_args_accepts_identity_file_override() {
     let config = Config::from_args(["--key".to_string(), "/tmp/late-key".to_string()]).unwrap();
     assert_eq!(config.key_file, Some(PathBuf::from("/tmp/late-key")));

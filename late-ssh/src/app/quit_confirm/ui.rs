@@ -14,7 +14,7 @@ const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT_ABOVE_FOOTER: u16 = 10;
 
 /// The key rows under the spacer: `q` / `Esc`, and `r restart` under `q`
-/// when the session's CLI can move it (`handoff::svc::can_request_move`).
+/// when a capable CLI or a draining bastion can move the session.
 fn footer_rows(can_restart: bool) -> u16 {
     if can_restart { 2 } else { 1 }
 }
@@ -59,12 +59,12 @@ pub(crate) fn sayonara_scene_area(modal_area: Rect, can_restart: bool) -> Option
     ))
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, can_restart: bool) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, is_draining: bool, can_restart: bool) {
     let popup = popup_rect(area, can_restart);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Quit? ")
+        .title(if is_draining { " Update? " } else { " Quit? " })
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -83,10 +83,25 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, can_restart: bool) {
     ])
     .split(inner);
 
-    let prompt = Line::from(Span::styled(
-        "Clicked by mistake, right?",
-        Style::default().fg(theme::TEXT_BRIGHT()),
-    ));
+    let prompt = if is_draining {
+        Line::from(vec![
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to reconnect to the updated late.sh!",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            "Clicked by mistake, right?",
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ))
+    };
     frame.render_widget(Paragraph::new(prompt).centered(), layout[1]);
 
     let footer_cols = Layout::horizontal([

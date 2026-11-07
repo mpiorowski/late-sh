@@ -678,6 +678,7 @@ async fn quit_routes_open_confirm_without_persisting_exit_command() {
 #[tokio::test]
 async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
     use crate::app::common::primitives::Screen;
+    use crate::app::door::nethack::proxy::ProxyStatus;
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "door-detach-flow").await;
@@ -720,12 +721,22 @@ async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Nethack);
 
-    // Detach again, then let the fabricated proxy die (its bridge task fails
-    // to connect once polled): the next tick reaps the dead detached state so
-    // the hub card stops advertising a live game.
+    // Detach again and wait for the fabricated proxy's bridge to fail. Do not
+    // tick the app while waiting: the first tick after closure must reap the
+    // detached state and dirty the frame so the hub stops advertising it.
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Dashboard);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let proxy = app
+        .nethack_state
+        .as_ref()
+        .expect("detached nethack state")
+        .proxy()
+        .expect("running proxy");
+    wait_until(
+        || async { proxy.status() == ProxyStatus::Closed },
+        "detached NetHack proxy to close",
+    )
+    .await;
     assert!(
         app.tick(),
         "expected the reaping tick to dirty the frame so the hub pip clears"
@@ -2020,6 +2031,90 @@ async fn ctrl_s_opens_shop_from_door_launchers() {
             "Shop is available on the {screen:?} launcher"
         );
     }
+}
+
+#[tokio::test]
+async fn direct_ssh_draining_quit_confirm_uses_plain_quit_flow() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-direct-draining-it").await;
+    let mut app = make_app(
+        test_db.db.clone(),
+        user.id,
+        "quit-confirm-direct-draining-flow-it",
+    );
+    app.set_draining_for_tests(true);
+
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Quit? ").await;
+    wait_for_render_contains(&mut app, "Clicked by mistake, right?").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("r to reconnect to the updated late.sh!"),
+        "direct ssh users should not see reconnect prompt; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("Server updating! Press 'q' to quit, then reconnect to join the new pod."),
+        "direct ssh users should see manual reconnect toast; frame={frame:?}"
+    );
+
+    app.handle_input(b"r");
+    assert!(app.is_running());
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Clicked by mistake, right?"),
+        "expected quit confirm to dismiss after Esc; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn tunnel_draining_quit_confirm_can_request_upgrade_reconnect() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-tunnel-draining-it").await;
+    let mut app = make_app(
+        test_db.db.clone(),
+        user.id,
+        "quit-confirm-tunnel-draining-flow-it",
+    );
+    app.set_draining_for_tests(true);
+    app.set_supports_reconnect_on_drain_for_tests(true);
+
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, " Update? ").await;
+    wait_for_render_contains(&mut app, "r to reconnect to the updated late.sh!").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Update available! Press q then r to get the late-est features!"),
+        "tunnel users should see reconnect toast; frame={frame:?}"
+    );
+
+    app.handle_input(b"r");
+    assert_eq!(
+        app.close_code_for_tests(),
+        late_core::tunnel_protocol::TUNNEL_CLOSE_RECONNECT_REQUESTED
+    );
+    assert!(!app.is_running());
+}
+
+#[tokio::test]
+async fn draining_quit_confirm_q_still_disconnects_terminally() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quit-confirm-draining-q-it").await;
+    let mut app = make_app(
+        test_db.db.clone(),
+        user.id,
+        "quit-confirm-draining-q-flow-it",
+    );
+    app.set_draining_for_tests(true);
+
+    app.handle_input(b"q");
+    app.handle_input(b"q");
+    assert_eq!(
+        app.close_code_for_tests(),
+        late_core::tunnel_protocol::TUNNEL_CLOSE_SESSION_ENDED
+    );
+    assert!(!app.is_running());
 }
 
 #[tokio::test]

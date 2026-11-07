@@ -258,3 +258,57 @@ async fn migrations_apply_and_track() {
         .get::<_, i32>("count");
     assert_eq!(applied_after, applied);
 }
+
+#[tokio::test]
+async fn failed_migrator_releases_its_session_lock_instead_of_pooling_it() {
+    let test_db = test_db().await;
+    let db = Db::new(&DbConfig {
+        max_pool_size: 3,
+        ..test_db.db.config().clone()
+    })
+    .unwrap();
+    let control = db.get().await.unwrap();
+    control
+        .batch_execute("ALTER TABLE _migrations RENAME COLUMN name TO broken_name")
+        .await
+        .unwrap();
+    assert!(db.migrate().await.is_err());
+    // Keep any connection returned by the failed migrator checked out. A
+    // retained session lock would now block a migration on a different socket.
+    let _idle = db.get().await.unwrap();
+    control
+        .batch_execute("ALTER TABLE _migrations RENAME COLUMN broken_name TO name")
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), db.migrate())
+        .await
+        .expect("failed migration returned a session lock to the pool")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_migrators_serialize_on_a_cold_database() {
+    let test_db = test_db().await;
+    let db = &test_db.db;
+    let client = db.get().await.unwrap();
+    client
+        .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        .await
+        .unwrap();
+    drop(client);
+    // Warm two distinct connections so both migrators can race immediately.
+    let (one, two) = tokio::join!(db.get(), db.get());
+    drop((one.unwrap(), two.unwrap()));
+    let (one, two) = tokio::join!(db.migrate(), db.migrate());
+    one.expect("first migrator");
+    two.expect("second migrator");
+    let client = db.get().await.unwrap();
+    assert!(
+        client
+            .query_one("SELECT count(*)::bigint FROM _migrations", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+            > 200
+    );
+}

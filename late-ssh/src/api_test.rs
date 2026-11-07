@@ -1,10 +1,158 @@
 use crate::api::run_api_server_with_listener;
 use crate::test_helpers::{new_test_db, test_app_state, test_config};
+use futures_util::StreamExt;
+use late_core::{MutexRecover, shutdown::CancellationToken, test_utils::create_test_user};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+fn pair_request(
+    addr: SocketAddr,
+    token: &str,
+    forwarded_for: &str,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    let mut request = format!("ws://{addr}/api/ws/pair?token={token}")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("x-forwarded-for", forwarded_for.parse().unwrap());
+    request
+}
+
+async fn pair_client_ip_attempt_limits(trust_ingress: bool) {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.ws_pair_max_attempts_per_ip = 1;
+    config.ssh_proxy_trusted_cidrs = if trust_ingress {
+        vec!["127.0.0.1/32".parse().unwrap()]
+    } else {
+        vec!["192.0.2.0/24".parse().unwrap()]
+    };
+    let state = test_app_state(test_db.db.clone(), config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(run_api_server_with_listener(
+        listener,
+        state,
+        Some(shutdown.clone()),
+    ));
+
+    // Even rejected token lookups consume the attempt limit. Both address
+    // families arrive through the same actual TCP peer, just as at ingress.
+    for (client_ip, expected) in [
+        ("2001:db8::11", 404),
+        ("2001:db8::11", 429),
+        ("2001:db8::12", if trust_ingress { 404 } else { 429 }),
+        ("203.0.113.13", if trust_ingress { 404 } else { 429 }),
+    ] {
+        let error = tokio_tungstenite::connect_async(pair_request(addr, "unknown", client_ip))
+            .await
+            .unwrap_err();
+        match error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                assert_eq!(response.status(), expected, "client {client_ip}");
+            }
+            other => panic!("expected HTTP rejection: {other:?}"),
+        }
+    }
+
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn ws_pair_client_ip_attempt_limits_isolate_trusted_ipv6_and_ipv4_clients() {
+    pair_client_ip_attempt_limits(true).await;
+}
+
+#[tokio::test]
+async fn ws_pair_client_ip_untrusted_forwarded_headers_cannot_bypass_limits() {
+    pair_client_ip_attempt_limits(false).await;
+}
+
+#[tokio::test]
+async fn ws_pair_client_ip_socket_limits_isolate_trusted_ipv6_and_ipv4_clients() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.max_conns_per_ip = 1;
+    config.ssh_proxy_trusted_cidrs = vec!["127.0.0.1/32".parse().unwrap()];
+    let state = test_app_state(test_db.db.clone(), config);
+    let mut receivers = Vec::new();
+    for name in ["alice", "bob", "carol"] {
+        let user = create_test_user(&test_db.db, name).await;
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        state
+            .session_registry
+            .register(name.to_string(), tx, user.id, None)
+            .await;
+        receivers.push(rx);
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(run_api_server_with_listener(
+        listener,
+        state.clone(),
+        Some(shutdown.clone()),
+    ));
+    let mut sockets = Vec::new();
+    for (name, ip) in [
+        ("alice", "2001:db8::11"),
+        ("bob", "2001:db8::12"),
+        ("carol", "203.0.113.13"),
+    ] {
+        let (mut socket, _) = tokio_tungstenite::connect_async(pair_request(addr, name, ip))
+            .await
+            .unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let message: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        assert_eq!(message["event"], "set_playback_source");
+        sockets.push(socket);
+    }
+    {
+        let counts = state.pair_ws_counts.lock_recover();
+        assert_eq!(counts.len(), 3);
+        assert!(!counts.contains_key(&addr.ip()));
+        for ip in ["2001:db8::11", "2001:db8::12", "203.0.113.13"] {
+            assert_eq!(counts[&ip.parse::<std::net::IpAddr>().unwrap()], 1);
+        }
+    }
+    // The socket cap is checked after upgrade. Only this extra socket closes;
+    // the three original clients remain registered on their own addresses.
+    let (mut extra, _) =
+        tokio_tungstenite::connect_async(pair_request(addr, "alice", "2001:db8::11"))
+            .await
+            .unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(5), extra.next())
+        .await
+        .unwrap();
+    assert!(
+        !matches!(closed, Some(Ok(message)) if !message.is_close()),
+        "socket over the per-client limit must close"
+    );
+    assert_eq!(state.pair_ws_counts.lock_recover().len(), 3);
+
+    for socket in &mut sockets {
+        socket.close(None).await.unwrap();
+    }
+    drop(sockets);
+    crate::test_helpers::wait_until(
+        || async { state.pair_ws_counts.lock_recover().is_empty() },
+        "paired client IP slots released",
+    )
+    .await;
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+}
 
 #[tokio::test]
 async fn ws_pair_endpoint_rate_limits_repeated_attempts_from_same_ip() {

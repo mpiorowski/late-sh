@@ -47,25 +47,55 @@ variable "SSH_HOST_KEY" {
 }
 
 # =============================================================================
-# IPv6 edge proxy
+# Bastion (late-bastion)
 # =============================================================================
 
-variable "IPV6_PROXY_ENABLED" {
-  description = "Deploy a host-network IPv6-only TCP proxy in front of the IPv4-only cluster ingress."
-  type        = bool
-  default     = true
+variable "BASTION_ENABLED" {
+  description = "\"1\" to deploy late-bastion and route public SSH :22 to it through ssh-edge; \"0\" leaves :22 on direct late-ssh. Change during a maintenance window."
+  type        = string
+  default     = "0"
 }
 
-variable "IPV6_PROXY_ADDRESS" {
-  description = "Public IPv6 address to bind for the IPv6 edge proxy."
+variable "BASTION_HOST_KEY" {
+  description = "Ed25519 private key for the bastion's russh host key. Always populates the secret so a future enable doesn't require re-applying secrets."
   type        = string
-  default     = "2a01:4f9:c013:2ae1::1"
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_HOST_KEY)) > 0
+    error_message = "BASTION_HOST_KEY must be non-empty when BASTION_ENABLED=1."
+  }
 }
 
-variable "IPV6_PROXY_IMAGE" {
-  description = "HAProxy image used by the IPv6 edge proxy."
+variable "BASTION_SHARED_SECRET" {
+  description = "Pre-shared secret sent on the /tunnel WS upgrade. Mounted into both late-bastion and late-ssh."
   type        = string
-  default     = "haproxy:2.9-alpine"
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty when BASTION_ENABLED=1."
+  }
+}
+
+variable "BASTION_SSH_PORT" {
+  description = "Port the bastion russh server listens on inside the cluster."
+  type        = string
+  default     = "5222"
+}
+
+variable "BASTION_MAX_CONNS_GLOBAL" {
+  description = "Bastion: max simultaneous SSH connections (global cap)."
+  type        = string
+  default     = "10000"
+}
+
+variable "BASTION_SSH_IDLE_TIMEOUT" {
+  description = "Bastion: russh inactivity timeout in seconds."
+  type        = string
+  default     = "3600"
 }
 
 # =============================================================================
