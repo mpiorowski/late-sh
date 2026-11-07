@@ -4142,7 +4142,10 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     let frame = render_plain(&mut app);
     assert!(frame.contains("the tour · the week"), "frame={frame:?}");
     assert!(frame.contains("tomorrow"), "frame={frame:?}");
-    assert!(frame.contains("[Enter] next: the chat"), "frame={frame:?}");
+    assert!(
+        frame.contains("[Enter] finish the tour · into the chat"),
+        "frame={frame:?}"
+    );
     app.handle_input(b"o]");
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
     assert!(!app.arcade_solvers_open);
@@ -4167,6 +4170,87 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
 /// On the `Board` route a terminal too small for the table or the board
 /// under its header has nothing to play: each stop says so and Enter walks
 /// on, with no break struck blind.
+/// `s` at the board asks first; Esc takes the question back, Enter on it
+/// leaves the board unsolved and goes on to the week.
+#[tokio::test]
+async fn forced_tour_board_can_be_skipped_after_a_confirmation() {
+    use crate::app::clubhouse::state::{TourRoute, Tutorial};
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-skip-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-skip-flow-it");
+    app.resize(160, 50).unwrap();
+    assert_eq!(app.clubhouse.tour_route, TourRoute::Board);
+
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
+    wait_for_esc_effect(
+        &mut app,
+        |app| {
+            app.daily
+                .board
+                .as_ref()
+                .is_some_and(|board| board.detail.is_some())
+        },
+        "practice table racked",
+    )
+    .await;
+    app.handle_input(b"\r");
+    wait_for_esc_effect(&mut app, |app| app.daily.practice_played(), "break struck").await;
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert!(app.is_playing_game);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("[s] skip"), "frame={frame:?}");
+
+    // `s` asks; the board's keys and Enter do not move the board meanwhile.
+    app.handle_input(b"s");
+    assert!(app.clubhouse.board_skip_asked);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("leave the board unsolved?"),
+        "frame={frame:?}"
+    );
+    assert!(
+        frame.contains("[Enter] skip to the week · [Esc] back to the board"),
+        "frame={frame:?}"
+    );
+    let cursor = app.netwalk_state.cursor();
+    app.handle_input(b"l");
+    assert_eq!(app.netwalk_state.cursor(), cursor);
+
+    // Esc takes the question back: the board is open again, nothing moved.
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.clubhouse.board_skip_asked);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
+    assert!(app.is_playing_game);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("solve it, then we go."), "frame={frame:?}");
+
+    // Asked again and confirmed: the board goes unsolved, the week is up.
+    app.handle_input(b"s\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert!(!app.clubhouse.board_skip_asked);
+    assert!(!app.netwalk_state.is_solved());
+    assert!(!app.is_playing_game);
+    assert_eq!(app.screen, Screen::Arcade);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("the tour · the week"), "frame={frame:?}");
+    assert!(
+        frame.contains("up at 00:00 UTC: your first star."),
+        "frame={frame:?}"
+    );
+}
+
 #[tokio::test]
 async fn forced_tour_board_route_walks_past_what_a_small_terminal_cannot_show() {
     use crate::app::clubhouse::state::Tutorial;

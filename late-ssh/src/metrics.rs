@@ -2968,6 +2968,23 @@ mod inner {
         tour_stops_total().add(1, &[KeyValue::new("stop", tour_stop_label(stop))]);
     }
 
+    fn tour_board_skips_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_tour_board_skips_total")
+                .with_description(
+                    "First-visit tours that left the board stop unsolved by its skip: read against the week stop's count",
+                )
+                .build()
+        })
+    }
+
+    /// A first visit's tour skipped the board, confirmed.
+    pub fn record_tour_board_skip() {
+        tour_board_skips_total().add(1, &[]);
+    }
+
     fn session_ends_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -4752,6 +4769,7 @@ mod inner {
     }
     pub fn record_place_visit(_screen: Screen, _place: Place, _tenure: Tenure) {}
     pub fn record_tour_stop(_stop: Tutorial) {}
+    pub fn record_tour_board_skip() {}
     pub fn record_session_end(_tenure: Tenure, _screen: Screen) {}
     pub fn record_screensaver(
         _trigger: ScreensaverTrigger,

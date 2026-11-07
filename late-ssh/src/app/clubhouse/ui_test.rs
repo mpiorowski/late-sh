@@ -577,9 +577,12 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
     let noon = at("2026-11-06T12:10:00Z");
     let tomorrow = rung_for(chrono::NaiveDate::from_ymd_opt(2026, 11, 7).unwrap());
     let default_terminal = Rect::new(1, 1, 78, 22);
-    assert_eq!(board_stop(default_terminal, false, noon), BoardStop::Open);
     assert_eq!(
-        board_stop(default_terminal, true, noon),
+        board_stop(default_terminal, false, false, noon),
+        BoardStop::Open
+    );
+    assert_eq!(
+        board_stop(default_terminal, true, false, noon),
         BoardStop::Solved {
             hours_left: 12,
             tomorrow
@@ -587,9 +590,9 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
     );
     // Too short for the header and a five-tile board under it.
     let tiny = Rect::new(1, 1, 78, 9);
-    assert_eq!(board_stop(tiny, false, noon), BoardStop::TooSmall);
+    assert_eq!(board_stop(tiny, false, false, noon), BoardStop::TooSmall);
     assert_eq!(
-        board_stop(tiny, true, noon),
+        board_stop(tiny, true, false, noon),
         BoardStop::Solved {
             hours_left: 12,
             tomorrow
@@ -597,14 +600,14 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
     );
 
     assert_eq!(
-        board_stop(default_terminal, true, at("2026-11-06T23:30:00Z")),
+        board_stop(default_terminal, true, false, at("2026-11-06T23:30:00Z")),
         BoardStop::Solved {
             hours_left: 1,
             tomorrow
         }
     );
     assert_eq!(
-        board_stop(default_terminal, true, at("2026-11-06T00:00:00Z")),
+        board_stop(default_terminal, true, false, at("2026-11-06T00:00:00Z")),
         BoardStop::Solved {
             hours_left: 24,
             tomorrow
@@ -613,8 +616,9 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
 }
 
 /// The week stop boxes the week over the Arcade lobby: today's badge,
-/// tomorrow's large with its name, the rest as names, and Enter to the
-/// chat. Look only: no key of the lobby's is named.
+/// tomorrow's large with its name, the pitch beside them, and Enter
+/// finishes the tour in the chat. Look only: no key of the lobby's is
+/// named.
 #[test]
 fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
     let backend = ratatui::backend::TestBackend::new(80, 24);
@@ -638,16 +642,17 @@ fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
         .collect();
     let joined = rows.join("\n");
     assert!(joined.contains("✦ the tour · the week"), "{rows:#?}");
+    assert!(joined.contains("today            tomorrow"), "{rows:#?}");
     assert!(
-        joined.contains("today            tomorrow         and then"),
-        "{rows:#?}"
-    );
-    assert!(
-        joined.contains("┏━━━━━━━━━━━━━━━━━━┓   Wed 11 Le Word"),
+        joined.contains("up at 00:00 UTC: your first star."),
         "{rows:#?}"
     );
     assert!(joined.contains("hard Netwalk"), "{rows:#?}");
-    assert!(joined.contains("[Enter] next: the chat ──"), "{rows:#?}");
+    assert!(!joined.contains("and then"), "{rows:#?}");
+    assert!(
+        joined.contains("[Enter] finish the tour · into the chat ──"),
+        "{rows:#?}"
+    );
 
     // Off its page it draws nothing.
     let backend = ratatui::backend::TestBackend::new(80, 24);

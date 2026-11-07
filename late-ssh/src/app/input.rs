@@ -1866,8 +1866,10 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     // A lone Esc skips the tour gate the same way, and would close the modal,
-    // the practice table or the board a stop is holding open.
+    // the practice table or the board a stop is holding open. The one thing
+    // it does there is take back the board stop's skip question.
     if app.clubhouse.tutorial_forced_step().is_some() {
+        app.clubhouse.board_skip_asked = false;
         return;
     }
     if app.show_help {
@@ -3519,7 +3521,7 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 /// here so no modal, composer, or game can hijack a newcomer mid-route.
 /// Returns true when the event was consumed.
 fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::clubhouse::state::{BoardStop, TableStop, TourStep};
+    use crate::app::clubhouse::state::{BoardStop, TableStop, TourStart, TourStep};
 
     let Some(step) = app.clubhouse.tutorial_forced_step() else {
         return false;
@@ -3571,29 +3573,52 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
         // terminal the board does not fit has nothing to solve, so Enter
         // walks on from there.
         (TourStep::Board, b'\r' | b'\n') => {
-            let board = crate::app::clubhouse::ui::board_stop(
-                app.content_area(),
-                app.netwalk_state.is_solved(),
-                chrono::Utc::now(),
-            );
-            match board {
+            match board_stop_now(app) {
                 BoardStop::Open => {
                     crate::app::arcade::input::lent_board_key(app, byte);
+                }
+                // The skip, confirmed: the board goes unsolved, and that is
+                // counted on a first visit the way the stops are.
+                BoardStop::SkipAsked => {
+                    match app.clubhouse.tour_start() {
+                        TourStart::FirstVisit => crate::metrics::record_tour_board_skip(),
+                        TourStart::Rerun => {}
+                    }
+                    tour_advance(app);
                 }
                 BoardStop::TooSmall | BoardStop::Solved { .. } => tour_advance(app),
             }
         }
+        // `s` on the open board asks before it lets the board go.
+        (TourStep::Board, b's' | b'S') => match board_stop_now(app) {
+            BoardStop::Open => app.clubhouse.board_skip_asked = true,
+            BoardStop::SkipAsked | BoardStop::TooSmall | BoardStop::Solved { .. } => {}
+        },
         // The way out is always open.
         (TourStep::Enter | TourStep::Table | TourStep::Fight | TourStep::Board, b'q' | b'Q') => {
             trigger_global_quit(app)
         }
-        (TourStep::Board, _) => {
-            crate::app::arcade::input::lent_board_key(app, byte);
-        }
+        // While the stop asks, the board does not move.
+        (TourStep::Board, _) => match board_stop_now(app) {
+            BoardStop::SkipAsked => {}
+            BoardStop::Open | BoardStop::TooSmall | BoardStop::Solved { .. } => {
+                crate::app::arcade::input::lent_board_key(app, byte);
+            }
+        },
         (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
     }
     sync_tour_modal(app);
     true
+}
+
+/// Where the board stop stands this frame.
+fn board_stop_now(app: &App) -> crate::app::clubhouse::state::BoardStop {
+    crate::app::clubhouse::ui::board_stop(
+        app.content_area(),
+        app.netwalk_state.is_solved(),
+        app.clubhouse.board_skip_asked,
+        chrono::Utc::now(),
+    )
 }
 
 /// `/onboard`: the first-visit tour from the top, for anyone who asks.

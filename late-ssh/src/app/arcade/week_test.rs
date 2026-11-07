@@ -178,30 +178,35 @@ fn the_panel_stacks_the_week_with_the_day_and_board_beside_each_badge() {
 }
 
 /// The tour's box: today's badge, tomorrow's large one with its name, the
-/// five after as names, and what the rotation is.
+/// pitch beside them from the art's second row, and nothing else.
 #[test]
-fn the_tour_shows_today_small_tomorrow_large_and_the_rest_as_names() {
+fn the_tour_shows_today_small_tomorrow_large_and_the_pitch_beside() {
     let monday = day(2026, 11, 9);
     let week = Week::today(monday, &HashMap::new(), None, Uuid::from_u128(1));
     let rows = plain(&week.tour_lines());
-    assert_eq!(rows.len(), LARGE_ART_ROWS + 6, "{rows:#?}");
-    assert_eq!(rows[0], "  today            tomorrow         and then");
-    assert_eq!(rows[1], "┌───────┐   ┏━━━━━━━━━━━━━━━━━━┓   Wed 11 Le Word");
+    assert_eq!(rows.len(), LARGE_ART_ROWS + 4, "{rows:#?}");
+    assert_eq!(rows[0], "  today            tomorrow");
+    assert_eq!(rows[1], "┌───────┐   ┏━━━━━━━━━━━━━━━━━━┓");
     assert_eq!(
         rows[2],
-        "│ 5│ │3 │   ┃  ┌───┬───■───┐   ┃   Thu 12 medium Minesweeper"
+        "│ 5│ │3 │   ┃  ┌───┬───■───┐   ┃   up at 00:00 UTC: your first star."
+    );
+    assert!(
+        rows[4].ends_with("┃   one board a day, the same for everyone."),
+        "{rows:#?}"
     );
     assert_eq!(
         rows[5],
-        "└───────┘   ┃  │           │   ┃   Sun 15 draw-1 Solitaire"
+        "└───────┘   ┃  │           │   ┃   win it on its day for the star ✦"
     );
-    assert_eq!(rows[6], " sudoku     ┃  ╵   ┌───┐   ╵   ┃");
-    assert_eq!(rows[7], " medium     ┃      ╵   ╵       ┃");
+    assert_eq!(
+        rows[7],
+        " medium     ┃      ╵   ╵       ┃   the days after sit in the Arcade lobby, on The Week."
+    );
     assert_eq!(rows[8], "   0 ✦      ┗━━━━━━━━━━━━━━━━━━┛");
     assert_eq!(rows[9], "               hard Netwalk");
-    assert_eq!(rows[10], "");
-    assert_eq!(
-        rows[11],
-        "11 boards, one a day, all new at 00:00 UTC. one board a day, the same for everyone; win it on its day for the star."
+    assert!(
+        !rows.iter().any(|row| row.contains("and then")),
+        "{rows:#?}"
     );
 }

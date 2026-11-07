@@ -263,13 +263,15 @@ impl Week {
         column
     }
 
-    /// The tour's week stop: today small and starred, tomorrow large with
-    /// its name, the five after as names, then what the rotation is.
+    /// The tour's week stop: today small, tomorrow large, and beside them
+    /// what the rung is in three short lines. The days after are not here:
+    /// the lobby under the box carries the whole week.
     pub(crate) fn tour_lines(&self) -> Vec<Line<'static>> {
         const GAP: &str = "   ";
         let today = &self.days[0];
         let tomorrow = self.tomorrow();
         let text = Style::default().fg(theme::TEXT());
+        let dim = Style::default().fg(theme::TEXT_DIM());
         let (frame, ink, label) = palette(DayKind::Tomorrow);
         let strokes = strokes(DayKind::Tomorrow);
 
@@ -287,37 +289,29 @@ impl Week {
             centered(&tomorrow.rung.label(), LARGE_WIDTH),
             label,
         ));
-        let rows = large.len();
+
+        // Beside the art, from its second row: the pitch, a breath, the
+        // rule, a breath, where the rest of the week is.
+        let mut beside: Vec<Span<'static>> = vec![Span::raw(""); large.len()];
+        beside[2] = Span::styled(
+            "up at 00:00 UTC: your first star.",
+            text.add_modifier(Modifier::BOLD),
+        );
+        beside[4] = Span::styled("one board a day, the same for everyone.", text);
+        beside[5] = Span::styled("win it on its day for the star ✦", text);
+        beside[7] = Span::styled("the days after sit in the Arcade lobby, on The Week.", dim);
 
         let mut small = self.lobby_column(today);
-        small.resize(rows, Span::raw(" ".repeat(BADGE_WIDTH)));
+        small.resize(large.len(), Span::raw(" ".repeat(BADGE_WIDTH)));
 
-        let mut names = vec![Span::styled("and then", text.add_modifier(Modifier::BOLD))];
-        names.extend(self.days[2..].iter().map(|day| {
-            Span::styled(
-                format!("{:<7}{}", self.day_label(day), day.rung.label()),
-                text,
-            )
-        }));
-        names.resize(rows, Span::raw(""));
-
-        let mut lines: Vec<Line<'static>> = small
+        small
             .into_iter()
             .zip(large)
-            .zip(names)
-            .map(|((small, large), name)| {
-                Line::from(vec![small, Span::raw(GAP), large, Span::raw(GAP), name])
+            .zip(beside)
+            .map(|((small, large), beside)| {
+                Line::from(vec![small, Span::raw(GAP), large, Span::raw(GAP), beside])
             })
-            .collect();
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{} one board a day, the same for everyone; win it on its day for the star.",
-                rotation_sentence()
-            ),
-            text,
-        )));
-        lines
+            .collect()
     }
 
     fn day_label(&self, day: &WeekDay) -> String {
@@ -572,13 +566,15 @@ fn large_art(puzzle: DailyPuzzle) -> [&'static str; LARGE_ART_ROWS] {
             "   ▫ ▫ ▫ ▫        ",
             "                  ",
         ],
+        // One face, closed on every side: six rows leave no room for the
+        // inner rules, so the columns alone draw the grid.
         DailyPuzzle::RubiksCube => [
+            "                  ",
             "   ┌──┬──┬──┐     ",
             "   │▓▓│░░│▓▓│     ",
-            "   ├──┼──┼──┤     ",
             "   │░░│▓▓│░░│     ",
-            "   ├──┼──┼──┤     ",
             "   │▓▓│░░│▓▓│     ",
+            "   └──┴──┴──┘     ",
         ],
     }
 }

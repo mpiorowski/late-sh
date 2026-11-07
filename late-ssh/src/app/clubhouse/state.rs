@@ -216,6 +216,9 @@ pub enum BoardStop {
     TooSmall,
     /// Open and waiting to be solved.
     Open,
+    /// `s` was pressed on the open board: the stop asks before it lets
+    /// the board go unsolved. Enter skips, Esc goes back to playing.
+    SkipAsked,
     /// Connected: the send-off, with the hours until the next board and
     /// the rung it brings, the first star.
     Solved { hours_left: u32, tomorrow: Rung },
@@ -318,6 +321,9 @@ pub struct State {
     welcome_pour: WelcomePour,
     /// The dungeon stop's scripted fight.
     pub tour_fight: super::fight::Fight,
+    /// The board stop is asking whether to skip the board
+    /// (`BoardStop::SkipAsked`). Cleared by Esc there and by any advance.
+    pub board_skip_asked: bool,
     /// The bartender banner plays his lines one at a time: the pinned line,
     /// the ids waiting their turn, and the newest `created` already taken
     /// from the tail (so each line enqueues exactly once).
@@ -371,6 +377,7 @@ impl State {
             hit_layout: RefCell::new(Vec::new()),
             welcome_pour: WelcomePour::NotOffered,
             tour_fight: super::fight::Fight::new(),
+            board_skip_asked: false,
             tutorial: if tutorial_pending {
                 Tutorial::Pending
             } else {
@@ -425,6 +432,7 @@ impl State {
         self.tour_start = start;
         self.tutorial = Tutorial::Welcome;
         self.tour_fight = super::fight::Fight::new();
+        self.board_skip_asked = false;
         self.place(map::SPAWN, now_ms);
     }
 
@@ -832,6 +840,8 @@ impl State {
     /// The route forks twice, at the chat stop and at the practice table;
     /// every other stop has one next.
     pub fn tutorial_advance(&mut self) -> TourMove {
+        // Leaving any stop leaves the board's question behind.
+        self.board_skip_asked = false;
         let (next, went) = match self.tutorial {
             Tutorial::Off | Tutorial::Pending | Tutorial::Done => return TourMove::Stay,
             Tutorial::Welcome => (Tutorial::VisitChat, TourMove::Page(Screen::Dashboard)),

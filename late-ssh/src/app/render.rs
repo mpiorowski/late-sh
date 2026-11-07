@@ -2174,6 +2174,7 @@ impl App {
             crate::app::clubhouse::ui::board_stop(
                 inner,
                 ctx.netwalk_state.is_solved(),
+                ctx.clubhouse_state.board_skip_asked,
                 chrono::Utc::now(),
             ),
         );

@@ -175,9 +175,13 @@ room is the chat surface, and the full history lives in #lounge on Home.
   its lobby card opens it, so the win is the Arcade's own: the win task
   runs, the chips land, the quest ticks when Netwalk is drawn, the
   solvers roster gains the name) -> `VisitWeek` (still The Arcade, its
-  lobby: the week of rungs ahead in a box, look only). Enter at the
-  board moves on only once `netwalk_state.is_solved()`; that Enter puts
-  the won board away (`arcade/input.rs::close_lent_board`,
+  lobby: today and tomorrow's rungs in a box, look only). Enter at the board moves
+  on only once `netwalk_state.is_solved()`, or through the skip: `s` on
+  the open board asks (`BoardStop::SkipAsked`, `State::board_skip_asked`,
+  the header turns into the question), Esc takes it back, Enter on it
+  leaves the board unsolved (counted on a first visit by
+  `late_ssh_tour_board_skips_total`, to read against the `week` stop).
+  Either Enter puts the board away (`arcade/input.rs::close_lent_board`,
   `TourMove::Week`), and the Enter at the week finishes the tour (`Done`
   persisted, `TourMove::FinishedAtChat`) and lands the session on Home,
   in the chat, input free. No Stations stop (84% of newcomers are on
@@ -291,10 +295,14 @@ room is the chat surface, and the full history lives in #lounge on Home.
   (`leave_board`). A rerun whose easy Netwalk is already solved today
   meets the board solved and Enter moves on.
 - **The week stop** (`Board` route). `VisitWeek` is a boxed stop over
-  the Arcade lobby, the won board put away under it: today's badge,
-  starred once today's rung is won, tomorrow's large with its name, the
-  five days after as names, and what the rotation is. Look only: the
-  gate swallows every key but Enter and `q`, and Enter goes to the chat.
+  the Arcade lobby, the board put away under it: today's badge, starred
+  once today's rung is won, tomorrow's large with its name, and beside
+  them three lines, that it is up at 00:00 UTC and the first star, that
+  it is one board a day, the same for everyone, won on its day for the
+  star, and that the days after sit on the lobby's week. The rest of the
+  week is the lobby's, visible around the box. Look only: the gate
+  swallows every key but Enter and `q`, and its breaker reads `finish
+  the tour · into the chat`, the one stop whose Enter is not a "next".
   The widget is the Arcade's (`arcade/week.rs`, `arcade/CONTEXT.md`, the
   week); `render.rs` reads the `Week` for the frame and hands it to
   `ui::draw_tour_overlay`, which only places it.
@@ -303,7 +311,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   below the quit-confirm modal) swallows every input, mouse and chords
   included, except Enter, Space at the practice table and the fight, the board's keys at the board stop, and `q` (quitting always works). A lone Esc reaches
   `dispatch_escape` without passing the gate, so that returns early while a
-  stop is up, after the quit-confirm arm. There is no skip. Completion
+  stop is up, after the quit-confirm arm, taking back the board stop's
+  skip question on its way. No stop can be skipped but the board, and
+  that one asks first. Completion
   persists once via `ProfileService::set_clubhouse_tutorial_done`
   (fire-and-forget, failure only logged: worst case the tour runs again
   next session).

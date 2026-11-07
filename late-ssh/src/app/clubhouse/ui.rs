@@ -1740,7 +1740,7 @@ pub(crate) fn draw_tour_overlay(
             Screen::Arcade,
             " ✦ the tour · the week ",
             week.tour_lines(),
-            "the chat",
+            "into the chat",
         ),
         // The music, lobby, practice-table, dungeon and board stops write
         // their pitch into the real surface they hold open: see
@@ -1760,16 +1760,20 @@ pub(crate) fn draw_tour_overlay(
     if screen != home {
         return;
     }
+    // The last stop of the route says so: the newcomer learns the tour is
+    // over, not that one more page follows.
     let mut keys = Vec::new();
-    let enter_verb = if stage == Tutorial::VisitArtboard && artboard_hidden {
+    let enter = if stage == Tutorial::VisitArtboard && artboard_hidden {
         keys.push(Span::styled("[S] ", key));
         keys.push(Span::styled("show · ", text));
-        "skip"
+        format!("skip: {next_label}")
+    } else if stage == Tutorial::VisitWeek {
+        format!("finish the tour · {next_label}")
     } else {
-        "next"
+        format!("next: {next_label}")
     };
     keys.push(Span::styled("[Enter] ", key));
-    keys.push(Span::styled(format!("{enter_verb}: {next_label}"), text));
+    keys.push(Span::styled(enter, text));
     TourHeader {
         title: title.trim(),
         lines: pitch,
@@ -1924,19 +1928,22 @@ fn table_header(table: TableStop, route: TourRoute) -> TourHeader {
 pub(crate) fn board_stop(
     content_area: Rect,
     solved: bool,
+    skip_asked: bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> BoardStop {
     let [_, page] = board_header(BoardStop::Open).split_above(content_area);
     match (
         solved,
         crate::app::arcade::netwalk::ui::lent_board_fits(page),
+        skip_asked,
     ) {
-        (true, true | false) => BoardStop::Solved {
+        (true, true | false, true | false) => BoardStop::Solved {
             hours_left: hours_to_rollover(now),
             tomorrow: rung_for(now.date_naive() + chrono::Duration::days(1)),
         },
-        (false, true) => BoardStop::Open,
-        (false, false) => BoardStop::TooSmall,
+        (false, true, true) => BoardStop::SkipAsked,
+        (false, true, false) => BoardStop::Open,
+        (false, false, true | false) => BoardStop::TooSmall,
     }
 }
 
@@ -1981,7 +1988,21 @@ fn board_header(board: BoardStop) -> TourHeader {
                 Span::styled("[Space] ", key),
                 Span::styled("turn · ", text),
                 Span::styled("[f] ", key),
-                Span::styled("lock", text),
+                Span::styled("lock · ", text),
+                Span::styled("[s] ", key),
+                Span::styled("skip", text),
+            ],
+        ),
+        BoardStop::SkipAsked => (
+            vec![Line::from(Span::styled(
+                "leave the board unsolved? it waits in the Arcade, under [2], and a win there today still counts as day one.",
+                text,
+            ))],
+            vec![
+                Span::styled("[Enter] ", key),
+                Span::styled("skip to the week · ", text),
+                Span::styled("[Esc] ", key),
+                Span::styled("back to the board", text),
             ],
         ),
         BoardStop::Solved {
