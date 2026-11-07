@@ -229,7 +229,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `chat`, `table`, `board`, `week`, `done`), the welcome box included (`enter_screen`
   returns true when it began the tour; `State::tour_start` says how the one
   in progress began, so a `/onboard` rerun counts nothing). The counting
-  happens in `App::enter_clubhouse` and `app/input.rs::tour_advance`, never
+  happens in `App::enter_clubhouse` and `input.rs::tour_advance`, never
   in this state machine, so the drop between two stops is where newcomers
   leave the route; `late-ssh/CONTEXT.md`, Telemetry.
 - **Every stop is one `ui::TourHeader`,** drawn one way: a title, the
@@ -324,7 +324,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   next session).
 - **`/onboard` runs it again** for anyone, from any composer that runs
   commands (so not the Lounge's): the chat state raises a request,
-  `start_tour` in `app/input.rs` walks to the tavern and calls
+  `input.rs::start_tour` walks to the tavern and calls
   `State::begin_tutorial` with `TourStart::Rerun`, the same route the first
   visit gets on the route in force (welcome box at the door, a fresh fight). It is just as
   forced. Only `TourStart::FirstVisit` offers the welcome pour, so a

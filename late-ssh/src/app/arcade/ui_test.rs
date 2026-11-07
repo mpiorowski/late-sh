@@ -252,7 +252,10 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
         app::common::primitives::Screen,
         test_helpers::{make_app, new_test_db, render_plain},
     };
-    use late_core::{models::daily_rung::rung_for, test_utils::create_test_user};
+    use late_core::{
+        models::{daily_rung::rung_for, leaderboard::ArcadeGame},
+        test_utils::create_test_user,
+    };
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "rung-reader").await;
@@ -284,6 +287,11 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
         lobby.contains("─── Daily Games ───"),
         "the list's head stays in view under the week: {lobby}"
     );
+    // The rung's card can sit below the fold from the first card; selecting
+    // its game scrolls it into view, whatever day it is.
+    let first = app.game_selection;
+    app.game_selection = ArcadeGame::Puzzle(rung.puzzle);
+    let lobby = render_plain(&mut app);
     let card = lobby
         .lines()
         .find(|line| line.contains(&format!("[ {} ]", rung.puzzle.title())))
@@ -298,6 +306,7 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
         .filter(|line| line.contains('✦'))
         .count();
     assert_eq!(other_cards, 0, "only the rung's card is starred: {lobby}");
+    app.game_selection = first;
 
     // A terminal with the room gets the week as a panel down the right
     // instead, the list keeping its own width.

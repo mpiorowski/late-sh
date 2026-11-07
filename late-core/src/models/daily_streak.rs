@@ -65,53 +65,43 @@ pub enum StreakDay {
 /// Keep the streak for `won_on`, the UTC date of a daily board win. `None`
 /// when that day already counted (or the win is older than the last day
 /// kept, which a late event can be), so a day with many wins is one day.
-/// The row is read without a lock, so two wins of one user landing at the
-/// same moment from two pods (yesterday's board finished after midnight,
-/// today's in another session) can both read the old row; the write only
-/// moves the day forward, and the one that lost the race is `None` too.
+/// The row works the count out itself inside the write (yesterday
+/// continues the run, anything older restarts it at 1), so two wins of one
+/// user landing at the same moment from two pods (yesterday's board
+/// finished after midnight, today's in another session) never store a
+/// count from a stale read; the one that moves no day forward is `None`.
 pub async fn record_daily_win(
     client: &impl GenericClient,
     user_id: Uuid,
     won_on: NaiveDate,
 ) -> Result<Option<StreakDay>> {
-    let existing = client
+    let row = client
         .query_opt(
-            "SELECT last_completed_date, consecutive_days
-             FROM user_daily_quest_streaks
-             WHERE user_id = $1",
-            &[&user_id],
-        )
-        .await?;
-    let existing = existing.map(|row| {
-        (
-            row.get::<_, NaiveDate>("last_completed_date"),
-            row.get::<_, i32>("consecutive_days"),
-        )
-    });
-    let Some(day) = next_streak_day(existing, won_on) else {
-        return Ok(None);
-    };
-    let consecutive_days = match day {
-        StreakDay::First => 1,
-        StreakDay::Kept { consecutive_days } => consecutive_days,
-    };
-    let written = client
-        .execute(
             "INSERT INTO user_daily_quest_streaks
                 (user_id, last_completed_date, consecutive_days)
-             VALUES ($1, $2, $3)
+             VALUES ($1, $2, 1)
              ON CONFLICT (user_id) DO UPDATE SET
                 last_completed_date = EXCLUDED.last_completed_date,
-                consecutive_days = EXCLUDED.consecutive_days,
+                consecutive_days = CASE
+                    WHEN user_daily_quest_streaks.last_completed_date
+                        = EXCLUDED.last_completed_date - 1
+                    THEN user_daily_quest_streaks.consecutive_days + 1
+                    ELSE 1
+                END,
                 updated = current_timestamp
-             WHERE user_daily_quest_streaks.last_completed_date < EXCLUDED.last_completed_date",
-            &[&user_id, &won_on, &consecutive_days],
+             WHERE user_daily_quest_streaks.last_completed_date < EXCLUDED.last_completed_date
+             RETURNING consecutive_days",
+            &[&user_id, &won_on],
         )
         .await?;
-    if written == 0 {
+    let Some(row) = row else {
         return Ok(None);
+    };
+    let consecutive_days: i32 = row.get("consecutive_days");
+    match consecutive_days {
+        1 => Ok(Some(StreakDay::First)),
+        consecutive_days => Ok(Some(StreakDay::Kept { consecutive_days })),
     }
-    Ok(Some(day))
 }
 
 pub async fn get_daily_streak_snapshot(
@@ -170,24 +160,6 @@ pub async fn list_daily_streak_snapshots(
         })
         .filter(|(_, snapshot)| snapshot.consecutive_days > 0)
         .collect())
-}
-
-/// The rule: a day counts once, yesterday continues, anything older
-/// restarts at 1. `existing` is the row's last kept day and count.
-fn next_streak_day(existing: Option<(NaiveDate, i32)>, won_on: NaiveDate) -> Option<StreakDay> {
-    let Some((last_completed_date, consecutive_days)) = existing else {
-        return Some(StreakDay::First);
-    };
-    let yesterday = won_on - Duration::days(1);
-    if last_completed_date >= won_on {
-        None
-    } else if last_completed_date == yesterday {
-        Some(StreakDay::Kept {
-            consecutive_days: consecutive_days.max(1).saturating_add(1),
-        })
-    } else {
-        Some(StreakDay::First)
-    }
 }
 
 /// A row's last kept day and count as seen on `today`.

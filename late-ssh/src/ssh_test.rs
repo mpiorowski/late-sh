@@ -82,41 +82,120 @@ async fn ssh_bootstrap_shows_gallery_splash_only_after_always_view() {
         )
         .await
         .unwrap();
-        let mut connection = client::connect(Arc::new(client::Config::default()), addr, TestClient)
-            .await
-            .unwrap();
-        assert!(authenticate(&mut connection, "splash-test", key).await);
-        let mut shell = connection.channel_open_session().await.unwrap();
-        shell
-            .request_pty(true, "xterm-256color", 160, 40, 0, 0, &[])
-            .await
-            .unwrap();
-        shell.request_shell(true).await.unwrap();
-        let mut received = Vec::new();
-        timeout(Duration::from_secs(15), async {
-            loop {
-                if let Some(ChannelMsg::Data { data }) = shell.wait().await {
-                    received.extend_from_slice(&data);
-                    let plain = String::from_utf8_lossy(&received);
-                    if plain.contains("login splash fixture") || plain.contains(".------.") {
-                        break;
-                    }
-                }
-            }
-        })
-        .await
-        .expect("splash frame");
+        let frame = login_splash(addr, key).await;
         assert_eq!(
-            String::from_utf8_lossy(&received).contains("login splash fixture"),
+            frame.contains("login splash fixture"),
             expect_art,
             "{label}"
         );
-        connection
-            .disconnect(russh::Disconnect::ByApplication, "", "en")
+    }
+    server.abort();
+}
+
+/// The disclaimer is per device: the key's own choice wins either way, a
+/// key with none follows the account. Read on the production login path,
+/// the same one the splash test above takes.
+#[tokio::test]
+async fn ssh_bootstrap_reads_the_disclaimer_of_this_device() {
+    use late_core::models::{
+        user::{User, UserParams},
+        user_ssh_key::UserSshKey,
+    };
+    let test_db = new_test_db().await;
+    let state = test_app_state(test_db.db.clone(), test_config(test_db.db.config().clone()));
+    crate::test_helpers::publish_test_splash(&state).await;
+    let db_client = test_db.db.get().await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let fingerprint =
+        |key: &Arc<PrivateKey>| key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let (home, work, fresh) = (new_client_key(), new_client_key(), new_client_key());
+    User::create(
+        &db_client,
+        UserParams {
+            fingerprint: fingerprint(&home),
+            username: "device-disclaimer".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let user = User::find_by_fingerprint(&db_client, &fingerprint(&home))
+        .await
+        .unwrap()
+        .expect("the account its first key made");
+    for key in [&work, &fresh] {
+        UserSshKey::ensure(&db_client, user.id, &fingerprint(key))
             .await
             .unwrap();
     }
+    UserSshKey::set_artboard_disclaimer(&db_client, user.id, &fingerprint(&home), false)
+        .await
+        .unwrap();
+    UserSshKey::set_artboard_disclaimer(&db_client, user.id, &fingerprint(&work), true)
+        .await
+        .unwrap();
+
+    for (account, key, expect_art) in [
+        (true, &home, true),
+        (false, &work, false),
+        (true, &fresh, false),
+        (false, &fresh, true),
+    ] {
+        User::update_settings(
+            &db_client,
+            user.id,
+            &serde_json::json!({ "artboard_disclaimer": account }),
+        )
+        .await
+        .unwrap();
+        let frame = login_splash(addr, key.clone()).await;
+        assert_eq!(
+            frame.contains("login splash fixture"),
+            expect_art,
+            "account={account} key={}",
+            fingerprint(key)
+        );
+    }
     server.abort();
+}
+
+/// Logs `key` in over `addr`, opens the shell and reads until the login
+/// splash is up (the gallery piece or the cup); the bytes so far as text.
+async fn login_splash(addr: std::net::SocketAddr, key: Arc<PrivateKey>) -> String {
+    let mut connection = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .unwrap();
+    assert!(authenticate(&mut connection, "splash-test", key).await);
+    let mut shell = connection.channel_open_session().await.unwrap();
+    shell
+        .request_pty(true, "xterm-256color", 160, 40, 0, 0, &[])
+        .await
+        .unwrap();
+    shell.request_shell(true).await.unwrap();
+    let mut received = Vec::new();
+    timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(ChannelMsg::Data { data }) = shell.wait().await {
+                received.extend_from_slice(&data);
+                let plain = String::from_utf8_lossy(&received);
+                if plain.contains("login splash fixture") || plain.contains(".------.") {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("splash frame");
+    connection
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&received).into_owned()
 }
 
 /// A session a drain handoff moved here already joined on the old pod, so it

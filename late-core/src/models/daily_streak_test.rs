@@ -6,27 +6,6 @@ fn day(d: u32) -> NaiveDate {
 }
 
 #[test]
-fn a_day_counts_once_yesterday_continues_and_older_restarts() {
-    assert_eq!(next_streak_day(None, day(5)), Some(StreakDay::First));
-    assert_eq!(
-        next_streak_day(Some((day(4), 3)), day(5)),
-        Some(StreakDay::Kept {
-            consecutive_days: 4
-        })
-    );
-    assert_eq!(next_streak_day(Some((day(5), 4)), day(5)), None);
-    assert_eq!(
-        next_streak_day(Some((day(5), 4)), day(4)),
-        None,
-        "a late event for an earlier day never moves the run"
-    );
-    assert_eq!(
-        next_streak_day(Some((day(2), 9)), day(5)),
-        Some(StreakDay::First)
-    );
-}
-
-#[test]
 fn the_snapshot_is_empty_once_a_whole_day_went_by() {
     let kept = DailyStreakSnapshot {
         consecutive_days: 7,

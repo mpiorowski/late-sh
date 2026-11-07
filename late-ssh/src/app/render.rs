@@ -2179,13 +2179,14 @@ impl App {
                 chrono::Utc::now(),
             ),
         );
-        // On the Arcade only the board stop draws across the page: the
-        // House route's lobby stop there is a modal that takes the header.
+        // On the Arcade a stop that holds a modal (the House route's lobby
+        // stop) has the modal take the header; only a stop without one
+        // draws it across the page.
         let board_area = match (&tour_header, screen) {
             (Some(header), Screen::DailyMatch | Screen::Games) => header.draw_above(frame, inner),
             (Some(header), Screen::Arcade)
-                if ctx.clubhouse_state.tutorial
-                    == crate::app::clubhouse::state::Tutorial::VisitBoard =>
+                if ctx.clubhouse_state.tour_modal()
+                    == crate::app::clubhouse::state::TourModal::None =>
             {
                 header.draw_above(frame, inner)
             }

@@ -40,7 +40,8 @@ badges are in [`AWARDS.md`](AWARDS.md).
 only while at least one session is subscribed, publishing it through a
 `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse:
 a 30s pass measured 13% of all DB execution time (SCALE.md, DB Cost
-Ranking). The pass is **fifteen queries**: each board family is
+Ranking). The pass is **sixteen queries**: the day's rung stars are one
+(`daily_rung::starred_on`); each board family is
 one union query ranked with `PARTITION BY game`; the Lateania boards add two
 (both O(players) over `mud_characters`) and the roguelike-door boards two
 (one query per window over `door_runs`/`door_milestones`, all three families

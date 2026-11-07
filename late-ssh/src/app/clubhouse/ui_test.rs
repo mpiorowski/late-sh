@@ -647,7 +647,16 @@ fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
         joined.contains("up at 00:00 UTC: your first star."),
         "{rows:#?}"
     );
-    assert!(joined.contains("hard Netwalk"), "{rows:#?}");
+    // Today's and tomorrow's badges: the games on one row, their boards on
+    // the next, in the same columns.
+    let names = rows
+        .iter()
+        .position(|row| row.contains("sudoku") && row.contains("netwalk"))
+        .expect("the badges' name row");
+    assert!(
+        rows[names + 1].contains("medium") && rows[names + 1].contains("hard"),
+        "{rows:#?}"
+    );
     assert!(!joined.contains("and then"), "{rows:#?}");
     assert!(
         joined.contains("[Enter] finish the tour · into the chat ──"),

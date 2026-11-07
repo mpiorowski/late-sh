@@ -304,9 +304,11 @@ which the room sees after the public flip.
   no chips) already run at the top of the Arcade lobby: 52 to 64 people
   a week complete a quest, flat since September, and 35 streaks are
   alive, six of them past 30 days. The quests pay chips into a deflated
-  economy, the strip is visible on one screen and in no message line or
-  profile, and the tour gives it half a sentence. The streak is the strongest "tomorrow" the site owns and the
-  newcomer never meets it.
+  economy. The streak is the strongest "tomorrow" the site owns; the
+  ladder (step 2 of `devdocs/PLAN-FIRST-HOUR.md`) now puts it beside the
+  name in chat as a moon that fills, on the profile modal with the stars,
+  and the tour's week stop names tomorrow's board as the newcomer's first
+  star.
 - **deadchannel works for everyone in it and is out of people.** Thirteen
   of sixteen runners touch it on a given day, the wire doubled Home's
   attention on the room, and about 20 eligible people remain. The gates

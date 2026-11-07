@@ -1584,14 +1584,6 @@ impl App {
         let active_users = config.active_users.clone();
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
-        let splash_hint =
-            match super::common::splash_tips::DidYouKnow::for_login(config.login_count) {
-                Some(line) => {
-                    crate::metrics::record_did_you_know(line);
-                    line.line(&listen_url(config.web_url.trim_end_matches('/')))
-                }
-                None => super::common::splash_tips::choose_splash_hint(config.is_new_user),
-            };
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -1619,6 +1611,21 @@ impl App {
         let resume = match tour_pending {
             true => None,
             false => config.resume,
+        };
+        // The splash hint, and the did-you-know line's count, only for a
+        // session that will see the splash: a handoff keeps its login count
+        // and shows none.
+        let splash_hint = match (
+            resume.is_none(),
+            super::common::splash_tips::DidYouKnow::for_login(config.login_count),
+        ) {
+            (true, Some(line)) => {
+                crate::metrics::record_did_you_know(line);
+                line.line(&listen_url(config.web_url.trim_end_matches('/')))
+            }
+            (true, None) | (false, _) => {
+                super::common::splash_tips::choose_splash_hint(config.is_new_user)
+            }
         };
         let landing = match (tour_pending, resume) {
             (true, _) => LandingPage::Clubhouse,
