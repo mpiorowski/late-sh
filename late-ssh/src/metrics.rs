@@ -12,6 +12,7 @@ use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::audio::client_state::ClientPlatform;
+use crate::app::audio::nudge::RadioNudgeSpot;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
 use crate::app::audio::svc::{BoothFavoriteOutcome, ThumbnailFetch};
@@ -25,6 +26,7 @@ use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::clubhouse::state::Tutorial;
 use crate::app::common::primitives::Screen;
+use crate::app::common::splash_tips::DidYouKnow;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::door::realm::svc::{
     RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome, RealmPayout,
@@ -32,6 +34,7 @@ use crate::app::door::realm::svc::{
 };
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
+use crate::app::hub::dailies::return_push::RungStanding;
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
@@ -818,9 +821,12 @@ mod inner {
 
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
+    use super::DidYouKnow;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
+    use super::RadioNudgeSpot;
+    use super::RungStanding;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -2927,6 +2933,7 @@ mod inner {
             Tutorial::VisitLobby => "lobby",
             Tutorial::VisitTable => "table",
             Tutorial::VisitBoard => "board",
+            Tutorial::VisitWeek => "week",
             Tutorial::VisitGames => "games",
             Tutorial::VisitDungeon => "dungeon",
             Tutorial::VisitArtboard => "artboard",
@@ -3080,6 +3087,83 @@ mod inner {
     /// The day's rung won on its day: one star.
     pub fn record_rung_star() {
         rung_stars_total().add(1, &[]);
+    }
+
+    fn return_pushes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_return_pushes_total")
+                .with_description(
+                    "Keypress-return pushes armed by a person's input after hours quiet, by whether the day's rung was still open",
+                )
+                .build()
+        })
+    }
+
+    fn rung_standing_label(standing: RungStanding) -> &'static str {
+        match standing {
+            RungStanding::Open => "open",
+            RungStanding::Done => "done",
+        }
+    }
+
+    /// A session came back after hours quiet and its composer took the push.
+    pub fn record_return_push(standing: RungStanding) {
+        return_pushes_total().add(1, &[KeyValue::new("rung", rung_standing_label(standing))]);
+    }
+
+    fn did_you_know_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_did_you_know_total")
+                .with_description(
+                    "The did-you-know splash line shown on the first logins after the tour, by line",
+                )
+                .build()
+        })
+    }
+
+    fn did_you_know_label(line: DidYouKnow) -> &'static str {
+        match line {
+            DidYouKnow::Radio => "radio",
+            DidYouKnow::Rung => "rung",
+            DidYouKnow::People => "people",
+            DidYouKnow::Booth => "booth",
+            DidYouKnow::Artboard => "artboard",
+            DidYouKnow::Nightcap => "nightcap",
+        }
+    }
+
+    /// A login's splash carried one line of the did-you-know series.
+    pub fn record_did_you_know(line: DidYouKnow) {
+        did_you_know_total().add(1, &[KeyValue::new("line", did_you_know_label(line))]);
+    }
+
+    fn radio_nudges_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_radio_nudges_total")
+                .with_description(
+                    "Plain-ssh sessions told nothing plays over plain ssh, by where they reached for the music",
+                )
+                .build()
+        })
+    }
+
+    fn radio_nudge_spot_label(spot: RadioNudgeSpot) -> &'static str {
+        match spot {
+            RadioNudgeSpot::Stations => "stations",
+            RadioNudgeSpot::Booth => "booth",
+            RadioNudgeSpot::Keys => "keys",
+        }
+    }
+
+    /// A plain-ssh session reached for the music and got the nudge.
+    pub fn record_radio_nudge(spot: RadioNudgeSpot) {
+        radio_nudges_total().add(1, &[KeyValue::new("spot", radio_nudge_spot_label(spot))]);
     }
 
     fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
@@ -4552,8 +4636,11 @@ mod inner {
 
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
+    use super::DidYouKnow;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
+    use super::RadioNudgeSpot;
+    use super::RungStanding;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -4675,6 +4762,9 @@ mod inner {
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_daily_streak_day(_day: StreakDay) {}
     pub fn record_rung_star() {}
+    pub fn record_return_push(_standing: RungStanding) {}
+    pub fn record_did_you_know(_line: DidYouKnow) {}
+    pub fn record_radio_nudge(_spot: RadioNudgeSpot) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}

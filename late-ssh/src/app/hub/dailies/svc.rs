@@ -9,7 +9,7 @@ use late_core::{
     MutexRecover,
     db::Db,
     models::{
-        daily_rung::record_rung_win,
+        daily_rung::{count_stars, record_rung_win},
         daily_streak::{DailyStreakSnapshot, get_daily_streak_snapshot, record_daily_win},
         quest::{
             QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
@@ -34,6 +34,8 @@ pub struct QuestSnapshot {
     pub daily: Vec<QuestItem>,
     pub weekly: Vec<QuestItem>,
     pub daily_streak: DailyStreakSnapshot,
+    /// Every star this user has, for the day card.
+    pub rung_stars: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -163,7 +165,8 @@ impl QuestService {
         let today = now.date_naive();
         let rows = list_active_snapshot_rows(&client, user_id, today).await?;
         let daily_streak = get_daily_streak_snapshot(&**client, user_id, today).await?;
-        Ok(snapshot_from_rows(user_id, rows, daily_streak))
+        let rung_stars = count_stars(&**client, user_id).await?;
+        Ok(snapshot_from_rows(user_id, rows, daily_streak, rung_stars))
     }
 
     pub fn start_activity_task(&self) -> tokio::task::JoinHandle<()> {
@@ -241,7 +244,7 @@ impl QuestService {
             }
         }
 
-        if !completed.is_empty() || streak_day.is_some() {
+        if !completed.is_empty() || streak_day.is_some() || rung_star.is_some() {
             self.refresh_user_if_active(user_id).await?;
         }
         for (title, reward_chips) in completed {
@@ -310,12 +313,14 @@ fn snapshot_from_rows(
     user_id: Uuid,
     rows: Vec<QuestSnapshotRow>,
     daily_streak: DailyStreakSnapshot,
+    rung_stars: i64,
 ) -> QuestSnapshot {
     let mut snapshot = QuestSnapshot {
         user_id: Some(user_id),
         daily: Vec::new(),
         weekly: Vec::new(),
         daily_streak,
+        rung_stars,
     };
     for row in rows {
         let progress_value = row

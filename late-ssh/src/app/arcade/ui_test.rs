@@ -247,7 +247,7 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
 /// The lobby names the day's rung above the cards and marks its card, so
 /// the one board everyone is on today is never a guess.
 #[tokio::test]
-async fn the_lobby_names_todays_rung_and_marks_its_card() {
+async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
     use crate::{
         app::common::primitives::Screen,
         test_helpers::{make_app, new_test_db, render_plain},
@@ -260,12 +260,26 @@ async fn the_lobby_names_todays_rung_and_marks_its_card() {
     app.resize(120, 40).expect("resize test terminal");
     app.set_screen(Screen::Arcade);
 
-    let rung = rung_for(chrono::Utc::now().date_naive());
+    let today = chrono::Utc::now().date_naive();
+    let rung = rung_for(today);
     let lobby = render_plain(&mut app);
+    // The week row: seven badges, today's rung and tomorrow's named under
+    // theirs, the rotation line under the row.
+    let day_row = lobby
+        .lines()
+        .find(|line| line.contains("today") && line.contains("tomorrow"))
+        .expect("the week row names today and tomorrow");
+    assert!(day_row.trim_start().starts_with("today"), "{day_row}");
+    let badge_tops = lobby
+        .lines()
+        .find(|line| line.contains("┌───────┐ ┏━━━━━━━┓ ┌───────┐"))
+        .expect("seven badges side by side, tomorrow's heavy");
+    assert_eq!(badge_tops.matches("───────").count(), 6, "{badge_tops}");
     assert!(
-        lobby.contains(&format!("✦ Today's rung: {}.", rung.label())),
+        lobby.contains("11 boards, one a day, all new at 00:00 UTC."),
         "{lobby}"
     );
+    assert!(lobby.contains("0 ✦"), "today's stars so far: {lobby}");
     let card = lobby
         .lines()
         .find(|line| line.contains(&format!("[ {} ]", rung.puzzle.title())))
@@ -280,6 +294,26 @@ async fn the_lobby_names_todays_rung_and_marks_its_card() {
         .filter(|line| line.contains('✦'))
         .count();
     assert_eq!(other_cards, 0, "only the rung's card is starred: {lobby}");
+
+    // A terminal with the room gets the week as a panel down the right
+    // instead, the list keeping its own width.
+    app.resize(170, 50).expect("resize test terminal");
+    let lobby = render_plain(&mut app);
+    assert!(lobby.contains("─── The Week ───"), "{lobby}");
+    assert!(lobby.contains("tomorrow · "), "{lobby}");
+    assert!(lobby.contains("all new at 00:00 UTC."), "{lobby}");
+    assert!(
+        !lobby.contains("┌───────┐ ┏━━━━━━━┓"),
+        "the row is gone once the panel is up: {lobby}"
+    );
+    let share_line = lobby
+        .lines()
+        .find(|line| line.contains("Share your day card"))
+        .expect("the intro keeps its line");
+    assert!(
+        share_line.contains("Every finished puzzle has one too."),
+        "{share_line}"
+    );
 }
 
 #[tokio::test]

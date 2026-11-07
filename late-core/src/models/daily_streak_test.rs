@@ -49,6 +49,20 @@ fn the_snapshot_is_empty_once_a_whole_day_went_by() {
 
 /// Three wins on two days make a two-day streak, and the snapshot reads
 /// it back on the days it is alive.
+/// The moon fills slowly: nothing under three days, then one glyph per
+/// milestone, so the mark is never a one-day badge.
+#[test]
+fn the_moon_fills_at_three_seven_thirty_and_a_hundred() {
+    assert_eq!(StreakMark::for_days(0), None);
+    assert_eq!(StreakMark::for_days(2), None);
+    assert_eq!(StreakMark::for_days(3), Some(StreakMark::Crescent));
+    assert_eq!(StreakMark::for_days(6), Some(StreakMark::Crescent));
+    assert_eq!(StreakMark::for_days(7), Some(StreakMark::Half));
+    assert_eq!(StreakMark::for_days(30), Some(StreakMark::Full));
+    assert_eq!(StreakMark::for_days(100), Some(StreakMark::Core));
+    assert_eq!(StreakMark::for_days(1000).map(StreakMark::glyph), Some('◉'));
+}
+
 #[tokio::test]
 async fn wins_keep_the_day_and_the_snapshot_reads_it_back() {
     let test_db = test_db().await;
@@ -85,6 +99,21 @@ async fn wins_keep_the_day_and_the_snapshot_reads_it_back() {
             .unwrap(),
         DailyStreakSnapshot::default()
     );
+    // The batched read for the chat marks lists the live runs only.
+    let stranger = create_test_user(&test_db.db, "streak-stranger").await;
+    let ids = [user.id, stranger.id];
+    let listed = |today: NaiveDate| list_daily_streak_snapshots(&**client, &ids, today);
+    assert_eq!(
+        listed(day(7)).await.unwrap(),
+        HashMap::from([(
+            user.id,
+            DailyStreakSnapshot {
+                consecutive_days: 2,
+                last_completed_date: Some(day(6)),
+            }
+        )])
+    );
+    assert_eq!(listed(day(8)).await.unwrap(), HashMap::new());
     assert_eq!(
         record_daily_win(&**client, user.id, day(9)).await.unwrap(),
         Some(StreakDay::First),

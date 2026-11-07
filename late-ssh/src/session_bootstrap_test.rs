@@ -21,6 +21,7 @@ async fn shared_bootstrap_shows_gallery_splash_only_after_always_view() {
             SessionBootstrapInputs {
                 user: user.clone(),
                 is_new_user: false,
+                login_count: 8,
                 cols: 80,
                 rows: 24,
                 term: "xterm-256color".to_string(),
@@ -71,6 +72,7 @@ async fn shared_bootstrap_reads_the_disclaimer_of_this_device() {
             SessionBootstrapInputs {
                 user: user.clone(),
                 is_new_user: false,
+                login_count: 8,
                 cols: 80,
                 rows: 24,
                 term: "xterm-256color".to_string(),

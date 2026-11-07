@@ -3,6 +3,8 @@
 //! Winning it on its day earns a star in `daily_rung_stars`; there is no
 //! catching up on yesterday's.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate, Weekday};
 use tokio_postgres::GenericClient;
@@ -10,8 +12,12 @@ use uuid::Uuid;
 
 use super::{
     chips::Difficulty,
-    leaderboard::{DailyPuzzle, SINGLE_TIER_KEY, Tiers},
+    leaderboard::{DailyCompletionStatus, DailyPuzzle, SINGLE_TIER_KEY, Tiers},
 };
+
+/// The star beside a name in chat on the day its rung landed, and on the
+/// week's badges: the tour's own glyph, one cell.
+pub const STAR_GLYPH: char = '✦';
 
 /// A day's rung: a daily and the one board of it that counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,7 +28,7 @@ pub struct Rung {
 }
 
 impl Rung {
-    /// The rung as copy names it: `easy Sudoku`, `draw-1 Solitaire`, and a
+    /// The rung as copy names it: `medium Sudoku`, `draw-1 Solitaire`, and a
     /// one-board daily by its title alone, `Le Word`.
     pub fn label(self) -> String {
         match self.puzzle.tiers() {
@@ -30,16 +36,22 @@ impl Rung {
             Tiers::Keyed(_) => format!("{} {}", self.difficulty_key, self.puzzle.title()),
         }
     }
+
+    /// Whether a day's marks hold this rung: a mark on its board is the
+    /// star, since the hub writes one for exactly that win on that day.
+    pub fn won_in(self, status: &DailyCompletionStatus) -> bool {
+        status.completed_difficulty(self.puzzle, self.difficulty_key)
+    }
 }
 
 /// The rotation: one game a day in this order, eleven games, so no game
-/// comes round twice inside a week. Each game's board is the one a regular
-/// finishes in five to fifteen minutes, picked by the clock and not the
-/// label (medium Netwalk is three minutes, medium Sudoku can be thirty).
-/// Easy Netwalk, the board the first-visit tour lends, is never a rung,
-/// so day one's win is never a star and tomorrow can be the first.
+/// comes round twice inside a week. Each game's board is at least its
+/// medium one: a star is for a real board, never an easy one, and within
+/// that the pick is by the clock (hard Netwalk is minutes, hard Sudoku an
+/// evening). Easy Netwalk, the board the first-visit tour lends, is never
+/// a rung, so day one's win is never a star and tomorrow can be the first.
 const ROTATION: [(DailyPuzzle, &str); 11] = [
-    (DailyPuzzle::Sudoku, "easy"),
+    (DailyPuzzle::Sudoku, "medium"),
     (DailyPuzzle::Netwalk, "hard"),
     (DailyPuzzle::LeWord, SINGLE_TIER_KEY),
     (DailyPuzzle::Minesweeper, "medium"),
@@ -51,6 +63,10 @@ const ROTATION: [(DailyPuzzle, &str); 11] = [
     (DailyPuzzle::Quartets, SINGLE_TIER_KEY),
     (DailyPuzzle::RubiksCube, SINGLE_TIER_KEY),
 ];
+
+/// How many boards the rotation holds: the days before a game comes round
+/// again.
+pub const ROTATION_LEN: usize = ROTATION.len();
 
 /// The Monday the rotation starts counting from. Never move it: every day's
 /// rung, and so every star, is derived from it.
@@ -110,13 +126,37 @@ pub async fn record_rung_win(
     if inserted == 0 {
         return Ok(None);
     }
+    Ok(Some(count_stars(client, user_id).await?))
+}
+
+/// Every star a user has: the number on the profile and the day card.
+pub async fn count_stars(client: &impl GenericClient, user_id: Uuid) -> Result<i64> {
     let row = client
         .query_one(
             "SELECT count(*) AS stars FROM daily_rung_stars WHERE user_id = $1",
             &[&user_id],
         )
         .await?;
-    Ok(Some(row.get("stars")))
+    Ok(row.get("stars"))
+}
+
+/// Which of `user_ids` have the star of `day`, for the marks beside their
+/// names on that day.
+pub async fn list_starred_on(
+    client: &impl GenericClient,
+    user_ids: &[Uuid],
+    day: NaiveDate,
+) -> Result<HashSet<Uuid>> {
+    if user_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let rows = client
+        .query(
+            "SELECT user_id FROM daily_rung_stars WHERE user_id = ANY($1) AND day = $2",
+            &[&user_ids, &day],
+        )
+        .await?;
+    Ok(rows.into_iter().map(|row| row.get("user_id")).collect())
 }
 
 #[cfg(test)]

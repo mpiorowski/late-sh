@@ -100,8 +100,9 @@ pub enum TourRoute {
     /// homecoming box back in the tavern.
     House,
     /// The first hour: welcome, the chat, the practice table, today's
-    /// board (the Netwalk daily the Arcade lends), which has to be won.
-    /// Ends on Home, in the chat, no homecoming.
+    /// board (the Netwalk daily the Arcade lends), which has to be won,
+    /// then the week of rungs ahead. Ends on Home, in the chat, no
+    /// homecoming.
     Board,
 }
 
@@ -121,8 +122,9 @@ pub const TOUR_ROUTE: TourRoute = TourRoute::Board;
 /// layout put back, and `Done` is persisted once on the homecoming Enter.
 /// The `Board` route forks at the chat stop: the practice table next, then
 /// today's board in The Arcade (`arcade/input.rs::open_lent_board`), which
-/// has to be solved to move on; the Enter after the win persists `Done`
-/// and lands the session on Home, in the chat the route pitched first.
+/// has to be solved to move on, then the week of rungs in a box over the
+/// Arcade lobby, look only; the Enter there persists `Done` and lands the
+/// session on Home, in the chat the route pitched first.
 /// The bartender is
 /// deliberately absent from both routes: his comped welcome pour stays a
 /// hidden treasure for whoever walks up to the glowing bar after the
@@ -151,6 +153,9 @@ pub enum Tutorial {
     /// On The Arcade, the `Board` route only: today's board, open and
     /// played for real, which has to be solved to move on.
     VisitBoard,
+    /// Still on The Arcade, its lobby, the `Board` route only: the week of
+    /// rungs ahead, tomorrow's large, in a box. Look only.
+    VisitWeek,
     /// On the Games hub: the heavy-door pitch.
     VisitGames,
     /// Still on the Games hub: one scripted fight (`fight::Fight`), which has
@@ -248,6 +253,8 @@ pub enum TourMove {
     Table,
     /// To The Arcade with today's board opened on it.
     Board,
+    /// The won board put away, the Arcade lobby under the week's box.
+    Week,
     /// To Home with its stock second layout up (`/layout street`).
     Layouts,
     /// Back to the tavern with Home's first layout put back, so the tour
@@ -256,7 +263,7 @@ pub enum TourMove {
     /// The tour just ended and should be persisted, where it stands.
     Finished,
     /// The tour just ended and should be persisted, and the session goes
-    /// to Home, the chat: the `Board` route's send-off, off the won board.
+    /// to Home, the chat: the `Board` route's send-off, off the week.
     FinishedAtChat,
 }
 
@@ -754,6 +761,7 @@ impl State {
             Tutorial::VisitBoard => Some(TourStep::Board),
             Tutorial::Welcome
             | Tutorial::VisitChat
+            | Tutorial::VisitWeek
             | Tutorial::VisitMusic
             | Tutorial::VisitArcade
             | Tutorial::VisitLobby
@@ -782,6 +790,7 @@ impl State {
             | Tutorial::VisitArcade
             | Tutorial::VisitTable
             | Tutorial::VisitBoard
+            | Tutorial::VisitWeek
             | Tutorial::VisitGames
             | Tutorial::VisitDungeon
             | Tutorial::VisitArtboard
@@ -837,7 +846,8 @@ impl State {
                 TourRoute::House => (Tutorial::VisitGames, TourMove::Page(Screen::Games)),
                 TourRoute::Board => (Tutorial::VisitBoard, TourMove::Board),
             },
-            Tutorial::VisitBoard => (Tutorial::Done, TourMove::FinishedAtChat),
+            Tutorial::VisitBoard => (Tutorial::VisitWeek, TourMove::Week),
+            Tutorial::VisitWeek => (Tutorial::Done, TourMove::FinishedAtChat),
             Tutorial::VisitGames => (Tutorial::VisitDungeon, TourMove::Stay),
             Tutorial::VisitDungeon => (Tutorial::VisitArtboard, TourMove::Page(Screen::Artboard)),
             Tutorial::VisitArtboard => (Tutorial::VisitMap, TourMove::Map),

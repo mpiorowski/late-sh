@@ -20,6 +20,7 @@ fn a_station_row_shows_cursor_state_provider_track_and_slot_key() {
         current: key("datawave"),
         slots,
         source: AudioSource::Radio,
+        nudge: None,
     };
     let row = StationRow {
         station: key("datawave"),
@@ -53,6 +54,7 @@ fn the_current_station_is_lit_only_while_radio_is_the_source() {
         current: key("chillsynth"),
         slots: RadioSlots::empty(),
         source: AudioSource::Youtube,
+        nudge: None,
     };
     let row = StationRow {
         station: key("chillsynth"),
@@ -123,6 +125,7 @@ fn the_list_groups_stations_under_one_heading_per_section() {
         current: key("chillsynth"),
         slots: RadioSlots::empty(),
         source: AudioSource::Radio,
+        nudge: None,
     };
     let (lines, selected_line) = list_lines(&view, Some(3), 72);
     let first_words: Vec<String> = lines
@@ -175,6 +178,7 @@ fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
         current: key("datawave"),
         slots: RadioSlots::empty(),
         source: AudioSource::Radio,
+        nudge: None,
     };
     let header = crate::app::clubhouse::ui::tour_header(
         Tutorial::VisitMusic,
@@ -209,4 +213,60 @@ fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
 fn the_footer_names_the_copy_key() {
     let text = line_text(&footer_line());
     assert!(text.contains("^y copy"), "{text}");
+}
+
+/// Over plain ssh the nudge sits between the dial and the footer; the
+/// tour's pitch outranks it.
+#[test]
+fn a_plain_ssh_session_reads_the_nudge_under_the_dial_unless_the_tour_holds_the_modal() {
+    use crate::app::clubhouse::state::Tutorial;
+
+    let rows: Vec<StationRow> = RadioStation::enabled()
+        .map(|station| StationRow {
+            station,
+            now_playing: None,
+        })
+        .collect();
+    let view = StationsView {
+        rows: &rows,
+        current: key("datawave"),
+        slots: RadioSlots::empty(),
+        source: AudioSource::Radio,
+        nudge: Some("Plain ssh plays nothing: install late (? Pair) or open late.sh/listen"),
+    };
+    let mut state = StationsModalState::default();
+    state.open(key("datawave"));
+
+    let render = |tour: Option<&TourHeader>| {
+        let backend = ratatui::backend::TestBackend::new(80, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw(frame, Rect::new(1, 1, 78, 28), &state, &view, tour))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..30)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<String>>()
+    };
+
+    let text = render(None);
+    let at = |needle: &str| text.iter().position(|row| row.contains(needle));
+    let pinned = at("pinned  v1").expect("the dial is drawn");
+    let nudge = at("Plain ssh plays nothing").expect("the nudge is drawn");
+    let footer = at("Esc close").expect("the footer is drawn");
+    assert!(pinned < nudge && nudge < footer, "{text:#?}");
+
+    let header = crate::app::clubhouse::ui::tour_header(
+        Tutorial::VisitMusic,
+        crate::app::clubhouse::state::TourRoute::House,
+        crate::app::clubhouse::state::TableStop::Racked,
+        false,
+        crate::app::clubhouse::state::BoardStop::Open,
+    )
+    .unwrap();
+    let text = render(Some(&header));
+    assert!(
+        !text.iter().any(|row| row.contains("Plain ssh")),
+        "{text:#?}"
+    );
 }

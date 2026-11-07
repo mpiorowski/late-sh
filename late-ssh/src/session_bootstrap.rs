@@ -21,6 +21,8 @@ mod tests;
 pub struct SessionBootstrapInputs {
     pub user: User,
     pub is_new_user: bool,
+    /// Logins counted from the account's first, this one included.
+    pub login_count: i32,
     pub cols: u16,
     pub rows: u16,
     pub term: String,
@@ -359,6 +361,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
     let SessionBootstrapInputs {
         user,
         is_new_user,
+        login_count,
         cols,
         rows,
         term,
@@ -668,6 +671,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
+        login_count,
         landing_page: late_core::models::user::extract_landing_page(&user.settings),
         paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)

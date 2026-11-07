@@ -3,6 +3,8 @@
 //! UTC day. A day counts once, yesterday continues the run, anything older
 //! restarts it at 1. It pays nothing; the count is the whole reward.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use tokio_postgres::GenericClient;
@@ -35,6 +37,43 @@ impl From<tokio_postgres::Row> for DailyStreak {
 pub struct DailyStreakSnapshot {
     pub consecutive_days: i32,
     pub last_completed_date: Option<NaiveDate>,
+}
+
+/// The moon beside a name in chat: it fills as the run grows, slowly, so
+/// a one-day streak is not a badge. Nothing under three days, and gone
+/// again the day after a run breaks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreakMark {
+    /// Three days.
+    Crescent,
+    /// A week.
+    Half,
+    /// A month.
+    Full,
+    /// A hundred days.
+    Core,
+}
+
+impl StreakMark {
+    pub fn for_days(consecutive_days: i32) -> Option<Self> {
+        match consecutive_days {
+            i32::MIN..=2 => None,
+            3..=6 => Some(Self::Crescent),
+            7..=29 => Some(Self::Half),
+            30..=99 => Some(Self::Full),
+            100..=i32::MAX => Some(Self::Core),
+        }
+    }
+
+    /// One cell, never wide.
+    pub const fn glyph(self) -> char {
+        match self {
+            Self::Crescent => '☽',
+            Self::Half => '◑',
+            Self::Full => '●',
+            Self::Core => '◉',
+        }
+    }
 }
 
 /// Which day a win kept: the streak's first, or one more on a run.
@@ -105,6 +144,36 @@ pub async fn get_daily_streak_snapshot(
         return Ok(DailyStreakSnapshot::default());
     };
     Ok(snapshot_from_streak(&DailyStreak::from(row), today))
+}
+
+/// The streaks of `user_ids` as seen on `today`, for the marks beside
+/// their names: only the live ones, so a user with no row or a broken run
+/// is absent.
+pub async fn list_daily_streak_snapshots(
+    client: &impl GenericClient,
+    user_ids: &[Uuid],
+    today: NaiveDate,
+) -> Result<HashMap<Uuid, DailyStreakSnapshot>> {
+    if user_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = client
+        .query(
+            "SELECT user_id, created, updated, last_completed_date, consecutive_days
+             FROM user_daily_quest_streaks
+             WHERE user_id = ANY($1)
+               AND last_completed_date >= $2",
+            &[&user_ids, &(today - Duration::days(1))],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let streak = DailyStreak::from(row);
+            (streak.user_id, snapshot_from_streak(&streak, today))
+        })
+        .filter(|(_, snapshot)| snapshot.consecutive_days > 0)
+        .collect())
 }
 
 /// The rule: a day counts once, yesterday continues, anything older

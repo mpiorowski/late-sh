@@ -1,5 +1,15 @@
 use super::*;
 
+/// The week from the rotation's first Monday, nobody starred.
+fn a_week() -> Week {
+    Week::today(
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
+        &std::collections::HashMap::new(),
+        None,
+        uuid::Uuid::from_u128(1),
+    )
+}
+
 #[test]
 fn truncate_name_keeps_short_names_and_cuts_long_ones() {
     assert_eq!(truncate_name("alice"), "alice");
@@ -281,6 +291,7 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
                 TourRoute::House,
                 Screen::Games,
                 false,
+                &a_week(),
             )
         })
         .unwrap();
@@ -319,6 +330,7 @@ fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
                     TourRoute::House,
                     Screen::Artboard,
                     hidden,
+                    &a_week(),
                 )
             })
             .unwrap();
@@ -358,6 +370,7 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
                 TourRoute::House,
                 Screen::Games,
                 false,
+                &a_week(),
             )
         })
         .unwrap();
@@ -451,6 +464,7 @@ fn the_board_route_names_the_table_and_the_board_as_what_comes_next() {
                 TourRoute::Board,
                 Screen::Dashboard,
                 false,
+                &a_week(),
             )
         })
         .unwrap();
@@ -521,7 +535,7 @@ fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
     let small = header(BoardStop::TooSmall);
     assert!(small[1].contains("needs a bigger window"), "{small:#?}");
     assert!(
-        small.last().unwrap().contains("[Enter] the chat ──"),
+        small.last().unwrap().contains("[Enter] next: the week ──"),
         "{small:#?}"
     );
 
@@ -535,7 +549,7 @@ fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
         "{solved:#?}"
     );
     assert!(
-        solved[2].contains("tomorrow is your first star: easy Sudoku, up at 00:00 UTC, in 7 h."),
+        solved[2].contains("tomorrow is your first star: medium Sudoku, up at 00:00 UTC, in 7 h."),
         "{solved:#?}"
     );
     assert!(
@@ -545,7 +559,7 @@ fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
         "{solved:#?}"
     );
     assert!(
-        solved.last().unwrap().contains("[Enter] the chat ──"),
+        solved.last().unwrap().contains("[Enter] next: the week ──"),
         "{solved:#?}"
     );
 }
@@ -596,4 +610,62 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
             tomorrow
         }
     );
+}
+
+/// The week stop boxes the week over the Arcade lobby: today's badge,
+/// tomorrow's large with its name, the rest as names, and Enter to the
+/// chat. Look only: no key of the lobby's is named.
+#[test]
+fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitWeek,
+                TourRoute::Board,
+                Screen::Arcade,
+                false,
+                &a_week(),
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let joined = rows.join("\n");
+    assert!(joined.contains("✦ the tour · the week"), "{rows:#?}");
+    assert!(
+        joined.contains("today            tomorrow         and then"),
+        "{rows:#?}"
+    );
+    assert!(
+        joined.contains("┏━━━━━━━━━━━━━━━━━━┓   Wed 11 Le Word"),
+        "{rows:#?}"
+    );
+    assert!(joined.contains("hard Netwalk"), "{rows:#?}");
+    assert!(joined.contains("[Enter] next: the chat ──"), "{rows:#?}");
+
+    // Off its page it draws nothing.
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitWeek,
+                TourRoute::Board,
+                Screen::Dashboard,
+                false,
+                &a_week(),
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let blank = (0..24).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " "));
+    assert!(blank);
 }

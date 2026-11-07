@@ -131,6 +131,7 @@ fn strip_height_matches_rendered_lines_plus_separator() {
         ],
         weekly: vec![quest_item("Win draw-3 Solitaire", "hard", 1, 0)],
         daily_streak: DailyStreakSnapshot::default(),
+        rung_stars: 0,
     };
     let lines = strip_lines(&snapshot, true, today, 90);
     assert_eq!(strip_height_for(&snapshot, true), lines.len() as u16 + 1);
@@ -152,6 +153,7 @@ fn weekly_reset_note_counts_days_to_exclusive_period_end() {
                 daily: Vec::new(),
                 weekly: vec![item],
                 daily_streak: DailyStreakSnapshot::default(),
+                rung_stars: 0,
             },
             true,
             today,

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
+use crate::app::arcade::week::Week;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
@@ -1365,6 +1366,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 | Tutorial::VisitLobby
                 | Tutorial::VisitTable
                 | Tutorial::VisitBoard
+                | Tutorial::VisitWeek
                 | Tutorial::VisitGames
                 | Tutorial::VisitDungeon
                 | Tutorial::VisitArtboard
@@ -1399,14 +1401,15 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
 /// mismatch, like off-tour stages, draws nothing. The Artboard stop lands
 /// behind the content disclaimer (`artboard_hidden`): it offers to show the
 /// art or skip ahead, and reads as a normal stop once shown. `route` names
-/// what the chat stop leads to.
-pub fn draw_tour_overlay(
+/// what the chat stop leads to; `week` is what the week stop shows.
+pub(crate) fn draw_tour_overlay(
     frame: &mut Frame,
     area: Rect,
     stage: Tutorial,
     route: TourRoute,
     screen: Screen,
     artboard_hidden: bool,
+    week: &Week,
 ) {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
@@ -1731,6 +1734,14 @@ pub fn draw_tour_overlay(
             ],
             "home to the lounge",
         ),
+        // The week, over the Arcade lobby: today starred once its rung is
+        // won, tomorrow large, the five after as names. Look only.
+        Tutorial::VisitWeek => (
+            Screen::Arcade,
+            " ✦ the tour · the week ",
+            week.tour_lines(),
+            "the chat",
+        ),
         // The music, lobby, practice-table, dungeon and board stops write
         // their pitch into the real surface they hold open: see
         // `tour_header`.
@@ -1942,10 +1953,10 @@ fn board_header(board: BoardStop) -> TourHeader {
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
-    let to_chat = || {
+    let to_week = || {
         vec![
             Span::styled("[Enter] ", key),
-            Span::styled("the chat", text),
+            Span::styled("next: the week", text),
         ]
     };
     let (lines, keys) = match board {
@@ -1954,7 +1965,7 @@ fn board_header(board: BoardStop) -> TourHeader {
                 "this board needs a bigger window. it waits for you in the Arcade, under [2].",
                 text,
             ))],
-            to_chat(),
+            to_week(),
         ),
         BoardStop::Open => (
             vec![
@@ -1995,7 +2006,7 @@ fn board_header(board: BoardStop) -> TourHeader {
                     Span::styled(" is the guide, anywhere.", text),
                 ]),
             ],
-            to_chat(),
+            to_week(),
         ),
     };
     TourHeader {
@@ -2099,6 +2110,7 @@ pub(crate) fn tour_header(
         | Tutorial::Welcome
         | Tutorial::VisitChat
         | Tutorial::VisitArcade
+        | Tutorial::VisitWeek
         | Tutorial::VisitGames
         | Tutorial::VisitArtboard
         | Tutorial::VisitMap

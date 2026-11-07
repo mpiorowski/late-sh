@@ -446,6 +446,10 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    /// Logins counted from the account's first, this one included; a drain
+    /// handoff keeps the count it arrived with. Picks the did-you-know
+    /// splash line (`common/splash_tips.rs`).
+    pub login_count: i32,
     /// Tweak: the page the session starts on. Ignored for brand-new users so
     /// they still get the clubhouse first-visit tutorial.
     pub landing_page: LandingPage,
@@ -1072,6 +1076,9 @@ pub struct App {
     /// This session's away flag as last written to the active-users roster,
     /// so the 1Hz edge writes only on a change (`App::sync_away`).
     pub(crate) away: bool,
+    /// The keypress-return push (`hub/dailies/return_push.rs`): armed by
+    /// the person's first input after hours quiet, read by the composer.
+    pub(crate) return_push: crate::app::hub::dailies::return_push::ReturnPush,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -1131,6 +1138,26 @@ impl App {
 
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Whether this session's user still has today's rung to win, for the
+    /// return push's line and its count.
+    pub(crate) fn rung_standing_today(
+        &self,
+    ) -> crate::app::hub::dailies::return_push::RungStanding {
+        use crate::app::hub::dailies::return_push::RungStanding;
+        let today = chrono::Utc::now().date_naive();
+        let won = crate::app::arcade::week::rung_won_today(
+            today,
+            self.leaderboard.user_daily_statuses.on(today),
+            self.session_daily_wins.today(),
+            self.user_id,
+        );
+        if won {
+            RungStanding::Done
+        } else {
+            RungStanding::Open
+        }
     }
 
     /// Recompute this session's away flag (`common/away.rs`) and write it to
@@ -1577,7 +1604,14 @@ impl App {
         let active_users = config.active_users.clone();
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
-        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let splash_hint =
+            match super::common::splash_tips::DidYouKnow::for_login(config.login_count) {
+                Some(line) => {
+                    crate::metrics::record_did_you_know(line);
+                    line.line(&listen_url(config.web_url.trim_end_matches('/')))
+                }
+                None => super::common::splash_tips::choose_splash_hint(config.is_new_user),
+            };
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -2021,6 +2055,7 @@ impl App {
             notify_outbox,
             sent_away: false,
             away: false,
+            return_push: Default::default(),
             is_draining: config.is_draining,
             handoff: crate::app::handoff::state::HandoffState::new(config.handoff_idle),
             icon_picker_open: false,
@@ -3119,11 +3154,15 @@ impl App {
                 event_end,
                 paste_open,
             } => {
+                let quiet = self.last_active_at.elapsed();
                 self.last_active_at = Instant::now();
                 self.newcomer_clock.note_input(chrono::Utc::now());
                 self.sent_away = false;
                 if self.away {
                     self.sync_away();
+                    if self.return_push.note_return(Instant::now(), quiet) {
+                        crate::metrics::record_return_push(self.rung_standing_today());
+                    }
                 }
                 // The held tail came from a chunk already swallowed, so the
                 // event ends this far into this one.

@@ -4114,7 +4114,7 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
         frame.contains("connected. that was day one."),
         "frame={frame:?}"
     );
-    assert!(frame.contains("[Enter] the chat"), "frame={frame:?}");
+    assert!(frame.contains("[Enter] next: the week"), "frame={frame:?}");
 
     // The win is the Arcade's own: it lands in the day's wins.
     let client = test_db.db.get().await.expect("db client");
@@ -4133,8 +4133,22 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // Enter puts the board away and lands in the chat: the tour is done,
-    // input is free again, and the Arcade still holds the won board.
+    // Enter puts the board away and boxes the week over the Arcade lobby:
+    // today's rung starred once won, tomorrow's large, look only.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(!app.is_playing_game);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("the tour · the week"), "frame={frame:?}");
+    assert!(frame.contains("tomorrow"), "frame={frame:?}");
+    assert!(frame.contains("[Enter] next: the chat"), "frame={frame:?}");
+    app.handle_input(b"o]");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert!(!app.arcade_solvers_open);
+
+    // Enter lands in the chat: the tour is done, input is free again, and
+    // the Arcade still holds the won board.
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
     assert_eq!(app.screen, Screen::Dashboard);
@@ -4200,12 +4214,15 @@ async fn forced_tour_board_route_walks_past_what_a_small_terminal_cannot_show() 
         frame.contains("this board needs a bigger window"),
         "frame={frame:?}"
     );
-    assert!(frame.contains("[Enter] the chat"), "frame={frame:?}");
+    assert!(frame.contains("[Enter] next: the week"), "frame={frame:?}");
 
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(!app.is_playing_game);
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
     assert_eq!(app.screen, Screen::Dashboard);
-    assert!(!app.is_playing_game);
 }
 
 /// `/onboard` from Home puts anyone back at the tavern door with the tour

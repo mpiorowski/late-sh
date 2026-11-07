@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context;
 use late_core::api_types::NowPlaying;
@@ -270,6 +271,9 @@ struct DrawContext<'a> {
     leaderboard: &'a Arc<LeaderboardData>,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
+    /// The plain-ssh radio nudge (`audio/nudge.rs`), `None` while a client
+    /// is paired.
+    radio_nudge: Option<&'a str>,
     eq_state: crate::app::audio::viz::EqState,
     clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
@@ -681,6 +685,14 @@ impl App {
         };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
+        let return_push = self.return_push.line(
+            Instant::now(),
+            self.quest_state.snapshot(),
+            late_core::models::daily_rung::rung_for(chrono::Utc::now().date_naive()),
+            self.rung_standing_today(),
+        );
+        let return_push = return_push.as_deref();
+        let ladder_marks = self.chat.ladder_marks();
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
@@ -885,7 +897,9 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
+            return_push,
             bonsai_glyphs,
+            ladder_marks,
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
@@ -949,6 +963,10 @@ impl App {
         let showcase_unread_count = self.chat.showcase.unread_count();
         let web_base_url = self.web_url.as_str();
         let listen_url = crate::app::state::listen_url(&self.web_url);
+        let radio_nudge = match paired_client {
+            Some(_) => None,
+            None => Some(crate::app::audio::nudge::line(&listen_url)),
+        };
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
             selected_index: self.chat.work.selected_index(),
@@ -1037,7 +1055,9 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
+            return_push,
             bonsai_glyphs,
+            ladder_marks,
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
@@ -1123,7 +1143,9 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
+                    return_push,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
@@ -1189,7 +1211,9 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
+                    return_push,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
@@ -1258,7 +1282,9 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
+                    return_push,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
@@ -1326,7 +1352,9 @@ impl App {
                 mention_active: self.chat.mention_ac.active,
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
+                return_push,
                 bonsai_glyphs,
+                ladder_marks,
                 chat_badges,
                 profile_award_badges,
                 drunk_levels: &self.drunk_levels,
@@ -1434,7 +1462,9 @@ impl App {
                                 None
                             },
                             is_editing: active && self.chat.edited_message_id.is_some(),
+                            return_push,
                             bonsai_glyphs,
+                            ladder_marks,
                             chat_badges,
                             profile_award_badges,
                             drunk_levels: &self.drunk_levels,
@@ -1511,6 +1541,7 @@ impl App {
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
+            return_push,
             mention_active: self.chat.mention_ac.active,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
@@ -1756,6 +1787,7 @@ impl App {
                         leaderboard: &self.leaderboard,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
+                        radio_nudge: radio_nudge.as_deref(),
                         eq_state,
                         clock: &clock,
                         bonsai: &self.bonsai.tree,
@@ -2653,6 +2685,13 @@ impl App {
         // draws its own tutorial overlays; toasts draw after, so they win
         // the corner while they last.
         if screen != Screen::Clubhouse {
+            let today = chrono::Utc::now().date_naive();
+            let week = crate::app::arcade::week::Week::today(
+                today,
+                ctx.leaderboard.user_daily_statuses.on(today),
+                ctx.session_daily_wins.today(),
+                ctx.user_id,
+            );
             crate::app::clubhouse::ui::draw_tour_overlay(
                 frame,
                 inner,
@@ -2660,6 +2699,7 @@ impl App {
                 ctx.clubhouse_state.tour_route,
                 screen,
                 ctx.artboard_disclaimer_visible,
+                &week,
             );
         }
 
@@ -2920,10 +2960,13 @@ impl App {
                 frame,
                 inner,
                 ctx.booth_modal_state,
-                &ctx.booth_snapshot,
-                ctx.booth_favorites,
-                ctx.booth_submit_enabled,
-                ctx.is_admin || ctx.is_moderator,
+                &crate::app::audio::booth::ui::BoothView {
+                    snapshot: &ctx.booth_snapshot,
+                    favorites: ctx.booth_favorites,
+                    submit_enabled: ctx.booth_submit_enabled,
+                    is_staff: ctx.is_admin || ctx.is_moderator,
+                    nudge: ctx.radio_nudge,
+                },
             );
         }
 
@@ -2939,6 +2982,7 @@ impl App {
                     current: ctx.selected_radio_station,
                     slots: ctx.radio_slots,
                     source: ctx.paired_source,
+                    nudge: ctx.radio_nudge,
                 },
                 tour_header.as_ref(),
             );

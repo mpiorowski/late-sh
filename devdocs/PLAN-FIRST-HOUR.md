@@ -43,8 +43,8 @@ down, is in Claude Code session `2fc40c39-0365-400e-b8c0-dd75cbf98223`
 - **Measure, then gate.** Deploy, wait seven days for a full weekly
   cohort, wait seven more for its first week, then run the funnel
   queries in `AUDIENCE.md` section 6 and read the Newcomers row
-  (`welcome`, `chat`, `table`, `board`, `done`; `board` against `done`
-  is the board's cost). Step 2 can start while that cohort runs. Step 3
+  (`welcome`, `chat`, `table`, `board`, `week`, `done`; `board` against
+  `week` is the board's cost). Step 2 can start while that cohort runs. Step 3
   waits for two-day return at 9% or more on one cohort, or two cohorts
   at 8%. If the cohort says the board loses more than it holds, the
   revert is the one line above, and the `House` route's old numbers are
@@ -76,60 +76,57 @@ Decided, in the order it ships; each piece has its own number to read:
    never the person, so the rung's solvers roster is the day's crowd
    and the chat has one board to argue about; the knob is time, not
    the difficulty label. The tour's easy Netwalk is not a star, on
-   purpose: "tomorrow is your first star: easy Sudoku" is tomorrow
+   purpose: "tomorrow is your first star: medium Sudoku" is tomorrow
    named with a prize instead of a time. Measure: the rung's roster
    size against the other boards (`AUDIENCE.md` section 6), active
    minutes on rung days.
-3. **The marks beside the name.** The chat author label already carries
-   the bonsai glyph, the country and the allowlisted badges; the ladder
-   adds at most two cells and keeps that budget. The streak is a moon
-   that fills, slow, so a one-day streak is not a badge: nothing under
-   three days, `☽` at 3, `◑` at 7, `●` at 30, `◉` at 100; break the run
-   and it is gone until day 3 again. The rung is `✦` in amber (the
-   tour's own glyph), beside the name today only, gone at 00:00 UTC:
-   the live signal that makes someone in chat do the board. No number
-   in the line; the count lives on the profile and the share card,
-   where "day 12" is the Wordle line and travels outside the house
-   for free. Single-cell glyphs, no emoji; the label's wide-glyph path
-   covers ambiguous-width terminals. People want to be seen
-   (`AUDIENCE.md` section 4): standing in the message line gets used,
-   a meter on one page does not.
-4. **The week, the rung's surface.** One widget, built in the Arcade,
-   drawn twice. In the Arcade lobby, above the game cards: seven days,
-   each a small ASCII badge for its rung (about 9 by 5 so seven fit in
-   80 columns), today starred if won, tomorrow highlighted, the day's
-   roster count under it, one line under the row: "12 boards, one a
-   day, all new at 00:00 UTC". Time-ordered, where the cards below stay
-   game-ordered. On the tour, as the fifth stop after the board: today's
-   badge starred, tomorrow's badge large (about 20 by 8) with its name,
-   the other five as names, look only, Enter to the chat; it gets its
-   own funnel label so its cost is a number. Tomorrow large and the
-   rest small, because seven big badges to a newcomer is a menu. Twelve
-   small badges and twelve large ones are one-off art. The week cannot
-   ship before the rotation: until then it has nothing honest to show.
-5. **The keypress-return moment says what it is at.** When a session
-   wakes after hours idle (the AFK edge in `app/state.rs`), one private
-   line: the streak's day, today's rung and that it is open. Private,
-   so the feed budget does not apply.
-6. **"Did you know", one line per login.** Selling the house to someone
+3. **The marks beside the name.** Built; what it is lives in
+   `late-ssh/src/app/chat/RENDERING.md` (the label) and
+   `late-ssh/src/app/hub/CONTEXT.md` (the moon and the star). Measure:
+   messages per day from people carrying a mark against the rest, and
+   the rung's roster on days a star was visible in the lounge
+   (`AUDIENCE.md` section 6).
+4. **The week, the rung's surface.** Built; what it is lives in
+   `late-ssh/src/app/arcade/CONTEXT.md` (the week) and
+   `late-ssh/src/app/clubhouse/CONTEXT.md` §5 (the week stop, funnel
+   label `week`). Measure: `week` against `done` in the tour funnel
+   and two-day return against the step 1 cohort (`AUDIENCE.md`
+   section 6).
+5. **The keypress-return moment says what it is at.** Built; what it is
+   lives in `late-ssh/src/app/hub/CONTEXT.md` (the push). It is the empty
+   composer's row, not a chat line: the chat's AFK divider sits where the
+   person stopped reading, out of view after a busy night, and the
+   composer is where the return keypress lands. Measure: rung wins in
+   the hour after `late_ssh_return_pushes_total{rung="open"}` against
+   the hour after any other return.
+6. **"Did you know", one line per login.** Built; what it is lives in
+   `late-ssh/CONTEXT.md` (the help modal bullet) and
+   `late-ssh/src/app/common/splash_tips.rs`. Selling the house to someone
    who came back, not to a stranger. On the second login and the few
-   after it, one dim sentence in a place the screen already has, chosen
-   by login count and shown once each, never a modal: the paper already
-   owns the login modal and a second box behind it is the one people
-   learn to Esc through. The order follows what predicts return: login
-   two, the rung is up and the streak is at one; login three, the
-   radio plays in the `late` CLI, one line to install, or in a browser
-   at `late.sh/listen`; login four, the people, the map, the profile;
-   later the booth, the Artboard, the Nightcap. Never two lines at once.
-7. **The radio nudge where the hand already is.** A plain-ssh session
-   that opens the Stations modal or presses the music keys is told right
-   there that nothing plays over plain ssh and where it can. This beats
-   any schedule: the person is already reaching for it. Measured by the
-   share of second-week newcomers on the CLI (16% today) and the listen
-   page's views (147 in 25 days). Before the radio line is written,
-   read whether newcomers who arrive on the CLI come back more than the
-   plain-ssh ones (logs keep a week, so a rough read on the latest
-   cohort); if they do not, the line moves later in the series.
+   after it, the splash's dim tip line, a place the screen already has,
+   chosen by `users.login_count` and shown once each, never a modal: the
+   paper already owns the login modal and a second box behind it is the
+   one people learn to Esc through. The order: login two, the radio, the
+   station count and the YouTube booth, in the `late` CLI or in a browser
+   at `late.sh/listen`, shown to every session, CLI ones included; login
+   three, the rung is up and a daily win starts the streak; login four,
+   the people, the map, the profile; then the booth, the Artboard, the
+   Nightcap. Never two lines at once. Measure: second-week newcomers on
+   the CLI and the listen page's views against
+   `late_ssh_did_you_know_total{line="radio"}`.
+7. **The radio nudge where the hand already is.** Built; what it is
+   lives in `late-ssh/src/app/audio/CONTEXT.md` (the plain-ssh nudge). A
+   plain-ssh session that opens the Stations modal or the Music Booth, or
+   presses the music keys, is told right there that nothing plays over
+   plain ssh and where it can. This beats any schedule: the person is
+   already reaching for it. Measured by the share of second-week
+   newcomers on the CLI (16% today) and the listen page's views (147 in
+   25 days), against `late_ssh_radio_nudges_total{spot}`. The read that
+   gated it, on the week of session summaries to 7 Nov 2026 (accounts
+   created 31 Oct to 5 Nov, arrival client from the first session,
+   return is a session on a later day): 14 arrived on the CLI and 2 came
+   back (14%); 72 arrived on plain ssh and 6 came back (8%). Small
+   numbers, same direction as the bet, so the nudge stays in its place.
 
 - **Not built:** XP, levels, leagues, rerolls or skips. A league needs
   cohorts of similar players; 85 weekly players is one league. Rerolls

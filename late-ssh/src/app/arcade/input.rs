@@ -345,14 +345,15 @@ pub(crate) fn day_card(app: &App) -> ShareCard {
         .on(today)
         .get(&app.user_id);
     let session = app.session_daily_wins.today();
-    let streak = app.quest_state.snapshot().daily_streak.consecutive_days;
+    let quests = app.quest_state.snapshot();
     share::day_card(
         today,
         |puzzle| {
             snapshot.is_some_and(|s| s.completed(puzzle))
                 || session.is_some_and(|s| s.completed(puzzle))
         },
-        streak,
+        quests.daily_streak.consecutive_days,
+        quests.rung_stars,
     )
 }
 

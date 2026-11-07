@@ -10,6 +10,10 @@ use std::{
 };
 use uuid::Uuid;
 
+use late_core::models::daily_rung::{STAR_GLYPH, list_starred_on};
+use late_core::models::daily_streak::{
+    DailyStreakSnapshot, StreakMark, list_daily_streak_snapshots,
+};
 use late_core::{
     MutexRecover,
     db::Db,
@@ -847,6 +851,9 @@ pub struct ChatSnapshot {
     pub room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     pub active_polls: HashMap<Uuid, ActiveChatPoll>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
+    /// The ladder's marks beside each author's name: the streak's moon and
+    /// today's star, as one short string, absent when there is nothing.
+    pub ladder_marks: HashMap<Uuid, String>,
     pub chat_badges: HashMap<Uuid, String>,
     pub profile_award_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
@@ -892,6 +899,7 @@ pub enum ChatEvent {
         target_user_ids: Option<Vec<Uuid>>,
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
+        author_ladder_marks: Option<String>,
         author_chat_badge: Option<String>,
         author_profile_award_badges: Option<String>,
     },
@@ -900,6 +908,7 @@ pub enum ChatEvent {
         target_user_ids: Option<Vec<Uuid>>,
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
+        author_ladder_marks: Option<String>,
         author_chat_badge: Option<String>,
         author_profile_award_badges: Option<String>,
     },
@@ -913,6 +922,7 @@ pub enum ChatEvent {
         message_gilds: HashMap<Uuid, ChatMessageGildSummary>,
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
+        ladder_marks: HashMap<Uuid, String>,
         chat_badges: HashMap<Uuid, String>,
         profile_award_badges: HashMap<Uuid, String>,
     },
@@ -1665,6 +1675,7 @@ impl ChatService {
             room_last_message_at,
             active_polls,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
+            ladder_marks: author_metadata.ladder_marks,
             chat_badges: author_metadata.chat_badges,
             profile_award_badges: author_metadata.profile_award_badges,
             ignored_user_ids,
@@ -1682,13 +1693,26 @@ impl ChatService {
         }
 
         let metadata = User::list_chat_author_metadata(client, user_ids).await?;
+        // The ladder's marks are read on the UTC day the label is built
+        // for: a star is today's only, and the moon goes the day after a
+        // run breaks. Both ride every author metadata load, so they are
+        // never staler than the badges beside them.
+        let today = Utc::now().date_naive();
+        let streaks = list_daily_streak_snapshots(client, user_ids, today).await?;
+        let starred = list_starred_on(client, user_ids, today).await?;
 
         let mut maps = ChatAuthorMaps {
             usernames: HashMap::with_capacity(metadata.len()),
             bonsai_glyphs: HashMap::new(),
+            ladder_marks: HashMap::new(),
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
         };
+        for user_id in user_ids {
+            if let Some(marks) = ladder_marks(streaks.get(user_id), starred.contains(user_id)) {
+                maps.ladder_marks.insert(*user_id, marks);
+            }
+        }
         for item in metadata {
             if !item.username.trim().is_empty() {
                 maps.usernames.insert(item.user_id, item.username);
@@ -1721,8 +1745,23 @@ impl ChatService {
 struct ChatAuthorMaps {
     usernames: HashMap<Uuid, String>,
     bonsai_glyphs: HashMap<Uuid, String>,
+    ladder_marks: HashMap<Uuid, String>,
     chat_badges: HashMap<Uuid, String>,
     profile_award_badges: HashMap<Uuid, String>,
+}
+
+/// The two cells the ladder may add to a name: the streak's moon, then
+/// today's star. At most two, single-width, and nothing at all for most
+/// people, so the label's budget holds.
+fn ladder_marks(streak: Option<&DailyStreakSnapshot>, starred_today: bool) -> Option<String> {
+    let mut marks = String::new();
+    if let Some(mark) = streak.and_then(|s| StreakMark::for_days(s.consecutive_days)) {
+        marks.push(mark.glyph());
+    }
+    if starred_today {
+        marks.push(STAR_GLYPH);
+    }
+    (!marks.is_empty()).then_some(marks)
 }
 
 fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {
@@ -1990,6 +2029,7 @@ impl ChatService {
                 message_gilds,
                 usernames: author_metadata.usernames,
                 bonsai_glyphs: author_metadata.bonsai_glyphs,
+                ladder_marks: author_metadata.ladder_marks,
                 chat_badges: author_metadata.chat_badges,
                 profile_award_badges: author_metadata.profile_award_badges,
             },
@@ -2796,6 +2836,7 @@ impl ChatService {
             target_user_ids,
             author_username: author_metadata.usernames.remove(&poll.poll.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&poll.poll.user_id),
+            author_ladder_marks: author_metadata.ladder_marks.remove(&poll.poll.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&poll.poll.user_id),
             author_profile_award_badges: author_metadata
                 .profile_award_badges
@@ -3538,6 +3579,7 @@ impl ChatService {
             target_user_ids,
             author_username: author_metadata.usernames.remove(&user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
+            author_ladder_marks: author_metadata.ladder_marks.remove(&user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&user_id),
             author_profile_award_badges: author_metadata.profile_award_badges.remove(&user_id),
         });
@@ -3739,6 +3781,7 @@ impl ChatService {
             target_user_ids,
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
+            author_ladder_marks: author_metadata.ladder_marks.remove(&existing.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
             author_profile_award_badges: author_metadata
                 .profile_award_badges

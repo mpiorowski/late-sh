@@ -61,3 +61,37 @@ fn every_daily_puzzle_has_a_tip() {
         );
     }
 }
+
+/// The series starts on the second login, the first being the tour's,
+/// leads with the radio and ends after the Nightcap.
+#[test]
+fn the_series_runs_from_the_second_login_to_the_nightcap() {
+    let series: Vec<Option<DidYouKnow>> = (0..=8).map(DidYouKnow::for_login).collect();
+    assert_eq!(
+        series,
+        vec![
+            None,
+            None,
+            Some(DidYouKnow::Radio),
+            Some(DidYouKnow::Rung),
+            Some(DidYouKnow::People),
+            Some(DidYouKnow::Booth),
+            Some(DidYouKnow::Artboard),
+            Some(DidYouKnow::Nightcap),
+            None,
+        ]
+    );
+}
+
+#[test]
+fn the_radio_line_counts_the_stations_and_names_the_listen_page() {
+    let line = DidYouKnow::Radio.line("https://late.sh/listen");
+    let stations = late_core::radio::RadioStation::enabled().count();
+    assert!(stations > 0);
+    assert_eq!(
+        line,
+        format!(
+            "Did you know? {stations} radio stations and the YouTube booth play in the late CLI, or in a browser at https://late.sh/listen"
+        )
+    );
+}

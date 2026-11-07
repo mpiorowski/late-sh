@@ -108,7 +108,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   into the tavern plus the shared `ComposerBlockView` footer (same block the
   dashboard card uses; grows while typing, shows placeholder hints idle).
   Its idle hint is the scene's (`ComposerIdleHint::Scene`, the Nightcap's
-  too): j/k walk here, so it never offers them as message selection.
+  too): j/k walk here, so it never offers them as message selection. The
+  keypress-return push (`hub/CONTEXT.md`) takes the row over the hint here
+  as everywhere.
 - `i` (or Enter in the open) composes into #lounge through the normal global
   composer pipeline; image paste works (Clubhouse is a
   `is_chat_composer_context` screen in `app::input`). Slash commands are
@@ -172,10 +174,12 @@ room is the chat surface, and the full history lives in #lounge on Home.
   Arcade game by `arcade/input.rs::open_lent_board`, the way Enter on
   its lobby card opens it, so the win is the Arcade's own: the win task
   runs, the chips land, the quest ticks when Netwalk is drawn, the
-  solvers roster gains the name). Enter at the board moves on only once
-  `netwalk_state.is_solved()`; that Enter finishes the tour (`Done`
-  persisted, `TourMove::FinishedAtChat`), puts the won board away
-  (`arcade/input.rs::close_lent_board`) and lands the session on Home,
+  solvers roster gains the name) -> `VisitWeek` (still The Arcade, its
+  lobby: the week of rungs ahead in a box, look only). Enter at the
+  board moves on only once `netwalk_state.is_solved()`; that Enter puts
+  the won board away (`arcade/input.rs::close_lent_board`,
+  `TourMove::Week`), and the Enter at the week finishes the tour (`Done`
+  persisted, `TourMove::FinishedAtChat`) and lands the session on Home,
   in the chat, input free. No Stations stop (84% of newcomers are on
   plain ssh with nothing to hear), no homecoming box: the solved board's
   header is the send-off and names tomorrow (a new board at 00:00 UTC
@@ -218,7 +222,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `Homecoming`'s Enter finishes the tour in place and frees input. On a
   first visit's tour every stop reached counts once on
   `late_ssh_tour_stops_total{stop}` (on the `Board` route: `welcome`,
-  `chat`, `table`, `board`, `done`), the welcome box included (`enter_screen`
+  `chat`, `table`, `board`, `week`, `done`), the welcome box included (`enter_screen`
   returns true when it began the tour; `State::tour_start` says how the one
   in progress began, so a `/onboard` rerun counts nothing). The counting
   happens in `App::enter_clubhouse` and `app/input.rs::tour_advance`, never
@@ -273,7 +277,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `Solved`, the send-off, which names tomorrow's rung as the first star
   (`late_core::models::daily_rung::rung_for` on the next UTC day; the
   tour's own easy Netwalk is never a rung, so day one's win is never a
-  star and tomorrow's can be the first), Enter settles in; `TooSmall`, a terminal the
+  star and tomorrow's can be the first), Enter moves on to the week; `TooSmall`, a terminal the
   board does not fit under the header
   (`arcade/netwalk/ui.rs::lent_board_fits` on the room left under it),
   where the header says so and Enter walks on, so nobody is held at a
@@ -285,7 +289,15 @@ room is the chat surface, and the full history lives in #lounge on Home.
   turning, locking, reset; never the keys that swap the board for
   another), and the practice table is dropped on the way in
   (`leave_board`). A rerun whose easy Netwalk is already solved today
-  meets the board solved and Enter settles in.
+  meets the board solved and Enter moves on.
+- **The week stop** (`Board` route). `VisitWeek` is a boxed stop over
+  the Arcade lobby, the won board put away under it: today's badge,
+  starred once today's rung is won, tomorrow's large with its name, the
+  five days after as names, and what the rotation is. Look only: the
+  gate swallows every key but Enter and `q`, and Enter goes to the chat.
+  The widget is the Arcade's (`arcade/week.rs`, `arcade/CONTEXT.md`, the
+  week); `render.rs` reads the `Week` for the frame and hands it to
+  `ui::draw_tour_overlay`, which only places it.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
   `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
   below the quit-confirm modal) swallows every input, mouse and chords

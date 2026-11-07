@@ -45,19 +45,24 @@ fn a_week_never_repeats_a_game_and_saturday_is_the_hard_night() {
             assert_eq!(rung.difficulty_key, *rotation_key, "{day}");
         }
         assert!(
-            !(rung.puzzle == DailyPuzzle::Netwalk && rung.difficulty_key == "easy"),
-            "the tour's board is a rung on {day}"
+            rung.tier != Difficulty::Easy,
+            "a star is never an easy board: {day}"
         );
     }
-    assert_eq!(rung_for(ROTATION_EPOCH).label(), "easy Sudoku");
+    assert_eq!(rung_for(ROTATION_EPOCH).label(), "medium Sudoku");
     assert_eq!(
         rung_for(ROTATION_EPOCH + Duration::days(2)).label(),
         "Le Word"
     );
     assert_eq!(
+        rung_for(ROTATION_EPOCH + Duration::days(5)).label(),
+        "hard Chess Puzzle",
+        "the first Saturday is Chess Puzzle at its hardest"
+    );
+    assert_eq!(
         rung_for(ROTATION_EPOCH + Duration::days(6)).label(),
-        "draw-3 Solitaire",
-        "the first Saturday is Solitaire at its hardest"
+        "draw-1 Solitaire",
+        "Sunday is back on the rotation's board"
     );
 }
 
@@ -87,4 +92,19 @@ async fn a_star_is_the_rungs_board_on_its_day_once() {
     assert_eq!(star(day, rung).await.unwrap(), None, "one star a day");
     let next = day + Duration::days(1);
     assert_eq!(star(next, rung_for(next)).await.unwrap(), Some(2));
+    assert_eq!(count_stars(&**client, user.id).await.unwrap(), 2);
+
+    // The day's star beside the name: today's only.
+    let stranger = create_test_user(&test_db.db, "rung-stranger").await;
+    let ids = [user.id, stranger.id];
+    assert_eq!(
+        list_starred_on(&**client, &ids, next).await.unwrap(),
+        HashSet::from([user.id])
+    );
+    assert_eq!(
+        list_starred_on(&**client, &ids, next + Duration::days(1))
+            .await
+            .unwrap(),
+        HashSet::new()
+    );
 }

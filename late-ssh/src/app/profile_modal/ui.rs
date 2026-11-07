@@ -353,6 +353,25 @@ fn build_segments(
         segments.push(Segment::Text(lines));
     }
 
+    // ── dailies: the numbers behind the marks beside the name in chat ──
+    let ladder = state.ladder();
+    if ladder.streak_days > 0 || ladder.stars > 0 {
+        let mut lines = section_lines("dailies", width_usize);
+        let mut facts = Vec::new();
+        if ladder.streak_days > 0 {
+            facts.push(format!("streak day {}", ladder.streak_days));
+        }
+        if ladder.stars > 0 {
+            let noun = if ladder.stars == 1 { "star" } else { "stars" };
+            facts.push(format!("✦ {} {noun}", ladder.stars));
+        }
+        lines.push(Line::from(Span::styled(
+            facts.join(" · "),
+            Style::default().fg(theme::TEXT()),
+        )));
+        segments.push(Segment::Text(lines));
+    }
+
     // ── chips ──
     let chips_top = segments.iter().map(Segment::height).sum::<u16>();
     let mut lines = section_lines("chips", width_usize);

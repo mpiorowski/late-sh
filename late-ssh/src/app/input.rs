@@ -3658,10 +3658,11 @@ fn tour_advance(app: &mut App) {
             crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
         }
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
-        // The won board is put away and the session lands in the chat, the
-        // place the route pitched first and where everyone is.
+        // The won board is put away; the week's box draws over the lobby.
+        TourMove::Week => crate::app::arcade::input::close_lent_board(app),
+        // The session lands in the chat, the place the route pitched first
+        // and where everyone is.
         TourMove::FinishedAtChat => {
-            crate::app::arcade::input::close_lent_board(app);
             app.set_screen(Screen::Dashboard);
             app.persist_clubhouse_tutorial_done();
         }

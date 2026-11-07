@@ -232,11 +232,11 @@ reached on it, 14 days to 2026-11-06:
 Arcade page, on sessions that are 84% plain ssh with nothing to hear.
 40% of day-one sessions end with the Clubhouse on screen
 (`late_ssh_session_ends_total{tenure="day_one"}`). The route in force
-now is the `Board` one (`TOUR_ROUTE`, one line to go back): four stops,
-welcome, chat, one shot of pool, today's board, the board played for
-real and won before the last Enter; its funnel is `welcome`, `chat`,
-`table`, `board`, `done`, read against the targets in section 5 on the
-first cohort that meets it.
+now is the `Board` one (`TOUR_ROUTE`, one line to go back): five stops,
+welcome, chat, one shot of pool, today's board, the week of rungs ahead,
+the board played for real and won before the week; its funnel is
+`welcome`, `chat`, `table`, `board`, `week`, `done`, read against the
+targets in section 5 on the first cohort that meets it.
 
 **deadchannel**, switched on 2026-10-21, read 16 days later (2026-11-06):
 16 runners, 13 of them touched the game that day and 15 in the week,
