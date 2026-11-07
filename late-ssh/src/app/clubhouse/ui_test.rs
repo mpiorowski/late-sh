@@ -291,7 +291,7 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
                 TourRoute::House,
                 Screen::Games,
                 false,
-                &a_week(),
+                a_week,
             )
         })
         .unwrap();
@@ -330,7 +330,7 @@ fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
                     TourRoute::House,
                     Screen::Artboard,
                     hidden,
-                    &a_week(),
+                    a_week,
                 )
             })
             .unwrap();
@@ -370,7 +370,7 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
                 TourRoute::House,
                 Screen::Games,
                 false,
-                &a_week(),
+                a_week,
             )
         })
         .unwrap();
@@ -464,7 +464,7 @@ fn the_board_route_names_the_table_and_the_board_as_what_comes_next() {
                 TourRoute::Board,
                 Screen::Dashboard,
                 false,
-                &a_week(),
+                a_week,
             )
         })
         .unwrap();
@@ -632,7 +632,7 @@ fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
                 TourRoute::Board,
                 Screen::Arcade,
                 false,
-                &a_week(),
+                a_week,
             )
         })
         .unwrap();
@@ -666,7 +666,7 @@ fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
                 TourRoute::Board,
                 Screen::Dashboard,
                 false,
-                &a_week(),
+                a_week,
             )
         })
         .unwrap();

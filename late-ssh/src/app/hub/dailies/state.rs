@@ -1,3 +1,4 @@
+use late_core::models::daily_rung::STAR_GLYPH;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -58,7 +59,7 @@ impl QuestState {
                 }
                 QuestEvent::RungStar { user_id, stars } if user_id == self.user_id => {
                     banner = Some(Banner::success(&format!(
-                        "✦ Today's rung, done. That is star {stars}."
+                        "{STAR_GLYPH} Today's rung, done. That is star {stars}."
                     )));
                 }
                 QuestEvent::Completed { .. } | QuestEvent::RungStar { .. } => {}

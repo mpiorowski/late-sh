@@ -6,30 +6,9 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate};
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
-
-#[derive(Clone, Debug)]
-pub struct DailyStreak {
-    pub user_id: Uuid,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-    pub last_completed_date: NaiveDate,
-    pub consecutive_days: i32,
-}
-
-impl From<tokio_postgres::Row> for DailyStreak {
-    fn from(row: tokio_postgres::Row) -> Self {
-        Self {
-            user_id: row.get("user_id"),
-            created: row.get("created"),
-            updated: row.get("updated"),
-            last_completed_date: row.get("last_completed_date"),
-            consecutive_days: row.get("consecutive_days"),
-        }
-    }
-}
 
 /// A streak as seen on a day: zero once a whole day has gone by without a
 /// win, otherwise the count and the day it was last kept.
@@ -134,7 +113,7 @@ pub async fn get_daily_streak_snapshot(
 ) -> Result<DailyStreakSnapshot> {
     let row = client
         .query_opt(
-            "SELECT user_id, created, updated, last_completed_date, consecutive_days
+            "SELECT last_completed_date, consecutive_days
              FROM user_daily_quest_streaks
              WHERE user_id = $1",
             &[&user_id],
@@ -143,7 +122,11 @@ pub async fn get_daily_streak_snapshot(
     let Some(row) = row else {
         return Ok(DailyStreakSnapshot::default());
     };
-    Ok(snapshot_from_streak(&DailyStreak::from(row), today))
+    Ok(snapshot_from_streak(
+        row.get("last_completed_date"),
+        row.get("consecutive_days"),
+        today,
+    ))
 }
 
 /// The streaks of `user_ids` as seen on `today`, for the marks beside
@@ -159,7 +142,7 @@ pub async fn list_daily_streak_snapshots(
     }
     let rows = client
         .query(
-            "SELECT user_id, created, updated, last_completed_date, consecutive_days
+            "SELECT user_id, last_completed_date, consecutive_days
              FROM user_daily_quest_streaks
              WHERE user_id = ANY($1)
                AND last_completed_date >= $2",
@@ -169,8 +152,13 @@ pub async fn list_daily_streak_snapshots(
     Ok(rows
         .into_iter()
         .map(|row| {
-            let streak = DailyStreak::from(row);
-            (streak.user_id, snapshot_from_streak(&streak, today))
+            let user_id: Uuid = row.get("user_id");
+            let snapshot = snapshot_from_streak(
+                row.get("last_completed_date"),
+                row.get("consecutive_days"),
+                today,
+            );
+            (user_id, snapshot)
         })
         .filter(|(_, snapshot)| snapshot.consecutive_days > 0)
         .collect())
@@ -194,14 +182,19 @@ fn next_streak_day(existing: Option<(NaiveDate, i32)>, won_on: NaiveDate) -> Opt
     }
 }
 
-fn snapshot_from_streak(streak: &DailyStreak, today: NaiveDate) -> DailyStreakSnapshot {
+/// A row's last kept day and count as seen on `today`.
+fn snapshot_from_streak(
+    last_completed_date: NaiveDate,
+    consecutive_days: i32,
+    today: NaiveDate,
+) -> DailyStreakSnapshot {
     let yesterday = today - Duration::days(1);
-    if streak.last_completed_date != today && streak.last_completed_date != yesterday {
+    if last_completed_date != today && last_completed_date != yesterday {
         return DailyStreakSnapshot::default();
     }
     DailyStreakSnapshot {
-        consecutive_days: streak.consecutive_days,
-        last_completed_date: Some(streak.last_completed_date),
+        consecutive_days,
+        last_completed_date: Some(last_completed_date),
     }
 }
 

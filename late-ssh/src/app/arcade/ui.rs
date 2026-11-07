@@ -12,7 +12,7 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use late_core::models::daily_rung::rung_for;
+use late_core::models::daily_rung::{Rung, STAR_GLYPH};
 
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
@@ -451,7 +451,7 @@ pub fn draw_arcade_hub(
 
     // No banner art above the list: with the quest strip on top, every row
     // belongs to the games, and small terminals never had the headroom.
-    draw_game_list(frame, content_area, view, week_inline);
+    draw_game_list(frame, content_area, view, week.days[0].rung, week_inline);
 
     if view.show_solvers
         && let ArcadeGame::Puzzle(game) = view.game_selection
@@ -658,12 +658,14 @@ fn wrap_names(names: &[String], width: usize) -> Vec<Vec<String>> {
     rows
 }
 
-/// The lobby's list, with the week in it above the daily cards when the
-/// lobby has no panel for it (`week_inline`).
+/// The lobby's list, today's `rung` starred on its card, with the week in
+/// it above the daily cards when the lobby has no panel for it
+/// (`week_inline`).
 fn draw_game_list(
     frame: &mut Frame,
     area: Rect,
     view: &ArcadeHubView<'_>,
+    rung: Rung,
     week_inline: Option<&super::week::Week>,
 ) {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -675,7 +677,6 @@ fn draw_game_list(
 
     // The week, time-ordered above the game-ordered cards. The list sits
     // four columns in from `area`.
-    let rung = rung_for(chrono::Utc::now().date_naive());
     if let Some(week) = week_inline {
         lines.extend(week.lobby_lines(area.width.saturating_sub(4)));
         lines.push(Line::from(""));
@@ -732,7 +733,10 @@ fn draw_game_list(
         let status = if card.available {
             let mut status = Vec::new();
             if puzzle == rung.puzzle {
-                status.push(Span::styled("✦ ", Style::default().fg(theme::AMBER())));
+                status.push(Span::styled(
+                    format!("{STAR_GLYPH} "),
+                    Style::default().fg(theme::AMBER()),
+                ));
             }
             status.extend(card_status_spans(
                 view,

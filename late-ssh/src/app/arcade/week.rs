@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use late_core::models::{
-    daily_rung::{ROTATION_LEN, Rung, rung_for},
+    daily_rung::{ROTATION_LEN, Rung, STAR_GLYPH, rung_for},
     leaderboard::{DailyCompletionStatus, DailyPuzzle, Tiers},
 };
 use ratatui::{
@@ -129,10 +129,6 @@ impl Week {
         }
     }
 
-    fn tomorrow(&self) -> WeekDay {
-        self.days[1]
-    }
-
     /// The lobby's week, for a list `width` columns wide: the badge row
     /// where it fits, one line per day where it does not, and the rotation
     /// line under either.
@@ -164,7 +160,6 @@ impl Week {
         ];
         for day in &self.days {
             let (frame, ink, label) = palette(day.kind);
-            let strokes = strokes(day.kind);
             let beside = [
                 Some((self.panel_day_label(day), label)),
                 Some((day.rung.label(), ink)),
@@ -172,13 +167,8 @@ impl Week {
                 None,
                 None,
             ];
-            let mut badge = vec![Span::styled(strokes.top(BADGE_ART_WIDTH), frame)];
-            badge.extend(
-                small_art(day.rung.puzzle)
-                    .into_iter()
-                    .map(|row| Span::styled(format!("{}{row}{}", strokes.side, strokes.side), ink)),
-            );
-            badge.push(Span::styled(strokes.bottom(BADGE_ART_WIDTH), frame));
+            let badge =
+                strokes(day.kind).badge(&small_art(day.rung.puzzle), BADGE_ART_WIDTH, frame, ink);
             for (badge, beside) in badge.into_iter().zip(beside) {
                 let mut spans = vec![badge, Span::raw("  ")];
                 if let Some((text, style)) = beside {
@@ -233,21 +223,17 @@ impl Week {
     /// A day's lobby column, every span exactly [`BADGE_WIDTH`] cells.
     fn lobby_column(&self, day: &WeekDay) -> Vec<Span<'static>> {
         let (frame, ink, label) = palette(day.kind);
-        let strokes = strokes(day.kind);
-        let art = small_art(day.rung.puzzle);
         let mut column = Vec::with_capacity(LOBBY_COLUMN_ROWS);
         column.push(Span::styled(
             centered(&self.day_label(day), BADGE_WIDTH),
             label,
         ));
-        column.push(Span::styled(strokes.top(BADGE_ART_WIDTH), frame));
-        for row in art {
-            column.push(Span::styled(
-                format!("{}{row}{}", strokes.side, strokes.side),
-                ink,
-            ));
-        }
-        column.push(Span::styled(strokes.bottom(BADGE_ART_WIDTH), frame));
+        column.extend(strokes(day.kind).badge(
+            &small_art(day.rung.puzzle),
+            BADGE_ART_WIDTH,
+            frame,
+            ink,
+        ));
         column.push(Span::styled(
             centered(short_name(day.rung.puzzle), BADGE_WIDTH),
             ink,
@@ -269,22 +255,19 @@ impl Week {
     pub(crate) fn tour_lines(&self) -> Vec<Line<'static>> {
         const GAP: &str = "   ";
         let today = &self.days[0];
-        let tomorrow = self.tomorrow();
+        let tomorrow = self.days[1];
         let text = Style::default().fg(theme::TEXT());
         let dim = Style::default().fg(theme::TEXT_DIM());
         let (frame, ink, label) = palette(DayKind::Tomorrow);
-        let strokes = strokes(DayKind::Tomorrow);
 
         let mut large = Vec::with_capacity(LARGE_ART_ROWS + 4);
         large.push(Span::styled(centered("tomorrow", LARGE_WIDTH), label));
-        large.push(Span::styled(strokes.top(LARGE_ART_WIDTH), frame));
-        for row in large_art(tomorrow.rung.puzzle) {
-            large.push(Span::styled(
-                format!("{}{row}{}", strokes.side, strokes.side),
-                ink,
-            ));
-        }
-        large.push(Span::styled(strokes.bottom(LARGE_ART_WIDTH), frame));
+        large.extend(strokes(DayKind::Tomorrow).badge(
+            &large_art(tomorrow.rung.puzzle),
+            LARGE_ART_WIDTH,
+            frame,
+            ink,
+        ));
         large.push(Span::styled(
             centered(&tomorrow.rung.label(), LARGE_WIDTH),
             label,
@@ -298,7 +281,7 @@ impl Week {
             text.add_modifier(Modifier::BOLD),
         );
         beside[4] = Span::styled("one board a day, the same for everyone.", text);
-        beside[5] = Span::styled("win it on its day for the star ✦", text);
+        beside[5] = Span::styled(format!("win it on its day for the star {STAR_GLYPH}"), text);
         beside[7] = Span::styled("the days after sit in the Arcade lobby, on The Week.", dim);
 
         let mut small = self.lobby_column(today);
@@ -316,7 +299,7 @@ impl Week {
 
     fn day_label(&self, day: &WeekDay) -> String {
         match day.kind {
-            DayKind::Today if self.today_won => "✦ today".to_string(),
+            DayKind::Today if self.today_won => format!("{STAR_GLYPH} today"),
             DayKind::Today => "today".to_string(),
             DayKind::Tomorrow => "tomorrow".to_string(),
             DayKind::Ahead => day.day.format("%a %-d").to_string(),
@@ -328,9 +311,7 @@ impl Week {
     fn panel_day_label(&self, day: &WeekDay) -> String {
         let date = day.day.format("%a %-d");
         match day.kind {
-            DayKind::Today if self.today_won => format!("✦ today · {date}"),
-            DayKind::Today => format!("today · {date}"),
-            DayKind::Tomorrow => format!("tomorrow · {date}"),
+            DayKind::Today | DayKind::Tomorrow => format!("{} · {date}", self.day_label(day)),
             DayKind::Ahead => date.to_string(),
         }
     }
@@ -339,7 +320,7 @@ impl Week {
     /// tomorrow's board comes up, nothing for the days after.
     fn panel_note(&self, day: &WeekDay) -> Option<String> {
         match day.kind {
-            DayKind::Today => Some(format!("{} ✦", self.today_stars)),
+            DayKind::Today => self.stars_label(day),
             DayKind::Tomorrow => Some("up at 00:00 UTC".to_string()),
             DayKind::Ahead => None,
         }
@@ -348,7 +329,7 @@ impl Week {
     /// Today's star count; the other days have none yet.
     fn stars_label(&self, day: &WeekDay) -> Option<String> {
         match day.kind {
-            DayKind::Today => Some(format!("{} ✦", self.today_stars)),
+            DayKind::Today => Some(format!("{} {STAR_GLYPH}", self.today_stars)),
             DayKind::Tomorrow | DayKind::Ahead => None,
         }
     }
@@ -396,22 +377,22 @@ struct Strokes {
 }
 
 impl Strokes {
-    fn top(&self, inner: usize) -> String {
-        format!(
-            "{}{}{}",
-            self.corners[0],
-            self.horizontal.to_string().repeat(inner),
-            self.corners[1]
-        )
-    }
-
-    fn bottom(&self, inner: usize) -> String {
-        format!(
-            "{}{}{}",
-            self.corners[2],
-            self.horizontal.to_string().repeat(inner),
-            self.corners[3]
-        )
+    /// `art` boxed, one span a row: the top rule in `frame`, each art row
+    /// between the sides in `ink`, the bottom rule. `inner` is the art's
+    /// width in cells.
+    fn badge(&self, art: &[&str], inner: usize, frame: Style, ink: Style) -> Vec<Span<'static>> {
+        let rule = self.horizontal.to_string().repeat(inner);
+        let [top_left, top_right, bottom_left, bottom_right] = self.corners;
+        let mut badge = vec![Span::styled(format!("{top_left}{rule}{top_right}"), frame)];
+        badge.extend(
+            art.iter()
+                .map(|row| Span::styled(format!("{}{row}{}", self.side, self.side), ink)),
+        );
+        badge.push(Span::styled(
+            format!("{bottom_left}{rule}{bottom_right}"),
+            frame,
+        ));
+        badge
     }
 }
 

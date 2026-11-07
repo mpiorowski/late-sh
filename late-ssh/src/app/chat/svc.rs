@@ -1692,14 +1692,17 @@ impl ChatService {
             return Ok(ChatAuthorMaps::default());
         }
 
-        let metadata = User::list_chat_author_metadata(client, user_ids).await?;
         // The ladder's marks are read on the UTC day the label is built
         // for: a star is today's only, and the moon goes the day after a
         // run breaks. Both ride every author metadata load, so they are
-        // never staler than the badges beside them.
+        // never staler than the badges beside them. The three reads are
+        // independent, so they share one round trip on the connection.
         let today = Utc::now().date_naive();
-        let streaks = list_daily_streak_snapshots(client, user_ids, today).await?;
-        let starred = list_starred_on(client, user_ids, today).await?;
+        let (metadata, streaks, starred) = tokio::try_join!(
+            User::list_chat_author_metadata(client, user_ids),
+            list_daily_streak_snapshots(client, user_ids, today),
+            list_starred_on(client, user_ids, today),
+        )?;
 
         let mut maps = ChatAuthorMaps {
             usernames: HashMap::with_capacity(metadata.len()),

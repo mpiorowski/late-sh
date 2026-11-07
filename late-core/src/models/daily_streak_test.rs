@@ -28,27 +28,18 @@ fn a_day_counts_once_yesterday_continues_and_older_restarts() {
 
 #[test]
 fn the_snapshot_is_empty_once_a_whole_day_went_by() {
-    let streak = DailyStreak {
-        user_id: Uuid::now_v7(),
-        created: DateTime::<Utc>::UNIX_EPOCH,
-        updated: DateTime::<Utc>::UNIX_EPOCH,
-        last_completed_date: day(4),
-        consecutive_days: 7,
-    };
     let kept = DailyStreakSnapshot {
         consecutive_days: 7,
         last_completed_date: Some(day(4)),
     };
-    assert_eq!(snapshot_from_streak(&streak, day(4)), kept);
-    assert_eq!(snapshot_from_streak(&streak, day(5)), kept);
+    assert_eq!(snapshot_from_streak(day(4), 7, day(4)), kept);
+    assert_eq!(snapshot_from_streak(day(4), 7, day(5)), kept);
     assert_eq!(
-        snapshot_from_streak(&streak, day(6)),
+        snapshot_from_streak(day(4), 7, day(6)),
         DailyStreakSnapshot::default()
     );
 }
 
-/// Three wins on two days make a two-day streak, and the snapshot reads
-/// it back on the days it is alive.
 /// The moon fills slowly: nothing under three days, then one glyph per
 /// milestone, so the mark is never a one-day badge.
 #[test]
@@ -63,6 +54,8 @@ fn the_moon_fills_at_three_seven_thirty_and_a_hundred() {
     assert_eq!(StreakMark::for_days(1000).map(StreakMark::glyph), Some('◉'));
 }
 
+/// Three wins on two days make a two-day streak, and the snapshot reads
+/// it back on the days it is alive.
 #[tokio::test]
 async fn wins_keep_the_day_and_the_snapshot_reads_it_back() {
     let test_db = test_db().await;

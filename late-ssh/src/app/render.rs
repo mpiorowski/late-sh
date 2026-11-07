@@ -2686,13 +2686,6 @@ impl App {
         // draws its own tutorial overlays; toasts draw after, so they win
         // the corner while they last.
         if screen != Screen::Clubhouse {
-            let today = chrono::Utc::now().date_naive();
-            let week = crate::app::arcade::week::Week::today(
-                today,
-                ctx.leaderboard.user_daily_statuses.on(today),
-                ctx.session_daily_wins.today(),
-                ctx.user_id,
-            );
             crate::app::clubhouse::ui::draw_tour_overlay(
                 frame,
                 inner,
@@ -2700,7 +2693,15 @@ impl App {
                 ctx.clubhouse_state.tour_route,
                 screen,
                 ctx.artboard_disclaimer_visible,
-                &week,
+                || {
+                    let today = chrono::Utc::now().date_naive();
+                    crate::app::arcade::week::Week::today(
+                        today,
+                        ctx.leaderboard.user_daily_statuses.on(today),
+                        ctx.session_daily_wins.today(),
+                        ctx.user_id,
+                    )
+                },
             );
         }
 

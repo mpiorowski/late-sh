@@ -1401,7 +1401,8 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
 /// mismatch, like off-tour stages, draws nothing. The Artboard stop lands
 /// behind the content disclaimer (`artboard_hidden`): it offers to show the
 /// art or skip ahead, and reads as a normal stop once shown. `route` names
-/// what the chat stop leads to; `week` is what the week stop shows.
+/// what the chat stop leads to; `week` builds what the week stop shows,
+/// called at that stop only, since it scans the day's marks.
 pub(crate) fn draw_tour_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -1409,7 +1410,7 @@ pub(crate) fn draw_tour_overlay(
     route: TourRoute,
     screen: Screen,
     artboard_hidden: bool,
-    week: &Week,
+    week: impl FnOnce() -> Week,
 ) {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
@@ -1739,7 +1740,7 @@ pub(crate) fn draw_tour_overlay(
         Tutorial::VisitWeek => (
             Screen::Arcade,
             " ✦ the tour · the week ",
-            week.tour_lines(),
+            week().tour_lines(),
             "into the chat",
         ),
         // The music, lobby, practice-table, dungeon and board stops write
