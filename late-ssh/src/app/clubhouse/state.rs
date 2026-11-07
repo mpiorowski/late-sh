@@ -110,8 +110,9 @@ pub enum TourRoute {
 pub const TOUR_ROUTE: TourRoute = TourRoute::Board;
 
 /// The first-visit tour. `Pending` arms it until the screen is first opened;
-/// then the tour is FORCED: while it runs, the input gate in `app/input.rs`
-/// (`handle_tour_gate`) swallows everything except Enter, which moves every
+/// then the tour is FORCED: while it runs, the input gate
+/// (`input::handle_tour_gate`, which `app/input.rs` asks first) swallows
+/// everything except Enter, which moves every
 /// stop on (`State::tutorial_advance`), the quit keys, and at the board
 /// stop the board's own keys. The `House` route walks
 /// that have no page of their own (the Stations modal on Home, the Lobby

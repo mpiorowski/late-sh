@@ -1140,26 +1140,6 @@ impl App {
         self.running
     }
 
-    /// Whether this session's user still has today's rung to win, for the
-    /// return push's line and its count.
-    pub(crate) fn rung_standing_today(
-        &self,
-    ) -> crate::app::hub::dailies::return_push::RungStanding {
-        use crate::app::hub::dailies::return_push::RungStanding;
-        let today = chrono::Utc::now().date_naive();
-        let won = crate::app::arcade::week::rung_won_today(
-            today,
-            self.leaderboard.user_daily_statuses.on(today),
-            self.session_daily_wins.today(),
-            self.user_id,
-        );
-        if won {
-            RungStanding::Done
-        } else {
-            RungStanding::Open
-        }
-    }
-
     /// Recompute this session's away flag (`common/away.rs`) and write it to
     /// the active-users roster when it changed. Rides the 1Hz presence edge,
     /// so peers see a session go away or come back within a second of it.
@@ -3161,7 +3141,10 @@ impl App {
                 if self.away {
                     self.sync_away();
                     if self.return_push.note_return(Instant::now(), quiet) {
-                        crate::metrics::record_return_push(self.rung_standing_today());
+                        crate::metrics::record_return_push(
+                            self.quest_state
+                                .rung_standing(chrono::Utc::now().date_naive()),
+                        );
                     }
                 }
                 // The held tail came from a chunk already swallowed, so the

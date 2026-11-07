@@ -685,11 +685,12 @@ impl App {
         };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
+        let today = chrono::Utc::now().date_naive();
         let return_push = self.return_push.line(
             Instant::now(),
             self.quest_state.snapshot(),
-            late_core::models::daily_rung::rung_for(chrono::Utc::now().date_naive()),
-            self.rung_standing_today(),
+            late_core::models::daily_rung::rung_for(today),
+            self.quest_state.rung_standing(today),
         );
         let return_push = return_push.as_deref();
         let ladder_marks = self.chat.ladder_marks();
@@ -2178,8 +2179,14 @@ impl App {
                 chrono::Utc::now(),
             ),
         );
+        // On the Arcade only the board stop draws across the page: the
+        // House route's lobby stop there is a modal that takes the header.
         let board_area = match (&tour_header, screen) {
-            (Some(header), Screen::DailyMatch | Screen::Games | Screen::Arcade) => {
+            (Some(header), Screen::DailyMatch | Screen::Games) => header.draw_above(frame, inner),
+            (Some(header), Screen::Arcade)
+                if ctx.clubhouse_state.tutorial
+                    == crate::app::clubhouse::state::Tutorial::VisitBoard =>
+            {
                 header.draw_above(frame, inner)
             }
             (Some(_), _) | (None, _) => inner,
@@ -2551,10 +2558,8 @@ impl App {
                 );
             }
             Screen::Arcade => {
-                let today_statuses = ctx
-                    .leaderboard
-                    .user_daily_statuses
-                    .on(chrono::Utc::now().date_naive());
+                let today = chrono::Utc::now().date_naive();
+                let today_statuses = ctx.leaderboard.user_daily_statuses.on(today);
                 crate::app::arcade::ui::draw_arcade_hub(
                     frame,
                     board_area,
@@ -2580,6 +2585,7 @@ impl App {
                         session_daily_completion: ctx.session_daily_wins.today(),
                         quest_state: ctx.quest_state,
                         today_statuses,
+                        starred_today: ctx.leaderboard.user_daily_statuses.starred_on(today),
                         usernames: ctx.usernames,
                         user_id: ctx.user_id,
                         username: ctx.clubhouse_own_username,
@@ -2697,8 +2703,8 @@ impl App {
                     let today = chrono::Utc::now().date_naive();
                     crate::app::arcade::week::Week::today(
                         today,
-                        ctx.leaderboard.user_daily_statuses.on(today),
-                        ctx.session_daily_wins.today(),
+                        ctx.leaderboard.user_daily_statuses.starred_on(today),
+                        ctx.quest_state.rung_standing(today),
                         ctx.user_id,
                     )
                 },

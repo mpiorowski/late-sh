@@ -810,8 +810,9 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     }
     assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
 
-    // Solved (the board set to its own network), the Enter that settles in
-    // is the last step of the opening; the paper is next.
+    // Solved (the board set to its own network), Enter reaches the week
+    // stop, still inside the opening; the Enter after it is the last step,
+    // and the paper is next.
     let solution = netwalk::generate(
         LENT_DIFFICULTY,
         netwalk::daily_seed(chrono::Utc::now().date_naive(), LENT_DIFFICULTY),
@@ -819,6 +820,10 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     .solution;
     app.netwalk_state
         .set_board_for_test(LENT_DIFFICULTY, solution, 1);
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    let frame = render_plain(&mut app);
+    assert!(!frame.contains("The Late Edition"), "{frame}");
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
     wait_for_render_contains(&mut app, "The Late Edition").await;

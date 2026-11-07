@@ -65,6 +65,10 @@ pub enum StreakDay {
 /// Keep the streak for `won_on`, the UTC date of a daily board win. `None`
 /// when that day already counted (or the win is older than the last day
 /// kept, which a late event can be), so a day with many wins is one day.
+/// The row is read without a lock, so two wins of one user landing at the
+/// same moment from two pods (yesterday's board finished after midnight,
+/// today's in another session) can both read the old row; the write only
+/// moves the day forward, and the one that lost the race is `None` too.
 pub async fn record_daily_win(
     client: &impl GenericClient,
     user_id: Uuid,
@@ -91,7 +95,7 @@ pub async fn record_daily_win(
         StreakDay::First => 1,
         StreakDay::Kept { consecutive_days } => consecutive_days,
     };
-    client
+    let written = client
         .execute(
             "INSERT INTO user_daily_quest_streaks
                 (user_id, last_completed_date, consecutive_days)
@@ -99,10 +103,14 @@ pub async fn record_daily_win(
              ON CONFLICT (user_id) DO UPDATE SET
                 last_completed_date = EXCLUDED.last_completed_date,
                 consecutive_days = EXCLUDED.consecutive_days,
-                updated = current_timestamp",
+                updated = current_timestamp
+             WHERE user_daily_quest_streaks.last_completed_date < EXCLUDED.last_completed_date",
             &[&user_id, &won_on, &consecutive_days],
         )
         .await?;
+    if written == 0 {
+        return Ok(None);
+    }
     Ok(Some(day))
 }
 

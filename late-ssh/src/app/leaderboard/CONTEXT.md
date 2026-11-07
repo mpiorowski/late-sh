@@ -65,10 +65,12 @@ services publish only after the win row commits, and the card ORs it with the
 snapshot's `user_daily_statuses`, which also feeds the Arcade card's `N solved`
 count and its `o` roster (`arcade/solvers.rs`, named through the app's username
 directory). Other players' standings still wait. The statuses carry the UTC
-day they were read for (`DailyStatuses`), and every reader goes through
-`DailyStatuses::on(today)`, which is empty once the day has moved on: for the
-few minutes after midnight before the next pass, every card shows today's
-puzzles open rather than yesterday's ticks.
+day they were read for (`DailyStatuses`), with the day's rung stars beside
+them (`daily_rung::starred_on`, the only read of `daily_rung_stars` the
+leaderboard makes, for the week's count in the Arcade), and every reader goes
+through `DailyStatuses::on(today)` or `starred_on(today)`, which are empty once
+the day has moved on: for the few minutes after midnight before the next
+pass, every card shows today's puzzles open rather than yesterday's ticks.
 
 ### Late Time persistence
 

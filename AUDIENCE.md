@@ -234,7 +234,8 @@ Arcade page, on sessions that are 84% plain ssh with nothing to hear.
 (`late_ssh_session_ends_total{tenure="day_one"}`). The route in force
 now is the `Board` one (`TOUR_ROUTE`, one line to go back): five stops,
 welcome, chat, one shot of pool, today's board, the week of rungs ahead,
-the board played for real and won before the week; its funnel is
+the board played for real and won, or skipped after a confirmation,
+before the week; its funnel is
 `welcome`, `chat`, `table`, `board`, `week`, `done`, read against the
 targets in section 5 on the first cohort that meets it.
 
@@ -388,13 +389,14 @@ Live, in order of evidence behind them:
   (section 3) say what holds them: a finished daily, a quest ticked, a
   reason named for tomorrow. Built as the tour's `Board` route, beside
   the old `House` one and one line to revert
-  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): four stops instead of
-  18 (what this is, the chat, the pool break, today's board); today's
-  Netwalk daily as the play the route ends on, played for real and won
-  before the tour lets go, in place of the scripted fight; no Stations
-  stop on plain ssh, where there is nothing to hear; the solved board's
-  header as the send-off, naming tomorrow (a new board at 00:00 UTC with
-  the hours left), and the chat as where the tour lands. Measure it on the next cohort
+  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): five stops instead of
+  18 (what this is, the chat, the pool break, today's board, the week
+  ahead); today's Netwalk daily as the play, played for real and won, or
+  skipped after a confirmation, before the tour lets go, in place of the
+  scripted fight; no Stations stop on plain ssh, where there is nothing
+  to hear; the solved board's header naming tomorrow (a new board at
+  00:00 UTC with the hours left), the week stop as the send-off, and the
+  chat as where the tour lands. Measure it on the next cohort
   with the queries in section 6. Targets: newcomers who win a daily on
   day one from 7% to 25% or more, two-day return from 5% to 9%, tour
   completion from 46% to 80%. One cohort to read. The steps, the ladder

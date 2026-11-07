@@ -1,14 +1,12 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
-use late_core::models::{
-    daily_rung::rung_for,
-    leaderboard::{DailyCompletionStatus, DailyPuzzle},
-};
+use late_core::models::leaderboard::DailyPuzzle;
 use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use super::*;
+use crate::app::hub::dailies::return_push::RungStanding;
 
 fn day(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).unwrap()
@@ -28,42 +26,29 @@ fn plain(lines: &[Line<'_>]) -> Vec<String> {
         .collect()
 }
 
-/// A mark on the rung's board is a star; any other mark is not.
-fn won(rung: Rung) -> DailyCompletionStatus {
-    let mut status = DailyCompletionStatus::default();
-    status.mark_completed(rung.puzzle, rung.difficulty_key.to_string());
-    status
-}
-
-/// Every badge is its stated size, so seven of them line up and the box
-/// around the large one closes.
+/// Every badge is its stated size, so seven of them line up and every
+/// frame closes.
 #[test]
 fn every_badge_is_its_size() {
     for puzzle in DailyPuzzle::ALL.iter().copied() {
         for row in small_art(puzzle) {
             assert_eq!(row.width(), BADGE_ART_WIDTH, "{puzzle:?} small {row:?}");
         }
-        for row in large_art(puzzle) {
-            assert_eq!(row.width(), LARGE_ART_WIDTH, "{puzzle:?} large {row:?}");
-        }
         assert!(short_name(puzzle).width() <= BADGE_WIDTH, "{puzzle:?}");
     }
 }
 
 /// The week runs from today: seven distinct games, today and tomorrow
-/// named, and the star count counts the marks on today's rung with the
-/// session's own win OR'd in once.
+/// named, and the star count is the snapshot's stars with the viewer's
+/// own OR'd in once.
 #[test]
 fn the_week_is_seven_days_from_today_and_counts_todays_stars() {
     let monday = day(2026, 11, 9);
-    let rung = rung_for(monday);
     let me = Uuid::from_u128(1);
     let alice = Uuid::from_u128(2);
-    let mut other_board = DailyCompletionStatus::default();
-    other_board.mark_completed(DailyPuzzle::Sudoku, "hard".to_string());
-    let statuses = HashMap::from([(alice, won(rung)), (Uuid::from_u128(3), other_board)]);
+    let starred = HashSet::from([alice]);
 
-    let week = Week::today(monday, &statuses, None, me);
+    let week = Week::today(monday, &starred, RungStanding::Open, me);
     assert_eq!(
         week.days.map(|d| d.kind),
         [
@@ -83,14 +68,13 @@ fn the_week_is_seven_days_from_today_and_counts_todays_stars() {
     assert_eq!(games.len(), DAYS, "a week never repeats a game");
     assert_eq!((week.today_stars, week.today_won), (1, false));
 
-    // The session's own win counts once, before and after the snapshot
-    // catches up with it.
-    let session = won(rung);
-    let week = Week::today(monday, &statuses, Some(&session), me);
+    // The viewer's own star counts once, before and after the snapshot
+    // catches up with the hub.
+    let week = Week::today(monday, &starred, RungStanding::Done, me);
     assert_eq!((week.today_stars, week.today_won), (2, true));
-    let mut caught_up = statuses.clone();
-    caught_up.insert(me, won(rung));
-    let week = Week::today(monday, &caught_up, Some(&session), me);
+    let mut caught_up = starred.clone();
+    caught_up.insert(me);
+    let week = Week::today(monday, &caught_up, RungStanding::Done, me);
     assert_eq!((week.today_stars, week.today_won), (2, true));
 }
 
@@ -101,8 +85,7 @@ fn the_week_is_seven_days_from_today_and_counts_todays_stars() {
 fn the_lobby_row_lines_up_seven_badges_and_narrows_to_a_list() {
     let monday = day(2026, 11, 9);
     let me = Uuid::from_u128(1);
-    let session = won(rung_for(monday));
-    let week = Week::today(monday, &HashMap::new(), Some(&session), me);
+    let week = Week::today(monday, &HashSet::new(), RungStanding::Done, me);
 
     let rows = plain(&week.lobby_lines(80));
     assert_eq!(rows.len(), LOBBY_COLUMN_ROWS + 1, "{rows:#?}");
@@ -151,8 +134,7 @@ fn the_lobby_row_lines_up_seven_badges_and_narrows_to_a_list() {
 fn the_panel_stacks_the_week_with_the_day_and_board_beside_each_badge() {
     let monday = day(2026, 11, 9);
     let me = Uuid::from_u128(1);
-    let session = won(rung_for(monday));
-    let week = Week::today(monday, &HashMap::new(), Some(&session), me);
+    let week = Week::today(monday, &HashSet::new(), RungStanding::Done, me);
     let rows = plain(&week.panel_lines());
     assert_eq!(rows.len(), usize::from(PANEL_HEIGHT), "{rows:#?}");
     assert_eq!(rows[0], "─── The Week ───");
@@ -177,34 +159,65 @@ fn the_panel_stacks_the_week_with_the_day_and_board_beside_each_badge() {
     }
 }
 
-/// The tour's box: today's badge, tomorrow's large one with its name, the
-/// pitch beside them from the art's second row, and nothing else.
+/// The tour's box: today's and tomorrow's badges at the lobby's size, the
+/// pitch beside them on the art rows, where the rest is on the names' row,
+/// and nothing else.
 #[test]
-fn the_tour_shows_today_small_tomorrow_large_and_the_pitch_beside() {
+fn the_tour_shows_today_and_tomorrow_as_badges_with_the_pitch_beside() {
     let monday = day(2026, 11, 9);
-    let week = Week::today(monday, &HashMap::new(), None, Uuid::from_u128(1));
+    let week = Week::today(
+        monday,
+        &HashSet::new(),
+        RungStanding::Open,
+        Uuid::from_u128(1),
+    );
     let rows = plain(&week.tour_lines());
-    assert_eq!(rows.len(), LARGE_ART_ROWS + 4, "{rows:#?}");
-    assert_eq!(rows[0], "  today            tomorrow");
-    assert_eq!(rows[1], "┌───────┐   ┏━━━━━━━━━━━━━━━━━━┓");
+    assert_eq!(rows.len(), LOBBY_COLUMN_ROWS, "{rows:#?}");
+    let netwalk = small_art(DailyPuzzle::Netwalk);
+    assert_eq!(
+        rows[0],
+        format!(
+            "{}   {}",
+            centered("today", BADGE_WIDTH),
+            centered("tomorrow", BADGE_WIDTH)
+        )
+        .trim_end()
+    );
+    assert_eq!(rows[1], "┌───────┐   ┏━━━━━━━┓");
     assert_eq!(
         rows[2],
-        "│ 5│ │3 │   ┃  ┌───┬───■───┐   ┃   up at 00:00 UTC: your first star."
+        format!(
+            "│ 5│ │3 │   ┃{}┃   up at 00:00 UTC: your first star.",
+            netwalk[0]
+        )
     );
     assert!(
-        rows[4].ends_with("┃   one board a day, the same for everyone."),
+        rows[3].ends_with("┃   one board a day, the same for everyone."),
         "{rows:#?}"
     );
+    assert!(
+        rows[4].ends_with("┃   win it on its day for the star ✦"),
+        "{rows:#?}"
+    );
+    assert_eq!(rows[5], "└───────┘   ┗━━━━━━━┛");
     assert_eq!(
-        rows[5],
-        "└───────┘   ┃  │           │   ┃   win it on its day for the star ✦"
+        rows[6],
+        format!(
+            "{}   {}   the days after sit in the Arcade lobby, on The Week.",
+            centered("sudoku", BADGE_WIDTH),
+            centered("netwalk", BADGE_WIDTH)
+        )
     );
     assert_eq!(
         rows[7],
-        " medium     ┃      ╵   ╵       ┃   the days after sit in the Arcade lobby, on The Week."
+        format!(
+            "{}   {}",
+            centered("medium", BADGE_WIDTH),
+            centered("hard", BADGE_WIDTH)
+        )
+        .trim_end()
     );
-    assert_eq!(rows[8], "   0 ✦      ┗━━━━━━━━━━━━━━━━━━┛");
-    assert_eq!(rows[9], "               hard Netwalk");
+    assert_eq!(rows[8], "   0 ✦");
     assert!(
         !rows.iter().any(|row| row.contains("and then")),
         "{rows:#?}"

@@ -1,9 +1,11 @@
+use chrono::NaiveDate;
 use late_core::models::daily_rung::STAR_GLYPH;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::primitives::Banner;
 
+use super::return_push::RungStanding;
 use super::svc::{QuestEvent, QuestService, QuestSnapshot};
 
 /// `pub` (not `pub(crate)`) because the public `ArcadeHubView` carries a
@@ -74,6 +76,15 @@ impl QuestState {
 
     pub(crate) fn snapshot(&self) -> &QuestSnapshot {
         &self.snapshot
+    }
+
+    /// Whether today's rung is still to be won, off the snapshot's newest
+    /// star; the hub refreshes the snapshot the moment a star lands.
+    pub(crate) fn rung_standing(&self, today: NaiveDate) -> RungStanding {
+        match self.snapshot.latest_star == Some(today) {
+            true => RungStanding::Done,
+            false => RungStanding::Open,
+        }
     }
 
     pub(crate) fn is_loaded(&self) -> bool {

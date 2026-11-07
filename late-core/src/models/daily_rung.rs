@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::{
     chips::Difficulty,
-    leaderboard::{DailyCompletionStatus, DailyPuzzle, SINGLE_TIER_KEY, Tiers},
+    leaderboard::{DailyPuzzle, SINGLE_TIER_KEY, Tiers},
 };
 
 /// The star beside a name in chat on the day its rung landed, and on the
@@ -36,20 +36,16 @@ impl Rung {
             Tiers::Keyed(_) => format!("{} {}", self.difficulty_key, self.puzzle.title()),
         }
     }
-
-    /// Whether a day's marks hold this rung: a mark on its board is the
-    /// star, since the hub writes one for exactly that win on that day.
-    pub fn won_in(self, status: &DailyCompletionStatus) -> bool {
-        status.completed_difficulty(self.puzzle, self.difficulty_key)
-    }
 }
 
 /// The rotation: one game a day in this order, eleven games, so no game
-/// comes round twice inside a week. Each game's board is at least its
-/// medium one: a star is for a real board, never an easy one, and within
-/// that the pick is by the clock (hard Netwalk is minutes, hard Sudoku an
-/// evening). Easy Netwalk, the board the first-visit tour lends, is never
-/// a rung, so day one's win is never a star and tomorrow can be the first.
+/// comes round twice inside a week. A game with a choice of boards gives
+/// at least its medium one: a star is for a real board, never a game's
+/// easy one, and within that the pick is by the clock (hard Netwalk is
+/// minutes, hard Sudoku an evening); a game with one board (Le Word,
+/// Quartets, the cube) gives that one. Easy Netwalk, the board the
+/// first-visit tour lends, is never a rung, so day one's win is never a
+/// star and tomorrow can be the first.
 const ROTATION: [(DailyPuzzle, &str); 11] = [
     (DailyPuzzle::Sudoku, "medium"),
     (DailyPuzzle::Netwalk, "hard"),
@@ -100,10 +96,12 @@ pub fn rung_for(day: NaiveDate) -> Rung {
     }
 }
 
-/// A daily board won on `won_on`: when it is that day's rung, the star
-/// lands and the user's star count comes back. `None` when the board is
-/// not the rung, or the star is already there (a day has one). A win's own
-/// date is what counts, so yesterday's rung won today is nothing.
+/// A daily board won, `won_on` its day: when it is that day's rung, the
+/// star lands and the user's star count comes back. `None` when the board
+/// is not the rung, or the star is already there (a day has one). The
+/// board's day is what counts, the date the hub stamps on the win, so a
+/// board finished after midnight still lands on its own day's rung, and a
+/// board that was not its day's rung is nothing whenever it is won.
 pub async fn record_rung_win(
     client: &impl GenericClient,
     user_id: Uuid,
@@ -138,6 +136,32 @@ pub async fn count_stars(client: &impl GenericClient, user_id: Uuid) -> Result<i
         )
         .await?;
     Ok(row.get("stars"))
+}
+
+/// The day of a user's newest star, `None` without one: today's star is
+/// this on today, for the week's badge and the return push.
+pub async fn latest_star_day(
+    client: &impl GenericClient,
+    user_id: Uuid,
+) -> Result<Option<NaiveDate>> {
+    let row = client
+        .query_one(
+            "SELECT max(day) AS day FROM daily_rung_stars WHERE user_id = $1",
+            &[&user_id],
+        )
+        .await?;
+    Ok(row.get("day"))
+}
+
+/// Everyone with the star of `day`, for the day's count on the week.
+pub async fn starred_on(client: &impl GenericClient, day: NaiveDate) -> Result<HashSet<Uuid>> {
+    let rows = client
+        .query(
+            "SELECT user_id FROM daily_rung_stars WHERE day = $1",
+            &[&day],
+        )
+        .await?;
+    Ok(rows.into_iter().map(|row| row.get("user_id")).collect())
 }
 
 /// Which of `user_ids` have the star of `day`, for the marks beside their

@@ -280,6 +280,10 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
         "{lobby}"
     );
     assert!(lobby.contains("0 ✦"), "today's stars so far: {lobby}");
+    assert!(
+        lobby.contains("─── Daily Games ───"),
+        "the list's head stays in view under the week: {lobby}"
+    );
     let card = lobby
         .lines()
         .find(|line| line.contains(&format!("[ {} ]", rung.puzzle.title())))
@@ -306,6 +310,16 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
         !lobby.contains("┌───────┐ ┏━━━━━━━┓"),
         "the row is gone once the panel is up: {lobby}"
     );
+
+    // A short terminal drops the week before the list loses its room, and
+    // the list's head stays in view: nothing scrolls the first card away.
+    app.resize(80, 24).expect("resize test terminal");
+    let lobby = render_plain(&mut app);
+    assert!(!lobby.contains("┌───────┐"), "no week at 80x24: {lobby}");
+    assert!(lobby.contains("─── Daily Games ───"), "{lobby}");
+    assert!(lobby.contains("Win once per UTC day"), "{lobby}");
+    app.resize(170, 50).expect("resize test terminal");
+    let lobby = render_plain(&mut app);
     let share_line = lobby
         .lines()
         .find(|line| line.contains("Share your day card"))
@@ -318,7 +332,10 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
 
 #[tokio::test]
 async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use crate::{
         app::common::primitives::Screen,
@@ -357,6 +374,7 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
                 (bob, bob_status),
                 (carol, carol_status),
             ]),
+            HashSet::new(),
         ),
         ..LeaderboardData::default()
     });
@@ -426,7 +444,10 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
 /// refresh) must see today's dailies open, not yesterday's ticks.
 #[tokio::test]
 async fn yesterdays_marks_do_not_show_on_todays_lobby() {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use crate::{
         app::common::primitives::Screen,
@@ -455,7 +476,7 @@ async fn yesterdays_marks_do_not_show_on_todays_lobby() {
     let today = chrono::Utc::now().date_naive();
 
     app.leaderboard = Arc::new(LeaderboardData {
-        user_daily_statuses: DailyStatuses::new(today, statuses.clone()),
+        user_daily_statuses: DailyStatuses::new(today, statuses.clone(), HashSet::new()),
         ..LeaderboardData::default()
     });
     let fresh = render_plain(&mut app);
@@ -463,7 +484,11 @@ async fn yesterdays_marks_do_not_show_on_todays_lobby() {
     assert!(fresh.contains("2 solved"), "{fresh}");
 
     app.leaderboard = Arc::new(LeaderboardData {
-        user_daily_statuses: DailyStatuses::new(today - chrono::Duration::days(1), statuses),
+        user_daily_statuses: DailyStatuses::new(
+            today - chrono::Duration::days(1),
+            statuses,
+            HashSet::new(),
+        ),
         ..LeaderboardData::default()
     });
     let stale = render_plain(&mut app);

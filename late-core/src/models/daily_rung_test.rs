@@ -44,10 +44,15 @@ fn a_week_never_repeats_a_game_and_saturday_is_the_hard_night() {
                 .unwrap();
             assert_eq!(rung.difficulty_key, *rotation_key, "{day}");
         }
-        assert!(
-            rung.tier != Difficulty::Easy,
-            "a star is never an easy board: {day}"
-        );
+        // A game with a choice of boards never gives its easy one; a game
+        // with one board gives that one, whatever its tier is called.
+        match rung.puzzle.tiers() {
+            Tiers::Keyed(_) => assert!(
+                rung.tier != Difficulty::Easy,
+                "a star is never a game's easy board: {day}"
+            ),
+            Tiers::Single(_) => {}
+        }
     }
     assert_eq!(rung_for(ROTATION_EPOCH).label(), "medium Sudoku");
     assert_eq!(
@@ -66,8 +71,8 @@ fn a_week_never_repeats_a_game_and_saturday_is_the_hard_night() {
     );
 }
 
-/// The star is the rung's board on its own day, once; another board, or
-/// yesterday's rung today, is nothing.
+/// The star is the rung's board on its own day, once; another board,
+/// yesterday's rung's among them, is nothing.
 #[tokio::test]
 async fn a_star_is_the_rungs_board_on_its_day_once() {
     let test_db = test_db().await;
@@ -93,6 +98,10 @@ async fn a_star_is_the_rungs_board_on_its_day_once() {
     let next = day + Duration::days(1);
     assert_eq!(star(next, rung_for(next)).await.unwrap(), Some(2));
     assert_eq!(count_stars(&**client, user.id).await.unwrap(), 2);
+    assert_eq!(
+        latest_star_day(&**client, user.id).await.unwrap(),
+        Some(next)
+    );
 
     // The day's star beside the name: today's only.
     let stranger = create_test_user(&test_db.db, "rung-stranger").await;
@@ -107,4 +116,7 @@ async fn a_star_is_the_rungs_board_on_its_day_once() {
             .unwrap(),
         HashSet::new()
     );
+    let everyone = starred_on(&**client, next).await.unwrap();
+    assert!(everyone.contains(&user.id) && !everyone.contains(&stranger.id));
+    assert_eq!(latest_star_day(&**client, stranger.id).await.unwrap(), None);
 }

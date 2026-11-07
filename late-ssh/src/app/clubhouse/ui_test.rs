@@ -4,8 +4,8 @@ use super::*;
 fn a_week() -> Week {
     Week::today(
         chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
-        &std::collections::HashMap::new(),
-        None,
+        &std::collections::HashSet::new(),
+        crate::app::hub::dailies::return_push::RungStanding::Open,
         uuid::Uuid::from_u128(1),
     )
 }
@@ -528,7 +528,7 @@ fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
     assert!(
         open.last()
             .unwrap()
-            .contains("[hjkl/arrows] move · [Space] turn · [f] lock ──"),
+            .contains("[hjkl/arrows] move · [Space] turn · [f] lock · [s] skip ──"),
         "{open:#?}"
     );
 
@@ -615,10 +615,9 @@ fn the_board_stop_follows_the_board_and_the_terminal() {
     );
 }
 
-/// The week stop boxes the week over the Arcade lobby: today's badge,
-/// tomorrow's large with its name, the pitch beside them, and Enter
-/// finishes the tour in the chat. Look only: no key of the lobby's is
-/// named.
+/// The week stop boxes the week over the Arcade lobby: today's and
+/// tomorrow's badges, the pitch beside them, and Enter finishes the tour
+/// in the chat. Look only: no key of the lobby's is named.
 #[test]
 fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
     let backend = ratatui::backend::TestBackend::new(80, 24);
@@ -642,7 +641,8 @@ fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
         .collect();
     let joined = rows.join("\n");
     assert!(joined.contains("✦ the tour · the week"), "{rows:#?}");
-    assert!(joined.contains("today            tomorrow"), "{rows:#?}");
+    assert!(joined.contains("today"), "{rows:#?}");
+    assert!(joined.contains("tomorrow"), "{rows:#?}");
     assert!(
         joined.contains("up at 00:00 UTC: your first star."),
         "{rows:#?}"

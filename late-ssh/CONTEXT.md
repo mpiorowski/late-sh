@@ -463,7 +463,8 @@ a no-op twin when built without `otel`.
   is a Grafana question, not a database one.
 - Newcomers: `late_ssh_tour_stops_total{stop}` (a first-visit tour stop
   reached: the welcome box when the tour begins, `App::enter_clubhouse`,
-  then each stop an Enter at the one before reaches, `input.rs::tour_advance`;
+  then each stop an Enter at the one before reaches,
+  `clubhouse/input.rs::tour_advance`;
   the drop between two stops is where they leave the tour. The route in
   force (`clubhouse::state::TOUR_ROUTE`) reaches `welcome`, `chat`,
   `table`, `board`, `week`, `done`, and `board` against `week` is what

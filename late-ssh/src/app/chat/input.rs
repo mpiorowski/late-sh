@@ -209,7 +209,7 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         crate::app::input::open_shop_modal_globally(app);
     }
     if app.chat.take_requested_onboard() {
-        crate::app::input::start_tour(app);
+        crate::app::clubhouse::input::start_tour(app);
     }
     if app.chat.take_requested_lobby_toggle() {
         crate::app::input::toggle_lobby_globally(app);

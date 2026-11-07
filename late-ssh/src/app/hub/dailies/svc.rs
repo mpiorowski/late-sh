@@ -9,7 +9,7 @@ use late_core::{
     MutexRecover,
     db::Db,
     models::{
-        daily_rung::{count_stars, record_rung_win},
+        daily_rung::{count_stars, latest_star_day, record_rung_win},
         daily_streak::{DailyStreakSnapshot, get_daily_streak_snapshot, record_daily_win},
         quest::{
             QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
@@ -36,6 +36,8 @@ pub struct QuestSnapshot {
     pub daily_streak: DailyStreakSnapshot,
     /// Every star this user has, for the day card.
     pub rung_stars: i64,
+    /// The day of this user's newest star: today's star is this on today.
+    pub latest_star: Option<NaiveDate>,
 }
 
 #[derive(Clone, Debug)]
@@ -166,7 +168,14 @@ impl QuestService {
         let rows = list_active_snapshot_rows(&client, user_id, today).await?;
         let daily_streak = get_daily_streak_snapshot(&**client, user_id, today).await?;
         let rung_stars = count_stars(&**client, user_id).await?;
-        Ok(snapshot_from_rows(user_id, rows, daily_streak, rung_stars))
+        let latest_star = latest_star_day(&**client, user_id).await?;
+        Ok(snapshot_from_rows(
+            user_id,
+            rows,
+            daily_streak,
+            rung_stars,
+            latest_star,
+        ))
     }
 
     pub fn start_activity_task(&self) -> tokio::task::JoinHandle<()> {
@@ -221,10 +230,21 @@ impl QuestService {
                 completed.push((row.template.title.clone(), outcome.rewarded_chips));
             }
         }
+        // Those are committed: their banners go out before the board
+        // bookkeeping below, whose failure must not take them along.
+        let any_completed = !completed.is_empty();
+        for (title, reward_chips) in completed {
+            self.publish_event(QuestEvent::Completed {
+                user_id,
+                title,
+                reward_chips,
+            });
+        }
 
         // Any daily board win keeps the day on the streak, whatever the
         // quests drew, and the day's rung won earns the star; both on the
-        // win's own UTC date so they roll with the boards.
+        // board's own UTC date, the date the event carries, so they roll
+        // with the boards.
         let mut streak_day = None;
         let mut rung_star = None;
         if let ActivityKind::GameWon { game, detail, .. } = &event.kind
@@ -244,15 +264,8 @@ impl QuestService {
             }
         }
 
-        if !completed.is_empty() || streak_day.is_some() || rung_star.is_some() {
+        if any_completed || streak_day.is_some() || rung_star.is_some() {
             self.refresh_user_if_active(user_id).await?;
-        }
-        for (title, reward_chips) in completed {
-            self.publish_event(QuestEvent::Completed {
-                user_id,
-                title,
-                reward_chips,
-            });
         }
         if let Some(stars) = rung_star {
             self.publish_event(QuestEvent::RungStar { user_id, stars });
@@ -314,6 +327,7 @@ fn snapshot_from_rows(
     rows: Vec<QuestSnapshotRow>,
     daily_streak: DailyStreakSnapshot,
     rung_stars: i64,
+    latest_star: Option<NaiveDate>,
 ) -> QuestSnapshot {
     let mut snapshot = QuestSnapshot {
         user_id: Some(user_id),
@@ -321,6 +335,7 @@ fn snapshot_from_rows(
         weekly: Vec::new(),
         daily_streak,
         rung_stars,
+        latest_star,
     };
     for row in rows {
         let progress_value = row

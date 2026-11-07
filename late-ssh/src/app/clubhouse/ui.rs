@@ -1935,7 +1935,7 @@ pub(crate) fn board_stop(
     let [_, page] = board_header(BoardStop::Open).split_above(content_area);
     match (
         solved,
-        crate::app::arcade::netwalk::ui::lent_board_fits(page),
+        crate::app::arcade::ui::lent_board_fits(page),
         skip_asked,
     ) {
         (true, true | false, true | false) => BoardStop::Solved {

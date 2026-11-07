@@ -52,9 +52,10 @@ down, is in Claude Code session `2fc40c39-0365-400e-b8c0-dd75cbf98223`
 
 ## Step 2: the ladder on the dailies
 
-Half of it is built (`late-ssh/src/app/hub/CONTEXT.md`): two daily
-quests and a weekly, `user_daily_quest_streaks`, a six-slot streak meter
-with a chip bonus at the top of the Arcade lobby. It holds 52 to 64
+Half of it is the quests (`late-ssh/src/app/hub/CONTEXT.md`): two daily
+quests and a weekly, and `user_daily_quest_streaks`, a count-only streak
+with no chip bonus, named in the quest strip's heading at the top of the
+Arcade lobby. It holds 52 to 64
 completers a week, flat since September, and 35 live streaks. The gap is
 visibility and the day-one handshake, not more quest kinds. The quest
 slots, their templates and their chips stay as they are; the ladder is

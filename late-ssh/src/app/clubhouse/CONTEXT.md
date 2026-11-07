@@ -244,7 +244,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - **Surface stops** hold a real surface open and take the header at its
   top (`ui::tour_header`). The music stop holds the Stations modal, the
   lobby stop holds the Lobby modal (`State::tour_modal`, kept in step by
-  `sync_tour_modal` in `app/input.rs`); both modals take the header as an
+  `input.rs::sync_tour_modal`); both modals take the header as an
   argument and drop their own footer, because none of its keys work
   mid-tour. Nothing in a held modal moves on its own.
 - **The practice table.** Enter at the lobby stop (on the `Board`
@@ -283,7 +283,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   tour's own easy Netwalk is never a rung, so day one's win is never a
   star and tomorrow's can be the first), Enter moves on to the week; `TooSmall`, a terminal the
   board does not fit under the header
-  (`arcade/netwalk/ui.rs::lent_board_fits` on the room left under it),
+  (`arcade/ui.rs::lent_board_fits` on the room left under it),
   where the header says so and Enter walks on, so nobody is held at a
   board they cannot see and nobody skips one they can. The gate and the
   renderer both read `board_stop`, so they cannot disagree; a solved
@@ -296,8 +296,8 @@ room is the chat surface, and the full history lives in #lounge on Home.
   meets the board solved and Enter moves on.
 - **The week stop** (`Board` route). `VisitWeek` is a boxed stop over
   the Arcade lobby, the board put away under it: today's badge, starred
-  once today's rung is won, tomorrow's large with its name, and beside
-  them three lines, that it is up at 00:00 UTC and the first star, that
+  once today's rung is won, tomorrow's beside it, heavy and bright as in
+  the lobby, and beside them three lines, that it is up at 00:00 UTC and the first star, that
   it is one board a day, the same for everyone, won on its day for the
   star, and that the days after sit on the lobby's week. The rest of the
   week is the lobby's, visible around the box. Look only: the gate
@@ -307,13 +307,18 @@ room is the chat surface, and the full history lives in #lounge on Home.
   week); `render.rs` reads the `Week` for the frame and hands it to
   `ui::draw_tour_overlay`, which only places it.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
-  `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
-  below the quit-confirm modal) swallows every input, mouse and chords
-  included, except Enter, Space at the practice table and the fight, the board's keys at the board stop, and `q` (quitting always works). A lone Esc reaches
-  `dispatch_escape` without passing the gate, so that returns early while a
-  stop is up, after the quit-confirm arm, taking back the board stop's
-  skip question on its way. No stop can be skipped but the board, and
-  that one asks first. Completion
+  `input.rs::handle_tour_gate` (which `app/input.rs` asks first, above the
+  reserved chords, below the quit-confirm modal) swallows every input, mouse
+  and chords included, except Enter, Space at the practice table and the
+  fight, the board's keys at the board stop, and `q` (quitting always
+  works). The gate, `tour_advance` (Enter at a stop, walking the newcomer
+  to wherever the next one lives through the other domains' surfaces),
+  `sync_tour_modal` and `start_tour` all live in this domain's `input.rs`.
+  A lone Esc reaches `app/input.rs::dispatch_escape` without passing the
+  gate; after the quit-confirm arm that hands it to
+  `input.rs::handle_tour_escape`, which swallows it while a stop is up and
+  takes back the board stop's skip question on its way. No stop can be
+  skipped but the board, and that one asks first. Completion
   persists once via `ProfileService::set_clubhouse_tutorial_done`
   (fire-and-forget, failure only logged: worst case the tour runs again
   next session).
