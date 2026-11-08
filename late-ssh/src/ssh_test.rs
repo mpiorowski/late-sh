@@ -128,7 +128,9 @@ async fn ssh_bootstrap_reads_the_disclaimer_of_this_device() {
         .await
         .unwrap()
         .expect("the account its first key made");
-    for key in [&work, &fresh] {
+    // The login path makes a key's row at connect; these keys are stamped
+    // before their first login, so the rows are made here.
+    for key in [&home, &work, &fresh] {
         UserSshKey::ensure(&db_client, user.id, &fingerprint(key))
             .await
             .unwrap();

@@ -266,18 +266,15 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
     let today = chrono::Utc::now().date_naive();
     let rung = rung_for(today);
     let lobby = render_plain(&mut app);
-    // The week row: seven badges, today's rung and tomorrow's named under
-    // theirs, the rotation line under the row.
-    let day_row = lobby
-        .lines()
-        .find(|line| line.contains("today") && line.contains("tomorrow"))
-        .expect("the week row names today and tomorrow");
-    assert!(day_row.trim_start().starts_with("today"), "{day_row}");
-    let badge_tops = lobby
-        .lines()
-        .find(|line| line.contains("┌───────┐ ┏━━━━━━━┓ ┌───────┐"))
-        .expect("seven badges side by side, tomorrow's heavy");
-    assert_eq!(badge_tops.matches("───────").count(), 6, "{badge_tops}");
+    // The week row: today first, then tomorrow, seven badges with
+    // tomorrow's heavy, and the rotation sentence in one line under the
+    // row. The plain render is one string with no line breaks and no
+    // unstyled gap cells, so the checks count glyphs over the whole frame.
+    let today_at = lobby.find("today").expect("today");
+    let tomorrow_at = lobby.find("tomorrow").expect("tomorrow");
+    assert!(today_at < tomorrow_at, "today comes first: {lobby}");
+    assert_eq!(lobby.matches("┌───────┐").count(), 6, "{lobby}");
+    assert_eq!(lobby.matches("┏━━━━━━━┓").count(), 1, "{lobby}");
     assert!(
         lobby.contains("11 boards, one a day, all new at 00:00 UTC."),
         "{lobby}"
@@ -315,8 +312,10 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
     assert!(lobby.contains("─── The Week ───"), "{lobby}");
     assert!(lobby.contains("tomorrow · "), "{lobby}");
     assert!(lobby.contains("all new at 00:00 UTC."), "{lobby}");
+    // The panel says the rotation in two lines; the one-line sentence is
+    // the row's alone.
     assert!(
-        !lobby.contains("┌───────┐ ┏━━━━━━━┓"),
+        !lobby.contains("one a day, all new at 00:00 UTC."),
         "the row is gone once the panel is up: {lobby}"
     );
 

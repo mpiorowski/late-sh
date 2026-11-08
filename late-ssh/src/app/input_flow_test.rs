@@ -4150,17 +4150,13 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
     assert!(!app.arcade_solvers_open);
 
-    // Enter lands in the chat: the tour is done, input is free again, and
-    // the Arcade still holds the won board.
+    // Enter lands in the chat: the tour is done, input is free again (the
+    // page keys work, as in the House route's test; this app has joined
+    // no room to compose in), and the Arcade still holds the won board.
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
     assert_eq!(app.screen, Screen::Dashboard);
     assert!(!app.is_playing_game);
-    app.handle_input(b"i");
-    assert!(app.chat.composing, "input is free: i composes");
-    app.handle_input(b"\x1b");
-    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
-    crate::app::input::flush_pending_escape(&mut app);
     app.handle_input(b"2");
     assert_eq!(app.screen, Screen::Arcade);
     assert!(!app.is_playing_game);

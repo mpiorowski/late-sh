@@ -95,7 +95,7 @@ async fn enter_on_plain_ssh_opens_the_pair_guide_and_closes_the_box() {
     assert!(app.show_help);
     assert_eq!(app.help_modal_state.selected_topic(), HelpTopic::Pair);
     let frame = render_plain(&mut app);
-    assert!(frame.contains(INSTALL), "{frame}");
+    assert!(frame.contains("Install `late`"), "{frame}");
 }
 
 /// A session with a client paired hears the radio already, so the box

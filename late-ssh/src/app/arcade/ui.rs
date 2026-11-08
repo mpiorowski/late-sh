@@ -69,8 +69,8 @@ const LIST_WIDTH_BESIDE_WEEK: u16 = 112;
 /// page edge.
 const LIST_INDENT: u16 = 4;
 /// Rows the game list keeps under the inline week; a shorter lobby drops
-/// the week, the way it drops the quest strip.
-const WEEK_MIN_LIST_ROWS: u16 = 8;
+/// the week, the way it drops the quest strip, at the strip's floor.
+const WEEK_MIN_LIST_ROWS: u16 = 13;
 
 // ── Arcade game frame ─────────────────────────────────────────
 

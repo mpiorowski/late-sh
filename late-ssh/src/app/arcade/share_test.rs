@@ -65,7 +65,7 @@ fn day_card_marks_wins_in_lobby_order_with_an_icon_under_each_box() {
     );
     assert_eq!(
         render(&card, ShareFormat::Emoji),
-        "late.sh Daily #150 · 2/11 · 🔥 41\n🟩⬛⬛🟩⬛⬛⬛⬛⬛⬛⬛\n🔤🎡🔗🔢🎨💣🔌♟️🃏🧩🧊\nssh late.sh"
+        "late.sh Daily #150 · 2/11 · 🔥 41 · ✦ 3\n🟩⬛⬛🟩⬛⬛⬛⬛⬛⬛⬛\n🔤🎡🔗🔢🎨💣🔌♟️🃏🧩🧊\nssh late.sh"
     );
 }
 

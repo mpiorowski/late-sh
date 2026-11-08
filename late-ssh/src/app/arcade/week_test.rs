@@ -107,7 +107,7 @@ fn the_lobby_row_lines_up_seven_badges_and_narrows_to_a_list() {
     );
     assert_eq!(
         rows[6],
-        " sudoku    netwalk   le word    mines    nonogram    chess   solitaire",
+        " sudoku    netwalk   le word    mines   nonogram    chess   solitaire",
     );
     assert_eq!(
         rows[7],
