@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -548,6 +548,23 @@ impl DailyStatuses {
     }
 }
 
+/// Four races over one UTC calendar month. The stamp keeps last month's
+/// standings off the page while the coarse refresh catches up at midnight.
+#[derive(Clone, Default)]
+pub struct TopChatBoards {
+    pub month_start: NaiveDate,
+    pub all_rooms: Vec<RankedEntry>,
+    pub outside_lounge: Vec<RankedEntry>,
+    pub daily_streak: Vec<RankedEntry>,
+    pub news_posts: Vec<RankedEntry>,
+}
+
+impl TopChatBoards {
+    pub fn in_month(&self, today: NaiveDate) -> bool {
+        self.month_start == today.with_day(1).expect("first of month")
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LeaderboardData {
     pub today_champions: Vec<LeaderboardEntry>,
@@ -559,6 +576,7 @@ pub struct LeaderboardData {
     /// Buzz points from every drink taken (`drink_pours`), whatever bar
     /// poured it and whoever paid.
     pub top_drinkers: MonthYearWindows,
+    pub top_chat: TopChatBoards,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
     pub door_boards: HashMap<DoorGame, DoorBoards>,
@@ -979,6 +997,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         arcade_champions,
         online_time,
         top_drinkers,
+        top_chat,
         daily_monthly,
         daily_all_time,
         score_monthly,
@@ -996,6 +1015,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_arcade_champions(client, BOARD_DEPTH),
         fetch_online_time(client, BOARD_DEPTH),
         fetch_top_drinkers(client, BOARD_DEPTH),
+        fetch_top_chat(client, today, BOARD_DEPTH),
         fetch_daily_win_boards(client, DailyWindow::Monthly),
         fetch_daily_win_boards(client, DailyWindow::AllTime),
         fetch_score_boards(client, ScoreWindow::Monthly),
@@ -1061,12 +1081,98 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         arcade_champions,
         online_time,
         top_drinkers,
+        top_chat,
         daily_boards,
         score_boards,
         door_boards,
         lateania_adventurers,
         lateania_pvp,
     })
+}
+
+/// One bounded read for all four panels. Reduce messages to at most 31 rows
+/// per user before finding runs; no gaps-and-islands scan over full history.
+pub(super) async fn fetch_top_chat(
+    client: &Client,
+    today: NaiveDate,
+    limit: i64,
+) -> Result<TopChatBoards> {
+    let month_start = today.with_day(1).expect("first of month");
+    let rows = client.query(
+        "WITH chat_days AS MATERIALIZED (
+            SELECT m.user_id, (m.created AT TIME ZONE 'UTC')::date AS day,
+                   COUNT(*)::bigint AS messages,
+                   COUNT(*) FILTER (WHERE r.kind <> 'lounge')::bigint AS outside
+            FROM chat_rooms r
+            JOIN chat_messages m ON m.room_id = r.id
+            JOIN users u ON u.id = m.user_id
+            WHERE r.visibility = 'public'
+              AND m.created >= ($1::date::timestamp AT TIME ZONE 'UTC')
+              AND m.created < (($1::date + INTERVAL '1 month') AT TIME ZONE 'UTC')
+              AND (m.created AT TIME ZONE 'UTC')::date <= $2
+              AND NOT m.is_news_card
+              AND NOT EXISTS (
+                  SELECT 1 FROM articles a WHERE a.lounge_message_id = m.id
+                    AND a.created >= ($1::date::timestamp AT TIME ZONE 'UTC')
+                    AND a.created < (($1::date + INTERVAL '1 month') AT TIME ZONE 'UTC')
+              )
+              AND COALESCE(u.settings->'bot', 'false'::jsonb) <> 'true'::jsonb
+              AND COALESCE(u.settings->'system', 'false'::jsonb) <> 'true'::jsonb
+              AND m.body !~* '(^|[^a-z0-9_.-])@bartender[.]*($|[^a-z0-9_.-])'
+            GROUP BY m.user_id, (m.created AT TIME ZONE 'UTC')::date
+        ), runs AS (
+            SELECT user_id, day - (ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY day))::int AS run
+            FROM chat_days
+        ), run_lengths AS (
+            SELECT user_id, COUNT(*)::bigint AS days FROM runs GROUP BY user_id, run
+        ), totals AS (
+            SELECT 'all_rooms' AS metric, user_id, SUM(messages)::bigint AS value
+            FROM chat_days GROUP BY user_id
+            UNION ALL
+            SELECT 'outside_lounge', user_id, SUM(outside)::bigint
+            FROM chat_days GROUP BY user_id HAVING SUM(outside) > 0
+            UNION ALL
+            SELECT 'daily_streak', user_id, MAX(days) FROM run_lengths GROUP BY user_id
+            UNION ALL
+            SELECT 'news_posts', a.user_id, COUNT(*)::bigint
+            FROM articles a JOIN users u ON u.id = a.user_id
+            WHERE a.created >= ($1::date::timestamp AT TIME ZONE 'UTC')
+              AND a.created < (($1::date + INTERVAL '1 month') AT TIME ZONE 'UTC')
+              AND (a.created AT TIME ZONE 'UTC')::date <= $2
+              AND COALESCE(u.settings->'bot', 'false'::jsonb) <> 'true'::jsonb
+              AND COALESCE(u.settings->'system', 'false'::jsonb) <> 'true'::jsonb
+            GROUP BY a.user_id
+        ), ranked AS (
+            SELECT metric, user_id, value,
+                   RANK() OVER (PARTITION BY metric ORDER BY value DESC) AS rank
+            FROM totals
+        )
+        SELECT metric, ranked.user_id, u.username, value, rank
+        FROM ranked JOIN users u ON u.id = ranked.user_id
+        WHERE rank <= $3 ORDER BY metric, rank, u.username",
+        &[&month_start, &today, &limit],
+    ).await?;
+    let mut boards = TopChatBoards {
+        month_start,
+        ..TopChatBoards::default()
+    };
+    for row in rows {
+        let entries = match row.get::<_, &str>("metric") {
+            "all_rooms" => &mut boards.all_rooms,
+            "outside_lounge" => &mut boards.outside_lounge,
+            "daily_streak" => &mut boards.daily_streak,
+            "news_posts" => &mut boards.news_posts,
+            _ => unreachable!("closed Top Chat metric"),
+        };
+        entries.push(RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            value: row.get("value"),
+            rank: row.get("rank"),
+            note: None,
+        });
+    }
+    Ok(boards)
 }
 
 /// One user's lifetime connected time, as last flushed. Zero for a user

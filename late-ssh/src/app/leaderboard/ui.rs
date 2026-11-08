@@ -33,6 +33,7 @@ pub(crate) struct LeaderboardPageView<'a> {
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
     view.state.clear_hit_regions();
+    view.state.sync_month(chrono::Utc::now().date_naive());
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         view.state.set_content_area(Rect::default(), 0);
         crate::app::common::primitives::draw_too_small(
@@ -47,6 +48,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
 
     let rows = Layout::vertical([
         Constraint::Min(0),    // body: rail with its rule, detail
+        Constraint::Length(1), // divider above controls
         Constraint::Length(1), // footer
     ])
     .split(area);
@@ -54,7 +56,8 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
         Layout::horizontal([Constraint::Length(RAIL_WIDTH + 1), Constraint::Min(0)]).split(rows[0]);
 
     draw_rail(frame, columns[0], view.state);
-    draw_detail(frame, below_breathing_row(columns[1]), view);
+    let center = draw_detail(frame, below_breathing_row(columns[1]), view);
+    draw_footer_rule(frame, rows[1], columns[0].right() - 1, center);
     frame.render_widget(
         Paragraph::new(hint_line(&[
             ("j/k/click", "board"),
@@ -62,7 +65,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
             ("wheel", "under pointer"),
             ("Tab", "page"),
         ])),
-        rows[1],
+        rows[2],
     );
 }
 
@@ -179,8 +182,12 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize, Vec<u
     (lines, selected_line, board_lines)
 }
 
-fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
+fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) -> Option<u16> {
     let board = view.state.selected_board();
+    let standings = board.standings(view.data);
+    if let Standings::TopChat(panels) = standings {
+        return draw_top_chat(frame, area, view, panels);
+    }
     let rows = Layout::vertical([
         Constraint::Length(1), // title
         Constraint::Length(1), // hint
@@ -205,11 +212,11 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
             .saturating_sub(rows[3].height as usize);
         view.state.set_content_area(area, max_scroll);
         frame.render_widget(paragraph.scroll((view.state.scroll(), 0)), rows[3]);
-        return;
+        return None;
     }
 
-    let standings = board.standings(view.data);
     let count = match &standings {
+        Standings::TopChat(_) => unreachable!("grid rendered above"),
         Standings::Paired { monthly, all_time } => monthly.len().max(all_time.len()),
         Standings::MonthlyYearly { monthly, yearly } => monthly.len().max(yearly.len()),
         Standings::MonthlyOnly(entries)
@@ -225,6 +232,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
     view.state.set_content_area(area, max_scroll);
     let scroll = view.state.scroll();
     match standings {
+        Standings::TopChat(_) => unreachable!("grid rendered above"),
         Standings::Paired { monthly, all_time } => {
             let columns = standings_columns(
                 rows[3],
@@ -308,6 +316,137 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
                 scroll,
             );
         }
+    }
+    None
+}
+
+const CHAT_HEADINGS: [&str; 4] = [
+    "all rooms",
+    "outside the lounge",
+    "daily streak (days)",
+    "news posts",
+];
+
+/// A fixed grid, with one shared offset and per-panel bottom clamping.
+fn draw_top_chat(
+    frame: &mut Frame,
+    area: Rect,
+    view: &LeaderboardPageView<'_>,
+    panels: [&[RankedEntry]; 4],
+) -> Option<u16> {
+    if area.width < 25 || area.height < 9 {
+        view.state.set_content_area(Rect::default(), 0);
+        crate::app::common::primitives::draw_too_small(frame, area, "Top Chat", 25, 9);
+        return None;
+    }
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(section_heading("Top Chat - monthly messages")),
+        rows[0],
+    );
+    let grid = rows[2];
+    let columns = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .split(grid);
+    let halves = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .split(grid);
+    let areas = [
+        Rect::new(
+            columns[0].x,
+            halves[0].y,
+            columns[0].width,
+            halves[0].height,
+        ),
+        Rect::new(
+            columns[2].x,
+            halves[0].y,
+            columns[2].width,
+            halves[0].height,
+        ),
+        Rect::new(
+            columns[0].x,
+            halves[2].y,
+            columns[0].width,
+            halves[2].height,
+        ),
+        Rect::new(
+            columns[2].x,
+            halves[2].y,
+            columns[2].width,
+            halves[2].height,
+        ),
+    ];
+    let max_scroll = panels
+        .iter()
+        .zip(areas)
+        .map(|(entries, pane)| {
+            entries
+                .len()
+                .saturating_sub(pane.height.saturating_sub(1) as usize)
+        })
+        .max()
+        .unwrap_or(0);
+    view.state.set_content_area(area, max_scroll);
+    view.state.set_content_dividers([columns[1], halves[1]]);
+    for ((entries, pane), heading) in panels.into_iter().zip(areas).zip(CHAT_HEADINGS) {
+        let lines = scrolled_window_lines(
+            heading,
+            entries,
+            Board::TopChat,
+            view.user_id,
+            pane.height.saturating_sub(1) as usize,
+            pane.width.saturating_sub(1) as usize,
+            view.state.scroll(),
+        );
+        frame.render_widget(Paragraph::new(lines), pane);
+    }
+    let style = Style::default().fg(theme::BORDER_DIM());
+    for y in grid.y..grid.bottom() {
+        frame.buffer_mut()[(columns[1].x, y)]
+            .set_symbol("│")
+            .set_style(style);
+    }
+    for x in grid.x..grid.right() {
+        frame.buffer_mut()[(x, halves[1].y)]
+            .set_symbol("─")
+            .set_style(style);
+    }
+    frame.buffer_mut()[(columns[1].x, halves[1].y)].set_symbol("┼");
+    Some(columns[1].x)
+}
+
+fn draw_footer_rule(frame: &mut Frame, area: Rect, rail_x: u16, center: Option<u16>) {
+    let style = Style::default().fg(theme::BORDER_DIM());
+    for x in area.x..area.right() {
+        let symbol = if x == rail_x || Some(x) == center {
+            "┴"
+        } else {
+            "─"
+        };
+        frame.buffer_mut()[(x, area.y)]
+            .set_symbol(symbol)
+            .set_style(style);
+    }
+    // The page gets the frame's inner rectangle; connect only when those
+    // outer cells exist (standalone TestBackend renders need no outer frame).
+    let bounds = frame.area();
+    if area.x > bounds.x {
+        frame.buffer_mut()[(area.x - 1, area.y)].set_symbol("├");
+    }
+    if area.right() < bounds.right() {
+        frame.buffer_mut()[(area.right(), area.y)].set_symbol("┤");
     }
 }
 
@@ -408,7 +547,11 @@ fn scrolled_window_lines(
         return window_lines(heading, entries, board, user_id, capacity, width);
     }
     let offset = usize::from(scroll).min(entries.len().saturating_sub(capacity));
-    let content_width = window_content_width(entries, board).min(width);
+    let content_width = if board == Board::TopChat {
+        width
+    } else {
+        window_content_width(entries, board).min(width)
+    };
     let mut lines = vec![section_heading(heading)];
     lines.extend(
         entries
@@ -442,7 +585,11 @@ fn window_lines(
     }
 
     let (leader_rows, own_tail) = window_row_plan(entries, user_id, capacity);
-    let content_width = window_content_width(entries, board).min(width);
+    let content_width = if board == Board::TopChat {
+        width
+    } else {
+        window_content_width(entries, board).min(width)
+    };
 
     for entry in entries.iter().take(leader_rows) {
         lines.push(entry_line(
@@ -562,6 +709,7 @@ fn empty_copy(board: Board) -> &'static str {
         Board::ArcadeWins => "no daily puzzle wins yet this month",
         Board::TimeOnline => "no connected time recorded yet",
         Board::TopDrinkers => "nobody has taken a drink yet",
+        Board::TopChat => "no activity this month",
         Board::Daily(_) => "no wins yet, be the first",
         Board::Score(_) => "no scores yet, be the first",
         // Unreachable: draw_detail special-cases BadgeGuide before calling

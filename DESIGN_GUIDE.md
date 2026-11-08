@@ -523,7 +523,7 @@ References: [Banner and drawing](late-ssh/src/app/common/primitives.rs),
 
 | Component | Current split behavior | Reference |
 | :--- | :--- | :--- |
-| Leaderboards | 25-column rail including divider; split retained down to its 48×8 area minimum | [Leaderboards](late-ssh/src/app/leaderboard/ui.rs) |
+| Leaderboards | 25-column rail including divider; 48×8 page minimum. Top Chat's 2×2 detail grid needs 25×9 cells; its size message retains the rail. All boards have a rule above the controls footer. | [Leaderboards](late-ssh/src/app/leaderboard/ui.rs) |
 | Games Hub | 19-column sidebar including rule; 60×6 area minimum | [Games](late-ssh/src/app/door/hub/ui.rs) |
 | Artboard | 21-column allocation; visibility follows editing/focus state | [Artboard](late-ssh/src/app/artboard/ui.rs) |
 | Artboard gallery | Preview omitted below 56 pane columns; listing requires 24×6 | [Gallery](late-ssh/src/app/artboard/gallery/ui.rs) |

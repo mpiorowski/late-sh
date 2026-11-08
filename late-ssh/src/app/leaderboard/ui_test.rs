@@ -30,6 +30,148 @@ fn viewer() -> Uuid {
 }
 
 #[test]
+fn top_chat_grid_shares_scroll_and_joins_the_footer_frame() {
+    use chrono::{Datelike, Utc};
+    use late_core::models::leaderboard::{LeaderboardData, TopChatBoards};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        layout::Position,
+        widgets::{Block, Borders},
+    };
+    let mut state = LeaderboardPageState::new();
+    state.select(1);
+    let entries: Vec<_> = (1..=80)
+        .map(|rank| {
+            entry(
+                rank,
+                &format!("player{rank}"),
+                Uuid::from_u128(rank as u128 + 100),
+                100 - rank,
+            )
+        })
+        .collect();
+    let data = LeaderboardData {
+        top_chat: TopChatBoards {
+            month_start: Utc::now().date_naive().with_day(1).unwrap(),
+            all_rooms: entries.clone(),
+            outside_lounge: entries[..20].to_vec(),
+            daily_streak: entries[..40].to_vec(),
+            news_posts: entries[..60].to_vec(),
+        },
+        ..LeaderboardData::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let draw = |frame: &mut ratatui::Frame| {
+        let block = Block::default().borders(Borders::ALL);
+        let area = block.inner(frame.area());
+        frame.render_widget(block, frame.area());
+        super::draw(
+            frame,
+            area,
+            &super::LeaderboardPageView {
+                state: &state,
+                data: &data,
+                user_id: viewer(),
+            },
+        );
+    };
+    terminal.draw(draw).unwrap();
+    let buffer = terminal.backend().buffer();
+    let row = |y| {
+        (0..100)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+    };
+    assert!(row(2).contains("Top Chat - monthly messages"));
+    let headings: Vec<_> = (0..30)
+        .filter(|&y| row(y).contains("all rooms") || row(y).contains("daily streak (days)"))
+        .collect();
+    assert_eq!(headings.len(), 2);
+    let center = (26..99).find(|&x| buffer[(x, 26)].symbol() == "│").unwrap();
+    assert_eq!(buffer[(center, 27)].symbol(), "┴");
+    assert_eq!(buffer[(25, 27)].symbol(), "┴");
+    assert_eq!(buffer[(0, 27)].symbol(), "├");
+    assert_eq!(buffer[(99, 27)].symbol(), "┤");
+    let cross_y = (3..27)
+        .find(|&y| buffer[(center, y)].symbol() == "┼")
+        .unwrap();
+    assert!(!state.over_content(Position::new(center, 5)));
+    assert!(!state.over_content(Position::new(30, cross_y)));
+    assert!(!state.over_content(Position::new(30, 27)));
+    state.scroll_by(3);
+    terminal.draw(draw).unwrap();
+    let buffer = terminal.backend().buffer();
+    for y in headings {
+        let text: String = (26..99).map(|x| buffer[(x, y + 1)].symbol()).collect();
+        assert_eq!(
+            text.matches("player4 ").count(),
+            2,
+            "all four panels move: {text}"
+        );
+    }
+    state.scroll_by(i16::MAX);
+    terminal.draw(draw).unwrap();
+    let buffer = terminal.backend().buffer();
+    let rendered: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    for last in ["player80", "player20", "player40", "player60"] {
+        assert!(
+            rendered.contains(last),
+            "every panel reaches its own bottom: {last}"
+        );
+    }
+    let mut bigger = Terminal::new(TestBackend::new(120, 100)).unwrap();
+    bigger.draw(draw).unwrap();
+    assert!(state.scroll() < 70, "resize clamps shared offset");
+}
+
+#[test]
+fn every_board_has_a_footer_rule_and_top_chat_keeps_navigation_when_small() {
+    use late_core::models::leaderboard::LeaderboardData;
+    use ratatui::{Terminal, backend::TestBackend, layout::Position};
+    let mut state = LeaderboardPageState::new();
+    let data = LeaderboardData::default();
+    let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
+    for index in 0..state.boards().len() {
+        state.select(index);
+        terminal
+            .draw(|frame| {
+                super::draw(
+                    frame,
+                    frame.area(),
+                    &super::LeaderboardPageView {
+                        state: &state,
+                        data: &data,
+                        user_id: viewer(),
+                    },
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(24, 22)].symbol(), "┴");
+        assert_eq!(buffer[(30, 22)].symbol(), "─");
+        assert!(!state.over_content(Position::new(30, 22)));
+    }
+    state.select(1);
+    let mut small = Terminal::new(TestBackend::new(48, 10)).unwrap();
+    small
+        .draw(|frame| {
+            super::draw(
+                frame,
+                frame.area(),
+                &super::LeaderboardPageView {
+                    state: &state,
+                    data: &data,
+                    user_id: viewer(),
+                },
+            )
+        })
+        .unwrap();
+    assert!(state.board_at(Position::new(4, 3)).is_some());
+    assert!(!state.over_content(Position::new(30, 5)));
+}
+
+#[test]
 fn rendered_rail_rows_are_clickable_after_scrolling_and_resize() {
     use late_core::models::leaderboard::LeaderboardData;
     use ratatui::{Terminal, backend::TestBackend, layout::Position};
@@ -219,7 +361,7 @@ fn paired_columns_share_scroll_and_keep_headings_fixed() {
     state.scroll_by(i16::MAX);
     draw(&mut terminal);
     let bottom: String = (25..110)
-        .map(|x| terminal.backend().buffer()[(x, 10)].symbol())
+        .map(|x| terminal.backend().buffer()[(x, 9)].symbol())
         .collect();
     assert!(
         bottom.contains("player8") && bottom.contains("player40"),
@@ -454,8 +596,8 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[1])
     );
     assert_eq!(selected_line, 1);
-    // The four bespoke boards, then a blank and the "Games" header.
-    let games_header = 1 + 4 + 1;
+    // The five bespoke boards, then a blank and the "Games" header.
+    let games_header = 1 + 5 + 1;
     assert_eq!(text(&lines[games_header - 1]), "");
     assert!(
         text(&lines[games_header]).contains("Games"),

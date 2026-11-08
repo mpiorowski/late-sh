@@ -399,8 +399,9 @@ struct SendMessageParams {
 pub(crate) enum Wording {
     /// Typed by the author.
     Typed,
-    /// Built by the house from someone else's text.
-    Quoted,
+    /// The house-generated lounge card of a News share. Kept out of chat
+    /// standings from the instant it is inserted.
+    NewsCard,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3381,7 +3382,7 @@ impl ChatService {
 
     /// `send_lounge_message` handing back the row it wrote, `None` for an
     /// empty body: for a caller that keeps a pointer to its line (a News
-    /// share's card, whose title is `Wording::Quoted`).
+    /// share's card, whose title is `Wording::NewsCard`).
     pub(crate) async fn send_lounge_message_returning(
         &self,
         user_id: Uuid,
@@ -3558,7 +3559,7 @@ impl ChatService {
         // mention task below sees the same body the room will.
         let body = match wording {
             Wording::Typed => self.slurred_body(&client, user_id, &room, body).await?,
-            Wording::Quoted => body.to_string(),
+            Wording::NewsCard => body.to_string(),
         };
 
         let message = ChatMessageParams {
@@ -3566,13 +3567,18 @@ impl ChatService {
             user_id,
             body: body.clone(),
         };
-        let chat = ChatMessage::create_with_reply_targets(
-            &client,
-            message,
-            reply_to_message_id,
-            reply_to_user_id,
-        )
-        .await?;
+        let chat = match wording {
+            Wording::Typed => {
+                ChatMessage::create_with_reply_targets(
+                    &client,
+                    message,
+                    reply_to_message_id,
+                    reply_to_user_id,
+                )
+                .await?
+            }
+            Wording::NewsCard => ChatMessage::create_news_card(&client, message).await?,
+        };
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
@@ -3594,7 +3600,7 @@ impl ChatService {
             }
             // An `@name` the author never wrote notifies nobody in their
             // name.
-            Wording::Quoted => {}
+            Wording::NewsCard => {}
         }
         self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
