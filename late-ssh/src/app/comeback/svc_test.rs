@@ -143,6 +143,7 @@ async fn the_big_games_name_the_hub_and_enter_opens_it() {
         );
     }
     assert!(!frame.contains("Night City"), "{frame}");
+    assert!(frame.contains("moving in the static"), "{frame}");
     assert!(
         frame.contains("[Enter] open the Games hub · [Esc] later"),
         "{frame}"
@@ -186,11 +187,11 @@ async fn the_people_name_the_three_shelves_and_enter_opens_the_map() {
     );
 }
 
-/// `/comeback N` reruns a box for anyone; a spent account's login owes none.
+/// `/comeback N` reruns a box for anyone; a regular's login owes none.
 #[tokio::test]
 async fn slash_comeback_reruns_a_moment_and_says_so_on_a_bad_number() {
     let (_test_db, mut app) = chat_compose_app("comeback-cmd").await;
-    assert!(!app.comeback.is_open(), "a spent series opens nothing");
+    assert!(!app.comeback.is_open(), "a regular is never handed the box");
 
     app.handle_input(b"/comeback 7\r");
     wait_for_render_contains(&mut app, "Usage: /comeback 1, 2 or 3").await;

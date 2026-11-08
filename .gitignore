@@ -61,3 +61,6 @@ upstream-brogue/
 GUIDE.md
 
 /scripts/test/aggstats.json
+
+# Symlink to personal NetHack notes (canonical copy in dotfiles).
+NETHACK.md

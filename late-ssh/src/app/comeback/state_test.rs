@@ -19,7 +19,8 @@ fn mark(moment: Moment, on: NaiveDate) -> ComebackMark {
 
 /// The series runs one moment per day from the day after the account's
 /// first: nothing on the tour's day, nothing twice in a day, nothing past
-/// the last, nothing on a mark the series no longer knows.
+/// the last, nothing on a mark the series no longer knows, and nothing
+/// for an account past its first two weeks.
 #[test]
 fn a_login_is_owed_one_moment_per_later_day_until_the_series_closes() {
     let created = day(2026, 11, 7);
@@ -35,9 +36,24 @@ fn a_login_is_owed_one_moment_per_later_day_until_the_series_closes() {
         Some(Moment::HearIt)
     );
     assert_eq!(
-        due_moment(None, created, day(2027, 3, 1), PLAIN_SSH),
+        due_moment(
+            None,
+            created,
+            created + Duration::days(SERIES_DAYS),
+            PLAIN_SSH
+        ),
         Some(Moment::HearIt),
-        "an old account with no mark is owed the series too"
+        "the last day of the window still owes it"
+    );
+    assert_eq!(
+        due_moment(
+            None,
+            created,
+            created + Duration::days(SERIES_DAYS + 1),
+            PLAIN_SSH
+        ),
+        None,
+        "a regular is never handed a newcomer's box"
     );
     assert_eq!(
         due_moment(Some(mark(Moment::HearIt, d2)), created, d2, PLAIN_SSH),

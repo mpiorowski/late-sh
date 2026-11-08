@@ -31,7 +31,7 @@ late-ssh/src/
     state.rs input.rs tick.rs render.rs   root glue: hold domain state, delegate
     terminal_backend.rs                   GlyphIsolatingBackend
     activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ pot/ ...
-    comeback/                             the box a return day owes, three once per account (own CONTEXT.md)
+    comeback/                             the box a newcomer's return day owes, three in all (own CONTEXT.md)
 ```
 
 Root glue rule: a root file holds a domain's state and delegates to it. The
@@ -398,8 +398,8 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   `late-ssh/assets/splash_tips/*.json`: one pool every session draws from,
   and a returning pool (the "did you know" lines on the radio, the rung,
   the people, the booth, the Artboard and Nightcap among them) added for
-  any account past its first session. The first return days hand every
-  account more than a line, once: one box per day, three in all, each on
+  any account past its first session. The first return days hand a
+  newcomer more than a line: one box per day, three in all, each on
   something the tour never reaches, `app/comeback`.
 
 ## 11. Global keys

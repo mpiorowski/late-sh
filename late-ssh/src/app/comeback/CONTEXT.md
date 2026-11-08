@@ -1,9 +1,9 @@
 # Comeback moments
 
-What a return day hands a person, once. The tour is the first session
+What the first return days hand a newcomer. The tour is the first session
 (`../clubhouse/CONTEXT.md` §5); a comeback moment is one box on the first
 login of a later UTC day, in series, one moment per day, three in all, for
-every account once. Each sells one thing the tour never reaches, and is
+an account in its first two weeks. Each sells one thing the tour never reaches, and is
 shown only when it has something to sell this session. None is a stop: the
 session lands where it would have, the box sits over it, Enter does the
 moment's own thing and Esc keeps it for later. The reasoning is in
@@ -33,13 +33,17 @@ moment's own thing and Esc keeps it for later. The reasoning is in
 2. **The big games** (`/comeback 2`). Page `3`, the Games hub: its roster
    by group from `door::hub::state::HubGame::roster(false)` (the runners'
    own card left off, so a door added or dropped shows up here without a
-   copy), the Lobby on `Ctrl+G`, and the hub's live rail. Enter opens the
-   Games page, what the `3` key does. To everyone once.
+   copy), the Lobby on `Ctrl+G`, the hub's live rail, and two dim lines
+   that something is moving in the static for those who stick around:
+   deadchannel is never named, its door is the haunting
+   (`../deadchannel/haunt/CONTEXT.md`), and the line is the only foreshadowing
+   that ever reaches a session the static has not picked. Enter opens the
+   Games page, what the `3` key does. To every newcomer once.
 3. **The people** (`/comeback 3`). Page `5`, People: its three shelves
    by name from `directory::state::Shelf::ALL` (the map and its `m`, the
    work cards and `w`, the job shelf and `/`), the web profile page, and
    `p` on a name in chat. Enter lands on People on its Map shelf, what
-   `/map` does. To everyone once.
+   `/map` does. To every newcomer once.
 
 ## The gate
 
@@ -57,8 +61,9 @@ the session stands:
   (`users.settings.comeback_step` and `comeback_day`,
   `late_core::models::user::ComebackMark`, written fire-and-forget
   through `ProfileService::set_comeback_mark`), so a dropped connection
-  never replays it. No age gate: an account with no mark, however old,
-  is owed the series, so every regular meets it once.
+  never replays it. Nothing for an account past `SERIES_DAYS` (14) from
+  its creation day: a regular is never handed a newcomer's box, the
+  moments are for people still finding the house.
 - From where the series stands, the first moment with something to say
   for this session (`Standing`: whether a client is paired) is the one
   owed; the ones with nothing to say are passed over, not spent. Nothing

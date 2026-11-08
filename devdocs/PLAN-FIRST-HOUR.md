@@ -107,15 +107,16 @@ Decided, in the order it ships; each piece has its own number to read:
    any other tip, and the return days get a box each
    (`late-ssh/src/app/comeback/CONTEXT.md`): on the first login of a UTC
    day after the account's first, then the next day, then the next, for
-   every account once, skippable, never a stop, in the paper's place
+   an account in its first two weeks only (the regulars already live
+   here and are not pushed), skippable, never a stop, in the paper's place
    after the splash. Keyed to days, not to `users.login_count`: a dropped
    connection is not a return. Each moment sells one thing the tour
    never reaches and is passed over when the session already has it.
    Built, all three: **hear it**, the radio and the booth over plain
    ssh, the CLI's one-liner and the listen page, passed over for a
-   session that hears; **the big games**, the Games hub's doors by group
-   and the Lobby, to everyone; **the people**, the People page's map,
-   work cards and job shelf, to everyone. Measure: `taken` against
+   session that hears; **the big games**, the Games hub's doors by group,
+   the Lobby and a dim unnamed hint of deadchannel; **the people**, the
+   People page's map, work cards and job shelf. Measure: `taken` against
    `shown` on `late_ssh_comeback_moments_total{moment}`; for `hear_it`,
    second-week newcomers on the CLI (16% today) against the listen
    page's views; for `big_games`, `late_ssh_place_visits_total` on the

@@ -169,6 +169,12 @@ fn compose(view: &View<'_>) -> Box_ {
                     Span::styled("[Enter]", key),
                     Span::styled(" on it watches.", text),
                 ]),
+                Line::default(),
+                Line::from(Span::styled(
+                    "and one the hub does not list. something is moving in the static,",
+                    dim,
+                )),
+                Line::from(Span::styled("for those who stick around.", dim)),
             ])
             .collect(),
             keys: vec![

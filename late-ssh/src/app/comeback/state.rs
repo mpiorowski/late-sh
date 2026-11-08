@@ -1,5 +1,5 @@
-//! The comeback moments: what the first return days hand a newcomer, and
-//! what every account gets shown once. The tour is the first session; a
+//! The comeback moments: what the first return days hand a newcomer. The
+//! tour is the first session; a
 //! moment is one box on the first login of a later UTC day, in series, one
 //! per day, each shown only when it has something to sell this session
 //! (the radio to someone who cannot hear it). None is a stop: the
@@ -9,8 +9,13 @@
 //! after the splash and stamps the account, `input.rs` takes its two keys,
 //! `ui.rs` draws it.
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use late_core::models::user::ComebackMark;
+
+/// How long after its creation day an account is a newcomer owed the
+/// series. Past it, nothing: the moments are for people still finding the
+/// house, never pushed on the people who already live in it.
+pub const SERIES_DAYS: i64 = 14;
 
 /// The moments, in the order the days hand them out. `pub` because
 /// `metrics` counts each by name.
@@ -21,10 +26,10 @@ pub enum Moment {
     /// paired; the CLI hears it already.
     HearIt,
     /// The big games the tour never reaches: the Games hub's doors and the
-    /// Lobby's tables. To everyone once.
+    /// Lobby's tables. To every newcomer once.
     BigGames,
     /// The People page the tour never reaches: the map, the work cards
-    /// and the job shelf. To everyone once.
+    /// and the job shelf. To every newcomer once.
     People,
 }
 
@@ -109,11 +114,12 @@ pub enum Beat {
     Skipped,
 }
 
-/// The moment a login is owed. The series starts on the first login of a
-/// day after the account's creation day (the tour's day stays quiet) and
-/// moves on at the first login of a day after the last moment was shown;
-/// nothing twice in a day, nothing past the series, and a mark with a
-/// step the series no longer has closes it. From where the series stands,
+/// The moment a login is owed. Only in the account's first
+/// [`SERIES_DAYS`]. The series starts on the first login of a day after
+/// the account's creation day (the tour's day stays quiet) and moves on
+/// at the first login of a day after the last moment was shown; nothing
+/// twice in a day, nothing past the series, and a mark with a step the
+/// series no longer has closes it. From where the series stands,
 /// the first moment with something to say for this session is the one
 /// owed; the ones with nothing to say are passed over, not spent.
 pub fn due_moment(
@@ -122,6 +128,9 @@ pub fn due_moment(
     today: NaiveDate,
     standing: Standing,
 ) -> Option<Moment> {
+    if today - account_created > Duration::days(SERIES_DAYS) {
+        return None;
+    }
     let mut candidate = match mark {
         None => match account_created < today {
             true => Some(Moment::FIRST),

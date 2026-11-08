@@ -447,15 +447,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     }
 }
 
-/// A comeback series spent today, so no test app opens a moment's box
-/// unless its world arms one (`app/comeback`).
-fn spent_comeback_mark() -> late_core::models::user::ComebackMark {
-    late_core::models::user::ComebackMark {
-        step: crate::app::comeback::state::Moment::LAST.step(),
-        day: chrono::Utc::now().date_naive(),
-    }
-}
-
 pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
     make_app_with_chat_service(db, user_id, session_token).0
 }
@@ -513,8 +504,8 @@ pub struct SessionWorld {
     /// starts the session in the Clubhouse. Unset means walked.
     pub tour_pending: bool,
     /// An account created yesterday with no comeback mark, so this login
-    /// owes the first comeback moment (`app/comeback`). Unset is a spent
-    /// series: the last moment stamped today.
+    /// owes the first comeback moment (`app/comeback`). Unset is an
+    /// account from the epoch, long past the series.
     pub comeback_due: bool,
     /// Where a session its CLI moved here was (`app/handoff`). Unset is a
     /// login.
@@ -807,10 +798,7 @@ fn make_app_with_chat_service_and_permissions(
         },
         activity_feed_rx: None,
         is_new_user: world.is_new_user,
-        comeback_mark: match world.comeback_due {
-            true => None,
-            false => Some(spent_comeback_mark()),
-        },
+        comeback_mark: None,
         landing_page: match world.landing_page {
             Some(page) => page,
             None => late_core::models::user::LandingPage::Clubhouse,
@@ -1116,7 +1104,7 @@ pub fn make_app_with_paired_client(
         account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: false,
-        comeback_mark: Some(spent_comeback_mark()),
+        comeback_mark: None,
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
