@@ -62,6 +62,20 @@ async fn arrows_follow_the_game_into_application_cursor_mode() {
     assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1b[A");
 }
 
+/// dopewars' `keypad(TRUE)` makes ncurses turn DEL (0x7f, the xterm `kbs`)
+/// into KEY_BACKSPACE (263), which `bgetch()` drops (`c > 255`). Rewriting it
+/// to ASCII BS (8) is what lets `nice_input()` erase a character, so every
+/// text/quantity prompt accepts Backspace.
+#[tokio::test]
+async fn backspace_del_rewrites_to_ctrl_h_for_bgetch() {
+    let mut state = disabled_state();
+    state.force_running_for_test();
+    let proxy = state.proxy().expect("running proxy");
+
+    assert_eq!(keys_for_game(proxy, b"100\x7f0"), b"100\x080");
+    assert_eq!(keys_for_game(proxy, b"\x08"), b"\x08");
+}
+
 #[test]
 fn exit_grace_opens_on_close_and_counts_down() {
     let mut state = disabled_state();

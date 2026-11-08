@@ -84,6 +84,7 @@ Input capture contract (client side):
 - The **launcher** behaves like a plain page: only `Enter` is consumed; every other key falls through to normal global handling. **Exception:** for a short post-exit grace window the launcher swallows *all* input — see the exit-grace gotcha in §9.
 - While **Running**, `App::handle_input` intercepts bytes *before* the normal input pipeline: if `state.is_running()`, it `forward_input`s straight to the host and returns. There is **no** key remap — dopewars is menu-driven, so number/letter keys, `q`, `Esc`, etc. all reach the game verbatim.
 - `forward_input` strips mouse reports (SGR `ESC [ < … M/m`, legacy X10 `ESC [ M b x y`) and bracketed-paste markers. late.sh keeps any-event mouse tracking (`?1003h`) on for its own UI; those motion reports' leading `ESC` would otherwise leak into the curses game as stray commands. Real keys and arrow escapes pass through verbatim; a sequence truncated at a chunk boundary falls through unchanged.
+- `forward_input` also rewrites **DEL (`0x7f`) → BS (`0x08`)**. dopewars calls `keypad(stdscr, TRUE)` (`curses_client.c:148`), so ncurses translates `0x7f` (which `xterm-256color` sets as `kbs=\177`) into `KEY_BACKSPACE` (`263`), and `cursesport.c:bgetch()`'s `if (c > 255) return 0;` throws it away before `nice_input()` (`curses_client.c:2308`) can act on it. `0x08` is not `kbs`, so it passes through untouched and `nice_input()`'s `c == 8` arm erases the character. The rewrite lives at the `out.push(...)` step, after the escape-sequence skipping, so mouse/paste reports are never touched. The host repeats the same mapping (idempotent) on `Command::Input` in `host.rs::bridge_loop`, so an older client still gets working Backspace.
 
 ---
 
@@ -154,7 +155,7 @@ Agents run the focused tests through the capped runner: `make test-llm ARGS="-p 
 Inline pure tests cover:
 - Client `proxy.rs`: `dopewars_playname` (keeps valid `late.sh` characters, caps at 32, `drifter` fallback, rewrites the reserved `late_stats`).
 - Client `identity.rs` / host `late-dopewars/src/identity.rs`: derivation determinism. (A cross-crate known-answer fingerprint test like nethack's is still missing.)
-- Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; exit-grace opens on close and counts down.
+- Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows and rewrites DEL to BS; `keys_for_game` retypes arrows in application-cursor mode; exit-grace opens on close and counts down.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
 - `app/door/hub/state.rs` + `app/common/primitives.rs`: selector ordering, and `Screen::page` places `Dopewars` on the Games page.
 
@@ -168,6 +169,7 @@ The PTY bridge (`host.rs`) and the russh client/server loops are process/network
 
 ### Client-side
 - **Trailing game keys can quit the whole app (exit-grace).** dopewars' end-of-game high-score screen makes players mash keys; the game exits mid-burst and the remaining keys land on the launcher, where `q` is the **global** app-quit (drops the SSH session). Guard: on close, `State::tick` opens `EXIT_GRACE_TICKS` (~0.66s); while `in_exit_grace()`, `App::handle_input` swallows launcher input. `connect` resets it. (Same pattern as the nethack door.)
+- **Backspace is DEL (`0x7f`), not BS (`0x08`).** dopewars' `keypad(stdscr, TRUE)` makes ncurses report Backspace as `KEY_BACKSPACE` (`263`), which `cursesport.c:bgetch()` discards (`if (c > 255) return 0;`) — so upstream's `nice_input()` "backspace" arm is unreachable with a modern `kbs=\177`. Both `strip_input_noise` (client) and `bridge_loop`'s `Command::Input` arm (host) rewrite `0x7f` → `0x08`, which ncurses passes through as plain BS and `nice_input()` erases on. Idempotent, so either side alone is sufficient. Reintroducing a verbatim passthrough breaks Backspace in every prompt (`"How many do you buy? "`, `"How much money? "`).
 
 ### Host-side (`late-dopewars`)
 - **Curses link bug (`make LIBS="-lncursesw"`).** See `DEPLOY.md`: the release Makefile omits `$(CURSES_LIBS)` from `dopewars_LDADD` with the GUI disabled; the build fails on undefined curses symbols without the override.

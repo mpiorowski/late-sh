@@ -189,7 +189,8 @@ fn keys_for_game(proxy: &DopewarsProcess, data: &[u8]) -> Vec<u8> {
 
 /// Drop terminal reports dopewars must never see: SGR mouse (`ESC [ < … M/m`),
 /// legacy X10 mouse (`ESC [ M b x y`), and bracketed-paste markers (`ESC [ 200~`
-/// / `ESC [ 201~`). Everything else, including real keys and arrow-key escapes,
+/// / `ESC [ 201~`), then rewrite DEL (`0x7f`) to BS (`0x08`) so `nice_input()`
+/// can erase. Everything else, including real keys and arrow-key escapes,
 /// passes through verbatim. A sequence truncated at the chunk boundary falls
 /// through unchanged rather than swallowing a following keystroke.
 fn strip_input_noise(data: &[u8]) -> Vec<u8> {
@@ -216,7 +217,10 @@ fn strip_input_noise(data: &[u8]) -> Vec<u8> {
                 continue;
             }
         }
-        out.push(data[i]);
+        // Upstream dopewars enables keypad(stdscr, TRUE), turning 0x7f (kbs=\177)
+        // into KEY_BACKSPACE (263), which cursesport.c:bgetch() drops (`c > 255`).
+        // nice_input() accepts ASCII BS (8), so rewrite DEL -> BS.
+        out.push(if data[i] == 0x7f { 0x08 } else { data[i] });
         i += 1;
     }
     out

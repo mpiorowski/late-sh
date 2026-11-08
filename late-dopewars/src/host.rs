@@ -255,7 +255,16 @@ async fn bridge_loop(
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
-                Some(Command::Input(bytes)) => {
+                Some(Command::Input(mut bytes)) => {
+                    // Same DEL -> BS rewrite as the late-ssh client: dopewars'
+                    // keypad(TRUE) turns 0x7f into KEY_BACKSPACE (263), which
+                    // cursesport.c:bgetch() drops, while nice_input() accepts BS (8).
+                    // Idempotent, so an older client that skipped it still works.
+                    for b in &mut bytes {
+                        if *b == 0x7f {
+                            *b = 0x08;
+                        }
+                    }
                     let mut sink: &std::fs::File = master;
                     if sink.write_all(&bytes).is_err() {
                         // pty master write failed: the child's tty is gone, so it
