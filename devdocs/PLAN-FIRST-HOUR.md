@@ -100,21 +100,35 @@ Decided, in the order it ships; each piece has its own number to read:
    composer is where the return keypress lands. Measure: rung wins in
    the hour after `late_ssh_return_pushes_total{rung="open"}` against
    the hour after any other return.
-6. **"Did you know", one line per login.** Built; what it is lives in
-   `late-ssh/CONTEXT.md` (the help modal bullet) and
-   `late-ssh/src/app/common/splash_tips.rs`. Selling the house to someone
-   who came back, not to a stranger. On the second login and the few
-   after it, the splash's dim tip line, a place the screen already has,
-   chosen by `users.login_count` and shown once each, never a modal: the
-   paper already owns the login modal and a second box behind it is the
-   one people learn to Esc through. The order: login two, the radio, the
-   station count and the YouTube booth, in the `late` CLI or in a browser
-   at `late.sh/listen`, shown to every session, CLI ones included; login
-   three, the rung is up and a daily win starts the streak; login four,
-   the people, the map, the profile; then the booth, the Artboard, the
-   Nightcap. Never two lines at once. Measure: second-week newcomers on
-   the CLI and the listen page's views against
-   `late_ssh_did_you_know_total{line="radio"}`.
+6. **The comeback moments: one box per return day, three in all.** A
+   dim splash line is too small a place for the pitch that matters, so
+   the six "did you know" lines sit in the returning splash pool
+   (`late-ssh/assets/splash_tips/returning_users_tip_pool.json`) like
+   any other tip, and the return days get a box each
+   (`late-ssh/src/app/comeback/CONTEXT.md`): on the first login of a UTC
+   day after the account's first, then the next day, then the next, for
+   every account once, skippable, never a stop, in the paper's place
+   after the splash. Keyed to days, not to `users.login_count`: a dropped
+   connection is not a return. Each moment sells one thing the tour
+   never reaches and is passed over when the session already has it.
+   Built, all three: **hear it**, the radio and the booth over plain
+   ssh, the CLI's one-liner and the listen page, passed over for a
+   session that hears; **the big games**, the Games hub's doors by group
+   and the Lobby, to everyone; **the people**, the People page's map,
+   work cards and job shelf, to everyone. Measure: `taken` against
+   `shown` on `late_ssh_comeback_moments_total{moment}`; for `hear_it`,
+   second-week newcomers on the CLI (16% today) against the listen
+   page's views; for `big_games`, `late_ssh_place_visits_total` on the
+   hub in the hour after a `taken` against the doors' share of attention
+   today (about 1%, window-shopped, `AUDIENCE.md` section 5: this box is
+   the test of whether that is a discovery problem or a taste one); for
+   `people`, work cards written and `screen="profiles"` attention in the
+   same hour. Weighed and not picked: "the star" (the rung is already
+   the tour's send-off and the keypress-return push, a third telling is
+   nagging), "leave it open" (the regulars' behavior, and it needs the
+   CLI first, so it is one line inside the first box), "say something in
+   #lounge" (where the tour already lands, and chat on day one predicts
+   return at half a board's rate).
 7. **The radio nudge where the hand already is.** Built; what it is
    lives in `late-ssh/src/app/audio/CONTEXT.md` (the plain-ssh nudge). A
    plain-ssh session that opens the Stations modal or the Music Booth, or

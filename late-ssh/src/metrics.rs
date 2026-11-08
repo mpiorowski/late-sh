@@ -25,8 +25,8 @@ use crate::app::chat::news::svc::{
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::clubhouse::state::Tutorial;
+use crate::app::comeback::state::{Beat as ComebackBeat, Moment as ComebackMoment};
 use crate::app::common::primitives::Screen;
-use crate::app::common::splash_tips::DidYouKnow;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::door::realm::svc::{
     RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome, RealmPayout,
@@ -821,7 +821,6 @@ mod inner {
 
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
-    use super::DidYouKnow;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
@@ -855,6 +854,7 @@ mod inner {
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
     };
+    use super::{ComebackBeat, ComebackMoment};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
@@ -3130,34 +3130,6 @@ mod inner {
         return_pushes_total().add(1, &[KeyValue::new("rung", rung_standing_label(standing))]);
     }
 
-    fn did_you_know_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_did_you_know_total")
-                .with_description(
-                    "The did-you-know splash line shown on the first logins after the tour, by line",
-                )
-                .build()
-        })
-    }
-
-    fn did_you_know_label(line: DidYouKnow) -> &'static str {
-        match line {
-            DidYouKnow::Radio => "radio",
-            DidYouKnow::Rung => "rung",
-            DidYouKnow::People => "people",
-            DidYouKnow::Booth => "booth",
-            DidYouKnow::Artboard => "artboard",
-            DidYouKnow::Nightcap => "nightcap",
-        }
-    }
-
-    /// A login's splash carried one line of the did-you-know series.
-    pub fn record_did_you_know(line: DidYouKnow) {
-        did_you_know_total().add(1, &[KeyValue::new("line", did_you_know_label(line))]);
-    }
-
     fn radio_nudges_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -3181,6 +3153,45 @@ mod inner {
     /// A plain-ssh session reached for the music and got the nudge.
     pub fn record_radio_nudge(spot: RadioNudgeSpot) {
         radio_nudges_total().add(1, &[KeyValue::new("spot", radio_nudge_spot_label(spot))]);
+    }
+
+    fn comeback_moments_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_comeback_moments_total")
+                .with_description(
+                    "A comeback moment's box on a return day's login, by moment and what the login did with it",
+                )
+                .build()
+        })
+    }
+
+    fn comeback_moment_label(moment: ComebackMoment) -> &'static str {
+        match moment {
+            ComebackMoment::HearIt => "hear_it",
+            ComebackMoment::BigGames => "big_games",
+            ComebackMoment::People => "people",
+        }
+    }
+
+    fn comeback_beat_label(beat: ComebackBeat) -> &'static str {
+        match beat {
+            ComebackBeat::Shown => "shown",
+            ComebackBeat::Taken => "taken",
+            ComebackBeat::Skipped => "skipped",
+        }
+    }
+
+    /// A login's comeback moment opened, was taken, or was kept for later.
+    pub fn record_comeback(moment: ComebackMoment, beat: ComebackBeat) {
+        comeback_moments_total().add(
+            1,
+            &[
+                KeyValue::new("moment", comeback_moment_label(moment)),
+                KeyValue::new("beat", comeback_beat_label(beat)),
+            ],
+        );
     }
 
     fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
@@ -4653,7 +4664,6 @@ mod inner {
 
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
-    use super::DidYouKnow;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
     use super::RadioNudgeSpot;
@@ -4686,6 +4696,7 @@ mod inner {
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
     };
+    use super::{ComebackBeat, ComebackMoment};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
@@ -4781,8 +4792,8 @@ mod inner {
     pub fn record_daily_streak_day(_day: StreakDay) {}
     pub fn record_rung_star() {}
     pub fn record_return_push(_standing: RungStanding) {}
-    pub fn record_did_you_know(_line: DidYouKnow) {}
     pub fn record_radio_nudge(_spot: RadioNudgeSpot) {}
+    pub fn record_comeback(_moment: ComebackMoment, _beat: ComebackBeat) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}

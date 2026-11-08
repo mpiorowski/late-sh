@@ -211,6 +211,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_onboard() {
         crate::app::clubhouse::input::start_tour(app);
     }
+    if let Some(moment) = app.chat.take_requested_comeback() {
+        crate::app::comeback::svc::show(app, moment, crate::app::comeback::state::Start::Command);
+    }
     if app.chat.take_requested_lobby_toggle() {
         crate::app::input::toggle_lobby_globally(app);
     }

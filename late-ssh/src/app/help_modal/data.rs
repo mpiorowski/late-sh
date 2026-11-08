@@ -264,7 +264,9 @@ fn is_restricted_bot_context_line(line: &str) -> bool {
     .any(|forbidden| line.contains(forbidden))
 }
 
-const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
+/// `pub(crate)` for the comeback moment's box (`app/comeback`), which
+/// names the same one-liner the Pair topic does.
+pub(crate) const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
 const WINDOWS_INSTALL_COMMAND: &str = "irm https://cli.late.sh/install.ps1 | iex";
 const NIX_COMMAND: &str = "nix run github:mpiorowski/late-sh#late";
 const SOURCE_URL: &str = "https://github.com/mpiorowski/late-sh";

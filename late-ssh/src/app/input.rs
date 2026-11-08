@@ -818,6 +818,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // A comeback moment's box holds every key but its two, like the tour's
+    // welcome box, so a stray key never takes the pitch off the screen.
+    if app.comeback.is_open() {
+        crate::app::comeback::input::handle_input(app, event);
+        return;
+    }
+
     if handle_reserved_global_chord(app, &event) {
         return;
     }
@@ -1869,6 +1876,9 @@ fn dispatch_escape(app: &mut App) {
     // the practice table or the board a stop is holding open; the tour takes
     // it first while a stop is up.
     if crate::app::clubhouse::input::handle_tour_escape(app) {
+        return;
+    }
+    if crate::app::comeback::input::handle_escape(app) {
         return;
     }
     if app.show_help {
@@ -3628,8 +3638,6 @@ pub(crate) fn toggle_lobby_globally(app: &mut App) {
 /// The global guide, opened on the topic that fits the current page. Shared
 /// by `?` and `/guide`.
 pub(crate) fn open_guide_globally(app: &mut App) {
-    app.help_modal_state
-        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     let topic = if app.screen == Screen::Lateania {
         HelpTopic::Lateania
     } else if app.screen == Screen::Profiles {
@@ -3639,6 +3647,13 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     } else {
         HelpTopic::Pair
     };
+    open_guide_on_globally(app, topic);
+}
+
+/// The global guide, opened on a named topic (a comeback moment's Enter).
+pub(crate) fn open_guide_on_globally(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
     app.show_help = true;
 }
@@ -3716,9 +3731,15 @@ fn handle_numbered_page_switch(app: &mut App, byte: u8) -> bool {
         b'7' => Screen::Calendars,
         _ => return false,
     };
+    switch_page_globally(app, screen);
+    true
+}
+
+/// What a page's number key does: the composers reset, then the page
+/// (a comeback moment's Enter takes the same path).
+pub(crate) fn switch_page_globally(app: &mut App, screen: Screen) {
     reset_composers_for_page_change(app);
     app.set_screen(screen);
-    true
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {

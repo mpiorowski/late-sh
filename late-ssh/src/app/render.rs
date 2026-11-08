@@ -345,6 +345,10 @@ struct DrawContext<'a> {
     /// everything; `None` unless it is playing. See `app/deadchannel`.
     breakthrough: Option<crate::app::deadchannel::haunt::ui::BreakthroughFrame>,
     listen_url: &'a str,
+    /// The comeback moment's box (`app/comeback`), `None` unless one is up.
+    comeback: Option<crate::app::comeback::state::Moment>,
+    /// A client is paired on the session's token, so the radio can be heard.
+    hears_music: bool,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     room_info_modal_open: bool,
@@ -453,6 +457,8 @@ impl App {
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
         let own_chat_open = crate::app::door::spectate::input::open_own_chat_game(self);
         let foreground_overlay_open = self.foreground_overlay_open();
+        // Read before the views borrow `self` mutably below.
+        let hears_music = self.paired_client_state().is_some();
         let crate::app::door::spectate::chat::WatcherCounts {
             own: own_watchers,
             held: held_watchers,
@@ -1580,6 +1586,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
+            || self.comeback.is_open()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -1603,6 +1610,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
+            || self.comeback.is_open()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -1851,6 +1859,8 @@ impl App {
                             self.marquee_tick,
                         ),
                         listen_url: &listen_url,
+                        comeback: self.comeback.open(),
+                        hears_music,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
@@ -2890,6 +2900,20 @@ impl App {
 
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
+        }
+
+        // A comeback moment's box, over the page the login landed on and
+        // under the guide its Enter opens.
+        if let Some(moment) = ctx.comeback {
+            crate::app::comeback::ui::draw(
+                frame,
+                inner,
+                &crate::app::comeback::ui::View {
+                    moment,
+                    hears: ctx.hears_music,
+                    listen_url: ctx.listen_url,
+                },
+            );
         }
 
         if ctx.show_ultimate_modal {

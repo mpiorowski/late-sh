@@ -447,6 +447,15 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     }
 }
 
+/// A comeback series spent today, so no test app opens a moment's box
+/// unless its world arms one (`app/comeback`).
+fn spent_comeback_mark() -> late_core::models::user::ComebackMark {
+    late_core::models::user::ComebackMark {
+        step: crate::app::comeback::state::Moment::LAST.step(),
+        day: chrono::Utc::now().date_naive(),
+    }
+}
+
 pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
     make_app_with_chat_service(db, user_id, session_token).0
 }
@@ -503,6 +512,10 @@ pub struct SessionWorld {
     /// The tour still to walk (the account's flag is unset), which also
     /// starts the session in the Clubhouse. Unset means walked.
     pub tour_pending: bool,
+    /// An account created yesterday with no comeback mark, so this login
+    /// owes the first comeback moment (`app/comeback`). Unset is a spent
+    /// series: the last moment stamped today.
+    pub comeback_due: bool,
     /// Where a session its CLI moved here was (`app/handoff`). Unset is a
     /// login.
     pub resume: Option<crate::app::handoff::state::ResumePoint>,
@@ -786,13 +799,17 @@ fn make_app_with_chat_service_and_permissions(
         pot_service: None,
         referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
         newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
-        // A regular: the newcomer counters are no-ops in tests either way.
-        account_created: chrono::DateTime::UNIX_EPOCH,
+        // A regular, unless the world owes a comeback moment: the newcomer
+        // counters are no-ops in tests either way.
+        account_created: match world.comeback_due {
+            true => chrono::Utc::now() - chrono::Duration::days(1),
+            false => chrono::DateTime::UNIX_EPOCH,
+        },
         activity_feed_rx: None,
         is_new_user: world.is_new_user,
-        login_count: match world.is_new_user {
-            true => 1,
-            false => 8,
+        comeback_mark: match world.comeback_due {
+            true => None,
+            false => Some(spent_comeback_mark()),
         },
         landing_page: match world.landing_page {
             Some(page) => page,
@@ -1099,7 +1116,7 @@ pub fn make_app_with_paired_client(
         account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: false,
-        login_count: 8,
+        comeback_mark: Some(spent_comeback_mark()),
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),

@@ -31,6 +31,7 @@ late-ssh/src/
     state.rs input.rs tick.rs render.rs   root glue: hold domain state, delegate
     terminal_backend.rs                   GlyphIsolatingBackend
     activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ pot/ ...
+    comeback/                             the box a return day owes, three once per account (own CONTEXT.md)
 ```
 
 Root glue rule: a root file holds a domain's state and delegates to it. The
@@ -74,7 +75,7 @@ sequenceDiagram
   the session's CLI moved it here, off a draining pod or on a quit-modal
   restart (`LATE_RESUME`); a moved session publishes none. Creating the receiver after the publish misses the user's
   own login event. The same point counts the login (`users.login_count`,
-  `User::note_login`); a moved session keeps the count it arrived with.
+  `User::note_login`); a moved session is not counted.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
 - SSH compression is pinned to `NONE`: a client that negotiates zlib drops
@@ -394,10 +395,12 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   support list per terminal, why there is no OSC 8, Shift+drag to select past
   mouse reporting, OSC 777/9 notification support (tmux needs
   `allow-passthrough`). Splash tips live in
-  `late-ssh/assets/splash_tips/*.json`; on logins two to seven the tip is
-  the "did you know" series instead (`common/splash_tips.rs`
-  `DidYouKnow`, one line per login by `login_count`, the radio first,
-  counted by `late_ssh_did_you_know_total{line}`).
+  `late-ssh/assets/splash_tips/*.json`: one pool every session draws from,
+  and a returning pool (the "did you know" lines on the radio, the rung,
+  the people, the booth, the Artboard and Nightcap among them) added for
+  any account past its first session. The first return days hand every
+  account more than a line, once: one box per day, three in all, each on
+  something the tour never reaches, `app/comeback`.
 
 ## 11. Global keys
 
@@ -470,7 +473,10 @@ a no-op twin when built without `otel`.
   `table`, `board`, `week`, `done`, and `board` against `week` is what
   the board costs. A tour left
   midway starts over at the welcome box next session, a new attempt;
-  `/onboard` reruns are not counted) and
+  `/onboard` reruns are not counted),
+  `late_ssh_comeback_moments_total{moment,beat}` (a return day's box,
+  `app/comeback/CONTEXT.md`: shown, taken or skipped; `/comeback` reruns
+  are not counted) and
   `late_ssh_session_ends_total{tenure,screen}` (the screen that was up when
   a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
   row (`monitoring/dashboards/observability.json`) reads these plus the

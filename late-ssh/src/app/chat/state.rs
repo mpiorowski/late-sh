@@ -1041,6 +1041,8 @@ pub struct ChatState {
     requested_usermap: bool,
     requested_shop_modal: bool,
     requested_onboard: bool,
+    /// Set by `/comeback N`; `App` opens the moment's box.
+    requested_comeback: Option<crate::app::comeback::state::Moment>,
     requested_lobby_toggle: bool,
     /// Set by `/edit`; `App` runs the Ctrl+E chord.
     requested_home_arrange: bool,
@@ -1417,6 +1419,7 @@ impl ChatState {
             requested_usermap: false,
             requested_shop_modal: false,
             requested_onboard: false,
+            requested_comeback: None,
             requested_lobby_toggle: false,
             requested_home_arrange: false,
             requested_guide: false,
@@ -2144,6 +2147,10 @@ impl ChatState {
 
     pub fn take_requested_onboard(&mut self) -> bool {
         std::mem::take(&mut self.requested_onboard)
+    }
+
+    pub fn take_requested_comeback(&mut self) -> Option<crate::app::comeback::state::Moment> {
+        self.requested_comeback.take()
     }
 
     pub fn take_requested_lobby_toggle(&mut self) -> bool {
@@ -3820,6 +3827,17 @@ impl ChatState {
         if body.trim() == "/onboard" {
             self.clear_composer_after_submit();
             self.requested_onboard = true;
+            return None;
+        }
+
+        // `/comeback N` reruns a comeback moment's box, like `/onboard`
+        // reruns the tour.
+        if let Some(parsed) = crate::app::comeback::state::parse_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(moment) = parsed else {
+                return Some(Banner::error("Usage: /comeback 1, 2 or 3"));
+            };
+            self.requested_comeback = Some(moment);
             return None;
         }
 

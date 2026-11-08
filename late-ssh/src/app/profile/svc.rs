@@ -674,6 +674,26 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: stamp the comeback moment a login just showed
+    /// (`app/comeback`). A failure is only logged: worst case the moment
+    /// shows once more on the next login.
+    pub fn set_comeback_mark(&self, user_id: Uuid, mark: late_core::models::user::ComebackMark) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_comeback_mark(&client, user_id, mark).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, step = mark.step, "failed to persist the comeback mark");
+                }
+            }
+            .instrument(info_span!("profile.comeback_mark_task", user_id = %user_id)),
+        );
+    }
+
     /// Fire-and-forget: claim one capped delivery of the first-contact
     /// splash whisper. A lost claim means another device played the held
     /// door in the same window, or the row's gap had not passed; it is

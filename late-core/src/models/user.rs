@@ -507,6 +507,10 @@ const TERMINAL_IMAGES_KEY: &str = "terminal_images";
 const HIDDEN_AWARD_CATEGORIES_KEY: &str = "hidden_award_categories";
 /// The edition (UTC date, ISO) whose login pop this account has had.
 const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
+/// The last comeback moment this account was shown (its number in the
+/// series) and the UTC date (ISO) it was shown on; see [`ComebackMark`].
+const COMEBACK_STEP_KEY: &str = "comeback_step";
+const COMEBACK_DAY_KEY: &str = "comeback_day";
 const TRANSLATE_TO_KEY: &str = "translate_to";
 const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
@@ -1704,6 +1708,29 @@ impl User {
         Ok(updated == 1)
     }
 
+    /// Stamp the comeback moment a login just showed, so the next login
+    /// knows which one comes next and that today's is spent.
+    pub async fn set_comeback_mark(
+        client: &Client,
+        user_id: Uuid,
+        mark: ComebackMark,
+    ) -> Result<()> {
+        let day = mark.day.format("%Y-%m-%d").to_string();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::int, $3::text, $4::text),
+                     updated = current_timestamp
+                 WHERE id = $5",
+                &[&COMEBACK_STEP_KEY, &mark.step, &COMEBACK_DAY_KEY, &day, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     /// Take the paper's login stamp off (the admin `/paper reset` hook), so
     /// the next session pops the paper again whatever edition is printed.
     pub async fn clear_paper_shown(client: &Client, user_id: Uuid) -> Result<()> {
@@ -2042,6 +2069,28 @@ pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
 /// falls back to the stock Home on anything unreadable.
 pub fn extract_home_layout(settings: &Value) -> Option<Value> {
     settings.get(HOME_LAYOUT_KEY).cloned()
+}
+
+/// The last comeback moment an account was shown and the UTC day it was
+/// shown on. `step` is the moment's number in the series; the series itself
+/// (which moment is which, what comes next) is `late-ssh/src/app/comeback`,
+/// and this is only its stored form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComebackMark {
+    pub step: i32,
+    pub day: chrono::NaiveDate,
+}
+
+/// The account's comeback mark, `None` until a moment has been shown. A
+/// mark with either half missing or malformed reads as none.
+pub fn extract_comeback_mark(settings: &Value) -> Option<ComebackMark> {
+    let step = settings.get(COMEBACK_STEP_KEY)?.as_i64()?;
+    let day = settings.get(COMEBACK_DAY_KEY)?.as_str()?;
+    let day = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
+    Some(ComebackMark {
+        step: i32::try_from(step).ok()?,
+        day,
+    })
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit

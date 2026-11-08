@@ -446,10 +446,9 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
-    /// Logins counted from the account's first, this one included; a drain
-    /// handoff keeps the count it arrived with. Picks the did-you-know
-    /// splash line (`common/splash_tips.rs`).
-    pub login_count: i32,
+    /// The last comeback moment this account was shown and when
+    /// (`app/comeback`), `None` until one has been.
+    pub comeback_mark: Option<late_core::models::user::ComebackMark>,
     /// Tweak: the page the session starts on. Ignored for brand-new users so
     /// they still get the clubhouse first-visit tutorial.
     pub landing_page: LandingPage,
@@ -545,6 +544,8 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The comeback moments (`app/comeback`): the box a return day owes.
+    pub(crate) comeback: crate::app::comeback::state::State,
     /// The herald: the `/herald` drain and its answers.
     pub(crate) herald: crate::app::herald::state::HeraldState,
     /// The watch player and setup box, and the session's one play on the
@@ -1612,20 +1613,13 @@ impl App {
             true => None,
             false => config.resume,
         };
-        // The splash hint, and the did-you-know line's count, only for a
-        // session that will see the splash: a handoff keeps its login count
-        // and shows none.
-        let splash_hint = match (
-            resume.is_none(),
-            super::common::splash_tips::DidYouKnow::for_login(config.login_count),
-        ) {
-            (true, Some(line)) => {
-                crate::metrics::record_did_you_know(line);
-                line.line(&listen_url(config.web_url.trim_end_matches('/')))
-            }
-            (true, None) | (false, _) => {
-                super::common::splash_tips::choose_splash_hint(config.is_new_user)
-            }
+        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        // How the comeback moments (`app/comeback`) see this session: a
+        // session with the tour to walk owes none, and a handoff is not a
+        // login. Which moment, if any, is read once the splash is down.
+        let comeback_arrival = match (tour_pending, resume.is_none()) {
+            (false, true) => crate::app::comeback::state::Arrival::Login(config.comeback_mark),
+            (true, _) | (false, false) => crate::app::comeback::state::Arrival::NotALogin,
         };
         let landing = match (tour_pending, resume) {
             (true, _) => LandingPage::Clubhouse,
@@ -1699,6 +1693,7 @@ impl App {
                 config.paper_service,
                 config.paper_at_login && resume.is_none(),
             ),
+            comeback: crate::app::comeback::state::State::new(comeback_arrival),
             video: crate::app::video::state::State::default(),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
@@ -3082,6 +3077,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_lobby_modal
             || self.paper.modal.is_some()
+            || self.comeback.is_open()
             || self.stream_modal.is_some()
             || self.show_help
             || self.show_ultimate_modal

@@ -96,6 +96,63 @@ async fn user_last_seen_updates_without_touching_updated() {
     );
 }
 
+/// The comeback mark: none until stamped, then the step and the day the
+/// stamp carried, and a later stamp replaces it.
+#[tokio::test]
+async fn the_comeback_mark_is_none_until_stamped_and_the_last_stamp_wins() {
+    use crate::models::user::{ComebackMark, extract_comeback_mark};
+
+    let (client, _test_db) = setup_db().await;
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-comeback".to_string(),
+            username: "comeback_user".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("failed to create user");
+    assert_eq!(extract_comeback_mark(&user.settings), None);
+
+    let first = ComebackMark {
+        step: 1,
+        day: chrono::NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(),
+    };
+    User::set_comeback_mark(&client, user.id, first)
+        .await
+        .expect("first stamp");
+    let stamped = User::get(&client, user.id)
+        .await
+        .expect("get failed")
+        .expect("user");
+    assert_eq!(extract_comeback_mark(&stamped.settings), Some(first));
+
+    let second = ComebackMark {
+        step: 2,
+        day: chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
+    };
+    User::set_comeback_mark(&client, user.id, second)
+        .await
+        .expect("second stamp");
+    let stamped = User::get(&client, user.id)
+        .await
+        .expect("get failed")
+        .expect("user");
+    assert_eq!(extract_comeback_mark(&stamped.settings), Some(second));
+
+    assert_eq!(
+        extract_comeback_mark(&json!({"comeback_step": 1})),
+        None,
+        "half a mark is none"
+    );
+    assert_eq!(
+        extract_comeback_mark(&json!({"comeback_step": 1, "comeback_day": "yesterday"})),
+        None,
+        "a malformed day is none"
+    );
+}
+
 #[tokio::test]
 async fn note_login_counts_from_the_first_and_lands_on_the_row() {
     let (client, _test_db) = setup_db().await;
