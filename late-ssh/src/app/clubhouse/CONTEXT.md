@@ -167,7 +167,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `state::TOUR_ROUTE` picks the one every session walks; flipping it is
   the whole revert. `House` is the original walk, every bullet below
   describes it unless it says otherwise. `Board` is the second version
-  (`devdocs/PLAN-FIRST-HOUR.md`, step 1), the first session built around
+  (`AUDIENCE.md` section 5), the first session built around
   today's board: `Welcome` -> `VisitChat` (Home) -> `VisitTable` (the
   practice table, the same stop as below) -> `VisitBoard` (The Arcade:
   today's Netwalk daily at its easiest difficulty, opened as the active

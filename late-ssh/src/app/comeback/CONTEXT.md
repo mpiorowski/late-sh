@@ -6,8 +6,15 @@ login of a later UTC day, in series, one moment per day, three in all, for
 an account in its first two weeks. Each sells one thing the tour never reaches, and is
 shown only when it has something to sell this session. None is a stop: the
 session lands where it would have, the box sits over it, Enter does the
-moment's own thing and Esc keeps it for later. The reasoning is in
-`devdocs/PLAN-FIRST-HOUR.md` (step 2, piece 6).
+moment's own thing and Esc keeps it for later. Keyed to days, not to
+`users.login_count`: a dropped connection is not a return. The numbers
+behind it and what each moment is measured by are in `AUDIENCE.md`
+(section 5, the ladder). Weighed and not picked as moments: "the star"
+(the rung is already the tour's send-off and the keypress-return push,
+a third telling is nagging), "leave it open" (the regulars' behavior,
+and it needs the CLI first, so it is one line inside the first box),
+"say something in #lounge" (where the tour already lands, and chat on
+day one predicts return at half a board's rate).
 
 ## Files
 

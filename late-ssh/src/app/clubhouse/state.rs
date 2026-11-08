@@ -90,7 +90,7 @@ struct BannerEntry {
 /// Which route the first-visit tour walks. Two live side by side so the
 /// switch is one line, [`TOUR_ROUTE`]: `House` is the original walk,
 /// `Board` the first hour built around today's board (the second version,
-/// `devdocs/PLAN-FIRST-HOUR.md`). Both share the stops, the gate and the
+/// `AUDIENCE.md` section 5). Both share the stops, the gate and the
 /// headers; the route only decides where Enter goes from the chat stop and
 /// from the practice table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

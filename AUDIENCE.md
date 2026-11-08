@@ -58,7 +58,12 @@ retention.
 
 Newcomers arrive on plain ssh: of the 108 first-week accounts with a
 session summary in the 7 days to 2026-11-06, 91 (84%) used it. The first
-session is a bare terminal with no radio to hear.
+session is a bare terminal with no radio to hear. The client they arrive
+on goes with whether they return (session summaries in the week to
+2026-11-07, accounts created 2026-10-31 to 2026-11-05, arrival client
+from the first session, return a session on a later day): 14 arrived on
+the CLI and 2 came back (14%); 72 arrived on plain ssh and 6 came back
+(8%). Small numbers, one direction.
 
 ## 2. Where the time goes
 
@@ -305,7 +310,7 @@ which the room sees after the public flip.
   a week complete a quest, flat since September, and 35 streaks are
   alive, six of them past 30 days. The quests pay chips into a deflated
   economy. The streak is the strongest "tomorrow" the site owns; the
-  ladder (step 2 of `devdocs/PLAN-FIRST-HOUR.md`) now puts it beside the
+  ladder (section 5) now puts it beside the
   name in chat as a moon that fills, on the profile modal with the stars,
   and the tour's week stop names tomorrow's board as the newcomer's first
   star.
@@ -398,24 +403,70 @@ Live, in order of evidence behind them:
   scripted fight; no Stations stop on plain ssh, where there is nothing
   to hear; the solved board's header naming tomorrow (a new board at
   00:00 UTC with the hours left), the week stop as the send-off, and the
-  chat as where the tour lands. Measure it on the next cohort
-  with the queries in section 6. Targets: newcomers who win a daily on
-  day one from 7% to 25% or more, two-day return from 5% to 9%, tour
-  completion from 46% to 80%. One cohort to read. The steps, the ladder
-  that follows and the post after that: `devdocs/PLAN-FIRST-HOUR.md`.
-  - **A ladder on the dailies (the Duolingo shape).** Half of it is
-    built: daily and weekly quests, a streak any daily win keeps, a
-    strip at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What
-    Duolingo has that the strip does not: the streak is the first thing
-    you see and the thing you are warned about losing, others can see
-    it, the reward is standing rather than currency, and day one ends
-    inside it. The gap is visibility and the day-one handshake, not more
-    quest kinds: the streak on the profile and beside the name in the
-    Arcade rosters, the first session's daily starting it, the
-    keypress-return moment (section 4) saying what it is at. Chips cannot
-    be the reward; the median balance is the stipend. Unmeasured:
-    whether a visible streak moves the 85 weekly players or only
-    decorates them.
+  chat as where the tour lands. Built with the ladder below, not yet
+  deployed or measured. Targets: newcomers who win a daily on day one
+  from 7% to 25% or more, two-day return from 5% to 9%, tour completion
+  from 46% to 80%. The read: deploy, wait seven days for a full weekly
+  cohort and seven more for its first week, then run the funnel queries
+  in section 6 and the tour stops (`welcome`, `chat`, `table`, `board`,
+  `week`, `done`; `board` against `week` is the board's cost). If the
+  cohort says the board loses more than it holds, the revert is the one
+  `TOUR_ROUTE` line and the `House` route's numbers are in section 3 to
+  compare against. The design reasoning, every decision and the ones
+  turned down, is in Claude Code session
+  `2fc40c39-0365-400e-b8c0-dd75cbf98223` (`claude --resume` in this
+  repo).
+  - **A ladder on the dailies (the Duolingo shape).** Half of it was
+    the quests (`late-ssh/src/app/hub/CONTEXT.md`): two daily quests and
+    a weekly, and a count-only streak named in the strip at the top of
+    the Arcade lobby, 52 to 64 completers a week, flat since September.
+    What Duolingo has that the strip did not: the streak is the first
+    thing you see and the thing you are warned about losing, others can
+    see it, the reward is standing rather than currency, and day one
+    ends inside it. The gap was visibility and the day-one handshake,
+    not more quest kinds, so the quest slots, templates and chips stay
+    as they are and the ladder is built beside them, taking only the
+    streak. Built, each with its own number to read once deployed:
+    - The streak: any daily win keeps the day, no chips
+      (`hub/CONTEXT.md`, Quests). Measure: live streaks (35, six past 30
+      days) and two-day return.
+    - The rung: one board a day, the same for everyone, and the star
+      (`hub/CONTEXT.md`, the lobby's line in `arcade/CONTEXT.md`, the
+      send-off in `clubhouse/CONTEXT.md` §5). Measure: the rung's roster
+      against the other boards (section 6), active minutes on rung days.
+    - The marks beside the name (`chat/RENDERING.md`, `hub/CONTEXT.md`).
+      Measure: messages per day from people carrying a mark against the
+      rest, and the rung's roster on days a star was visible in the
+      lounge.
+    - The week, the rung's surface (`arcade/CONTEXT.md`, the week stop in
+      `clubhouse/CONTEXT.md` §5). Measure: `week` against `done` in the
+      tour funnel, two-day return against the cohort before it.
+    - The keypress-return push, the empty composer's row saying what the
+      ladder is at (`hub/CONTEXT.md`, the push). Measure: rung wins in
+      the hour after `late_ssh_return_pushes_total{rung="open"}` against
+      the hour after any other return.
+    - The comeback moments, one box per return day in a newcomer's first
+      two weeks, three in all: hear it, the big games, the people
+      (`late-ssh/src/app/comeback/CONTEXT.md`). Measure: `taken` against
+      `shown` on `late_ssh_comeback_moments_total{moment}`; for
+      `hear_it`, second-week newcomers on the CLI (16% today) against
+      the listen page's views; for `big_games`, hub visits in the hour
+      after a `taken` against the doors' share of attention today (1%,
+      window-shopped, section 4: the box is the test of whether that is
+      discovery or taste); for `people`, work cards written and People
+      attention in the same hour.
+    - The radio nudge where the hand already is, on plain ssh
+      (`late-ssh/src/app/audio/CONTEXT.md`). Measure: second-week
+      newcomers on the CLI and the listen page's views (147 in 25 days)
+      against `late_ssh_radio_nudges_total{spot}`; the arrival-client
+      read in section 1 is what gated it.
+    Not built: XP, levels, leagues, rerolls or skips. A league needs
+    cohorts of similar players and 85 weekly players is one league;
+    rerolls exist only when a prescribed board can be unwanted, and with
+    any board keeping the day and the rung a bonus on top there is
+    nothing to reroll. The ladder has worked if live streaks and weekly
+    distinct daily players (85) both move, not if wins per player moves
+    alone.
 - **Daily boards are the proven ritual.** The Arcade's daily is the floor
   deadchannel's ration loop is built to copy. More of that shape (one
   shared object a day, finished in minutes, talked about in #lounge) beats
@@ -630,8 +681,18 @@ Live, in order of evidence behind them:
   hundred signups. The flip (`GAME.md`, "The three surfaces") is the
   game's own launch and waits on runners; runners wait on bios; bios, by
   design, wait on the flip. Gating the posts on it as well gates them on
-  a loop. Post once the next cohort's two-day return has moved; the flip
-  comes when the game is ready, at its own pace.
+  a loop. Post once the next cohort's two-day return has moved: 9% or
+  more on one cohort, or two cohorts at 8%; the flip comes when the game
+  is ready, at its own pace. Capacity is `SCALE.md`, about 225 sessions
+  on the node as shared against the July peak of 100; check replicas and
+  the screensaver byte share the day before. Where: Show HN with
+  `ssh late.sh`, the paper at `/paper` as the landing for anyone who
+  reads before they connect, the herald posting the same day on both
+  accounts; then, a week apart, the smaller rooms (lobste.rs,
+  tildeverse, the terminal subreddits). Watch during: concurrency,
+  signups a day, the Newcomers row, the tour stops live. Read after: the
+  post's cohort through the funnel queries against the organic cohorts
+  beside it; that number decides whether to post again, and where.
 - **Progress Quest** is the cheap next door on the incremental shelf, the
   only door shape that holds people (`devdocs/DOOR-CANDIDATES.md`).
 
@@ -684,6 +745,17 @@ curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_attention_sec
   http://127.0.0.1:18428/api/v1/query
 # where the tour loses people: stops reached, the drop between two is the leak
 curl -s --data-urlencode 'query=sum by (stop) (increase(late_ssh_tour_stops_total[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
+# the ladder: streak days, stars, return pushes, comeback boxes, radio nudges
+curl -s --data-urlencode 'query=sum by (day) (increase(late_ssh_daily_streak_days_total[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
+curl -s --data-urlencode 'query=increase(late_ssh_rung_stars_total[7d])' \
+  http://127.0.0.1:18428/api/v1/query
+curl -s --data-urlencode 'query=sum by (rung) (increase(late_ssh_return_pushes_total[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
+curl -s --data-urlencode 'query=sum by (moment,beat) (increase(late_ssh_comeback_moments_total[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
+curl -s --data-urlencode 'query=sum by (spot) (increase(late_ssh_radio_nudges_total[7d]))' \
   http://127.0.0.1:18428/api/v1/query
 # distinct people per day, and sessions per person (logs, 7 days)
 curl -s http://127.0.0.1:19428/select/logsql/query \
