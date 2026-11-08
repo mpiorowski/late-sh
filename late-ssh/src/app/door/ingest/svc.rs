@@ -24,7 +24,8 @@ use late_core::models::arcade_handle::{ArcadeHandle, handle_reserved};
 use late_core::models::door_log_cursor::DoorLogCursor;
 use late_core::models::door_milestone::{DoorMilestone, DoorMilestoneKind, NewDoorMilestone};
 use late_core::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
-use late_core::models::leaderboard::DoorGame;
+use late_core::models::leaderboard::{DOPEWARS_GAME_KEY, DoorGame};
+use late_core::models::user::User;
 use late_core::shutdown::CancellationToken;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -32,6 +33,7 @@ use uuid::Uuid;
 use super::award::{DoorAwards, DoorBadge, DoorLineKey};
 use super::brogue::{BrogueLine, BrogueRun, parse_run_history_line, playname_from_file};
 use super::dcss::{DcssMilestone, DcssRun, parse_logfile_line, parse_milestone_line};
+use super::dopewars::{self, DopewarsRun, parse_runs_line};
 use super::nethack::{NethackMilestone, NethackRun, parse_livelog_line, parse_xlogfile_line};
 use super::stream::{StatsFrame, StreamConfig, run_stats_stream};
 use crate::app::activity::event::ActivityGame;
@@ -55,21 +57,25 @@ pub struct DoorIngestTarget {
 }
 
 /// The doors this service can ingest, one variant per host stats session.
-/// Each maps to its roster game, its own identity derivation (per-door blake3
-/// domain), and its own frame dispatch.
+/// Each maps to its `door_runs.game` key, its own identity derivation
+/// (per-door blake3 domain), and its own frame dispatch.
 #[derive(Clone, Copy, Debug)]
 enum DoorKind {
     Dcss,
     Nethack,
     Brogue,
+    Dopewars,
 }
 
 impl DoorKind {
-    const fn game(self) -> DoorGame {
+    /// The `door_runs.game` key. Dopewars is not in the roguelike board
+    /// roster (`DoorGame`), only in the leaderboard's own constant.
+    const fn key(self) -> &'static str {
         match self {
-            Self::Dcss => DoorGame::Dcss,
-            Self::Nethack => DoorGame::Nethack,
-            Self::Brogue => DoorGame::Brogue,
+            Self::Dcss => DoorGame::Dcss.key(),
+            Self::Nethack => DoorGame::Nethack.key(),
+            Self::Brogue => DoorGame::Brogue.key(),
+            Self::Dopewars => DOPEWARS_GAME_KEY,
         }
     }
 
@@ -78,6 +84,7 @@ impl DoorKind {
             Self::Dcss => crate::app::door::dcss::identity::derive_client_key(secret),
             Self::Nethack => crate::app::door::nethack::identity::derive_client_key(secret),
             Self::Brogue => crate::app::door::brogue::identity::derive_client_key(secret),
+            Self::Dopewars => crate::app::door::dopewars::identity::derive_client_key(secret),
         }
     }
 }
@@ -128,6 +135,16 @@ impl DoorIngestService {
         self.start_task(DoorKind::Brogue, target, shutdown)
     }
 
+    /// The dopewars twin: the host's append-only run log, built from the
+    /// game's high-score table (see `late-dopewars/src/scorelog.rs`).
+    pub fn start_dopewars_task(
+        self,
+        target: DoorIngestTarget,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        self.start_task(DoorKind::Dopewars, target, shutdown)
+    }
+
     fn start_task(
         self,
         kind: DoorKind,
@@ -139,7 +156,7 @@ impl DoorIngestService {
                 match self.run_session(kind, &target).await {
                     Ok(()) => tracing::info!(?kind, "door stats stream ended; reconnecting"),
                     Err(error) => {
-                        crate::metrics::record_door_ingest_session_failure(kind.game());
+                        crate::metrics::record_door_ingest_session_failure(kind.key());
                         tracing::warn!(?kind, ?error, "door stats session failed; reconnecting")
                     }
                 }
@@ -152,7 +169,7 @@ impl DoorIngestService {
     }
 
     async fn run_session(&self, kind: DoorKind, target: &DoorIngestTarget) -> Result<()> {
-        let game = kind.game().key();
+        let game = kind.key();
         let cursors = {
             let client = self.db.get().await.context("db client for cursors")?;
             DoorLogCursor::all_for_game(&client, game)
@@ -177,9 +194,10 @@ impl DoorIngestService {
                 DoorKind::Dcss => self.handle_dcss_frame(&frame).await,
                 DoorKind::Nethack => self.handle_nethack_frame(&frame).await,
                 DoorKind::Brogue => self.handle_brogue_frame(&frame).await,
+                DoorKind::Dopewars => self.handle_dopewars_frame(&frame).await,
             };
             match handled {
-                Ok(()) => crate::metrics::record_door_ingest_line(kind.game()),
+                Ok(()) => crate::metrics::record_door_ingest_line(kind.key()),
                 Err(error) => {
                     // Do not advance past this line: drop the stream and let
                     // the retry loop resume from the last committed cursor.
@@ -554,6 +572,70 @@ impl DoorIngestService {
             }
         }
         Ok(())
+    }
+
+    /// Land one dopewars run-log line. Every path advances the cursor; only
+    /// lines that map to a live account insert a fact row.
+    pub(crate) async fn handle_dopewars_frame(&self, frame: &StatsFrame) -> Result<()> {
+        let game = DOPEWARS_GAME_KEY;
+        if frame.file != dopewars::FILE_ID {
+            tracing::warn!(file = %frame.file, "unknown dopewars stats file; skipping");
+            return self.advance_cursor(game, frame).await;
+        }
+        match parse_runs_line(&frame.line) {
+            Some(run) => self.land_dopewars_run(frame, run).await,
+            None => {
+                tracing::warn!(line = %frame.line, "unparseable dopewars run line; skipping");
+                self.advance_cursor(game, frame).await
+            }
+        }
+    }
+
+    async fn land_dopewars_run(&self, frame: &StatsFrame, run: DopewarsRun) -> Result<()> {
+        let game = DOPEWARS_GAME_KEY;
+        // dopewars' playname is the account's `late.sh` username (the door
+        // skips its name prompt and passes it as `-P`), not an arcade handle.
+        let Some(user_id) = self.resolve_username(&run.name).await? else {
+            return self.advance_cursor(game, frame).await;
+        };
+
+        let new_run = NewDoorRun {
+            game,
+            user_id,
+            ended_at: run.ended_at,
+            result: run.result,
+            score: Some(run.score),
+            depth: None,
+            // dopewars runs a fixed 31-day career.
+            turns: Some(31),
+            raw: run.raw.clone(),
+            source_file: frame.file.clone(),
+            source_offset: frame.next_offset,
+        };
+        let mut client = self.db.get().await.context("db client for run insert")?;
+        let tx = client.transaction().await?;
+        DoorRun::insert_ignore(&tx, &new_run).await?;
+        DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The live account behind a dopewars playname. Reserved `late`/`late_*`
+    /// shapes are skipped like every other door's (`late_stats` itself is the
+    /// stats session, never a score).
+    async fn resolve_username(&self, name: &str) -> Result<Option<Uuid>> {
+        if handle_reserved(name) {
+            return Ok(None);
+        }
+        let client = self
+            .db
+            .get()
+            .await
+            .context("db client for username lookup")?;
+        Ok(User::find_by_username(&client, name)
+            .await
+            .context("resolving username")?
+            .map(|user| user.id))
     }
 
     /// The live account behind a playname, or `None` for names the pipe must

@@ -9,7 +9,7 @@ and release flow are in `infra/` and the root `CONTEXT.md`.
 - `LATE_DOPEWARS_SECRET`: the only env the client reads; shared secret, **must equal the host's**.
 
 ## Host config (`late-dopewars` env)
-- `LATE_DOPEWARS_SECRET` (required), `LATE_DOPEWARS_BIN` (default `/usr/games/dopewars`), `LATE_DOPEWARS_SCORE_FILE` (default `/var/lib/late-dopewars/dopewars.sco`, the one shared high-score file on the PVC), `LATE_DOPEWARS_LISTEN_ADDR` (default `0.0.0.0`), `LATE_DOPEWARS_PORT` (default `2324`), `LATE_DOPEWARS_IDLE_TIMEOUT`.
+- `LATE_DOPEWARS_SECRET` (required), `LATE_DOPEWARS_BIN` (default `/usr/games/dopewars`), `LATE_DOPEWARS_SCORE_FILE` (default `/var/lib/late-dopewars/dopewars.sco`, the one shared high-score file on the PVC; the host keeps its append-only `dopewars.sco.runs.log` sibling beside it, which the leaderboard ingest streams), `LATE_DOPEWARS_LISTEN_ADDR` (default `0.0.0.0`), `LATE_DOPEWARS_PORT` (default `2324`), `LATE_DOPEWARS_IDLE_TIMEOUT`.
 
 ## Binary sourcing — **built from verified upstream source, dopewars 1.6.2**
 - Compiled in the `dopewars-build` stage (`docker/doors/dopewars.Dockerfile`, published as the ghcr `door-dopewars` image the root Dockerfile pins) (terminal-only: `--disable-gui-client --disable-gui-server --enable-curses-client`). The stage downloads the pinned 1.6.2 SourceForge tarball, verifies SHA-256 (`sha256sum -c`, fail-closed), builds, and copies the binary to `/dopewars`. Version/URL/checksum are `ARG`s.

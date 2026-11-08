@@ -841,3 +841,58 @@ async fn unparseable_and_untracked_lines_only_advance_the_cursor() {
         .get("n");
     assert_eq!(milestones, 0);
 }
+
+#[tokio::test]
+async fn dopewars_runs_land_once_for_the_named_account() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "dopewars-dealer").await;
+    let svc = ingest_service(&test_db.db);
+
+    let frame = StatsFrame {
+        file: "runs".to_string(),
+        next_offset: 64,
+        line: format!("{}\t1234567\t1\t1769947200\t01-02-2026", user.username),
+    };
+    svc.handle_dopewars_frame(&frame)
+        .await
+        .expect("first ingest");
+    svc.handle_dopewars_frame(&frame)
+        .await
+        .expect("replay ingest");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "dopewars", "runs").await,
+        Some(64)
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT result, score, depth, turns FROM door_runs WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("run row");
+    assert_eq!(row.get::<_, &str>("result"), "death");
+    assert_eq!(row.get::<_, i64>("score"), 1_234_567);
+    assert_eq!(row.get::<_, Option<i32>>("depth"), None);
+    assert_eq!(row.get::<_, i64>("turns"), 31);
+
+    // An unknown and a reserved playname land nothing, but still advance the
+    // cursor past their lines.
+    for (offset, name) in [(128, "nobody-here"), (192, "late_stats")] {
+        svc.handle_dopewars_frame(&StatsFrame {
+            file: "runs".to_string(),
+            next_offset: offset,
+            line: format!("{name}\t100\t0\t1769947200\t01-02-2026"),
+        })
+        .await
+        .expect("unattributable line");
+    }
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "dopewars", "runs").await,
+        Some(192)
+    );
+}

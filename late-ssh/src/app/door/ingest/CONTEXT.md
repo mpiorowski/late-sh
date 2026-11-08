@@ -2,8 +2,9 @@
 
 The three external roguelike doors (DCSS, NetHack, Brogue) feed their boards,
 badges, chips, and feed lines from **host-written log files, never from the
-terminal**. This slice tails those files and lands `door_runs` /
-`door_milestones` rows (models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`,
+terminal**. The dopewars door joins the same pipe for its one leaderboard
+board, with no badges, chips, or feed lines of its own. This slice tails
+those files and lands `door_runs` / `door_milestones` rows (models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`,
 migration `136_create_door_ingestion.sql`). Migrations 136 and 140 name a
 deleted plan (`devdocs/PLAN-ROGUELIKE-BOARDS.md`) in their header comments;
 this file is where they lead.
@@ -18,7 +19,7 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
 
 - `svc.rs`: orchestration, one connect-with-retry task per enabled door, spawned from `main.rs`.
 - `stream.rs`: the stats SSH client.
-- `dcss.rs`, `nethack.rs`, `brogue.rs`: pure line parsers, each verified against its pinned upstream source.
+- `dcss.rs`, `nethack.rs`, `brogue.rs`, `dopewars.rs`: pure line parsers, each verified against its pinned upstream source (dopewars parses the host's own run log, `late-dopewars/src/scorelog.rs`).
 - `award.rs`: the shared `DoorAwards`/`DoorBadge` chip and badge sink.
 
 ## The contract
@@ -40,7 +41,7 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
 - **Client side.** `app/door/ingest/`: `svc.rs` orchestration (one
   connect-with-retry task per enabled door, spawned from `main.rs` behind that
   door's `LATE_*_ENABLED`), `stream.rs` the stats SSH client, `dcss.rs` /
-  `nethack.rs` / `brogue.rs` pure parsers, `award.rs` the shared
+  `nethack.rs` / `brogue.rs` / `dopewars.rs` pure parsers, `award.rs` the shared
   `DoorAwards`/`DoorBadge` sink. Cursors persist in `door_log_cursors`.
   Observability: `late_ssh_door_ingest_lines_total` and
   `late_ssh_door_ingest_session_failures_total` (both labeled by game), so a
@@ -57,7 +58,10 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
   (NetHack `-u`, DCSS `-name`, Brogue's player directory name), mapped through
   `arcade_handles` (unique on `lower(handle)`). Handle rows outlive accounts
   with `user_id` NULL and those are skipped, as are the reserved `late`/`late_*`
-  shapes (NetHack's legacy `late_<hex>` lines predate handles).
+  shapes (NetHack's legacy `late_<hex>` lines predate handles). dopewars is the
+  exception: its playname is the account's `late.sh` username (the door skips
+  its startup name prompt and passes it as `-P`), so its lines resolve through
+  `users` (`User::find_by_username`) instead of `arcade_handles`.
 - **Grants are idempotent; the badge is once, the chips repeat.** Badges and
   chips fire from `award.rs` on every win or pickup. The badge is guarded by a
   `NOT EXISTS` award insert and lands once per account for life. The chips go

@@ -239,6 +239,20 @@ async fn run_bridge(
     drop(reader);
     // Best-effort cleanup of the per-session scratch HOME.
     let _ = fs::remove_dir_all(&home);
+
+    // The child may have just written the shared score file; fold any new
+    // entries into the append-only run log the leaderboard streams.
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Err(e) = crate::scorelog::sync_from_sco(
+        std::path::Path::new(&cfg.score_file),
+        &crate::scorelog::runs_log_path(&cfg.score_file),
+        now_epoch,
+    ) {
+        tracing::warn!(error = ?e, "failed to sync dopewars run log");
+    }
     Ok(())
 }
 

@@ -3,7 +3,7 @@ use late_core::models::chat_message_gild::GildTier;
 use late_core::models::chat_room::WatchDoor;
 use late_core::models::chips::Difficulty;
 use late_core::models::door_opening::DoorCard;
-use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
+use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::media_queue_item::SongQueueReward;
 use late_core::models::user::RadioStation;
 
@@ -826,19 +826,18 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
-        DoorGame, DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat,
-        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
-        GiftDrinkRefusal, GildRefusal, GildTier, HeraldBriefResult, HeraldDeliveryResult,
-        HeraldLookResult, HeraldPostResult, HeraldProjectResult, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
-        RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
+        HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RollCallResult, RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage,
+        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4203,9 +4202,10 @@ mod inner {
         })
     }
 
-    pub fn record_door_ingest_line(game: DoorGame) {
-        // `DoorGame::key` is the closed roster's own exhaustive label map.
-        door_ingest_lines_total().add(1, &[KeyValue::new("game", game.key())]);
+    /// `game_key` is the ingesting door's own label (the roguelike roster's
+    /// key, or `dopewars`'s, which is not in that roster).
+    pub fn record_door_ingest_line(game_key: &'static str) {
+        door_ingest_lines_total().add(1, &[KeyValue::new("game", game_key)]);
     }
 
     fn door_opening_result_label(result: DoorOpeningResult) -> &'static str {
@@ -4238,8 +4238,8 @@ mod inner {
         );
     }
 
-    pub fn record_door_ingest_session_failure(game: DoorGame) {
-        door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    pub fn record_door_ingest_session_failure(game_key: &'static str) {
+        door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game_key)]);
     }
 
     fn door_watch_outcome_label(outcome: DoorWatchOutcome) -> &'static str {
@@ -4518,19 +4518,18 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
-        DoorGame, DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat,
-        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
-        GiftDrinkRefusal, GildRefusal, GildTier, HeraldBriefResult, HeraldDeliveryResult,
-        HeraldLookResult, HeraldPostResult, HeraldProjectResult, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
-        RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
+        HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
+        LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RollCallResult, RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage,
+        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4716,9 +4715,9 @@ mod inner {
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
-    pub fn record_door_ingest_line(_game: DoorGame) {}
+    pub fn record_door_ingest_line(_game_key: &'static str) {}
     pub fn record_door_opening(_card: DoorCard, _result: DoorOpeningResult) {}
-    pub fn record_door_ingest_session_failure(_game: DoorGame) {}
+    pub fn record_door_ingest_session_failure(_game_key: &'static str) {}
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
     pub fn record_door_watch_chat_room_failure(_game: WatchDoor) {}

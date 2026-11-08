@@ -11,7 +11,9 @@ mod identity;
 #[cfg(test)]
 mod identity_test;
 mod playname;
+mod scorelog;
 mod server;
+mod stats;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,14 +60,30 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     });
 
+    // Backfill the append-only run log from whatever history the score file
+    // already holds (a rebuilt PVC, the first deploy of this host version).
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Err(e) = scorelog::sync_from_sco(
+        std::path::Path::new(&config.score_file),
+        &scorelog::runs_log_path(&config.score_file),
+        now_epoch,
+    ) {
+        tracing::warn!(error = ?e, "failed to backfill dopewars run log");
+    }
+
     let listen_addr = config.listen_addr.clone();
     let port = config.port;
-    let mut server = Server::new(&config);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut server = Server::new(&config, shutdown_rx);
 
     tracing::info!(%listen_addr, port, "ssh listener bound");
     // dopewars has no mid-game save, so a pod SIGTERM has nothing to drain: the
     // detached per-session bridges' children are `kill_on_drop` and die with the
-    // process. We just exit promptly on the signal.
+    // process. We just exit promptly on the signal, and tell the stats streams
+    // to close so the client reconnects to the new pod.
     tokio::select! {
         res = russh::server::Server::run_on_address(
             &mut server,
@@ -76,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ = wait_for_shutdown_signal() => {
             tracing::info!("shutdown signal received; exiting");
+            let _ = shutdown_tx.send(true);
         }
     }
     Ok(())

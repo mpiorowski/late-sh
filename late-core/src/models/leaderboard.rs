@@ -108,6 +108,12 @@ roster!(
 /// its `GameWon`, its reward-template key, its daily-status rows.
 pub const SINGLE_TIER_KEY: &str = "daily";
 
+/// dopewars' `door_runs.game` key. The door is not on the roguelike board
+/// roster (`DoorGame`): it has no wins/depth families, only one score board
+/// (a player's best final net worth), so it rides `fetch_door_boards`'
+/// single query and is split out by this key.
+pub const DOPEWARS_GAME_KEY: &str = "dopewars";
+
 /// The three tiers a keyed daily with easy/medium/hard boards pays.
 const THREE_TIERS: &[(&str, Difficulty)] = &[
     (Difficulty::Easy.key(), Difficulty::Easy),
@@ -542,6 +548,10 @@ pub struct LeaderboardData {
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
     pub door_boards: HashMap<DoorGame, DoorBoards>,
+    /// dopewars' single board: each player's best final net worth
+    /// (Cash + Bank - Debt), monthly and all-time. Fed by the host's
+    /// append-only run log, which keeps what the top-18 score table drops.
+    pub dopewars_scores: BoardWindows,
     /// Living Lateania characters by level (ties broken by experience), the
     /// character's class carried in `note`. Past the level cap the value keeps
     /// climbing in paragon levels (see `LATEANIA_XP_PER_PARAGON_LEVEL`).
@@ -982,6 +992,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_door_boards(client, DoorWindow::Monthly),
         fetch_door_boards(client, DoorWindow::AllTime),
     )?;
+    let (door_monthly, dopewars_monthly) = door_monthly;
+    let (door_all_time, dopewars_all_time) = door_all_time;
 
     let door_boards = DoorGame::ALL
         .iter()
@@ -1041,6 +1053,10 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         daily_boards,
         score_boards,
         door_boards,
+        dopewars_scores: BoardWindows {
+            monthly: dopewars_monthly,
+            all_time: dopewars_all_time,
+        },
         lateania_adventurers,
         lateania_pvp,
     })
@@ -1185,16 +1201,18 @@ struct DoorWindowBoards {
 /// arm only reads `absdepth` values that are purely numeric: `raw` stores the
 /// log line's fields as uninterpreted strings, and an unguarded cast would
 /// let one malformed value error this query and take every board down with
-/// it.
+/// it. dopewars rides the same query for its one score board and is split
+/// out by [`DOPEWARS_GAME_KEY`], so the refresh stays at fifteen queries.
 async fn fetch_door_boards(
     client: &Client,
     window: DoorWindow,
-) -> Result<HashMap<DoorGame, DoorWindowBoards>> {
-    let keys: String = DoorGame::ALL
+) -> Result<(HashMap<DoorGame, DoorWindowBoards>, Vec<RankedEntry>)> {
+    let mut keys: Vec<String> = DoorGame::ALL
         .iter()
         .map(|game| format!("'{}'", game.key()))
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    keys.push(format!("'{DOPEWARS_GAME_KEY}'"));
+    let keys = keys.join(", ");
     let win_results: String = DoorRunResult::WINS
         .iter()
         .map(|result| format!("'{}'", result.key()))
@@ -1262,9 +1280,8 @@ async fn fetch_door_boards(
         .await?;
 
     let mut boards: HashMap<DoorGame, DoorWindowBoards> = HashMap::new();
+    let mut dopewars = Vec::new();
     for row in rows {
-        let game =
-            DoorGame::from_key(row.get("game")).expect("door board row game key from roster");
         let entry = RankedEntry {
             username: row.get("username"),
             user_id: row.get("user_id"),
@@ -1272,15 +1289,27 @@ async fn fetch_door_boards(
             value: row.get("value"),
             note: None,
         };
+        let family: &str = row.get("family");
+        // dopewars is off the roguelike roster and has only the score family
+        // (its runs never win and carry no depth); the query leaves it there
+        // naturally, so splitting it out here costs no extra round trip.
+        if row.get::<_, &str>("game") == DOPEWARS_GAME_KEY {
+            if family == "score" {
+                dopewars.push(entry);
+            }
+            continue;
+        }
+        let game =
+            DoorGame::from_key(row.get("game")).expect("door board row game key from roster");
         let board = boards.entry(game).or_default();
-        match row.get::<_, &str>("family") {
+        match family {
             "wins" => board.wins.push(entry),
             "depth" => board.depth.push(entry),
             "score" => board.score.push(entry),
             other => unreachable!("door board family {other} not produced by this query"),
         }
     }
-    Ok(boards)
+    Ok((boards, dopewars))
 }
 
 /// Lateania's level curve at the cap, mirrored from

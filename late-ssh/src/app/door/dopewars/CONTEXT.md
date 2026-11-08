@@ -33,7 +33,8 @@ Core shape:
 - **Auth is shared-secret-derived; the username carries the playname, not a credential.** The connection authenticates with a single Ed25519 key both ends derive from `LATE_DOPEWARS_SECRET`. The SSH username is the player's `late.sh` handle (`dopewars_playname`, sanitized again on the host by `playname::sanitize`), which the host passes to the child as `-P <playname>`, so dopewars skips its startup "Hey dude, what's your name?" prompt and the shared high-score table records the right player.
 - The child is spawned `dopewars -t -n -b -f <shared score file> -P <playname>` (text client / single-player / black-and-white / shared high-score path / player handle). See §4 for why `-b` is load-bearing.
 - While Running, raw client bytes are forwarded straight to the host→child (minus mouse/paste noise) — dopewars, not late.sh, interprets keys. There is **no** key remap (no F1→help; dopewars is menu-driven). **Ctrl-C** ends the game: dopewars traps only `SIGWINCH`, so `^C` raises the default `SIGINT` through the PTY and the child dies, returning the session to the hub.
-- **Persistence: the shared high-score table only.** dopewars has **no mid-game save** (upstream single-player has no savegame format), so a dropped connection or a pod restart *ends* any in-progress game — no architecture changes that. What *does* persist is the leaderboard: every session's `-f` points at **one shared `dopewars.sco` file on the host's PVC**, so scores survive restarts and are global across players (the dopewars analog of nethack's shared bones playground). There are **no milestones, chips, or awards** — deferred (see §9).
+- **Persistence: the shared high-score table only.** dopewars has **no mid-game save** (upstream single-player has no savegame format), so a dropped connection or a pod restart *ends* any in-progress game — no architecture changes that. What *does* persist is the leaderboard: every session's `-f` points at **one shared `dopewars.sco` file on the host's PVC**, so scores survive restarts and are global across players (the dopewars analog of nethack's shared bones playground).
+- **Leaderboard feed:** because upstream rewrites that table in place (top 18 only), the host diffs it into an append-only `dopewars.sco.runs.log` after every game and at startup (`scorelog.rs`) and streams the log over the standard `late_stats` SSH session (`stats.rs`). late-ssh's door log pipe parses it and lands `door_runs` rows, which the Tab 6 `dopewars Top Score` board ranks by best final net worth. There are **no milestones, chips, or awards** — deferred (see §9).
 
 The door is gated by the `dopewars_enabled` profile flag in `late-ssh/src/config.rs` (enabled in every current profile); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
 
@@ -55,9 +56,11 @@ The door is gated by the `dopewars_enabled` profile flag in `late-ssh/src/config
 
 | File | Responsibility |
 |---|---|
-| `main.rs` | Tracing init, `Config::from_env`, load/generate the SSH host key, run the russh server (`run_on_address`). Exits promptly on SIGTERM (no save to drain). |
+| `main.rs` | Tracing init, `Config::from_env`, the startup run-log backfill (`scorelog::sync_from_sco`), load/generate the SSH host key, run the russh server (`run_on_address`). Exits promptly on SIGTERM (no save to drain) after telling the stats streams to close. |
 | `config.rs` | `Config`: `bin`, `score_file` (the one shared `.sco`), `secret`, listen addr/port, idle timeout. |
-| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key — see §7), `pty_request`, `shell_request`, `data`, `window_change_request`, `channel_eof/close`. Holds `effective_term` (TERM fallback, §4). Records the sanitized `playname` from the SSH username for `-P`. |
+| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key — see §7), `pty_request`, `env_request` (stats cursors), `shell_request`, `data`, `window_change_request`, `channel_eof/close`. Holds `effective_term` (TERM fallback, §4). Records the sanitized `playname` from the SSH username for `-P`; `late_stats` gets a stats stream instead of a child. |
+| `scorelog.rs` | Pure parser for the binary score file plus the append-only run log: `parse_sco`, `runs_log_path`, `sync_from_sco` (multiset diff, idempotent). Verified against dopewars 1.6.2 `src/serverside.c`. |
+| `stats.rs` | The `late_stats` SSH session: tails `<score_file>.runs.log` as frame id `runs` (same contract as `late-nethack/src/stats.rs`). |
 | `host.rs` | `PtyHost`: the per-session PTY bridge. `openpty` + `env_clear` + `setsid`/`TIOCSCTTY` + `IXON/IXOFF/IXANY` clear + `TIOCSWINSZ` + the **detached** reader + a private per-session scratch `HOME`. Output flows to the SSH channel handle; client bytes flow to the PTY master. Teardown is a plain kill — dopewars has no hangup-save. |
 | `identity.rs` | `derive_client_key(secret)` — identical to the client copy. |
 | `playname.rs` | `sanitize(username)`: narrows the SSH username to a dopewars `-P` playname (ASCII alphanumerics plus `_`/`-`/`.`, capped at 32, `drifter` fallback). Defense in depth behind the client's `dopewars_playname`. |
@@ -131,7 +134,7 @@ Env knobs on both halves, the pinned dopewars 1.6.2 source build (SHA-256 verifi
 
 ## 7. Critical Invariants [STABLE]
 
-- The child process (on the host) is authoritative for game state. late.sh owns only the terminal bytes (vt100) and a status flag. It persists **nothing** on the late.sh side; the only durable state anywhere is the host's shared `.sco` high-score file on the PVC.
+- The child process (on the host) is authoritative for game state. late.sh owns only the terminal bytes (vt100) and a status flag. It persists **nothing** on the late.sh side; the only durable state anywhere is the host's shared `.sco` high-score file and the append-only `dopewars.sco.runs.log` the leaderboard streams, both on the PVC.
 - While Running, do not route dopewars bytes through the normal late.sh input pipeline — forward them raw. There is no key remap; `Ctrl-C` ending the game is the intended leave path (dopewars catches no `SIGINT`).
 - Keep mouse/paste stripping in client `forward_input`. With `?1003h` mouse tracking on, unfiltered motion reports' leading `ESC` would leak into the curses game as stray commands.
 - Keep `-b` (monochrome) in the spawn args, or the blue-on-blue panels become unreadable embedded (§4).
@@ -157,6 +160,8 @@ Inline pure tests cover:
 - Client `identity.rs` / host `late-dopewars/src/identity.rs`: derivation determinism. (A cross-crate known-answer fingerprint test like nethack's is still missing.)
 - Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows and rewrites DEL to BS; `keys_for_game` retypes arrows in application-cursor mode; exit-grace opens on close and counts down.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
+- Host `scorelog.rs`: `parse_sco` (header, empty slots, positive/negative/zero money, truncated tail) and `sync_from_sco` (delta only, idempotent re-sync, cold-start date stamping). Host `stats.rs`: cursor env round-trip and frame shape.
+- `app/door/ingest/dopewars.rs`: `parse_runs_line` (surviving/dead, negative worth, malformed lines).
 - `app/door/hub/state.rs` + `app/common/primitives.rs`: selector ordering, and `Screen::page` places `Dopewars` on the Games page.
 
 The PTY bridge (`host.rs`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/play/quit manually against a real host.
@@ -180,9 +185,10 @@ The PTY bridge (`host.rs`) and the russh client/server loops are process/network
 
 ### Operational
 - **No mid-game save.** dopewars single-player has no savegame format; a pod restart or dropped connection ends any in-progress game. This is an upstream-game property, not fixable by this architecture (nethack survives restarts only because *it* has SIGHUP-save/recover; dopewars has no equivalent). Only the **high-score table** persists (the PVC).
-- **Score file on the PVC.** `LATE_DOPEWARS_SCORE_FILE` is one shared file; `replicas` must stay 1 (RWO volume, single-node `local-path`). dopewars locks it during updates, so concurrent sessions are safe. Kill-before-create rollout means no two pods co-mount it.
+- **Score file on the PVC.** `LATE_DOPEWARS_SCORE_FILE` is one shared file; `replicas` must stay 1 (RWO volume, single-node `local-path`). dopewars locks it during updates, so concurrent sessions are safe. Kill-before-create rollout means no two pods co-mount it. Its `runs.log` sibling must travel with it: dropping the log re-backfills from the table's surviving 18.
+- **The run log only sees the table's top 18.** Upstream keeps `NUMHISCORE` (18) runs; a game that did not make the table is never logged, and neither is a run another player's better one displaced between two syncs (a game only ever overwrites the last slot). The board is therefore "best 18 ever seen", not "every game ever played"; `late-dopewars/src/scorelog.rs` documents the `shortcut:` limit.
 
 ### Possible future work
-- Milestones/chips/awards by scraping the final-score screen (deferred; the roguelike doors get theirs from host log files through the door log pipe, `door/ingest/`, never from the screen).
+- Milestones/chips/awards by scraping the final-score screen (deferred; the roguelike doors get theirs from host log files through the door log pipe, `door/ingest/`, never from the screen). Scores now reach the leaderboard off the host's own run log, not a screen scrape.
 - **Rejected: a shared/competitive market** (one `dopewars -S` server with `-o`/`-p` clients per session): concurrency is far too low (~1 player/week) for two people to ever share the market, and one shared server makes every deploy wipe all in-progress runs. Cheap to build (supervised `-S` on localhost, spawn `-t -b -o 127.0.0.1 -p 7902 -P <handle>`, thread the handle through the SSH username), so revisit only if concurrent players become a thing.
 - A cross-crate known-answer fingerprint test pinning `derive_client_key` (mirror nethack's KAT).
