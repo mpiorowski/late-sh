@@ -8,9 +8,13 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::{
     MutexRecover,
     db::Db,
-    models::quest::{
-        DailyQuestStreakSnapshot, QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
-        ensure_current_assignments, get_daily_quest_streak_snapshot, list_active_snapshot_rows,
+    models::{
+        daily_rung::{count_stars, latest_star_day, record_rung_win},
+        daily_streak::{DailyStreakSnapshot, get_daily_streak_snapshot, record_daily_win},
+        quest::{
+            QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
+            ensure_current_assignments, list_active_snapshot_rows,
+        },
     },
 };
 use serde_json::Value;
@@ -29,7 +33,11 @@ pub struct QuestSnapshot {
     pub user_id: Option<Uuid>,
     pub daily: Vec<QuestItem>,
     pub weekly: Vec<QuestItem>,
-    pub daily_streak: DailyQuestStreakSnapshot,
+    pub daily_streak: DailyStreakSnapshot,
+    /// Every star this user has, for the day card.
+    pub rung_stars: i64,
+    /// The day of this user's newest star: today's star is this on today.
+    pub latest_star: Option<NaiveDate>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,9 +70,9 @@ pub enum QuestEvent {
         user_id: Uuid,
         title: String,
         reward_chips: i64,
-        streak_reward_chips: i64,
-        streak_bonus_level: Option<i32>,
     },
+    /// The day's rung won on its day: the star, and how many that makes.
+    RungStar { user_id: Uuid, stars: i64 },
 }
 
 #[derive(Clone)]
@@ -158,8 +166,16 @@ impl QuestService {
         ensure_current_assignments(&mut client, now).await?;
         let today = now.date_naive();
         let rows = list_active_snapshot_rows(&client, user_id, today).await?;
-        let daily_streak = get_daily_quest_streak_snapshot(&client, user_id, today).await?;
-        Ok(snapshot_from_rows(user_id, rows, daily_streak))
+        let daily_streak = get_daily_streak_snapshot(&**client, user_id, today).await?;
+        let rung_stars = count_stars(&**client, user_id).await?;
+        let latest_star = latest_star_day(&**client, user_id).await?;
+        Ok(snapshot_from_rows(
+            user_id,
+            rows,
+            daily_streak,
+            rung_stars,
+            latest_star,
+        ))
     }
 
     pub fn start_activity_task(&self) -> tokio::task::JoinHandle<()> {
@@ -211,30 +227,48 @@ impl QuestService {
                 continue;
             };
             if outcome.completed_now {
-                completed.push((
-                    row.template.title.clone(),
-                    outcome.rewarded_chips,
-                    outcome
-                        .streak_reward
-                        .as_ref()
-                        .map(|reward| (reward.reward_chips, reward.bonus_level)),
-                ));
+                completed.push((row.template.title.clone(), outcome.rewarded_chips));
+            }
+        }
+        // Those are committed: their banners go out before the board
+        // bookkeeping below, whose failure must not take them along.
+        let any_completed = !completed.is_empty();
+        for (title, reward_chips) in completed {
+            self.publish_event(QuestEvent::Completed {
+                user_id,
+                title,
+                reward_chips,
+            });
+        }
+
+        // Any daily board win keeps the day on the streak, whatever the
+        // quests drew, and the day's rung won earns the star; both on the
+        // board's own UTC date, the date the event carries, so they roll
+        // with the boards.
+        let mut streak_day = None;
+        let mut rung_star = None;
+        if let ActivityKind::GameWon { game, detail, .. } = &event.kind
+            && let Some(puzzle) = game.daily_puzzle()
+        {
+            let won_on = event.occurred_at.date_naive();
+            streak_day = record_daily_win(&**client, user_id, won_on).await?;
+            if let Some(day) = streak_day {
+                crate::metrics::record_daily_streak_day(day);
+            }
+            if let Some(difficulty_key) = detail.as_deref() {
+                rung_star =
+                    record_rung_win(&**client, user_id, won_on, puzzle, difficulty_key).await?;
+                if rung_star.is_some() {
+                    crate::metrics::record_rung_star();
+                }
             }
         }
 
-        if !completed.is_empty() {
+        if any_completed || streak_day.is_some() || rung_star.is_some() {
             self.refresh_user_if_active(user_id).await?;
-            for (title, reward_chips, streak_reward) in completed {
-                self.publish_event(QuestEvent::Completed {
-                    user_id,
-                    title,
-                    reward_chips,
-                    streak_reward_chips: streak_reward
-                        .map(|(reward_chips, _)| reward_chips)
-                        .unwrap_or(0),
-                    streak_bonus_level: streak_reward.map(|(_, bonus_level)| bonus_level),
-                });
-            }
+        }
+        if let Some(stars) = rung_star {
+            self.publish_event(QuestEvent::RungStar { user_id, stars });
         }
 
         Ok(())
@@ -291,13 +325,17 @@ impl QuestService {
 fn snapshot_from_rows(
     user_id: Uuid,
     rows: Vec<QuestSnapshotRow>,
-    daily_streak: DailyQuestStreakSnapshot,
+    daily_streak: DailyStreakSnapshot,
+    rung_stars: i64,
+    latest_star: Option<NaiveDate>,
 ) -> QuestSnapshot {
     let mut snapshot = QuestSnapshot {
         user_id: Some(user_id),
         daily: Vec::new(),
         weekly: Vec::new(),
         daily_streak,
+        rung_stars,
+        latest_star,
     };
     for row in rows {
         let progress_value = row

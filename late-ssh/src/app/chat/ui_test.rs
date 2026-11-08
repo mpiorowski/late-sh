@@ -222,6 +222,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -251,6 +252,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
@@ -291,6 +293,104 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     );
 }
 
+/// The ladder's marks are part of the name: one space after it, before the
+/// rented title and the badge stack.
+#[test]
+fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let author_id = Uuid::from_u128(3);
+    let created = Utc::now();
+    let message = ChatMessage {
+        id: Uuid::from_u128(10),
+        created,
+        updated: created,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id: author_id,
+        body: "rain again".to_string(),
+    };
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (author_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let ladder_marks = HashMap::from([(author_id, "☽✦".to_string())]);
+    let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
+    let friend_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_flair = HashMap::from([(
+        author_id,
+        crate::app::common::username_effect::ResolvedName {
+            style: None,
+            title: Some("the night clerk".to_string()),
+            milestone: None,
+        },
+    )]);
+    let away_user_ids = HashSet::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        live_user_ids: &live_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
+        inline_images: &inline_images,
+        news_cards: &HashMap::new(),
+        dividers: ChatDividers::default(),
+        drunk_levels: &drunk_levels,
+        name_flair: &name_flair,
+        away_user_ids: &away_user_ids,
+        name_flicker: None,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
+        runner_looks: None,
+    };
+
+    let mut cache = ChatRowsCache::default();
+    ensure_chat_rows_cache(&mut cache, vec![&message], 60, ctx);
+
+    let rendered: Vec<String> = cache
+        .all_rows
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+
+    // The moon and the star sit a space after the name, ahead of the title
+    // and the badge stack.
+    assert!(
+        rendered
+            .iter()
+            .any(|row| row.contains("bob ☽✦, the night clerk 🐱")),
+        "no marked author header in {rendered:#?}"
+    );
+}
+
 /// Plain glyphs (`show_flag_fallback`) is the one switch that keeps Nerd Font
 /// icons off the screen: with it on, a body loses them and a reaction chip
 /// whose icon was nothing but Nerd Font keeps its count behind `?`. With it
@@ -320,6 +420,7 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
         ]);
         let countries = HashMap::new();
         let bonsai_glyphs = HashMap::new();
+        let ladder_marks: HashMap<Uuid, String> = HashMap::new();
         let chat_badges = HashMap::new();
         let friend_user_ids = HashSet::new();
         let live_user_ids = HashSet::new();
@@ -354,6 +455,7 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
             countries: &countries,
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
+            ladder_marks: &ladder_marks,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
             message_reactions: &message_reactions,
@@ -404,6 +506,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let usernames = HashMap::from([(user_id, "alice".to_string())]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -427,6 +530,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
@@ -460,6 +564,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let usernames = HashMap::from([(user_id, "alice".to_string())]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -490,6 +595,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
@@ -562,6 +668,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -584,6 +691,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
@@ -774,6 +882,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -796,6 +905,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
@@ -858,6 +968,7 @@ fn background_wash_fills_the_whole_row_width() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -880,6 +991,7 @@ fn background_wash_fills_the_whole_row_width() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
@@ -929,6 +1041,7 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         reaction_picker_active: false,
         reply_author: None,
         is_editing: false,
+        return_push: None,
         mention_active: false,
         mention_matches: &[],
         mention_selected: 0,
@@ -984,6 +1097,7 @@ fn chat_view<'a>(
     > = OnceLock::new();
     static ROOM_VERSIONS: OnceLock<HashMap<Uuid, u64>> = OnceLock::new();
     static MESSAGE_GILDS: OnceLock<HashMap<Uuid, ChatMessageGildSummary>> = OnceLock::new();
+    static LADDER_MARKS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
 
     ChatRenderInput {
         activity_ticker: &[],
@@ -1071,7 +1185,9 @@ fn chat_view<'a>(
         mention_active: false,
         reply_author: None,
         is_editing: false,
+        return_push: None,
         bonsai_glyphs,
+        ladder_marks: LADDER_MARKS.get_or_init(HashMap::new),
         chat_badges,
         profile_award_badges,
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
@@ -1435,6 +1551,44 @@ fn reaction_picker_placeholder_keeps_custom_zero_choice_at_mid_width() {
     assert!(
         rendered.contains("0 icon"),
         "custom icon reaction choice missing from {rendered:?}",
+    );
+}
+
+/// The return push takes the empty composer's one row, idle or focused,
+/// and the first typed character puts the text back in its place.
+#[test]
+fn draw_composer_block_shows_the_return_push_in_the_empty_composer() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let ta = TextArea::default();
+    let mut view = composer_view(&ta);
+    view.composing = false;
+    view.return_push = Some("back after 9 h · streak day 4 · the rung: medium Sudoku, open");
+
+    let backend = TestBackend::new(96, 3);
+    let mut terminal = Terminal::new(backend).expect("term");
+    terminal
+        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+    assert!(
+        row_1.contains("back after 9 h · streak day 4 · the rung: medium Sudoku, open"),
+        "no push in {row_1:?}"
+    );
+
+    let mut typed = TextArea::default();
+    typed.insert_str("on it");
+    let mut view = composer_view(&typed);
+    view.return_push = Some("back after 9 h · the rung: medium Sudoku, open");
+    terminal
+        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+    assert!(
+        row_1.contains("on it") && !row_1.contains("back after"),
+        "{row_1:?}"
     );
 }
 
@@ -2432,6 +2586,42 @@ fn header_segments_bare_username_only() {
     assert_eq!(segs[0].end_col, 1 + 5); // "alice"
 }
 
+/// The marks widen the name's own click target and nothing else: the
+/// profile is where their numbers live.
+#[test]
+fn header_segments_cover_the_ladder_marks_with_the_name() {
+    let built = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "alice",
+        title: None,
+        milestone: None,
+        ladder_marks: Some("◑✦"),
+        special_badges: &[],
+        chat_badges: &[],
+        bonsai_glyph: Some("🌱"),
+        profile_award_badges: None,
+        presence_badges: &[],
+        runner_badge: None,
+    });
+    assert_eq!(built.prefix, "alice ◑✦ 🌱");
+    assert_eq!(built.author_range, (0, 5));
+    assert_eq!(
+        built.marks_range,
+        Some((5, 12)),
+        "the space and two three-byte glyphs"
+    );
+    assert_eq!(built.segments.len(), 2);
+    assert_eq!(built.segments[0].target, HeaderTarget::Profile);
+    assert_eq!(
+        (built.segments[0].start_col, built.segments[0].end_col),
+        (1, 9)
+    );
+    assert_eq!(
+        built.segments[1].start_col, 10,
+        "the bonsai follows the gap"
+    );
+}
+
 #[test]
 fn build_author_prefix_matches_legacy_formatter_across_combinations() {
     // The legacy `format_author_badge_suffix` is kept under #[cfg(test)]
@@ -2583,12 +2773,14 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         (HeaderTarget::StoreFlag, "US"),
     ];
     let AuthorPrefix {
+        marks_range: _,
         prefix,
         segments: segs,
         author_range,
         title_range,
         runner_range: _,
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "bob",
         title: None,
@@ -2619,12 +2811,14 @@ fn header_segments_show_a_burn_milestone_on_top_of_a_rented_badge_and_flag() {
         (HeaderTarget::StoreFlag, "US"),
     ];
     let AuthorPrefix {
+        marks_range: _,
         prefix,
         segments: segs,
         author_range: _,
         title_range: _,
         runner_range: _,
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "bob",
         title: None,
@@ -2649,12 +2843,14 @@ fn header_segments_show_a_burn_milestone_on_top_of_a_rented_badge_and_flag() {
 #[test]
 fn header_prefix_wears_a_milestone_with_no_rentals_at_all() {
     let AuthorPrefix {
+        marks_range: _,
         prefix,
         segments: segs,
         author_range: _,
         title_range: _,
         runner_range: _,
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "bob",
         title: Some("the night clerk"),
@@ -2675,12 +2871,14 @@ fn header_prefix_wears_a_milestone_with_no_rentals_at_all() {
 fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
     let chat_badges = [(HeaderTarget::StoreBadge, "🐱")];
     let AuthorPrefix {
+        marks_range: _,
         prefix,
         segments: segs,
         author_range,
         title_range,
         runner_range: _,
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "bob",
         title: Some("the insufferable"),
@@ -2706,10 +2904,12 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
 
     // A blank title is not a title: nothing is printed and no range is set.
     let AuthorPrefix {
+        marks_range: _,
         prefix,
         title_range,
         ..
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "bob",
         title: Some("   "),
@@ -2732,6 +2932,7 @@ fn header_prefix_orders_all_badge_classes() {
         (HeaderTarget::StoreFlag, "flag"),
     ];
     let prefix = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "alice",
         title: None,
@@ -2757,12 +2958,14 @@ fn header_prefix_orders_all_badge_classes() {
 #[test]
 fn header_prefix_leads_the_badge_stack_with_the_runner_badge() {
     let AuthorPrefix {
+        marks_range: _,
         prefix,
         segments,
         title_range,
         runner_range,
         ..
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        ladder_marks: None,
         is_friend: false,
         author: "mira",
         title: Some("the night clerk"),
@@ -3184,6 +3387,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -3211,6 +3415,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             countries: &countries,
             friend_user_ids: &friend_user_ids,
             bonsai_glyphs: &bonsai_glyphs,
+            ladder_marks: &ladder_marks,
             chat_badges: &chat_badges,
             profile_award_badges: &profile_award_badges,
             message_reactions: &message_reactions,
@@ -3393,6 +3598,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
+    let ladder_marks: HashMap<Uuid, String> = HashMap::new();
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -3415,6 +3621,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         countries: &countries,
         friend_user_ids: &friend_user_ids,
         bonsai_glyphs: &bonsai_glyphs,
+        ladder_marks: &ladder_marks,
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,

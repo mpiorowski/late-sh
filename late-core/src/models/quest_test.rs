@@ -80,51 +80,6 @@ fn medium_slot_keeps_same_domain_puzzles_after_easy_pick() {
     assert!(keys.contains(&"solve_rubiks_cube"));
 }
 
-#[test]
-fn daily_streak_bonus_starts_on_second_consecutive_full_daily_and_caps() {
-    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
-    let next_day = day.checked_add_signed(Duration::days(1)).unwrap();
-    let sixth_day = day.checked_add_signed(Duration::days(5)).unwrap();
-    let skipped_day = day.checked_add_signed(Duration::days(7)).unwrap();
-
-    assert_eq!(
-        next_daily_streak_advance(None, day),
-        Some(DailyStreakAdvance {
-            consecutive_days: 1,
-            bonus_level: 0,
-            reward_chips: 0
-        })
-    );
-    assert_eq!(
-        next_daily_streak_advance(Some((day, 1)), next_day),
-        Some(DailyStreakAdvance {
-            consecutive_days: 2,
-            bonus_level: 1,
-            reward_chips: 100
-        })
-    );
-    assert_eq!(
-        next_daily_streak_advance(Some((sixth_day, 6)), sixth_day),
-        None
-    );
-    assert_eq!(
-        next_daily_streak_advance(Some((day, 5)), skipped_day),
-        Some(DailyStreakAdvance {
-            consecutive_days: 1,
-            bonus_level: 0,
-            reward_chips: 0
-        })
-    );
-    assert_eq!(
-        next_daily_streak_advance(Some((sixth_day, 6)), sixth_day.succ_opt().unwrap()),
-        Some(DailyStreakAdvance {
-            consecutive_days: 7,
-            bonus_level: 5,
-            reward_chips: 500
-        })
-    );
-}
-
 /// A quest reward row's ref is the assignment id; the assignment's template
 /// names the quest.
 #[tokio::test]
