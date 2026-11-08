@@ -2419,7 +2419,7 @@ impl App {
             return;
         }
         self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
-            self.user_id,
+            self.username.clone(),
             self.dopewars_host.clone(),
             self.dopewars_port,
             self.dopewars_secret.clone(),

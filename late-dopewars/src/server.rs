@@ -42,7 +42,7 @@ impl russh::server::Server for Server {
     fn new_client(&mut self, _peer: Option<std::net::SocketAddr>) -> ClientHandler {
         ClientHandler {
             shared: self.shared.clone(),
-            authorized: false,
+            playname: None,
             channel: None,
             term: "xterm-256color".to_string(),
             cols: 80,
@@ -54,8 +54,9 @@ impl russh::server::Server for Server {
 
 pub(crate) struct ClientHandler {
     shared: Arc<Shared>,
-    /// Set once the shared-secret-derived key checks out.
-    authorized: bool,
+    /// Set once the shared-secret-derived key checks out: the sanitized playname
+    /// sent in the SSH username, passed to dopewars as `-P`.
+    playname: Option<String>,
     /// Session channel, set on open and consumed when the shell starts.
     channel: Option<Channel<Msg>>,
     term: String,
@@ -119,8 +120,9 @@ impl Handler for ClientHandler {
             tracing::warn!(user, "rejected: client key does not match shared secret");
             return Ok(reject());
         }
-        tracing::info!(user, "client authorized");
-        self.authorized = true;
+        let name = crate::playname::sanitize(user);
+        tracing::info!(playname = %name, "client authorized");
+        self.playname = Some(name);
         Ok(Auth::Accept)
     }
 
@@ -175,10 +177,10 @@ impl Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let _ = session.channel_success(channel);
 
-        if !self.authorized {
+        let Some(playname) = self.playname.clone() else {
             tracing::error!("shell requested before authentication");
             return Err(anyhow::anyhow!("unauthenticated shell request"));
-        }
+        };
         // Drop the stored Channel handle; we drive the channel by id via the
         // session handle from here on.
         let _ = self.channel.take();
@@ -198,6 +200,7 @@ impl Handler for ClientHandler {
             HostConfig {
                 bin: self.shared.bin.clone(),
                 score_file: self.shared.score_file.clone(),
+                playname,
                 cols: self.cols,
                 rows: self.rows,
                 term,

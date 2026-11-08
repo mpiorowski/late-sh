@@ -45,9 +45,9 @@ enum OutboundCommand {
 ///
 /// This is the network-proxied twin of the nethack door (`NethackProcess`): same
 /// vt100 model and transport, but the target is late.sh's own dopewars host.
-/// dopewars single-player takes no `-u` name, so the SSH username carries no
-/// identity (only an account-derived label for host-side log correlation); the
-/// player types their handle in-game and it lands in the shared high-score table.
+/// The SSH username carries the player's `late.sh` handle: the host sanitizes it
+/// and passes it to dopewars as `-P`, so the startup name prompt is skipped and
+/// the shared high-score table records the right player.
 pub struct DopewarsProcess {
     cmd_tx: mpsc::Sender<OutboundCommand>,
     task: JoinHandle<()>,
@@ -59,7 +59,9 @@ pub struct ProcessConfig {
     pub host: String,
     pub port: u16,
     pub secret: String,
-    pub user_id: uuid::Uuid,
+    /// The player's `late.sh` username, sent as the SSH username so the host can
+    /// pass it to dopewars as `-P <playname>`.
+    pub playname: String,
     pub cols: u16,
     pub rows: u16,
     pub term: String,
@@ -144,14 +146,25 @@ impl Drop for DopewarsProcess {
     }
 }
 
-/// An opaque, account-derived label sent as the SSH username. dopewars uses no
-/// `-u` name, so this is not an identity the host acts on -- it only correlates
-/// host-side logs to an account. Derived from the immutable user id (trailing
-/// hex, since our UUIDv7 ids have a low-entropy leading timestamp) so it is
-/// stable and PTY/SSH-safe.
-pub fn dopewars_session_label(user_id: uuid::Uuid) -> String {
-    let simple = user_id.simple().to_string(); // 32 lowercase hex
-    format!("late_{}", &simple[simple.len() - 24..])
+/// The SSH username sent to the dopewars host: the player's `late.sh` handle,
+/// narrowed to characters safe in an SSH username and a dopewars playname.
+///
+/// `late_stats` is rewritten because the host reserves that username for the
+/// stats stream; a player holding it must not collide. The host sanitizes again
+/// (defense in depth) before handing the name to `dopewars -P`.
+pub fn dopewars_playname(username: &str) -> String {
+    let cleaned: String = username
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .take(32)
+        .collect();
+    if cleaned.is_empty() {
+        "drifter".to_string()
+    } else if cleaned.eq_ignore_ascii_case("late_stats") {
+        "late_stats_".to_string()
+    } else {
+        cleaned
+    }
 }
 
 async fn run_bridge(
@@ -173,9 +186,9 @@ async fn run_bridge(
     .context("dopewars outbound connect timed out")?
     .with_context(|| format!("connecting to {}:{}", cfg.host, cfg.port))?;
 
-    // Authenticate with the shared-secret-derived key; the username is only an
-    // account-correlation label (the host takes no `-u` name from it).
-    let username = dopewars_session_label(cfg.user_id);
+    // Authenticate with the shared-secret-derived key; the username is the
+    // player's handle, which the host turns into `dopewars -P <playname>`.
+    let username = dopewars_playname(&cfg.playname);
     let key =
         russh::keys::PrivateKeyWithHashAlg::new(Arc::new(derive_client_key(&cfg.secret)), None);
     let auth = timeout(

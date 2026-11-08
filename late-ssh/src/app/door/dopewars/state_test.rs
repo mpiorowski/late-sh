@@ -2,7 +2,7 @@ use super::*;
 
 fn disabled_state() -> State {
     State::new(
-        uuid::Uuid::nil(),
+        "tester".to_string(),
         "127.0.0.1".to_string(),
         2324,
         String::new(),

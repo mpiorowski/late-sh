@@ -30,8 +30,8 @@ dopewars runs the **real upstream dopewars curses client on a PTY**, but **not**
 Core shape:
 - `Screen::Dopewars` has no top-level number key. It is reached by selecting the dopewars card in the Games hub (page `3`, last card) and pressing `Enter`. `Enter` constructs the `State` (`enter_dopewars`) and `connect`s — opening the SSH connection and switching to `Mode::Running` — in one step; the standalone launcher render is normally skipped.
 - One per-session `DopewarsProcess` (a russh client; the twin of `door::nethack::proxy::NethackProcess`) owns a background Tokio task that connects to `late-dopewars`, requests a PTY + shell, and bridges the remote bytes into a shared `vt100::Parser`. The foreground reads that screen and a `ProxyStatus` flag.
-- **Auth is shared-secret-derived; there is no per-player identity.** The connection authenticates with a single Ed25519 key both ends derive from `LATE_DOPEWARS_SECRET`. Unlike nethack, dopewars single-player takes **no `-u` playname**: the SSH username carries only an opaque account-correlation label for host logs (`dopewars_session_label`), which the host does not act on. The player types their handle in-game and it lands in the shared high-score table.
-- The child is spawned `dopewars -t -n -b -f <shared score file>` (text client / single-player / black-and-white / shared high-score path). See §4 for why `-b` is load-bearing.
+- **Auth is shared-secret-derived; the username carries the playname, not a credential.** The connection authenticates with a single Ed25519 key both ends derive from `LATE_DOPEWARS_SECRET`. The SSH username is the player's `late.sh` handle (`dopewars_playname`, sanitized again on the host by `playname::sanitize`), which the host passes to the child as `-P <playname>`, so dopewars skips its startup "Hey dude, what's your name?" prompt and the shared high-score table records the right player.
+- The child is spawned `dopewars -t -n -b -f <shared score file> -P <playname>` (text client / single-player / black-and-white / shared high-score path / player handle). See §4 for why `-b` is load-bearing.
 - While Running, raw client bytes are forwarded straight to the host→child (minus mouse/paste noise) — dopewars, not late.sh, interprets keys. There is **no** key remap (no F1→help; dopewars is menu-driven). **Ctrl-C** ends the game: dopewars traps only `SIGWINCH`, so `^C` raises the default `SIGINT` through the PTY and the child dies, returning the session to the hub.
 - **Persistence: the shared high-score table only.** dopewars has **no mid-game save** (upstream single-player has no savegame format), so a dropped connection or a pod restart *ends* any in-progress game — no architecture changes that. What *does* persist is the leaderboard: every session's `-f` points at **one shared `dopewars.sco` file on the host's PVC**, so scores survive restarts and are global across players (the dopewars analog of nethack's shared bones playground). There are **no milestones, chips, or awards** — deferred (see §9).
 
@@ -46,9 +46,9 @@ The door is gated by the `dopewars_enabled` profile flag in `late-ssh/src/config
 | File | Responsibility |
 |---|---|
 | `mod.rs` | Module declarations + framing comment. Declaration-only. |
-| `proxy.rs` | `DopewarsProcess`: per-session russh **client** to the host. Owns the bridge task (`run_bridge`), the shared `vt100::Parser`, the `ProxyStatus` flag, the input/resize command channel, and `dopewars_session_label`. Near-clone of `door::nethack::proxy`. |
+| `proxy.rs` | `DopewarsProcess`: per-session russh **client** to the host. Owns the bridge task (`run_bridge`), the shared `vt100::Parser`, the `ProxyStatus` flag, the input/resize command channel, and `dopewars_playname`. Near-clone of `door::nethack::proxy`. |
 | `identity.rs` | `derive_client_key(secret)`: the shared-secret → Ed25519 key derivation (blake3, domain `late.sh/dopewars/v1`). Must stay byte-identical to the host's copy (see the cross-crate note in the source). |
-| `state.rs` | Per-session `State`: launcher/running `Mode`, connection config (host/port/secret/term/enabled), the optional `DopewarsProcess`, last viewport `Rect`, the post-exit input grace, `connect`, `set_viewport`, `forward_input`/`strip_input_noise`, and `tick` (flips back to Launcher on close). No award/milestone scraping. |
+| `state.rs` | Per-session `State`: launcher/running `Mode`, connection config (username/host/port/secret/term/enabled), the optional `DopewarsProcess`, last viewport `Rect`, the post-exit input grace, `connect`, `set_viewport`, `forward_input`/`strip_input_noise`, and `tick` (flips back to Launcher on close). No award/milestone scraping. |
 | `render.rs` | Ratatui rendering: `draw_landing`/`draw_launcher` (logo, blurb, market-ticker strip, hints) and `draw_running` which blits the live `vt100` screen via `rebels::render::blit_screen`. |
 
 ### Host — `late-dopewars/` crate (standalone binary)
@@ -57,9 +57,10 @@ The door is gated by the `dopewars_enabled` profile flag in `late-ssh/src/config
 |---|---|
 | `main.rs` | Tracing init, `Config::from_env`, load/generate the SSH host key, run the russh server (`run_on_address`). Exits promptly on SIGTERM (no save to drain). |
 | `config.rs` | `Config`: `bin`, `score_file` (the one shared `.sco`), `secret`, listen addr/port, idle timeout. |
-| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key — see §7), `pty_request`, `shell_request`, `data`, `window_change_request`, `channel_eof/close`. Holds `effective_term` (TERM fallback, §4). No playname (dopewars uses no `-u`). |
+| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key — see §7), `pty_request`, `shell_request`, `data`, `window_change_request`, `channel_eof/close`. Holds `effective_term` (TERM fallback, §4). Records the sanitized `playname` from the SSH username for `-P`. |
 | `host.rs` | `PtyHost`: the per-session PTY bridge. `openpty` + `env_clear` + `setsid`/`TIOCSCTTY` + `IXON/IXOFF/IXANY` clear + `TIOCSWINSZ` + the **detached** reader + a private per-session scratch `HOME`. Output flows to the SSH channel handle; client bytes flow to the PTY master. Teardown is a plain kill — dopewars has no hangup-save. |
 | `identity.rs` | `derive_client_key(secret)` — identical to the client copy. |
+| `playname.rs` | `sanitize(username)`: narrows the SSH username to a dopewars `-P` playname (ASCII alphanumerics plus `_`/`-`/`.`, capped at 32, `drifter` fallback). Defense in depth behind the client's `dopewars_playname`. |
 
 Cross-module wiring (client side, outside this folder — the ~10 door touchpoints):
 - `app/common/primitives.rs`: `Screen::Dopewars` (+ `Screen::page` puts it on `Games`, so `next`/`prev` fall back to the hub and its tab stays lit; `draw_tabs`/`page_title` label `"dopewars"`).
@@ -91,15 +92,16 @@ Input capture contract (client side):
 ### Client (`proxy.rs`, in late-ssh) — the vt100 side
 
 - `DopewarsProcess::spawn` creates an mpsc command channel, a shared `vt100::Parser` (sized to the viewport), a `ProxyStatus` mutex, and spawns the bridge task. On task end it forces `ProxyStatus::Closed` and wakes the render loop (so `tick()` returns to the launcher; without this the screen freezes on the last frame).
-- `run_bridge` is a russh client (`AcceptAnyHostKey`): `client::connect` → `authenticate_publickey(username = dopewars_session_label(user_id), key = derive_client_key(secret))` → `channel_open_session` → `request_pty` → `request_shell` → status `Running`. Then a `tokio::select!` loop: command channel (`Input` → `channel.data`; `Resize` → `window_change`) and `channel.wait()` (remote `Data`/`ExtendedData` → `parser.process` + repaint; `Eof`/`Close`/`ExitStatus` → break).
+- `run_bridge` is a russh client (`AcceptAnyHostKey`): `client::connect` → `authenticate_publickey(username = dopewars_playname(&cfg.playname), key = derive_client_key(secret))` → `channel_open_session` → `request_pty` → `request_shell` → status `Running`. Then a `tokio::select!` loop: command channel (`Input` → `channel.data`; `Resize` → `window_change`) and `channel.wait()` (remote `Data`/`ExtendedData` → `parser.process` + repaint; `Eof`/`Close`/`ExitStatus` → break).
 - The vt100 parser lives **client-side only**. The host streams raw bytes; only late-ssh interprets them into a screen (shared with rebels/nethack via `rebels::render::blit_screen`).
 
 ### Host (`late-dopewars`) — the PTY side
 
-- `ClientHandler` (one per SSH connection): `auth_publickey` checks the derived key and marks the session authorized; `pty_request` records term/cols/rows; `shell_request` resolves the effective TERM and spawns a `PtyHost`, handing it `session.handle()` + the `ChannelId`.
-- `PtyHost::spawn` → `run_bridge` (unix only): `openpty`, clear `IXON/IXOFF/IXANY` on the slave termios **before exec** (§9), build the `dopewars` `Command` with `env_clear()` + allowlist (`-t -n -b -f <score>`, `TERM`, a private scratch `HOME`, `LANG`/`LC_ALL=C.UTF-8`, `LINES`/`COLUMNS`), wire slave→stdio, `pre_exec` `setsid` + `TIOCSCTTY`. A blocking **reader thread** pumps PTY output to an unbounded channel; the select loop forwards those chunks to `handle.data(channel, …)`, writes client `Input` to the PTY master, applies `Resize` via `TIOCSWINSZ`, and breaks on `child.wait()`.
-- **Spawn args: `-t -n -b -f <score>`.**
+- `ClientHandler` (one per SSH connection): `auth_publickey` checks the derived key, sanitizes the SSH username into the session's `playname`, and marks the session authorized; `pty_request` records term/cols/rows; `shell_request` resolves the effective TERM and spawns a `PtyHost`, handing it `session.handle()` + the `ChannelId` + the playname.
+- `PtyHost::spawn` → `run_bridge` (unix only): `openpty`, clear `IXON/IXOFF/IXANY` on the slave termios **before exec** (§9), build the `dopewars` `Command` with `env_clear()` + allowlist (`-t -n -b -f <score> -P <playname>`, `TERM`, a private scratch `HOME`, `LANG`/`LC_ALL=C.UTF-8`, `LINES`/`COLUMNS`), wire slave→stdio, `pre_exec` `setsid` + `TIOCSCTTY`. A blocking **reader thread** pumps PTY output to an unbounded channel; the select loop forwards those chunks to `handle.data(channel, …)`, writes client `Input` to the PTY master, applies `Resize` via `TIOCSWINSZ`, and breaks on `child.wait()`.
+- **Spawn args: `-t -n -b -f <score> -P <playname>`.**
   - `-t` text (curses) client, `-n` single-player.
+  - `-P <playname>` pre-fills dopewars' `PlayerName`, so the startup `nice_input("Hey dude, what's your name? ")` prompt is skipped. The name is the sanitized SSH username (`playname::sanitize`).
   - **`-b` (black-and-white) is load-bearing.** dopewars' default palette hard-codes a blue-on-blue window scheme that assumes a black terminal and renders nearly unreadable when embedded. Monochrome lets its colors map to `Color::Default → Reset`, so the game inherits the late.sh theme (same effect as the rebels/nethack doors). Removing `-b` brings back the unreadable panels.
   - `-f <score>` points at the **one shared high-score file** on the PVC (`LATE_DOPEWARS_SCORE_FILE`, default `/var/lib/late-dopewars/dopewars.sco`). dopewars creates it on the first write and locks it during updates, so concurrent sessions writing the same file are safe. **Do not run a setgid binary**: dopewars refuses a user `-f` under setgid (the from-source binary we ship is not setgid; see §6).
 - On child exit **or** client disconnect: close the SSH channel (`eof` + `close`) first so the late-ssh client returns to its launcher now, then kill the child. There is **no** SIGHUP/hangup-save dance (dopewars has no mid-game save, so nothing to persist beyond scores already written on the game's own exit path). The per-session scratch `HOME` is removed on teardown.
@@ -150,7 +152,7 @@ Env knobs on both halves, the pinned dopewars 1.6.2 source build (SHA-256 verifi
 Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-dopewars -p late-ssh -E 'package(late-dopewars) or test(dopewars)'"`.
 
 Inline pure tests cover:
-- Client `proxy.rs`: `dopewars_session_label` (account-derived, safe, stable, distinct per account).
+- Client `proxy.rs`: `dopewars_playname` (keeps valid `late.sh` characters, caps at 32, `drifter` fallback, rewrites the reserved `late_stats`).
 - Client `identity.rs` / host `late-dopewars/src/identity.rs`: derivation determinism. (A cross-crate known-answer fingerprint test like nethack's is still missing.)
 - Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; exit-grace opens on close and counts down.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.

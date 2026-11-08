@@ -1,23 +1,25 @@
 use crate::app::door::dopewars::proxy::*;
 
 #[test]
-fn session_label_is_account_derived_and_safe() {
-    let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-    let label = dopewars_session_label(id);
-    assert!(label.starts_with("late_"));
-    assert!(label.ends_with(&id.simple().to_string()[8..]));
-    assert!(label.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+fn playname_keeps_valid_late_username_characters() {
+    assert_eq!(dopewars_playname("bob"), "bob");
+    assert_eq!(dopewars_playname("bob.smith-42_x"), "bob.smith-42_x");
 }
 
 #[test]
-fn session_label_is_stable_per_account() {
-    let id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1122_3344_5566_7788);
-    assert_eq!(dopewars_session_label(id), dopewars_session_label(id));
+fn playname_caps_at_32_characters() {
+    assert_eq!(dopewars_playname(&"x".repeat(100)), "x".repeat(32));
 }
 
 #[test]
-fn session_label_distinguishes_accounts() {
-    let a = uuid::Uuid::from_u128(1);
-    let b = uuid::Uuid::from_u128(2);
-    assert_ne!(dopewars_session_label(a), dopewars_session_label(b));
+fn playname_strips_unsafe_characters_and_falls_back() {
+    assert_eq!(dopewars_playname("bob smith!"), "bobsmith");
+    assert_eq!(dopewars_playname(""), "drifter");
+    assert_eq!(dopewars_playname("$%^"), "drifter");
+}
+
+#[test]
+fn playname_avoids_the_reserved_stats_username() {
+    assert_eq!(dopewars_playname("late_stats"), "late_stats_");
+    assert_eq!(dopewars_playname("LATE_STATS"), "late_stats_");
 }

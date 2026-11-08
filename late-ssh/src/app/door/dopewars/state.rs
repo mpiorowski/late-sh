@@ -19,7 +19,9 @@ pub enum Mode {
 const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
-    user_id: uuid::Uuid,
+    /// The player's `late.sh` username, sent to the host so dopewars starts with
+    /// `-P <playname>` instead of prompting for a name.
+    username: String,
     host: String,
     port: u16,
     secret: String,
@@ -43,7 +45,7 @@ pub struct State {
 
 impl State {
     pub fn new(
-        user_id: uuid::Uuid,
+        username: String,
         host: String,
         port: u16,
         secret: String,
@@ -52,7 +54,7 @@ impl State {
         repaint: Option<Arc<RenderSignal>>,
     ) -> Self {
         Self {
-            user_id,
+            username,
             host,
             port,
             secret,
@@ -96,7 +98,7 @@ impl State {
             host: self.host.clone(),
             port: self.port,
             secret: self.secret.clone(),
-            user_id: self.user_id,
+            playname: self.username.clone(),
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
@@ -161,7 +163,7 @@ impl State {
             host: "127.0.0.1".into(),
             port: 1,
             secret: "test-secret".into(),
-            user_id: uuid::Uuid::nil(),
+            playname: "tester".into(),
             cols: 80,
             rows: 24,
             term: "xterm".into(),
