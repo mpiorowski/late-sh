@@ -441,10 +441,6 @@ Live, in order of evidence behind them:
     - The week, the rung's surface (`arcade/CONTEXT.md`, the week stop in
       `clubhouse/CONTEXT.md` §5). Measure: `week` against `done` in the
       tour funnel, two-day return against the cohort before it.
-    - The keypress-return push, the empty composer's row saying what the
-      ladder is at (`hub/CONTEXT.md`, the push). Measure: rung wins in
-      the hour after `late_ssh_return_pushes_total{rung="open"}` against
-      the hour after any other return.
     - The comeback moments, one box per return day in a newcomer's first
       two weeks, three in all: hear it, the big games, the people
       (`late-ssh/src/app/comeback/CONTEXT.md`). Measure: `taken` against
@@ -746,12 +742,10 @@ curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_attention_sec
 # where the tour loses people: stops reached, the drop between two is the leak
 curl -s --data-urlencode 'query=sum by (stop) (increase(late_ssh_tour_stops_total[7d]))' \
   http://127.0.0.1:18428/api/v1/query
-# the ladder: streak days, stars, return pushes, comeback boxes, radio nudges
+# the ladder: streak days, stars, comeback boxes, radio nudges
 curl -s --data-urlencode 'query=sum by (day) (increase(late_ssh_daily_streak_days_total[7d]))' \
   http://127.0.0.1:18428/api/v1/query
 curl -s --data-urlencode 'query=increase(late_ssh_rung_stars_total[7d])' \
-  http://127.0.0.1:18428/api/v1/query
-curl -s --data-urlencode 'query=sum by (rung) (increase(late_ssh_return_pushes_total[7d]))' \
   http://127.0.0.1:18428/api/v1/query
 curl -s --data-urlencode 'query=sum by (moment,beat) (increase(late_ssh_comeback_moments_total[7d]))' \
   http://127.0.0.1:18428/api/v1/query

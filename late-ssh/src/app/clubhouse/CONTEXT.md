@@ -108,9 +108,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   into the tavern plus the shared `ComposerBlockView` footer (same block the
   dashboard card uses; grows while typing, shows placeholder hints idle).
   Its idle hint is the scene's (`ComposerIdleHint::Scene`, the Nightcap's
-  too): j/k walk here, so it never offers them as message selection. The
-  keypress-return push (`hub/CONTEXT.md`) takes the row over the hint here
-  as everywhere.
+  too): j/k walk here, so it never offers them as message selection.
 - `i` (or Enter in the open) composes into #lounge through the normal global
   composer pipeline; image paste works (Clubhouse is a
   `is_chat_composer_context` screen in `app::input`). Slash commands are

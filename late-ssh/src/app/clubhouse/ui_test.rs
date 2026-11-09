@@ -5,7 +5,7 @@ fn a_week() -> Week {
     Week::today(
         chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
         &std::collections::HashSet::new(),
-        crate::app::hub::dailies::return_push::RungStanding::Open,
+        crate::app::hub::dailies::state::RungStanding::Open,
         uuid::Uuid::from_u128(1),
     )
 }

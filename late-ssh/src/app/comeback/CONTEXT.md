@@ -10,7 +10,7 @@ moment's own thing and Esc keeps it for later. Keyed to days, not to
 `users.login_count`: a dropped connection is not a return. The numbers
 behind it and what each moment is measured by are in `AUDIENCE.md`
 (section 5, the ladder). Weighed and not picked as moments: "the star"
-(the rung is already the tour's send-off and the keypress-return push,
+(the rung is already the tour's send-off and the arcade week,
 a third telling is nagging), "leave it open" (the regulars' behavior,
 and it needs the CLI first, so it is one line inside the first box),
 "say something in #lounge" (where the tour already lands, and chat on
