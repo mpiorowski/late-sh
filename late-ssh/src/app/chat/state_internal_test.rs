@@ -2151,6 +2151,7 @@ fn inline_image_request_candidates_scan_newest_messages_first() {
 
     let requests = inline_image_request_candidates(
         &messages,
+        &HashMap::new(),
         &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
@@ -2179,6 +2180,7 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
 
     let requests = inline_image_request_candidates(
         &messages,
+        &HashMap::new(),
         &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
@@ -2201,7 +2203,12 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
         ]
     );
     assert_eq!(
-        requests[0].1.fetch_url(),
+        match &requests[0].1 {
+            InlinePreviewSource::Video { video_id } => {
+                crate::app::audio::thumbnail::thumbnail_url(video_id)
+            }
+            _ => String::new(),
+        },
         "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
     );
 }
@@ -2223,6 +2230,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert!(
         inline_image_request_candidates(
             &messages,
+            &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,
@@ -2241,6 +2249,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert_eq!(
         inline_image_request_candidates(
             &messages,
+            &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,
@@ -2262,6 +2271,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert!(
         inline_image_request_candidates(
             &messages,
+            &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,

@@ -25,8 +25,8 @@ use dartboard_core::{CellValue, Pos, RgbColor};
 use ratatui::style::Color;
 use unicode_width::UnicodeWidthChar;
 
-const LOUNGE_CARD_PREVIEW_MAX_HEIGHT: usize = 12;
-const LOUNGE_CARD_MIN_PREVIEW_WIDTH: usize = 20;
+pub(crate) const LOUNGE_CARD_PREVIEW_MAX_HEIGHT: usize = 12;
+pub(crate) const LOUNGE_CARD_MIN_PREVIEW_WIDTH: usize = 20;
 /// The rail's width, gap included.
 pub const RAIL_WIDTH: u16 = 20;
 /// Lines above the entries when the rail shows an archive list: the kind's
@@ -878,11 +878,15 @@ fn piece_preview_lines(piece: &GalleryPiece, width: usize, max_height: usize) ->
     }
     lines
 }
+pub(crate) fn piece_fits_native_preview(piece: &GalleryPiece, width: usize) -> bool {
+    piece.width <= width && piece.height <= LOUNGE_CARD_PREVIEW_MAX_HEIGHT
+}
 
 pub(crate) fn lounge_card_lines(
     piece: &GalleryPiece,
     width: usize,
     disclaimer_active: bool,
+    bitmap_preview: Option<&[Line<'static>]>,
 ) -> Vec<Line<'static>> {
     let faint = Style::default().fg(theme::TEXT_FAINT());
     let dim = Style::default().fg(theme::TEXT_DIM());
@@ -903,7 +907,13 @@ pub(crate) fn lounge_card_lines(
             dim,
         )));
     } else if width >= LOUNGE_CARD_MIN_PREVIEW_WIDTH {
-        rows.extend(piece_preview_lines(piece, width, LOUNGE_CARD_PREVIEW_MAX_HEIGHT));
+        if piece_fits_native_preview(piece, width) {
+            rows.extend(piece_preview_lines(piece, width, LOUNGE_CARD_PREVIEW_MAX_HEIGHT));
+        } else if let Some(preview_lines) = bitmap_preview.filter(|lines| !lines.is_empty()) {
+            rows.extend(preview_lines.iter().cloned());
+        } else {
+            rows.extend(piece_preview_lines(piece, width, LOUNGE_CARD_PREVIEW_MAX_HEIGHT));
+        }
     }
 
     // Meta row
@@ -927,7 +937,7 @@ pub(crate) fn lounge_card_lines(
         Span::styled(credits_summary, dim),
         Span::styled(" · ", faint),
         Span::styled(applause_label(piece.applause), dim),
-        Span::styled(" · Enter to open", faint),
+        Span::styled(" · Enter preview · o gallery", faint),
     ];
     rows.push(Line::from(clip_spans(meta_spans, width)));
 

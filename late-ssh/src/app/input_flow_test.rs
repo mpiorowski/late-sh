@@ -4711,6 +4711,88 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
 }
 
 #[tokio::test]
+async fn artboard_gallery_hangs_two_pieces_in_succession() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-gallery-it2").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-gallery-flow-it2");
+
+    app.handle_input(b"4v");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    // Paint a 10x4 block
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~\r");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
+        "dismiss floating paste",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    // Hang piece 1
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    for _ in 0..5 {
+        app.handle_input(b"j");
+    }
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Frame your work").await;
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    app.handle_input(b"piece one\r");
+    wait_for_render_contains(&mut app, "now hangs").await;
+
+    // Now paint another 10x4 block at a different position with different chars
+    app.handle_input(b"\x1b"); // back to rail
+    for _ in 0..5 { app.handle_input(b"k"); }
+    app.handle_input(b"\r"); // focus board
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    for _ in 0..15 { app.handle_input(b"l"); }
+    app.handle_input(b"\x1b[200~$$$$$$$$$$\n$$$$$$$$$$\n$$$$$$$$$$\n$$$$$$$$$$\x1b[201~\r");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
+        "dismiss floating paste 2",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    // Now try to hang piece 2. Notice the block is at board (21, 3) to (30, 6).
+    // Screen column starts at 2 (x=2 + board_x, y=2 + board_y):
+    // from (23, 5) to (32, 8).
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    for _ in 0..5 {
+        app.handle_input(b"j");
+    }
+    app.handle_input(b"\r");
+    // Select 10x4 frame using Shift+Right and Shift+Down
+    for _ in 0..9 {
+        app.handle_input(b"\x1b[1;2C"); // Shift+Right
+    }
+    for _ in 0..3 {
+        app.handle_input(b"\x1b[1;2B"); // Shift+Down
+    }
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    app.handle_input(b"piece two\r");
+    wait_for_render_contains(&mut app, "now hangs").await;
+    wait_for_render_contains(&mut app, "piece two").await;
+}
+
+#[tokio::test]
 async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     use crate::app::zen::state::TileKind;
 

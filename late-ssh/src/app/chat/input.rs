@@ -454,6 +454,8 @@ pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
                 | b'G'
                 | b'v'
                 | b'V'
+                | b'o'
+                | b'O'
                 | b'\r'
                 | b'\n'
                 | 0x10
@@ -504,6 +506,12 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         b'f' | b'F' | b'v' | b'V' if app.chat.selected_gallery_card_in_room(room_id).is_some() => {
             if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
                 app.applaud_gallery_piece(piece);
+                return true;
+            }
+        }
+        b'o' | b'O' if app.chat.selected_gallery_card_in_room(room_id).is_some() => {
+            if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
+                app.open_gallery_piece(piece);
                 return true;
             }
         }
@@ -586,7 +594,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         }
         b'\r' | b'\n' if app.chat.selected_gallery_card_in_room(room_id).is_some() => {
             if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
-                app.open_gallery_piece(piece);
+                if app.artboard_disclaimer_visible_for_chat() {
+                    app.open_gallery_piece(piece);
+                } else {
+                    app.chat.open_selected_image_modal_in_room(room_id);
+                }
                 return true;
             }
         }

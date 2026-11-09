@@ -6,4 +6,5 @@ pub mod frame;
 pub mod input;
 pub mod state;
 pub mod svc;
+pub mod raster;
 pub mod ui;

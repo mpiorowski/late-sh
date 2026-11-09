@@ -288,12 +288,13 @@ pub(super) fn wrap_chat_entry_to_lines(
             }
             Some((start, lines.len()))
         }
-        (None, Some(piece), _) => {
+        (None, Some(piece), inline_lines) => {
             let start = lines.len();
             for card_line in crate::app::artboard::gallery::ui::lounge_card_lines(
                 piece,
                 width.saturating_sub(1),
                 artboard_disclaimer,
+                inline_lines,
             ) {
                 let mut spans = vec![pad.clone()];
                 spans.extend(card_line.spans);

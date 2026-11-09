@@ -205,6 +205,7 @@ pub struct ImageModalView<'a> {
     pub preview: Option<&'a InlinePreview>,
     pub terminal_image: Option<&'a TerminalImageData>,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
+    pub is_gallery_piece: bool,
 }
 
 /// Shared composer block rendering for the dashboard card, the chat page,
@@ -530,7 +531,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
         reaction_picker_placeholder_lines(dim, width)
     } else if view.selected_gallery_card {
         vec![Line::from(Span::styled(
-            "f applaud · r reply · d delete · p profile · Enter open piece",
+            "f applaud · r reply · d delete · p profile · o gallery · Enter preview",
             dim,
         ))]
     } else if view.selected_image_message {
@@ -2338,7 +2339,7 @@ fn draw_image_modal(
         }
 
         frame.render_widget(
-            Paragraph::new(image_modal_footer(footer_area.width)),
+            Paragraph::new(image_modal_footer(footer_area.width, view.is_gallery_piece)),
             footer_area,
         );
         return;
@@ -2385,7 +2386,7 @@ fn draw_image_modal(
     );
     frame.render_widget(Paragraph::new(fallback_lines).style(modal_bg), content_area);
     frame.render_widget(
-        Paragraph::new(image_modal_footer(footer_area.width)).style(modal_bg),
+        Paragraph::new(image_modal_footer(footer_area.width, view.is_gallery_piece)).style(modal_bg),
         footer_area,
     );
 }
@@ -2439,14 +2440,40 @@ fn image_modal_fallback_lines(view: ImageModalView<'_>) -> Vec<Line<'static>> {
     ]
 }
 
-fn image_modal_footer(width: u16) -> Line<'static> {
+fn image_modal_footer(width: u16, is_gallery_piece: bool) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let key = Style::default().fg(theme::AMBER_DIM());
+    let sep = Style::default().fg(theme::BORDER());
+    if is_gallery_piece {
+        if width >= 44 {
+            return Line::from(vec![
+                Span::styled(" o", key),
+                Span::styled(" open in gallery", dim),
+                Span::styled("  · ", sep),
+                Span::styled("Enter/c", key),
+                Span::styled(" copy", dim),
+                Span::styled("  · ", sep),
+                Span::styled("Esc/q", key),
+                Span::styled(" close", dim),
+            ]);
+        }
+        if width >= 26 {
+            return Line::from(vec![
+                Span::styled(" o", key),
+                Span::styled(" gallery ", dim),
+                Span::styled("Enter", key),
+                Span::styled(" copy ", dim),
+                Span::styled("Esc", key),
+                Span::styled(" close", dim),
+            ]);
+        }
+        return Line::from(vec![Span::styled("Esc", key), Span::styled(" close", dim)]);
+    }
     if width >= 32 {
         return Line::from(vec![
             Span::styled(" Enter/c", key),
             Span::styled(" copy", dim),
-            Span::styled("  · ", Style::default().fg(theme::BORDER())),
+            Span::styled("  · ", sep),
             Span::styled("Esc/q", key),
             Span::styled(" close", dim),
         ]);

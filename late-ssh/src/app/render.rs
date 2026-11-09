@@ -705,6 +705,7 @@ impl App {
                         .filter(|image| image.supports_protocol(protocol))
                 }),
                 terminal_image_protocol,
+                is_gallery_piece: self.chat.gallery_card(modal.message_id).is_some(),
             });
         let dashboard_room = shell_active_room.and_then(|room_id| self.chat.room_by_id(room_id));
         let dashboard_messages = shell_active_room

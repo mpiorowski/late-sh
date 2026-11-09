@@ -711,6 +711,17 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 
 fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     match event {
+        ParsedInput::Byte(b'o' | b'O') | ParsedInput::Char('o' | 'O') => {
+            if let Some(piece) = app
+                .chat
+                .image_modal()
+                .and_then(|m| app.chat.gallery_card(m.message_id).cloned())
+            {
+                close_image_modal(app);
+                app.open_gallery_piece(piece);
+                return;
+            }
+        }
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             close_image_modal(app);
         }
@@ -3003,14 +3014,16 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
-            if !app.chat.open_selected_card_in_room(room_id)
-                && !app.chat.open_selected_image_modal_in_room(room_id)
-            {
-                if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
+            if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
+                if app.artboard_disclaimer_visible_for_chat() {
                     app.open_gallery_piece(piece);
                 } else {
-                    crate::app::chat::input::watch_selected_video(app, room_id);
+                    app.chat.open_selected_image_modal_in_room(room_id);
                 }
+            } else if !app.chat.open_selected_card_in_room(room_id)
+                && !app.chat.open_selected_image_modal_in_room(room_id)
+            {
+                crate::app::chat::input::watch_selected_video(app, room_id);
             }
         }
     }
@@ -4052,6 +4065,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
+                && !(ctx.screen == Screen::Dashboard
+                    && app
+                        .chat
+                        .selected_gallery_card_in_room(app.chat.selected_room_id.unwrap_or_default())
+                        .is_some())
                 && app.home_strip_hosted() =>
         {
             crate::app::live::input::open_from_key(app)

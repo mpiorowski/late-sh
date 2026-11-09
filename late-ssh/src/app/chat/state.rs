@@ -3025,7 +3025,9 @@ impl ChatState {
         let message = self.selected_message_in_room(room_id)?;
         let video_id = match inline_preview_source_in_body(&message.body) {
             Some(InlinePreviewSource::Video { video_id }) => video_id,
-            Some(InlinePreviewSource::Image(_)) | None => return None,
+            Some(InlinePreviewSource::Image(_) | InlinePreviewSource::GalleryPiece(_)) | None => {
+                return None;
+            }
         };
         // The oEmbed title rides with the thumbnail; until it lands, or
         // when YouTube would not name the video, the player says so plainly.
@@ -3049,7 +3051,14 @@ impl ChatState {
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
-            inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+            if self.gallery_cards.contains_key(&message.id) {
+                let url = inline_image_url_in_body(&message.body)
+                    .or_else(|| body_links(&message.body).next().map(str::to_string))
+                    .unwrap_or_default();
+                Some((message.id, url))
+            } else {
+                inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+            }
         }) else {
             return false;
         };
@@ -5348,6 +5357,7 @@ impl ChatState {
 
         let requests = inline_image_request_candidates(
             messages,
+            &self.gallery_cards,
             &self.inline_image_requested,
             &self.inline_image_cache,
             &self.inline_image_failures,
@@ -5446,14 +5456,26 @@ impl ChatState {
         };
 
         let url = modal.url.clone();
+        let gallery_canvas = self.gallery_cards.get(&msg_id).map(|p| Arc::new(p.canvas.clone()));
         self.terminal_image_requested.insert(msg_id);
         self.track_inline_image_id(msg_id);
         tokio::spawn(async move {
-            let result = crate::app::files::terminal_image::fetch_terminal_image(
-                url, max_cols, max_rows, protocol,
-            )
-            .await
-            .map_err(|e| e.to_string());
+            let result = if let Some(canvas) = gallery_canvas {
+                tokio::task::spawn_blocking(move || {
+                    crate::app::artboard::gallery::raster::render_canvas_terminal_image(
+                        &canvas, max_cols, max_rows, protocol,
+                    )
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+            } else {
+                crate::app::files::terminal_image::fetch_terminal_image(
+                    url, max_cols, max_rows, protocol,
+                )
+                .await
+                .map_err(|e| e.to_string())
+            };
             let _ = tx.send((msg_id, result));
         });
     }
@@ -7548,15 +7570,36 @@ async fn fetch_inline_preview(
     source: InlinePreviewSource,
     settings: InlineImageRenderSettings,
 ) -> anyhow::Result<InlinePreview> {
-    let picture = crate::app::files::inline_image::fetch_and_render_image(
-        source.fetch_url(),
-        INLINE_IMAGE_MAX_WIDTH,
-        INLINE_IMAGE_MAX_ROWS,
-        settings,
-    );
     match source {
-        InlinePreviewSource::Image(_) => Ok(InlinePreview::Image(picture.await?)),
+        InlinePreviewSource::GalleryPiece(canvas) => {
+            let preview = tokio::task::spawn_blocking(move || {
+                crate::app::artboard::gallery::raster::render_canvas_inline_preview(
+                    &canvas,
+                    INLINE_IMAGE_MAX_WIDTH,
+                    INLINE_IMAGE_MAX_ROWS,
+                    settings,
+                )
+            })
+            .await??;
+            Ok(InlinePreview::Image(preview))
+        }
+        InlinePreviewSource::Image(url) => {
+            let picture = crate::app::files::inline_image::fetch_and_render_image(
+                url,
+                INLINE_IMAGE_MAX_WIDTH,
+                INLINE_IMAGE_MAX_ROWS,
+                settings,
+            )
+            .await?;
+            Ok(InlinePreview::Image(picture))
+        }
         InlinePreviewSource::Video { video_id } => {
+            let picture = crate::app::files::inline_image::fetch_and_render_image(
+                crate::app::audio::thumbnail::thumbnail_url(&video_id),
+                INLINE_IMAGE_MAX_WIDTH,
+                INLINE_IMAGE_MAX_ROWS,
+                settings,
+            );
             let (picture, title) = tokio::join!(
                 picture,
                 crate::app::audio::youtube::fetch_oembed_title(&video_id)
@@ -7577,23 +7620,29 @@ async fn fetch_inline_preview(
 }
 
 /// What an inline preview is drawn from.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) enum InlinePreviewSource {
     /// An image link: the picture itself.
     Image(String),
     /// A YouTube video link: its thumbnail, with the watch hint under it.
     /// Enter or a click opens the watch player (`app/video/`).
     Video { video_id: String },
+    /// A hung Artboard gallery piece: rendered from its in-memory Canvas.
+    GalleryPiece(Arc<dartboard_core::Canvas>),
 }
 
-impl InlinePreviewSource {
-    fn fetch_url(&self) -> String {
-        match self {
-            Self::Image(url) => url.clone(),
-            Self::Video { video_id } => crate::app::audio::thumbnail::thumbnail_url(video_id),
+impl PartialEq for InlinePreviewSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Image(a), Self::Image(b)) => a == b,
+            (Self::Video { video_id: a }, Self::Video { video_id: b }) => a == b,
+            (Self::GalleryPiece(a), Self::GalleryPiece(b)) => Arc::ptr_eq(a, b) || **a == **b,
+            _ => false,
         }
     }
 }
+
+impl Eq for InlinePreviewSource {}
 
 /// A message's inline preview, if it gets one: an image link first, else
 /// a YouTube video link's thumbnail. A reply's quote line is its parent's
@@ -7609,6 +7658,7 @@ pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewS
 
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
+    gallery_cards: &HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
     requested: &HashSet<Uuid>,
     cached: &HashMap<Uuid, InlinePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
@@ -7622,6 +7672,16 @@ fn inline_image_request_candidates(
         if let Some(failure) = failures.get(&msg.id)
             && (failure.attempts >= INLINE_IMAGE_MAX_FAILURES || now < failure.next_retry_at)
         {
+            continue;
+        }
+        if let Some(piece) = gallery_cards.get(&msg.id) {
+            requests.push((
+                msg.id,
+                InlinePreviewSource::GalleryPiece(Arc::new(piece.canvas.clone())),
+            ));
+            if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
+                break;
+            }
             continue;
         }
         if let Some(source) = inline_preview_source_in_body(&msg.body) {

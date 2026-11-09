@@ -453,6 +453,15 @@ pub(crate) fn terminal_image_from_bytes(
     protocol: TerminalImageProtocol,
 ) -> Result<TerminalImageData> {
     let img = image::load_from_memory(bytes).context("failed to decode terminal image")?;
+    terminal_image_from_dynamic(img, max_cols, max_rows, protocol)
+}
+
+pub(crate) fn terminal_image_from_dynamic(
+    img: image::DynamicImage,
+    max_cols: u32,
+    max_rows: u32,
+    protocol: TerminalImageProtocol,
+) -> Result<TerminalImageData> {
     let (width, height) = img.dimensions();
     if width == 0 || height == 0 {
         bail!("image has invalid dimensions");

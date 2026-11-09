@@ -1623,7 +1623,7 @@ fn empty_composer_placeholder_contextualizes_selected_gallery_card() {
     view.selected_message = true;
     view.selected_gallery_card = true;
 
-    let expected = "f applaud · r reply · d delete · p profile · Enter open piece";
+    let expected = "f applaud · r reply · d delete · p profile · o gallery · Enter preview";
     let width = expected.chars().count() as u16;
     let placeholder = empty_composer_placeholder(&view, width as usize);
     let backend = TestBackend::new(width, 1);

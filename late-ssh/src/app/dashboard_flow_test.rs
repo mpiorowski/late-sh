@@ -693,8 +693,8 @@ async fn enter_on_a_gallery_lounge_card_opens_the_piece_in_artboard_gallery() {
     assert_eq!(app.screen, Screen::Artboard);
     assert!(app.artboard_disclaimer_visible());
 
-    // Press V to view and accept disclaimer
-    app.handle_input(b"V");
+    // Press A to always accept disclaimer on this device
+    app.handle_input(b"A");
     assert!(!app.artboard_disclaimer_visible());
     assert_eq!(
         app.dartboard_state
@@ -709,6 +709,41 @@ async fn enter_on_a_gallery_lounge_card_opens_the_piece_in_artboard_gallery() {
             .map(|s| s.gallery().focus()),
         Some(crate::app::artboard::gallery::state::Focus::Piece),
         "gallery is focused on full piece view"
+    );
+
+    // 2. Switch back to Dashboard with disclaimer accepted:
+    app.set_screen(Screen::Dashboard);
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(!app.artboard_disclaimer_visible_for_chat());
+
+    // Select the card again and press Enter -> opens Image Preview modal in chat
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert!(app.chat.has_image_modal(), "image modal opens for gallery card");
+
+    // Press 'o' inside the image modal -> closes modal and navigates to Artboard in Focus::Piece
+    app.handle_input(b"o");
+    assert!(!app.chat.has_image_modal(), "image modal is closed");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .map(|s| s.gallery().focus()),
+        Some(crate::app::artboard::gallery::state::Focus::Piece),
+        "gallery is focused on full piece view after 'o' in modal"
+    );
+
+    // 3. Switch back to Dashboard and press 'o' directly on selected card:
+    app.set_screen(Screen::Dashboard);
+    app.handle_input(b"j");
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .map(|s| s.gallery().focus()),
+        Some(crate::app::artboard::gallery::state::Focus::Piece),
+        "gallery is focused on full piece view after 'o' on card"
     );
 }
 

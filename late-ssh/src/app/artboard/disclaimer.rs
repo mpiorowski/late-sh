@@ -69,12 +69,16 @@ impl App {
     }
 
     pub(crate) fn artboard_disclaimer_visible(&self) -> bool {
+        self.screen == Screen::Artboard && self.artboard_disclaimer_visible_for_chat()
+    }
+
+    pub(crate) fn artboard_disclaimer_visible_for_chat(&self) -> bool {
         let enabled = if self.show_settings {
             self.settings_modal_state.device_artboard_disclaimer()
         } else {
             self.artboard_disclaimer_enabled()
         };
-        self.screen == Screen::Artboard && enabled && !self.artboard_content_accepted
+        enabled && !self.artboard_content_accepted
     }
 
     /// The board seat follows consent: connect only once the page may show,
