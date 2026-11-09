@@ -136,6 +136,7 @@ pub struct DashboardChatView<'a> {
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
+    pub selected_gallery_card: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -179,6 +180,8 @@ pub struct DashboardChatView<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    pub gallery_cards: &'a HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
+    pub artboard_disclaimer: bool,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -212,6 +215,7 @@ pub(crate) struct ComposerBlockView<'a> {
     pub composing: bool,
     pub selected_message: bool,
     pub selected_image_message: bool,
+    pub selected_gallery_card: bool,
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
@@ -524,6 +528,11 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
 
     let placeholder = if view.reaction_picker_active {
         reaction_picker_placeholder_lines(dim, width)
+    } else if view.selected_gallery_card {
+        vec![Line::from(Span::styled(
+            "f applaud · r reply · d delete · p profile · Enter open piece",
+            dim,
+        ))]
     } else if view.selected_image_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
@@ -1103,6 +1112,7 @@ pub fn draw_dashboard_chat_card(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
+                selected_gallery_card: view.selected_gallery_card,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1216,6 +1226,8 @@ pub fn draw_dashboard_chat_card(
                 message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
                 news_cards: view.news_cards,
+                gallery_cards: view.gallery_cards,
+                artboard_disclaimer: view.artboard_disclaimer,
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
@@ -1274,6 +1286,7 @@ pub fn draw_dashboard_chat_card(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
+            selected_gallery_card: view.selected_gallery_card,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -1313,6 +1326,8 @@ struct ChatRowsContext<'a> {
     /// News shares' #lounge cards by message id (`news::State::lounge_cards`):
     /// those messages draw as the card.
     news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    gallery_cards: &'a HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
+    artboard_disclaimer: bool,
     dividers: ChatDividers,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
@@ -1455,6 +1470,7 @@ struct ChatRowsCacheKey {
     current_user_id: Uuid,
     show_flag_fallback: bool,
     name_flicker: Option<(Uuid, u64)>,
+    artboard_disclaimer: bool,
 }
 
 #[derive(Default)]
@@ -1488,6 +1504,7 @@ fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCache
         current_user_id: ctx.current_user_id,
         show_flag_fallback: ctx.show_flag_fallback,
         name_flicker: ctx.name_flicker,
+        artboard_disclaimer: ctx.artboard_disclaimer,
     }
 }
 
@@ -1967,6 +1984,8 @@ fn ensure_chat_rows_cache(
             system_text,
             image_lines,
             ctx.news_cards.get(&msg.id),
+            ctx.gallery_cards.get(&msg.id),
+            ctx.artboard_disclaimer,
             reactions,
             gild,
             translation,
@@ -3047,6 +3066,8 @@ pub struct ChatRenderInput<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    pub gallery_cards: &'a HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
+    pub artboard_disclaimer: bool,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
@@ -3067,6 +3088,7 @@ pub struct ChatRenderInput<'a> {
     pub rail_scroll_nudge: isize,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
+    pub selected_gallery_card: bool,
     pub reaction_picker_active: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -3241,6 +3263,8 @@ pub struct EmbeddedRoomChatView<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    pub gallery_cards: &'a HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
+    pub artboard_disclaimer: bool,
     pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
@@ -3250,6 +3274,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
+    pub selected_gallery_card: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -3351,6 +3376,7 @@ pub fn draw_embedded_room_chat(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
+                selected_gallery_card: view.selected_gallery_card,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -3375,6 +3401,7 @@ pub fn draw_embedded_room_chat(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
+            selected_gallery_card: view.selected_gallery_card,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -3465,6 +3492,8 @@ fn draw_embedded_messages(
             message_gilds: view.message_gilds,
             inline_images: view.inline_images,
             news_cards: view.news_cards,
+            gallery_cards: view.gallery_cards,
+            artboard_disclaimer: view.artboard_disclaimer,
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
@@ -3589,6 +3618,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         composing: view.composing,
                         selected_message: view.selected_message_id.is_some(),
                         selected_image_message: view.selected_image_message,
+                        selected_gallery_card: view.selected_gallery_card,
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
@@ -4977,6 +5007,8 @@ fn draw_selected_content(
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
                     news_cards: view.news_cards,
+                    gallery_cards: view.gallery_cards,
+                    artboard_disclaimer: view.artboard_disclaimer,
                     dividers: ChatDividers {
                         afk_line: view.afk_lines.get(&room.id).copied(),
                         left_app: view.device_left_at,
@@ -5232,6 +5264,7 @@ fn draw_selected_content(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
+                selected_gallery_card: view.selected_gallery_card,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,

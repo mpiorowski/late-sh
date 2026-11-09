@@ -1021,6 +1021,7 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
+    pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1808,6 +1809,7 @@ impl App {
                     showcases: config.showcase_service.clone(),
                     work: config.work_service.clone(),
                     cyberspace: config.cyberspace_service.clone(),
+                    gallery: config.gallery_service.clone(),
                 },
                 chat::state::ChatSession {
                     user_id: config.user_id,
@@ -2001,6 +2003,7 @@ impl App {
             artboard_interacting: false,
             artboard_content_accepted: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
+            pending_gallery_piece: None,
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -2704,6 +2707,7 @@ impl App {
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
+            self.pending_gallery_piece = None;
         }
 
         if self.screen == Screen::Lateania {
@@ -2777,6 +2781,7 @@ impl App {
         if self.screen == Screen::Codekeep {
             self.leave_codekeep();
         }
+
 
         if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
             self.daily.close_board();
@@ -2893,6 +2898,38 @@ impl App {
             self.enter_clubhouse();
         }
         self.sync_visible_chat_room();
+    }
+
+    pub(crate) fn open_gallery_piece(
+        &mut self,
+        piece: crate::app::artboard::gallery::svc::GalleryPiece,
+    ) {
+        self.set_screen(Screen::Artboard);
+        if !self.artboard_disclaimer_visible() {
+            if let Some(state) = self.dartboard_state.as_mut() {
+                state.gallery_mut().open_piece(piece);
+            }
+        } else {
+            self.pending_gallery_piece = Some(piece);
+        }
+    }
+
+    pub(crate) fn applaud_gallery_piece(
+        &mut self,
+        piece: crate::app::artboard::gallery::svc::GalleryPiece,
+    ) {
+        use crate::app::artboard::gallery::state::{applause_refusal, current_period_month};
+        if let Some(refusal) = applause_refusal(&piece, self.user_id, current_period_month()) {
+            self.banner = Some(Banner::error(refusal));
+            return;
+        }
+        let service = self.gallery_service.clone();
+        let user_id = self.user_id;
+        let piece_id = piece.id;
+        tokio::spawn(async move {
+            let _ = service.toggle_applause(piece_id, user_id).await;
+        });
+        self.banner = Some(Banner::success("Toggling applause..."));
     }
 
     fn set_cursor_shape(&mut self, sequence: &[u8]) {

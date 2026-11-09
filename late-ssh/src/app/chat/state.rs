@@ -841,6 +841,8 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
+    gallery_cards_rx: watch::Receiver<Arc<HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>>>,
+    gallery_cards: Arc<HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>>,
     /// The AFK line per room: the instant this session's human went quiet
     /// while that room was on screen. The `new messages` divider draws
     /// against it and `/history` opens there. It is one of two marks, and
@@ -1248,6 +1250,7 @@ pub(crate) struct ChatServices {
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
     pub cyberspace: cyberspace::svc::CyberspaceService,
+    pub gallery: crate::app::artboard::gallery::svc::GalleryService,
 }
 
 impl Drop for ChatState {
@@ -1281,7 +1284,10 @@ impl ChatState {
             showcases: showcase_service,
             work: work_service,
             cyberspace: cyberspace_service,
+            gallery: gallery_service,
         } = services;
+        let gallery_cards_rx = gallery_service.subscribe_lounge_cards();
+        let gallery_cards = gallery_cards_rx.borrow().clone();
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
@@ -1476,6 +1482,8 @@ impl ChatState {
             terminal_image_requested: HashSet::new(),
             terminal_image_failed: HashSet::new(),
             last_image_upload_at: None,
+            gallery_cards_rx,
+            gallery_cards,
         }
     }
 
@@ -2503,6 +2511,9 @@ impl ChatState {
         let Some(message_id) = self.selected_message_in_room(room_id).map(|m| m.id) else {
             return false;
         };
+        if self.gallery_card(message_id).is_some() {
+            return false;
+        }
 
         self.overlay = Some(Overlay::dismissible(
             "Reactions",
@@ -2638,6 +2649,9 @@ impl ChatState {
         // (`ChatService::edit_message` refuses it too).
         if self.news.lounge_card(selected_id).is_some() {
             return Some(Banner::error("A story's card can't be edited."));
+        }
+        if self.gallery_card(selected_id).is_some() {
+            return Some(Banner::error("A piece's card can't be edited."));
         }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
@@ -2992,6 +3006,15 @@ impl ChatState {
             return false;
         };
         self.open_reader_for_article(article_id)
+    }
+
+    /// The piece a #lounge message is the card of, if it is one.
+    pub(crate) fn selected_gallery_card_in_room(
+        &self,
+        room_id: Uuid,
+    ) -> Option<crate::app::artboard::gallery::svc::GalleryPiece> {
+        self.selected_message_in_room(room_id)
+            .and_then(|message| self.gallery_card(message.id).cloned())
     }
 
     /// The selected message in `room_id` when its preview is a YouTube
@@ -5494,7 +5517,7 @@ impl ChatState {
             || !self.translation_rx.is_empty()
             || !self.summary_rx.is_empty();
         self.drain_username_directory();
-        let changed = self.drain_snapshot() || changed;
+        let mut changed = self.drain_snapshot() || changed;
         let banner = self.drain_events();
         let translation_banner = self.drain_translation_events();
         let (summary_banner, summary_overlay_promoted) = self.drain_summary_events();
@@ -5504,6 +5527,11 @@ impl ChatState {
         // A #lounge card is drawn from its story, so new cards are new rows.
         if news_tick.cards_changed {
             self.context_epoch += 1;
+        }
+        if self.gallery_cards_rx.has_changed().unwrap_or(false) {
+            self.gallery_cards = self.gallery_cards_rx.borrow_and_update().clone();
+            self.context_epoch += 1;
+            changed = true;
         }
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
@@ -6211,6 +6239,19 @@ impl ChatState {
         self.sync_selection();
         changed |= self.selected_room_id != selected_before;
         changed || context_changed
+    }
+
+    pub(crate) fn gallery_cards(
+        &self,
+    ) -> &HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece> {
+        &self.gallery_cards
+    }
+
+    pub(crate) fn gallery_card(
+        &self,
+        message_id: Uuid,
+    ) -> Option<&crate::app::artboard::gallery::svc::GalleryPiece> {
+        self.gallery_cards.get(&message_id)
     }
 
     fn drain_username_directory(&mut self) {

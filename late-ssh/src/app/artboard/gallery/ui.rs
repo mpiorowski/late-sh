@@ -20,6 +20,13 @@ use super::frame::Credit;
 use super::state::{Focus, GallerySection, GalleryState, HangFlow, RailRow};
 use super::svc::{GalleryPiece, SplashPiece, applause_label};
 
+use crate::app::chat::ui::truncate_cells;
+use dartboard_core::{CellValue, Pos, RgbColor};
+use ratatui::style::Color;
+use unicode_width::UnicodeWidthChar;
+
+const LOUNGE_CARD_PREVIEW_MAX_HEIGHT: usize = 12;
+const LOUNGE_CARD_MIN_PREVIEW_WIDTH: usize = 20;
 /// The rail's width, gap included.
 pub const RAIL_WIDTH: u16 = 20;
 /// Lines above the entries when the rail shows an archive list: the kind's
@@ -802,6 +809,139 @@ fn key_hint_line(keys: &[(&str, &str)]) -> Line<'static> {
         ));
     }
     Line::from(spans)
+}
+
+fn rgb(color: RgbColor) -> Color {
+    Color::Rgb(color.r, color.g, color.b)
+}
+
+fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(Span::width).sum();
+    if total <= width {
+        return spans;
+    }
+    let mut room = width.saturating_sub(1);
+    let mut clipped = Vec::new();
+    for span in spans {
+        let span_width = span.width();
+        if span_width <= room {
+            room -= span_width;
+            clipped.push(span);
+            continue;
+        }
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if ch_width > room {
+                break;
+            }
+            room -= ch_width;
+            kept.push(ch);
+        }
+        kept.push('…');
+        clipped.push(Span::styled(kept, span.style));
+        break;
+    }
+    clipped
+}
+
+fn piece_preview_lines(piece: &GalleryPiece, width: usize, max_height: usize) -> Vec<Line<'static>> {
+    let preview_width = piece.width.min(width);
+    let preview_height = piece.height.min(max_height);
+    let mut lines = Vec::with_capacity(preview_height + 1);
+
+    for y in 0..preview_height {
+        let mut spans = Vec::new();
+        let mut x = 0;
+        while x < preview_width {
+            let pos = Pos {
+                x,
+                y,
+            };
+            let (ch, cell_w) = match piece.canvas.cell(pos) {
+                Some(CellValue::Narrow(ch)) => (ch, 1),
+                Some(CellValue::Wide(ch)) if x + 1 < preview_width => (ch, 2),
+                Some(CellValue::Wide(_) | CellValue::WideCont) | None => (' ', 1),
+            };
+            let fg = piece.canvas.fg(pos).map(rgb).unwrap_or_else(theme::TEXT);
+            spans.push(Span::styled(ch.to_string(), Style::default().fg(fg)));
+            x += cell_w;
+        }
+        lines.push(Line::from(spans));
+    }
+
+    if piece.width > preview_width || piece.height > preview_height {
+        lines.push(Line::from(Span::styled(
+            format!("(cropped from {}x{})", piece.width, piece.height),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+    lines
+}
+
+pub(crate) fn lounge_card_lines(
+    piece: &GalleryPiece,
+    width: usize,
+    disclaimer_active: bool,
+) -> Vec<Line<'static>> {
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let mut rows: Vec<Line<'static>> = Vec::new();
+
+    // Row 1: Title
+    rows.push(Line::from(Span::styled(
+        truncate_cells(&format!("🎨 \"{}\"", piece.title.trim()), width),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    // Preview or disclaimer gate
+    if disclaimer_active {
+        rows.push(Line::from(Span::styled(
+            "• Artboard content disclaimer is on · Enter to view on Artboard",
+            dim,
+        )));
+    } else if width >= LOUNGE_CARD_MIN_PREVIEW_WIDTH {
+        rows.extend(piece_preview_lines(piece, width, LOUNGE_CARD_PREVIEW_MAX_HEIGHT));
+    }
+
+    // Meta row
+    let total_credits: usize = piece.credits.iter().map(|c| c.glyphs).sum::<usize>().max(1);
+    let others: Vec<String> = piece
+        .credits
+        .iter()
+        .filter(|c| c.username != piece.username)
+        .take(4)
+        .map(|c| format!("@{} {}%", c.username, c.glyphs * 100 / total_credits))
+        .collect();
+    let credits_summary = if others.is_empty() {
+        "all their own work".to_string()
+    } else {
+        format!("with {}", others.join(", "))
+    };
+
+    let meta_spans = vec![
+        Span::styled(format!("{}x{}", piece.width, piece.height), faint),
+        Span::styled(" · ", faint),
+        Span::styled(credits_summary, dim),
+        Span::styled(" · ", faint),
+        Span::styled(applause_label(piece.applause), dim),
+        Span::styled(" · Enter to open", faint),
+    ];
+    rows.push(Line::from(clip_spans(meta_spans, width)));
+
+    // CTA footer row
+    let cta_spans = vec![
+        Span::styled("hang a piece on Artboard (page 4) · ", faint),
+        Span::styled(
+            "monthly prizes up to 40,000 chips",
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ];
+    rows.push(Line::from(clip_spans(cta_spans, width)));
+
+    rows
 }
 
 #[cfg(test)]

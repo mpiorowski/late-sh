@@ -20,6 +20,7 @@ use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite}
 use crate::app::chat::news::svc::{
     BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup,
 };
+use crate::app::artboard::gallery::svc::GalleryCardOutcome;
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::clubhouse::state::Tutorial;
@@ -850,6 +851,7 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+    use super::GalleryCardOutcome;
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -1912,6 +1914,18 @@ mod inner {
         })
     }
 
+    fn gallery_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_gallery_cards_total")
+                .with_description(
+                    "Artboard gallery piece cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its piece), piece_gone",
+                )
+                .build()
+        })
+    }
+
     fn news_share_chips_paid_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2697,6 +2711,7 @@ mod inner {
             Refresh::ShopFlairDirectory => "shop_flair_directory",
             Refresh::CalendarNotices => "calendar_notices",
             Refresh::RealmGames => "realm_games",
+            Refresh::GalleryCards => "gallery_cards",
         }
     }
 
@@ -3405,6 +3420,21 @@ mod inner {
     /// share people only find in News.
     pub fn record_news_card(outcome: NewsCardOutcome) {
         news_cards_total().add(1, &[KeyValue::new("outcome", news_card_label(outcome))]);
+    }
+
+    fn gallery_card_label(outcome: GalleryCardOutcome) -> &'static str {
+        match outcome {
+            GalleryCardOutcome::Posted => "posted",
+            GalleryCardOutcome::Refused => "refused",
+            GalleryCardOutcome::PostFailed => "post_failed",
+            GalleryCardOutcome::LinkFailed => "link_failed",
+            GalleryCardOutcome::PieceGone => "piece_gone",
+        }
+    }
+
+    /// Every piece hung tries one card in #lounge.
+    pub fn record_gallery_card(outcome: GalleryCardOutcome) {
+        gallery_cards_total().add(1, &[KeyValue::new("outcome", gallery_card_label(outcome))]);
     }
 
     /// Same shape as the News share: one counter for the submissions and one
@@ -4542,6 +4572,7 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+    use super::GalleryCardOutcome;
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -4651,6 +4682,7 @@ mod inner {
     pub fn record_pulse_sample(_outcome: PulseSampleOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
+    pub fn record_gallery_card(_outcome: GalleryCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_roll_call(
         _result: RollCallResult,

@@ -38,6 +38,7 @@ fn overview_lines() -> Vec<String> {
         "  Esc               back to the rail from the board; j/k or arrows move, Enter opens",
         "  Hang a piece      frame your work on the board, name it, hang it",
         "  frame rules       at least 40 glyphs, at most 120x50, 75% painted by you",
+        "  lounge cards      hanging a piece posts a card in #lounge; Enter/click on it opens the piece",
         "  v                 applaud a piece (one per person, take it back with v again)",
         "  login splash      the day's piece greets you only after A (Always View) on the content",
         "                    disclaimer; with the disclaimer on, the splash is the coffee cup",

@@ -394,10 +394,13 @@ impl ChatMessage {
                    AND msg.created >= $2
                    AND msg.created < $3
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
-                   AND NOT EXISTS (
+                  AND NOT EXISTS (
                         SELECT 1 FROM articles card WHERE card.lounge_message_id = msg.id
-                   )
-                 ORDER BY msg.created DESC, msg.id DESC
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM artboard_pieces piece WHERE piece.lounge_message_id = msg.id
+                  )
+                ORDER BY msg.created DESC, msg.id DESC
                  LIMIT $4",
                 &[&room_id, &floor, &ceiling, &limit],
             )

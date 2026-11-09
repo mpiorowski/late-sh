@@ -617,6 +617,203 @@ async fn enter_on_a_lounge_card_opens_the_reader() {
     );
 }
 
+#[tokio::test]
+async fn enter_on_a_gallery_lounge_card_opens_the_piece_in_artboard_gallery() {
+    use crate::app::artboard::gallery::svc::{GalleryPiece, GalleryService};
+    use crate::app::common::primitives::Screen;
+    use crate::app::chat::notifications::svc::NotificationService;
+    use crate::app::chat::svc::ChatService;
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+    use serde_json::json;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "gallery-card-me").await;
+    let artist = create_test_user(&test_db.db, "gallery-card-artist").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+
+    let hang_params = HangParams {
+        user_id: artist.id,
+        title: "Sunset Over Late".to_string(),
+        width: 12,
+        height: 4,
+        canvas: json!({
+            "width": 12,
+            "height": 4,
+            "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
+            "colors": [],
+        }),
+        provenance: json!({ "cells": [[{"x": 0, "y": 0}, "artist"]] }),
+        glyph_count: 40,
+        own_share_percent: 100,
+        content_hash: "hash-sunset-flow".to_string(),
+    };
+    let HangOutcome::Hung(hung) = ArtboardPiece::hang(&client, hang_params)
+        .await
+        .expect("hang")
+    else {
+        panic!("hang outcome not Hung");
+    };
+    let piece = GalleryPiece::decode(*hung).expect("decode piece");
+
+    let notifications = NotificationService::new(test_db.db.clone());
+    let chat = ChatService::new(test_db.db.clone(), notifications);
+    let gallery = GalleryService::new(test_db.db.clone())
+        .with_lounge_cards(chat.clone(), "http://localhost:3000".to_string());
+
+    gallery.post_lounge_card(&piece).await;
+    gallery.refresh_lounge_cards().await.expect("refresh lounge cards");
+
+    let world = crate::test_helpers::SessionWorld {
+        gallery_service: Some(gallery),
+        chat_service: Some(chat),
+        ..Default::default()
+    };
+    let mut app = crate::test_helpers::make_app_in_world(test_db.db.clone(), me.id, "gallery-card-flow-it", world);
+    app.resize(160, 40).expect("resize test terminal");
+
+    // 1. With disclaimer on (default for newcomers):
+    wait_for_render_contains(&mut app, "Artboard content disclaimer is on").await;
+    let frame_gated = render_plain(&mut app);
+    assert!(frame_gated.contains("🎨 \"Sunset Over Late\""), "{frame_gated}");
+    assert!(
+        !frame_gated.contains("http://localhost:3000/gallery/pieces/"),
+        "raw link is suppressed: {frame_gated}"
+    );
+
+    // Select message and press Enter
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    // It switches to Artboard screen where disclaimer prompt is shown
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+
+    // Press V to view and accept disclaimer
+    app.handle_input(b"V");
+    assert!(!app.artboard_disclaimer_visible());
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .and_then(|s| s.gallery().selected_piece().map(|p| p.id)),
+        Some(piece.id),
+        "piece is selected in gallery"
+    );
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .map(|s| s.gallery().focus()),
+        Some(crate::app::artboard::gallery::state::Focus::Piece),
+        "gallery is focused on full piece view"
+    );
+}
+
+#[tokio::test]
+async fn f_or_v_on_a_gallery_lounge_card_applauds_the_piece() {
+    use crate::app::artboard::gallery::svc::{GalleryPiece, GalleryService};
+    use crate::app::chat::notifications::svc::NotificationService;
+    use crate::app::chat::svc::ChatService;
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+    use serde_json::json;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "applaud-card-me").await;
+    let artist = create_test_user(&test_db.db, "applaud-card-artist").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+
+    let hang_params = HangParams {
+        user_id: artist.id,
+        title: "Dawn Canvas".to_string(),
+        width: 12,
+        height: 4,
+        canvas: json!({
+            "width": 12,
+            "height": 4,
+            "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
+            "colors": [],
+        }),
+        provenance: json!({ "cells": [[{"x": 0, "y": 0}, "artist"]] }),
+        glyph_count: 40,
+        own_share_percent: 100,
+        content_hash: "hash-dawn-applaud".to_string(),
+    };
+    let HangOutcome::Hung(hung) = ArtboardPiece::hang(&client, hang_params)
+        .await
+        .expect("hang")
+    else {
+        panic!("hang outcome not Hung");
+    };
+    let piece = GalleryPiece::decode(*hung).expect("decode piece");
+
+    let notifications = NotificationService::new(test_db.db.clone());
+    let chat = ChatService::new(test_db.db.clone(), notifications);
+    let gallery = GalleryService::new(test_db.db.clone())
+        .with_lounge_cards(chat.clone(), "http://localhost:3000".to_string());
+
+    gallery.post_lounge_card(&piece).await;
+    gallery.refresh_lounge_cards().await.expect("refresh lounge cards");
+
+    let world = crate::test_helpers::SessionWorld {
+        gallery_service: Some(gallery),
+        chat_service: Some(chat),
+        ..Default::default()
+    };
+    let mut app = crate::test_helpers::make_app_in_world(test_db.db.clone(), me.id, "applaud-card-flow-it", world);
+    app.resize(160, 40).expect("resize test terminal");
+
+    wait_for_render_contains(&mut app, "Dawn Canvas").await;
+
+    // Select message
+    app.handle_input(b"j");
+    let selected_frame = render_plain(&mut app);
+    assert!(selected_frame.contains("f applaud · r reply"), "composer placeholder offers applaud: {selected_frame}");
+
+    // Press 'f' to applaud
+    app.handle_input(b"f");
+    assert!(
+        app.banner.as_ref().map(|b| b.message.as_str()).unwrap_or("").contains("applause"),
+        "applaud banner was shown"
+    );
+
+    // Verify vote landed in database
+    crate::test_helpers::wait_until(
+        || async {
+            ArtboardPiece::applause_count(&client, piece.id)
+                .await
+                .unwrap_or(0)
+                == 1
+        },
+        "applause count becomes 1",
+    )
+    .await;
+    // Press 'f' to withdraw applause
+    app.handle_input(b"f");
+    assert!(
+        app.banner.as_ref().map(|b| b.message.as_str()).unwrap_or("").contains("applause"),
+        "withdrawal banner was shown"
+    );
+    crate::test_helpers::wait_until(
+        || async {
+            ArtboardPiece::applause_count(&client, piece.id)
+                .await
+                .unwrap_or(1)
+                == 0
+        },
+        "applause count becomes 0",
+    )
+    .await;
+}
+
 /// `r` in the reader on a story with a #lounge card is `r` on the card: the
 /// reply quotes the card's first line and points at it, so Enter on it jumps
 /// back to the card.

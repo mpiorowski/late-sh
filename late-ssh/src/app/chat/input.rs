@@ -452,6 +452,8 @@ pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
                 | b'F'
                 | b'g'
                 | b'G'
+                | b'v'
+                | b'V'
                 | b'\r'
                 | b'\n'
                 | 0x10
@@ -499,6 +501,12 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // `e` enters edit mode and drops the selection.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
+        b'f' | b'F' | b'v' | b'V' if app.chat.selected_gallery_card_in_room(room_id).is_some() => {
+            if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
+                app.applaud_gallery_piece(piece);
+                return true;
+            }
+        }
         b'f' | b'F' if app.chat.begin_reaction_leader() => return true,
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
@@ -576,6 +584,12 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         b'\r' | b'\n' if app.chat.open_selected_card_in_room(room_id) => {
             return true;
         }
+        b'\r' | b'\n' if app.chat.selected_gallery_card_in_room(room_id).is_some() => {
+            if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
+                app.open_gallery_piece(piece);
+                return true;
+            }
+        }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
             return true;
         }
@@ -589,7 +603,7 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         _ => {}
     }
 
-    if !matches!(byte, b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15) {
+    if !matches!(byte, b'j' | b'J' | b'k' | b'K' | b'f' | b'F' | b'v' | b'V' | 0x04 | 0x15) {
         app.chat.clear_message_selection();
     }
 

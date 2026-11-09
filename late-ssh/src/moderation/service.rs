@@ -56,6 +56,7 @@ pub struct ModerationInfra {
     artboard: Option<ArtboardRestoreHandles>,
     voice: Option<VoiceService>,
     stream: Option<StreamService>,
+    chat_events: Option<broadcast::Sender<crate::app::chat::svc::ChatEvent>>,
 }
 
 #[derive(Clone)]
@@ -135,6 +136,14 @@ impl ModerationInfra {
 
     pub fn with_stream(mut self, stream: StreamService) -> Self {
         self.stream = Some(stream);
+        self
+    }
+
+    pub fn with_chat_events(
+        mut self,
+        chat_events: broadcast::Sender<crate::app::chat::svc::ChatEvent>,
+    ) -> Self {
+        self.chat_events = Some(chat_events);
         self
     }
 
@@ -1718,6 +1727,23 @@ impl ModerationService {
         .await?;
         tx.commit().await?;
 
+        if let Some(message_id) = removed.lounge_message_id
+            && let Ok(client) = self.db.get().await
+            && let Ok(Some(message)) =
+                late_core::models::chat_message::ChatMessage::get(&client, message_id).await
+        {
+            let _ =
+                late_core::models::chat_message::ChatMessage::delete_by_admin(&client, message_id)
+                    .await;
+            if let Some(chat_events) = &self.infra.chat_events {
+                let _ = chat_events.send(crate::app::chat::svc::ChatEvent::MessageDeleted {
+                    user_id: actor_user_id,
+                    room_id: message.room_id,
+                    message_id,
+                });
+            }
+        }
+
         let _ = self.event_tx.send(ModerationEvent::ArtboardPieceRemoved {
             actor_user_id,
             piece_id,
@@ -1725,7 +1751,6 @@ impl ModerationService {
             title: removed.title.clone(),
             reason,
         });
-
         Ok(vec![format!(
             "took down gallery piece {piece_id} (\"{}\")",
             removed.title

@@ -204,6 +204,7 @@ pub struct GalleryState {
     take_down_asked: Option<Uuid>,
     /// The piece whose take-down is in flight.
     pending_take_down: Option<Uuid>,
+    pending_open_piece: Option<GalleryPiece>,
     /// Published by the draw path so hit tests and the viewport math agree
     /// with what is on screen.
     rail_visible: Cell<bool>,
@@ -230,6 +231,7 @@ impl GalleryState {
             pending_applause: None,
             take_down_asked: None,
             pending_take_down: None,
+            pending_open_piece: None,
             rail_visible: Cell::new(false),
             rail_area: Cell::new(Rect::default()),
             list_area: Cell::new(Rect::default()),
@@ -464,7 +466,29 @@ impl GalleryState {
     pub fn selected_piece(&self) -> Option<&GalleryPiece> {
         let section = self.viewed_section()?;
         let state = &self.sections[section.index()];
-        state.pieces.get(state.selected)
+        state
+            .pieces
+            .get(state.selected)
+            .or(self.pending_open_piece.as_ref())
+    }
+
+    pub fn open_piece(&mut self, piece: GalleryPiece) {
+        self.rail_select(RailRow::Gallery(GallerySection::Newest));
+        let state = &mut self.sections[GallerySection::Newest.index()];
+        if state.loaded {
+            if let Some(pos) = state.pieces.iter().position(|p| p.id == piece.id) {
+                state.selected = pos;
+                state.scroll = pos.min(state.scroll);
+            } else {
+                state.pieces.insert(0, piece);
+                state.selected = 0;
+                state.scroll = 0;
+            }
+            self.pending_open_piece = None;
+        } else {
+            self.pending_open_piece = Some(piece);
+        }
+        self.focus = Focus::Piece;
     }
 
     pub fn list_move(&mut self, delta: isize) {
@@ -686,6 +710,18 @@ impl GalleryState {
                     state.error = None;
                     state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
                     state.scroll = state.scroll.min(state.selected);
+                    if section == GallerySection::Newest
+                        && let Some(pending) = self.pending_open_piece.take()
+                    {
+                        if let Some(pos) = state.pieces.iter().position(|p| p.id == pending.id) {
+                            state.selected = pos;
+                            state.scroll = pos.min(state.scroll);
+                        } else {
+                            state.pieces.insert(0, pending);
+                            state.selected = 0;
+                            state.scroll = 0;
+                        }
+                    }
                 }
                 GalleryResult::ListFailed {
                     listing,
@@ -770,7 +806,7 @@ impl GalleryState {
                 GalleryResult::TakeDown { piece_id, outcome } => {
                     self.pending_take_down = None;
                     match outcome {
-                        TakeDownOutcome::TakenDown => {
+                        TakeDownOutcome::TakenDown { .. } => {
                             self.drop_piece(piece_id);
                             self.notice = Some("Taken down. The wall forgets it.".to_string());
                             self.service
@@ -834,7 +870,7 @@ const CLOSED_MONTH_TAKE_DOWN: &str = "Last month's wall is settled; that piece s
 
 /// The first day of the current UTC month, the `period_month` a piece hung
 /// now would carry.
-fn current_period_month() -> NaiveDate {
+pub(crate) fn current_period_month() -> NaiveDate {
     let today = Utc::now().date_naive();
     today.with_day(1).unwrap_or(today)
 }

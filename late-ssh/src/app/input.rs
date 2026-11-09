@@ -3006,7 +3006,11 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             if !app.chat.open_selected_card_in_room(room_id)
                 && !app.chat.open_selected_image_modal_in_room(room_id)
             {
-                crate::app::chat::input::watch_selected_video(app, room_id);
+                if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
+                    app.open_gallery_piece(piece);
+                } else {
+                    crate::app::chat::input::watch_selected_video(app, room_id);
+                }
             }
         }
     }
@@ -4273,6 +4277,9 @@ pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {
     let Some(message_id) = app.chat.selected_message_id_in_room(room_id) else {
         return false;
     };
+    if app.chat.selected_gallery_card_in_room(room_id).is_some() {
+        return false;
+    }
     app.chat.cancel_reaction_leader();
     open_icon_picker(
         app,

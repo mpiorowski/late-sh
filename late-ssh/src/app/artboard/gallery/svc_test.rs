@@ -204,3 +204,93 @@ async fn first_login_after_midnight_shows_the_new_days_piece() {
         .expect("the new day's piece, not the cup");
     assert_eq!((splash.piece.id, splash.shown_on), (pieces[1], today));
 }
+
+#[tokio::test]
+async fn gallery_lounge_card_lifecycle_hang_refresh_and_takedown() {
+    let test_db = new_test_db().await;
+    let notifications =
+        crate::app::chat::notifications::svc::NotificationService::new(test_db.db.clone());
+    let chat_service = crate::app::chat::svc::ChatService::new(test_db.db.clone(), notifications);
+    let service = GalleryService::new(test_db.db.clone())
+        .with_lounge_cards(chat_service.clone(), "http://localhost:3000".to_string());
+
+    let artist = create_test_user(&test_db.db, "card-artist").await;
+    let client = test_db.db.get().await.unwrap();
+    late_core::models::chat_room::ChatRoom::ensure_lounge(&client).await.expect("lounge");
+
+    let HangOutcome::Hung(hung) = ArtboardPiece::hang(
+        &client,
+        hang_params(artist.id, "cool piece @mention"),
+    )
+    .await
+    .unwrap()
+    else {
+        panic!("hang");
+    };
+    let piece = super::GalleryPiece::decode(*hung).unwrap();
+
+    // Post lounge card
+    service.post_lounge_card(&piece).await;
+
+    let piece_row = ArtboardPiece::find(&client, artist.id, piece.id)
+        .await
+        .unwrap()
+        .expect("piece row");
+    let lounge_message_id = piece_row.lounge_message_id.expect("lounge_message_id set");
+
+    // Verify message was created in lounge
+    let msg = late_core::models::chat_message::ChatMessage::get(&client, lounge_message_id)
+        .await
+        .unwrap()
+        .expect("chat message");
+    assert!(msg.body.starts_with("🎨 \"cool piece @mention\""));
+    assert!(msg.body.contains("http://localhost:3000/gallery/pieces/"));
+
+    // Verify refresh_lounge_cards picks it up
+    service.refresh_lounge_cards().await.unwrap();
+    let cards = service.subscribe_lounge_cards().borrow().clone();
+    assert_eq!(cards.get(&lounge_message_id).map(|p| p.id), Some(piece.id));
+
+    // Editing gallery card should be blocked
+    let mut events = chat_service.subscribe_events();
+    let request_id = Uuid::now_v7();
+    chat_service.edit_message_task(
+        artist.id,
+        lounge_message_id,
+        "edited".to_string(),
+        request_id,
+        crate::moderation::policy::Permissions::default(),
+    );
+    let refusal = loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            crate::app::chat::svc::ChatEvent::EditFailed {
+                request_id: got_request,
+                message,
+                ..
+            } if got_request == request_id => break message,
+            crate::app::chat::svc::ChatEvent::EditSucceeded {
+                request_id: got_request,
+                ..
+            } if got_request == request_id => panic!("the card's edit went through"),
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "A piece's card can't be edited.");
+
+    // Taking down via take_down_task removes the lounge card
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    service.take_down_task(piece.id, artist.id, tx);
+    let res = rx.recv().await.unwrap();
+    assert!(matches!(res, super::GalleryResult::TakeDown { outcome: late_core::models::artboard_piece::TakeDownOutcome::TakenDown { .. }, .. }));
+
+    // Give the spawned task a moment to delete the card
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let msg_after = late_core::models::chat_message::ChatMessage::get(&client, lounge_message_id)
+        .await
+        .unwrap();
+    assert!(msg_after.is_none());
+}

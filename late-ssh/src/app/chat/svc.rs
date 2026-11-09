@@ -1488,7 +1488,9 @@ impl ChatService {
             self.db.clone(),
             self.moderation_session_effects(),
             self.moderation_event_tx.clone(),
-            self.moderation_infra.clone(),
+            self.moderation_infra
+                .clone()
+                .with_chat_events(self.evt_tx.clone()),
         )
     }
 
@@ -3640,6 +3642,8 @@ impl ChatService {
                             "Reports here must keep their marker; edit the text after it."
                         } else if e.to_string().starts_with("news-card:") {
                             "A story's card can't be edited."
+                        } else if e.to_string().starts_with("gallery-card:") {
+                            "A piece's card can't be edited."
                         } else {
                             "Could not edit message. Please try again."
                         };
@@ -3698,7 +3702,9 @@ impl ChatService {
         if Article::is_lounge_card(&client, message_id).await? {
             anyhow::bail!("news-card: a story's card is not edited");
         }
-
+        if late_core::models::artboard_piece::ArtboardPiece::is_lounge_card(&client, message_id).await? {
+            anyhow::bail!("gallery-card: a piece's card is not edited");
+        }
         // Report-only rooms: a regular user's only messages there are their own
         // report cards, and an edit must not strip the marker — otherwise
         // editing would bypass the free-text send gate.

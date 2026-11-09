@@ -257,6 +257,8 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -360,6 +362,8 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
             message_gilds: &message_gilds,
             inline_images: &inline_images,
             news_cards: &HashMap::new(),
+            gallery_cards: &HashMap::new(),
+            artboard_disclaimer: false,
             dividers: ChatDividers::default(),
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
@@ -433,6 +437,8 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -473,6 +479,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
     let news_cards = HashMap::new();
+    let gallery_cards = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let base_versions = ChatRowsVersions {
@@ -496,6 +503,8 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &news_cards,
+        gallery_cards: &gallery_cards,
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -590,6 +599,8 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -802,6 +813,8 @@ fn mentions_and_replies_paint_a_background_wash() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -886,6 +899,8 @@ fn background_wash_fills_the_whole_row_width() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -926,6 +941,7 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         composing: true,
         selected_message: false,
         selected_image_message: false,
+        selected_gallery_card: false,
         reaction_picker_active: false,
         reply_author: None,
         is_editing: false,
@@ -955,6 +971,8 @@ fn chat_view<'a>(
 ) -> ChatRenderInput<'a> {
     static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlinePreview>> = OnceLock::new();
     static NEWS_CARDS: OnceLock<HashMap<Uuid, late_core::models::article::ArticleFeedItem>> =
+        OnceLock::new();
+    static GALLERY_CARDS: OnceLock<HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>> =
         OnceLock::new();
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static LIVE_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1042,6 +1060,8 @@ fn chat_view<'a>(
         message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
         news_cards: NEWS_CARDS.get_or_init(HashMap::new),
+        gallery_cards: GALLERY_CARDS.get_or_init(HashMap::new),
+        artboard_disclaimer: false,
         afk_lines: AFK_LINES.get_or_init(HashMap::new),
         device_left_at: None,
         unread_counts,
@@ -1056,6 +1076,7 @@ fn chat_view<'a>(
         rail_scroll_nudge: 0,
         selected_message_id: None,
         selected_image_message: false,
+        selected_gallery_card: false,
         reaction_picker_active: false,
         highlighted_message_id: None,
         composer,
@@ -1578,6 +1599,31 @@ fn empty_composer_placeholder_contextualizes_selected_image_message() {
     view.selected_image_message = true;
 
     let expected = "f react · r reply · e edit · d delete · p profile · c copy · Enter view image";
+    let width = expected.chars().count() as u16;
+    let placeholder = empty_composer_placeholder(&view, width as usize);
+    let backend = TestBackend::new(width, 1);
+    let mut terminal = Terminal::new(backend).expect("term");
+
+    terminal
+        .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
+        .unwrap();
+
+    let buf = terminal.backend().buffer();
+    let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert_eq!(rendered, expected);
+}
+
+#[test]
+fn empty_composer_placeholder_contextualizes_selected_gallery_card() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let ta = TextArea::default();
+    let mut view = composer_view(&ta);
+    view.composing = false;
+    view.selected_message = true;
+    view.selected_gallery_card = true;
+
+    let expected = "f applaud · r reply · d delete · p profile · Enter open piece";
     let width = expected.chars().count() as u16;
     let placeholder = empty_composer_placeholder(&view, width as usize);
     let backend = TestBackend::new(width, 1);
@@ -3217,6 +3263,8 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             message_gilds: &message_gilds,
             inline_images: &inline_images,
             news_cards: &HashMap::new(),
+            gallery_cards: &HashMap::new(),
+            artboard_disclaimer: false,
             dividers,
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
@@ -3421,6 +3469,8 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,

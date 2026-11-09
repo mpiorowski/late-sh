@@ -207,7 +207,7 @@ fn a_listing_asked_for_before_a_take_down_cannot_put_the_piece_back() {
         .results_tx
         .send(GalleryResult::TakeDown {
             piece_id: piece.id,
-            outcome: TakeDownOutcome::TakenDown,
+            outcome: TakeDownOutcome::TakenDown { lounge_message_id: None },
         })
         .unwrap();
     assert!(state.tick());

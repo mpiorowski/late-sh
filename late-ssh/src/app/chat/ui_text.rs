@@ -220,6 +220,8 @@ pub(super) fn wrap_chat_entry_to_lines(
     system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
     news_card: Option<&ArticleFeedItem>,
+    gallery_card: Option<&crate::app::artboard::gallery::svc::GalleryPiece>,
+    artboard_disclaimer: bool,
     reactions: &[ChatMessageReactionSummary],
     gild: Option<ChatMessageGildSummary>,
     translation: Option<&TranslationDisplay>,
@@ -229,9 +231,9 @@ pub(super) fn wrap_chat_entry_to_lines(
     // A News share's #lounge card is drawn from its story in place of its
     // line (`📰 Title url`), so the line itself shows nothing under the
     // header, gets no link preview, and is never translated.
-    let body = match news_card {
-        Some(_) => "",
-        None => body,
+    let body = match (news_card, gallery_card) {
+        (Some(_), _) | (_, Some(_)) => "",
+        (None, None) => body,
     };
     let report_payload = system_text
         .is_none()
@@ -253,7 +255,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     // actions) only: report cards and system lines have their own layouts
     // and are never translated.
     let translation_slot =
-        (system_text.is_none() && report_payload.is_none() && news_card.is_none())
+        (system_text.is_none() && report_payload.is_none() && news_card.is_none() && gallery_card.is_none())
             .then_some(translation)
             .flatten();
     let mut lines = if let Some(system) = system_text {
@@ -276,8 +278,8 @@ pub(super) fn wrap_chat_entry_to_lines(
         )
     };
 
-    let image_line_range = match (news_card, inline_image_lines.filter(|l| !l.is_empty())) {
-        (Some(item), _) => {
+    let image_line_range = match (news_card, gallery_card, inline_image_lines.filter(|l| !l.is_empty())) {
+        (Some(item), _, _) => {
             let start = lines.len();
             for card_line in lounge_card_lines(item, width.saturating_sub(1)) {
                 let mut spans = vec![pad.clone()];
@@ -286,7 +288,20 @@ pub(super) fn wrap_chat_entry_to_lines(
             }
             Some((start, lines.len()))
         }
-        (None, Some(img_lines)) => {
+        (None, Some(piece), _) => {
+            let start = lines.len();
+            for card_line in crate::app::artboard::gallery::ui::lounge_card_lines(
+                piece,
+                width.saturating_sub(1),
+                artboard_disclaimer,
+            ) {
+                let mut spans = vec![pad.clone()];
+                spans.extend(card_line.spans);
+                lines.push(Line::from(spans));
+            }
+            Some((start, lines.len()))
+        }
+        (None, None, Some(img_lines)) => {
             let start = lines.len();
             for img_line in img_lines {
                 let mut spans = vec![pad.clone(), Span::raw(" ")];
@@ -295,14 +310,16 @@ pub(super) fn wrap_chat_entry_to_lines(
             }
             Some((start, lines.len()))
         }
-        (None, None) => None,
+        (None, None, None) => None,
     };
 
     if let Some(translation) = translation_slot {
         lines.extend(translation_lines(translation, width, &pad));
     }
 
-    lines.extend(render_message_footer_lines(gild, reactions, width, pad));
+    if gallery_card.is_none() {
+        lines.extend(render_message_footer_lines(gild, reactions, width, pad));
+    }
     WrappedChatEntry {
         lines,
         header_line_index,

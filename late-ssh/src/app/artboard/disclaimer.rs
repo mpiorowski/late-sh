@@ -84,6 +84,12 @@ impl App {
     pub(crate) fn sync_dartboard_connection(&mut self) {
         if self.screen == Screen::Artboard && !self.artboard_disclaimer_visible() {
             self.enter_dartboard();
+            if let (Some(piece), Some(state)) = (
+                self.pending_gallery_piece.take(),
+                self.dartboard_state.as_mut(),
+            ) {
+                state.gallery_mut().open_piece(piece);
+            }
         }
     }
 }

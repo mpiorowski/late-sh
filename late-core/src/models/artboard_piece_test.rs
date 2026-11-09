@@ -203,7 +203,7 @@ async fn a_hanger_takes_down_only_their_own_piece_and_only_this_month() {
         ArtboardPiece::take_down(&client, first.id, painter.id)
             .await
             .expect("take down"),
-        TakeDownOutcome::TakenDown
+        TakeDownOutcome::TakenDown { lounge_message_id: None }
     );
     assert!(
         ArtboardPiece::find(&client, painter.id, first.id)
@@ -569,4 +569,62 @@ async fn the_newest_hanging_piece_names_its_artist() {
         .expect("something hangs");
     assert_eq!(newest.title, latest.title);
     assert_eq!(newest.artist, second.username);
+}
+
+#[tokio::test]
+async fn lounge_card_linking_and_listing_and_takedown() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let painter = create_test_user(&test_db.db, "card-painter").await;
+
+    let piece = hang(&client, hang_params(painter.id, "sunset", "hash-sunset")).await;
+    assert_eq!(piece.lounge_message_id, None);
+
+    // Create a dummy chat room and message to link to.
+    let room_id = uuid::Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO chat_rooms (id, kind, visibility, auto_join, permanent, slug) VALUES ($1, 'lounge', 'public', true, true, 'lounge')",
+            &[&room_id],
+        )
+        .await
+        .expect("insert room");
+    let message_id = uuid::Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO chat_messages (id, room_id, user_id, body) VALUES ($1, $2, $3, 'card')",
+            &[&message_id, &room_id, &painter.id],
+        )
+        .await
+        .expect("insert message");
+
+    assert!(!ArtboardPiece::is_lounge_card(&client, message_id).await.expect("is_lounge_card"));
+
+    let linked = ArtboardPiece::link_lounge_message(&client, painter.id, piece.id, message_id)
+        .await
+        .expect("link");
+    assert_eq!(linked, 1);
+
+    assert!(ArtboardPiece::is_lounge_card(&client, message_id).await.expect("is_lounge_card"));
+
+    let cards = ArtboardPiece::list_lounge_cards(&client, 10).await.expect("list cards");
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].id, piece.id);
+    assert_eq!(cards[0].lounge_message_id, Some(message_id));
+
+    // Take down returns the linked lounge message id.
+    let outcome = ArtboardPiece::take_down(&client, piece.id, painter.id)
+        .await
+        .expect("take down");
+    assert_eq!(
+        outcome,
+        TakeDownOutcome::TakenDown {
+            lounge_message_id: Some(message_id)
+        }
+    );
+
+    // Once taken down, is_lounge_card is false and list_lounge_cards omits it.
+    assert!(!ArtboardPiece::is_lounge_card(&client, message_id).await.expect("is_lounge_card"));
+    let cards_after = ArtboardPiece::list_lounge_cards(&client, 10).await.expect("list cards after");
+    assert!(cards_after.is_empty());
 }

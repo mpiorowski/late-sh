@@ -478,6 +478,8 @@ impl App {
 
         // Init theme and layout sync — preview settings-modal draft live while open.
         let artboard_disclaimer_visible = self.artboard_disclaimer_visible();
+        let artboard_disclaimer_active =
+            self.artboard_disclaimer_enabled() && !self.artboard_content_accepted;
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
                 .draft()
@@ -710,6 +712,8 @@ impl App {
             .unwrap_or(&[]);
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let dashboard_selected_gallery_card = shell_active_room
+            .is_some_and(|room_id| self.chat.selected_gallery_card_in_room(room_id).is_some());
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
         // The live games on the watchable doors: the hub rail's live rows,
@@ -875,6 +879,7 @@ impl App {
             show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             selected_message_id: self.chat.selected_message_id,
             selected_image_message: dashboard_selected_image_message,
+            selected_gallery_card: dashboard_selected_gallery_card,
             highlighted_message_id: self.chat.highlighted_message_id,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
@@ -900,6 +905,8 @@ impl App {
             live_strip_hit: &self.live.hit,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
+            gallery_cards: self.chat.gallery_cards(),
+            artboard_disclaimer: artboard_disclaimer_active,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -965,6 +972,10 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
+        let selected_gallery_card = self
+            .chat
+            .selected_room_id
+            .is_some_and(|room_id| self.chat.selected_gallery_card_in_room(room_id).is_some());
         let selected_room_active_poll = if !self.chat.synthetic_entry_selected() {
             self.chat
                 .selected_room_id
@@ -1011,6 +1022,8 @@ impl App {
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
+            gallery_cards: self.chat.gallery_cards(),
+            artboard_disclaimer: artboard_disclaimer_active,
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
@@ -1026,6 +1039,7 @@ impl App {
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
+            selected_gallery_card,
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer(),
             composing: self.chat.composing,
@@ -1096,6 +1110,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.chat.gallery_cards(),
+                    artboard_disclaimer: artboard_disclaimer_active,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1114,6 +1130,10 @@ impl App {
                         .chat
                         .selected_message_has_inline_image_in_room(chat_room_id),
                     highlighted_message_id: self.chat.highlighted_message_id,
+                    selected_gallery_card: self
+                        .chat
+                        .selected_gallery_card_in_room(chat_room_id)
+                        .is_some(),
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
                     composer_inert: chat::ui::ComposerInert::No,
@@ -1162,6 +1182,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.chat.gallery_cards(),
+                    artboard_disclaimer: artboard_disclaimer_active,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1182,6 +1204,10 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
+                    selected_gallery_card: self
+                        .chat
+                        .selected_gallery_card_in_room(chat_room_id)
+                        .is_some(),
                     composer_inert: chat::ui::ComposerInert::No,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
@@ -1231,6 +1257,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.chat.gallery_cards(),
+                    artboard_disclaimer: artboard_disclaimer_active,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1252,6 +1280,10 @@ impl App {
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
                     composer_inert: chat::ui::ComposerInert::No,
+                    selected_gallery_card: self
+                        .chat
+                        .selected_gallery_card_in_room(chat_room_id)
+                        .is_some(),
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1299,6 +1331,8 @@ impl App {
                 message_gilds,
                 inline_images: &self.chat.inline_image_cache,
                 news_cards: self.chat.news.lounge_cards(),
+                gallery_cards: self.chat.gallery_cards(),
+                artboard_disclaimer: artboard_disclaimer_active,
                 dividers: crate::app::chat::ui::ChatDividers {
                     afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                     left_app: self.chat.device_left_at(),
@@ -1319,6 +1353,10 @@ impl App {
                 highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
+                selected_gallery_card: self
+                    .chat
+                    .selected_gallery_card_in_room(chat_room_id)
+                    .is_some(),
                 composer_inert: chat::ui::ComposerInert::No,
                 composing: self.chat.composing,
                 mention_matches: &self.chat.mention_ac.matches,
@@ -1387,6 +1425,8 @@ impl App {
                             message_gilds,
                             inline_images: &self.chat.inline_image_cache,
                             news_cards: self.chat.news.lounge_cards(),
+                            gallery_cards: self.chat.gallery_cards(),
+                            artboard_disclaimer: artboard_disclaimer_active,
                             dividers: crate::app::chat::ui::ChatDividers {
                                 afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                                 left_app: self.chat.device_left_at(),
@@ -1409,6 +1449,11 @@ impl App {
                                 && self
                                     .chat
                                     .selected_message_has_inline_image_in_room(chat_room_id),
+                            selected_gallery_card: active
+                                && self
+                                    .chat
+                                    .selected_gallery_card_in_room(chat_room_id)
+                                    .is_some(),
                             highlighted_message_id: if active {
                                 self.chat.highlighted_message_id
                             } else {
@@ -1508,6 +1553,7 @@ impl App {
             composing: self.chat.composing,
             selected_message: false,
             selected_image_message: false,
+            selected_gallery_card: false,
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
