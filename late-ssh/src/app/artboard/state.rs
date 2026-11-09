@@ -134,8 +134,11 @@ impl State {
     pub fn tick(&mut self) -> bool {
         let mut changed = self.drain_archive_results();
         changed |= self.gallery.tick();
+        if let Some(err) = self.gallery.take_hang_error() {
+            self.private_notice = Some(err);
+            changed = true;
+        }
         changed |= !self.event_rx.is_empty();
-
         if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.invalidate_owner_overlay_cache();

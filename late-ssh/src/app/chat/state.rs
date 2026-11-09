@@ -5285,22 +5285,23 @@ impl ChatState {
             }
         }
     }
-
-    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) {
+    /// Returns true when any inline image completed; chat renders from
+    /// this cache, so a completion must count as a render-visible change.
+    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) -> bool {
         if settings != self.inline_image_render_settings {
             self.clear_inline_image_previews();
             self.inline_image_render_settings = settings;
         }
 
         let Some(rx) = self.inline_image_rx.as_mut() else {
-            return;
+            return false;
         };
         let now = Instant::now();
         let mut completed = Vec::new();
         while let Ok(result) = rx.try_recv() {
             completed.push(result);
         }
-
+        let mut any_completed = false;
         let mut received_ids = Vec::new();
         for (msg_id, completed_settings, result) in completed {
             if completed_settings != settings {
@@ -5312,6 +5313,7 @@ impl ChatState {
                     self.inline_image_failures.remove(&msg_id);
                     self.inline_image_cache.insert(msg_id, lines);
                     self.context_epoch += 1;
+                    any_completed = true;
                 }
                 Err(error) => {
                     let attempts = self
@@ -5344,15 +5346,15 @@ impl ChatState {
 
         // Request missing images for currently visible room
         let Some(room_id) = self.visible_room_id else {
-            return;
+            return any_completed;
         };
         let Some(tx) = self.inline_image_tx.clone() else {
-            return;
+            return any_completed;
         };
 
         let messages = self.messages_for_room(room_id);
         if messages.is_empty() {
-            return;
+            return any_completed;
         }
 
         let requests = inline_image_request_candidates(
@@ -5375,6 +5377,7 @@ impl ChatState {
                 let _ = tx_clone.send((msg_id, settings, result));
             });
         }
+        any_completed
     }
 
     /// Returns true when any fetch completed; the image modal renders from

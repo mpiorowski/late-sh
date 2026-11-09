@@ -4790,6 +4790,38 @@ async fn artboard_gallery_hangs_two_pieces_in_succession() {
     app.handle_input(b"piece two\r");
     wait_for_render_contains(&mut app, "now hangs").await;
     wait_for_render_contains(&mut app, "piece two").await;
+
+    // Re-hang piece two with exact same cells -> Duplicate refusal banner.
+    // After hanging, focus is List and selected row is Mine (row 4: Board, Newest, ThisMonth, HallOfFame, Mine, Hang).
+    // Esc on List focuses Rail. Press 'j' once to move from Mine to Hang a piece.
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Frame your work").await;
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    app.handle_input(b"piece three\r");
+    wait_for_render_contains(&mut app, "now hangs").await;
+
+    // Fourth piece today -> Daily cap reached refusal banner
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Frame your work").await;
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    app.handle_input(b"piece four\r");
+    wait_for_render_contains(&mut app, "You have hung today's three pieces already").await;
 }
 
 #[tokio::test]

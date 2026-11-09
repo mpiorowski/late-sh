@@ -125,7 +125,12 @@ fn raster_renders_canvas_to_inline_and_terminal_image() {
         .expect("inline preview renders");
     assert!(!preview.is_empty());
     assert!(preview.len() <= 12);
-
+    let non_space = preview
+        .iter()
+        .flat_map(|l| &l.spans)
+        .filter(|s| s.content != " ")
+        .count();
+    assert!(non_space > 0, "preview must contain rendered glyph blocks");
     let terminal_image = render_canvas_terminal_image(&canvas, 80, 24, TerminalImageProtocol::Sixel)
         .expect("terminal image renders");
     assert!(terminal_image.supports_protocol(TerminalImageProtocol::Sixel));

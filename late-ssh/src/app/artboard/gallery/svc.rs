@@ -219,6 +219,8 @@ pub struct GalleryService {
     splash_rx: watch::Receiver<Option<SplashPiece>>,
     lounge_cards_tx: Arc<watch::Sender<Arc<HashMap<Uuid, GalleryPiece>>>>,
     lounge_cards_rx: watch::Receiver<Arc<HashMap<Uuid, GalleryPiece>>>,
+    changed_tx: Arc<watch::Sender<u64>>,
+    changed_rx: watch::Receiver<u64>,
 }
 
 impl GalleryService {
@@ -227,6 +229,7 @@ impl GalleryService {
     pub fn new(db: Db) -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
         let (lounge_cards_tx, lounge_cards_rx) = watch::channel(Arc::new(HashMap::new()));
+        let (changed_tx, changed_rx) = watch::channel(0);
         Self {
             db: Some(db),
             chat_service: None,
@@ -235,8 +238,11 @@ impl GalleryService {
             splash_rx,
             lounge_cards_tx: Arc::new(lounge_cards_tx),
             lounge_cards_rx,
+            changed_tx: Arc::new(changed_tx),
+            changed_rx,
         }
     }
+
 
     /// Attach chat service and web URL for posting and deleting #lounge cards.
     pub fn with_lounge_cards(mut self, chat_service: ChatService, web_url: String) -> Self {
@@ -249,6 +255,7 @@ impl GalleryService {
     pub fn disabled() -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
         let (lounge_cards_tx, lounge_cards_rx) = watch::channel(Arc::new(HashMap::new()));
+        let (changed_tx, changed_rx) = watch::channel(0);
         Self {
             db: None,
             chat_service: None,
@@ -257,11 +264,22 @@ impl GalleryService {
             splash_rx,
             lounge_cards_tx: Arc::new(lounge_cards_tx),
             lounge_cards_rx,
+            changed_tx: Arc::new(changed_tx),
+            changed_rx,
         }
     }
 
+
     pub fn subscribe_lounge_cards(&self) -> watch::Receiver<Arc<HashMap<Uuid, GalleryPiece>>> {
         self.lounge_cards_rx.clone()
+    }
+
+    pub fn subscribe_changed(&self) -> watch::Receiver<u64> {
+        self.changed_rx.clone()
+    }
+
+    pub(crate) fn notify_changed(&self) {
+        let _ = self.changed_tx.send_modify(|rev| *rev = rev.wrapping_add(1));
     }
 
     pub fn start_notify_worker(
@@ -273,6 +291,7 @@ impl GalleryService {
             while let Some(signal) = signals.recv().await {
                 match signal {
                     Signal::Resync | Signal::Notify { .. } => {
+                        service.notify_changed();
                         read_until_ok(Refresh::GalleryCards, || service.refresh_lounge_cards())
                             .await;
                     }

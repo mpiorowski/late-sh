@@ -260,7 +260,7 @@ impl App {
             }
         }
         let inline_image_render_settings = self.inline_image_render_settings();
-        self.chat.poll_inline_images(inline_image_render_settings);
+        changed |= self.chat.poll_inline_images(inline_image_render_settings);
         if self.screen == Screen::Arcade
             && self.is_playing_game
             && self.game_selection == ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle)
@@ -649,6 +649,12 @@ impl App {
             // is up, and it reports its own changes (own edits are
             // input-driven).
             changed |= state.tick();
+            if let Some(err) = state.private_notice.clone()
+                && self.banner.is_none()
+            {
+                self.banner = Some(crate::app::common::primitives::Banner::error(&err));
+                changed = true;
+            }
         }
         if let Some(state) = self.lateania_state.as_mut() {
             // Drain even off-screen so the snapshot stays current; only an

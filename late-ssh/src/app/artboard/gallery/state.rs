@@ -10,7 +10,7 @@ use late_core::models::artboard_piece::{
 };
 use late_core::models::profile_award::gallery_prize_chips;
 use ratatui::layout::Rect;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::artboard::svc::ArtboardSnapshotKind;
@@ -205,6 +205,8 @@ pub struct GalleryState {
     /// The piece whose take-down is in flight.
     pending_take_down: Option<Uuid>,
     pending_open_piece: Option<GalleryPiece>,
+    pending_hang_error: Option<String>,
+    changed_rx: watch::Receiver<u64>,
     /// Published by the draw path so hit tests and the viewport math agree
     /// with what is on screen.
     rail_visible: Cell<bool>,
@@ -216,6 +218,7 @@ pub struct GalleryState {
 impl GalleryState {
     pub fn new(service: GalleryService, viewer_id: Uuid) -> Self {
         let (results_tx, results_rx) = mpsc::unbounded_channel();
+        let changed_rx = service.subscribe_changed();
         service.counts_task(viewer_id, results_tx.clone());
         Self {
             service,
@@ -232,6 +235,8 @@ impl GalleryState {
             take_down_asked: None,
             pending_take_down: None,
             pending_open_piece: None,
+            pending_hang_error: None,
+            changed_rx,
             rail_visible: Cell::new(false),
             rail_area: Cell::new(Rect::default()),
             list_area: Cell::new(Rect::default()),
@@ -262,6 +267,10 @@ impl GalleryState {
 
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
+    }
+
+    pub fn take_hang_error(&mut self) -> Option<String> {
+        self.pending_hang_error.take()
     }
 
     /// The section the detail pane shows, if the selected row is one.
@@ -681,6 +690,18 @@ impl GalleryState {
     /// screen changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        if self.changed_rx.has_changed().unwrap_or(false) {
+            let _ = self.changed_rx.borrow_and_update();
+            self.service
+                .counts_task(self.viewer_id, self.results_tx.clone());
+            for section in GallerySection::ALL {
+                let state = &mut self.sections[section.index()];
+                if state.loaded {
+                    self.reload(section);
+                }
+            }
+            changed = true;
+        }
         while let Ok(result) = self.results_rx.try_recv() {
             changed = true;
             match result {
@@ -759,7 +780,9 @@ impl GalleryState {
                 }
                 GalleryResult::HangRefused(refusal) => {
                     self.hang = HangFlow::Idle;
-                    self.notice = Some(refusal.notice().to_string());
+                    let notice = refusal.notice().to_string();
+                    self.notice = Some(notice.clone());
+                    self.pending_hang_error = Some(notice);
                     if refusal == HangRefusal::Disabled {
                         self.focus = Focus::Canvas;
                         self.rail_index = 0;
@@ -767,7 +790,8 @@ impl GalleryState {
                 }
                 GalleryResult::HangFailed(error) => {
                     self.hang = HangFlow::Idle;
-                    self.notice = Some(error);
+                    self.notice = Some(error.clone());
+                    self.pending_hang_error = Some(error);
                 }
                 GalleryResult::Applause { piece_id, outcome } => {
                     self.pending_applause = None;

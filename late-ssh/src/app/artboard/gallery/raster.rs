@@ -122,7 +122,18 @@ pub(crate) fn render_canvas_inline_preview(
     max_height: u32,
     settings: InlineImageRenderSettings,
 ) -> anyhow::Result<InlineImagePreview> {
-    let rgba = render_canvas_rgba(canvas, [0, 0, 0, 0])?;
+    let background = settings
+        .background_rgb
+        .map(|rgb| {
+            [
+                ((rgb >> 16) & 0xff) as u8,
+                ((rgb >> 8) & 0xff) as u8,
+                (rgb & 0xff) as u8,
+                0xff,
+            ]
+        })
+        .unwrap_or(MODAL_BACKGROUND);
+    let rgba = render_canvas_rgba(canvas, background)?;
     render_rgba_image_preview(&rgba, max_width, max_height, settings)
 }
 
