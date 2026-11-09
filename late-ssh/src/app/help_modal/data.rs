@@ -1499,6 +1499,7 @@ fn overview_lines() -> Vec<String> {
         "Shop",
         "  Ctrl+S / /shop    open the Shop; /shop works from any composer",
         "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
+        "  PageUp/PageDown   jump 8 Shop items, stopping at either end of the list",
         "  name effects      Name Glow / Gradient / Shimmer sell by the day or by the month",
         "  badges and flags  rented for 24h or 30 days; a rebuy replaces the live one",
         "  title             your own words after your name in chat, 20 characters, rented the same way",
