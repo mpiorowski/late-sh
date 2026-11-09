@@ -51,7 +51,8 @@ late-core/
 ## 3. Shared tables
 
 - **`users`.** `fingerprint` UNIQUE (the account's first key only); `is_admin`
-  and `is_moderator`; `username` 1-32 chars, `^[A-Za-z0-9._-]+$`, no trailing
+  and `is_moderator`; `login_count`, bumped once per ssh login by
+  `User::note_login`; `username` 1-32 chars, `^[A-Za-z0-9._-]+$`, no trailing
   dot, case-insensitive UNIQUE (`idx_users_username_lower`). `settings` JSONB
   holds per-account settings. `Profile` (`models/profile.rs`) is the typed
   projection and the list of keys: there is no `profiles` table.

@@ -10,6 +10,7 @@ pub mod calendar;
 mod calendar_flow_test;
 pub mod chat;
 pub mod clubhouse;
+pub mod comeback;
 pub mod common;
 #[cfg(test)]
 mod dashboard_flow_test;

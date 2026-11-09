@@ -145,7 +145,7 @@ glyphs and the Old Signal).
 - A session spends rations in 10-15 minutes and is interruptible at any
   point. Thin combat is a feature at this session length.
 - Ration status lives in the same mental slot as quests/streaks: a line on
-  the city's landing sheet, streak bonuses mirroring the `QuestService` daily-streak shape.
+  the city's landing sheet, a streak mirroring the `QuestService` daily-streak shape (a count of days, no bonus).
 - **The climb is two to three weeks** (decided 2026-10-06; it was three
   to four). A runner who walks every day's road and reads the hand puts
   the Old Signal down in about two weeks; one who plays it on the

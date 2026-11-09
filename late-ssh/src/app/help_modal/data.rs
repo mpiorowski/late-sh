@@ -10,7 +10,6 @@ use late_core::models::{
     leaderboard::DailyPuzzle,
     media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS},
     pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE},
-    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 use qrcodegen::{QrCode, QrCodeEcc};
 
@@ -265,7 +264,9 @@ fn is_restricted_bot_context_line(line: &str) -> bool {
     .any(|forbidden| line.contains(forbidden))
 }
 
-const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
+/// `pub(crate)` for the comeback moment's box (`app/comeback`), which
+/// names the same one-liner the Pair topic does.
+pub(crate) const SHELL_INSTALL_COMMAND: &str = "curl -fsSL https://cli.late.sh/install.sh | bash";
 const WINDOWS_INSTALL_COMMAND: &str = "irm https://cli.late.sh/install.ps1 | iex";
 const NIX_COMMAND: &str = "nix run github:mpiorowski/late-sh#late";
 const SOURCE_URL: &str = "https://github.com/mpiorowski/late-sh";
@@ -379,8 +380,6 @@ fn chips_help_lines() -> Vec<String> {
     let floor = CHIP_FLOOR;
     let water = crate::app::bonsai::svc::WATER_CHIP_BONUS;
     let asterion = ASTERION_DAILY_ESCAPE_PAYOUT;
-    let streak_step = DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL;
-    let streak_max = i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL) * streak_step;
 
     let mut lines = vec![
         "Late Chips".to_string(),
@@ -412,8 +411,7 @@ fn chips_help_lines() -> Vec<String> {
         "  hard weekly        750 chips".to_string(),
         "  Rewards pay automatically the moment the target completes; there is nothing to claim.".to_string(),
         "  A quest reward stacks with the daily-puzzle payout above, so one solve can pay twice.".to_string(),
-        format!("  Finishing any one daily quest advances your daily streak: +{streak_step} chips on the second consecutive day, climbing by {streak_step} per day up to +{streak_max}."),
-        "  Weekly quests do not advance the daily streak.".to_string(),
+        "  The daily streak above the quests pays no chips: any daily board won that day keeps it, and the count is the reward.".to_string(),
         "".to_string(),
         "3. Bonsai (w)".to_string(),
         format!("  Watering pays {water} chips once per UTC day."),
@@ -1350,6 +1348,9 @@ fn vintagestory_help_lines() -> Vec<String> {
         "                    it to release the animal",
         "  Purposeful Storage",
         "                    racks, wardrobes, and bins that display what they hold",
+        "  Food Shelves      food shelves, baskets, jars, and bucket hooks; coolers keep",
+        "                    food fresh longer while closed, much longer with Cut Ice",
+        "                    (saw glacier ice); an Ice Keeper stops ice melting",
         "",
         "Land claims (built into the game)",
         "  /land claim new   start a claim, then mark two opposite corners:",
@@ -1449,10 +1450,9 @@ fn overview_lines() -> Vec<String> {
         "the prompt. Settings > Tweaks > Artboard content disclaimer turns this",
         "default-on prompt off or back on, per device (the SSH key you logged in",
         "with), so it can stay on at work and off at home.",
-        "With it off, the login splash shows the day's gallery piece instead of the coffee cup,",
-        "and #lounge gallery cards show an inline preview instead of the disclaimer notice.",
-        "During the tour, S shows the art for that visit and Enter skips to People;",
-        "the tour never changes disclaimer preferences.",
+        "With it off, the login splash shows the day's gallery piece instead of the coffee cup.",
+        "The first-visit tour does not visit the Artboard and never changes",
+        "disclaimer preferences.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",

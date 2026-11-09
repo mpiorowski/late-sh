@@ -23,6 +23,7 @@
 use chrono::Utc;
 use dartboard_core::Canvas;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
+use late_core::models::daily_rung::STAR_GLYPH;
 use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
 use ratatui::{
@@ -350,6 +351,25 @@ fn build_segments(
     if !badge_lines.is_empty() {
         let mut lines = section_lines("badges", width_usize);
         lines.extend(badge_lines);
+        segments.push(Segment::Text(lines));
+    }
+
+    // ── dailies: the numbers behind the marks beside the name in chat ──
+    let ladder = state.ladder();
+    if ladder.streak_days > 0 || ladder.stars > 0 {
+        let mut lines = section_lines("dailies", width_usize);
+        let mut facts = Vec::new();
+        if ladder.streak_days > 0 {
+            facts.push(format!("streak day {}", ladder.streak_days));
+        }
+        if ladder.stars > 0 {
+            let noun = if ladder.stars == 1 { "star" } else { "stars" };
+            facts.push(format!("{STAR_GLYPH} {} {noun}", ladder.stars));
+        }
+        lines.push(Line::from(Span::styled(
+            facts.join(" · "),
+            Style::default().fg(theme::TEXT()),
+        )));
         segments.push(Segment::Text(lines));
     }
 

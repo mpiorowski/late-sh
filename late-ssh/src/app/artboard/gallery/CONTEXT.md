@@ -47,7 +47,7 @@ Tests: `frame_test.rs` (crop, credits, hash, the three local rails), `state_test
 
 Not done: the web `/gallery` page does not list pieces. Each piece still up has its own page and PNG on the web (`/gallery/pieces/{id}`, `late-web/CONTEXT.md`), and the herald posts the splash wall's piece of the day when the look clears it, so a piece whose day is a Monday, or one the look flags, is never posted (`late-ssh/src/app/herald/CONTEXT.md`); a take-down 404s the page at once, but a post already out is removed by hand from the herald's accounts.
 
-Splash gate coverage: `session_bootstrap_test.rs` and `ssh_test.rs` log in through both session builders as a newcomer (no setting), with the disclaimer on, and after Always View; only the last sees the piece.
+Splash gate coverage: `ssh_test.rs` logs in over ssh as a newcomer (no setting), with the disclaimer on, and after Always View; only the last sees the piece. The same test file logs in with three keys of one account to pin the per-device choice.
 
 ## Local gallery fixtures
 

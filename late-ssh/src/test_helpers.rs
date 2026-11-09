@@ -504,6 +504,10 @@ pub struct SessionWorld {
     /// The tour still to walk (the account's flag is unset), which also
     /// starts the session in the Clubhouse. Unset means walked.
     pub tour_pending: bool,
+    /// An account created yesterday with no comeback mark, so this login
+    /// owes the first comeback moment (`app/comeback`). Unset is an
+    /// account from the epoch, long past the series.
+    pub comeback_due: bool,
     /// Where a session its CLI moved here was (`app/handoff`). Unset is a
     /// login.
     pub resume: Option<crate::app::handoff::state::ResumePoint>,
@@ -794,10 +798,15 @@ fn make_app_with_chat_service_and_permissions(
         pot_service: None,
         referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
         newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
-        // A regular: the newcomer counters are no-ops in tests either way.
-        account_created: chrono::DateTime::UNIX_EPOCH,
+        // A regular, unless the world owes a comeback moment: the newcomer
+        // counters are no-ops in tests either way.
+        account_created: match world.comeback_due {
+            true => chrono::Utc::now() - chrono::Duration::days(1),
+            false => chrono::DateTime::UNIX_EPOCH,
+        },
         activity_feed_rx: None,
         is_new_user: world.is_new_user,
+        comeback_mark: None,
         landing_page: match world.landing_page {
             Some(page) => page,
             None => late_core::models::user::LandingPage::Clubhouse,
@@ -1104,6 +1113,7 @@ pub fn make_app_with_paired_client(
         account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: false,
+        comeback_mark: None,
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),

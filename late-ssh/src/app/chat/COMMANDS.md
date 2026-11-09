@@ -120,6 +120,7 @@ User commands:
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `. `/chips [@user]` is the same modal opened on its chips ledger (`ProfileSection::Chips` rides on `OpenProfileResolved` and the `requested_open_profile` handoff; the modal scrolls there on its first measured draw).
 - `/onboard` starts the first-visit tour again from the tavern door (`app/clubhouse/CONTEXT.md` §5).
+- `/comeback N` opens comeback moment N's box again, for anyone, without the stamp or the count a return day's login gives it (`app/comeback/CONTEXT.md`); a bad or missing number banners the usage.
 - `/public #room` (alias `/join #room`) opens or creates an opt-in public room for the caller only. A new room starts with `auto_join=false`; an existing room keeps its flag.
 - `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `sheet_modal/`.
 - `/settings` opens settings.

@@ -334,10 +334,43 @@ fn wrap_message_empty_body() {
     assert_eq!(lines.len(), 1);
 }
 
+/// The ladder's marks after the name: the moon in the name's color, the
+/// star in amber, the rest of the prefix untouched.
+#[test]
+fn wrap_message_author_tint_paints_the_star_amber_and_the_moon_as_the_name() {
+    let tint = AuthorTint {
+        range: (0, 3),
+        marks_range: Some((3, 10)), // " ☽✦", the glyphs three bytes each
+        title_range: None,
+        runner: None,
+        word: None,
+        name_style: None,
+    };
+    let author = Style::default().fg(Color::Cyan);
+    let lines = wrap_message_to_lines(
+        "hello",
+        "[1m]",
+        "bob ☽✦ 🌱",
+        80,
+        author,
+        Some(tint),
+        Style::default(),
+        Gutter::Plain,
+        false,
+    );
+    let header = &lines[0];
+    let texts: Vec<&str> = header.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(texts, [" ", "bob", " ", "☽", "✦", " 🌱", " [1m]"]);
+    assert_eq!(header.spans[1].style.fg, Some(Color::Cyan));
+    assert_eq!(header.spans[3].style.fg, Some(Color::Cyan));
+    assert_eq!(header.spans[4].style.fg, Some(theme::AMBER()));
+}
+
 #[test]
 fn wrap_message_author_tint_splits_only_the_username() {
     let tint = AuthorTint {
         range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
+        marks_range: None,
         title_range: None,
         runner: None,
         word: None,
@@ -377,6 +410,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
 fn wrap_message_author_tint_ignores_bad_ranges() {
     let tint = AuthorTint {
         range: (0, 99),
+        marks_range: None,
         title_range: None,
         runner: None,
         word: None,
@@ -400,6 +434,7 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
 fn wrap_message_name_style_paints_per_char_over_author_style() {
     let tint = AuthorTint {
         range: (0, 5),
+        marks_range: None,
         title_range: None,
         runner: None,
         word: None,
@@ -438,6 +473,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
 fn wrap_message_prints_drunk_word_between_name_and_stamp() {
     let tint = AuthorTint {
         range: (0, 5),
+        marks_range: None,
         title_range: None,
         runner: None,
         word: Some(("wasted", Color::Rgb(120, 40, 35))),
@@ -474,6 +510,7 @@ fn wrap_message_omits_drunk_word_when_absent() {
     // A name_style-only tint with no drunk word: header stays lean.
     let tint = AuthorTint {
         range: (0, 5),
+        marks_range: None,
         title_range: None,
         runner: None,
         word: None,

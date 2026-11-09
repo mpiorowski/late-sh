@@ -1,0 +1,12 @@
+-- DEFERRED: promote to migrations/ (with a fresh number) in the release
+-- AFTER the any-win streak ships. The previous binary reads `bonus_level`
+-- off every `user_daily_quest_streaks` row it loads for the Arcade strip,
+-- and drained pods live for hours after a deploy, so dropping the column in
+-- the same release fails those loads in the old pod. Files in this folder
+-- are invisible to the migration runner; build.rs warns on every build
+-- while any remain here.
+--
+-- The streak pays no chips any more: any daily board win keeps the day
+-- (`late-core/src/models/daily_streak.rs`). The old `daily_quest_streak_reward`
+-- ledger rows stay so history reads.
+ALTER TABLE user_daily_quest_streaks DROP COLUMN bonus_level;

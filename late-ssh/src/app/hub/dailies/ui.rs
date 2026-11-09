@@ -8,7 +8,7 @@
 //!
 //! ```text
 //!
-//! ─── Quests ───  streak ▰▰▰▱▱▱ 3 days · next daily +300 bonus
+//! ─── Quests ───  streak day 3 · any daily board tomorrow keeps it
 //!
 //!   Daily 0/2 · +525 chips to earn · resets 00:00 UTC
 //!     ○ Win easy Sudoku            easy     +150
@@ -19,7 +19,7 @@
 //! ```
 
 use chrono::{NaiveDate, Utc};
-use late_core::models::quest::{DailyQuestStreakSnapshot, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL};
+use late_core::models::daily_streak::DailyStreakSnapshot;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -34,10 +34,6 @@ use super::{
     state::QuestState,
     svc::{QuestItem, QuestSnapshot},
 };
-
-/// The streak meter has one slot per day until the bonus caps: day 1 starts
-/// the streak at bonus level 0, so the cap lands on day `MAX + 1`.
-const STREAK_BAR_SLOTS: i32 = MAX_DAILY_QUEST_STREAK_BONUS_LEVEL + 1;
 
 /// Item progress bars only fit comfortably on wider terminals; below this the
 /// bar is dropped and only the numeric progress remains.
@@ -88,7 +84,10 @@ fn strip_lines(
     today: NaiveDate,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(""), heading_line(&snapshot.daily_streak, loaded)];
+    let mut lines = vec![
+        Line::from(""),
+        heading_line(&snapshot.daily_streak, loaded, today),
+    ];
     if !loaded {
         return lines;
     }
@@ -110,7 +109,9 @@ fn strip_lines(
     lines
 }
 
-fn heading_line(streak: &DailyQuestStreakSnapshot, loaded: bool) -> Line<'static> {
+/// The heading carries the streak: the day it is on and what keeps it,
+/// today's board if none is won yet, tomorrow's once one is.
+fn heading_line(streak: &DailyStreakSnapshot, loaded: bool, today: NaiveDate) -> Line<'static> {
     // Same style as the game list's section headings ("─── Score Games ───"),
     // so the strip reads as the first section of the lobby.
     let accent = Style::default()
@@ -126,39 +127,29 @@ fn heading_line(streak: &DailyQuestStreakSnapshot, loaded: bool) -> Line<'static
         return Line::from(spans);
     }
 
-    spans.push(Span::styled(
-        "  streak ",
-        Style::default().fg(theme::TEXT_DIM()),
-    ));
-    let filled = streak.consecutive_days.clamp(0, STREAK_BAR_SLOTS) as usize;
-    spans.extend(bar_spans(filled, STREAK_BAR_SLOTS as usize));
-    spans.push(Span::raw(" "));
-
     if streak.consecutive_days == 0 {
         spans.push(Span::styled(
-            "no streak · win any daily quest to start one",
+            "  no streak · win any daily board to start one",
             Style::default().fg(theme::TEXT_FAINT()),
         ));
         return Line::from(spans);
     }
 
-    let days = streak.consecutive_days;
     spans.push(Span::styled(
-        format!("{days} day{}", if days == 1 { "" } else { "s" }),
+        "  streak ",
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    spans.push(Span::styled(
+        format!("day {}", streak.consecutive_days),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
     spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
-    if filled as i32 >= STREAK_BAR_SLOTS {
-        spans.push(Span::styled(
-            format!("max bonus +{}/day", thousands(streak.current_bonus_chips)),
-            Style::default().fg(theme::AMBER()),
-        ));
+    let keeps_it = if streak.last_completed_date == Some(today) {
+        "any daily board tomorrow keeps it"
     } else {
-        spans.push(Span::styled(
-            format!("next daily +{} bonus", thousands(streak.next_bonus_chips)),
-            Style::default().fg(theme::AMBER()),
-        ));
-    }
+        "any daily board today keeps it"
+    };
+    spans.push(Span::styled(keeps_it, Style::default().fg(theme::AMBER())));
     Line::from(spans)
 }
 

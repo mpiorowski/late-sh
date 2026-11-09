@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context;
 use late_core::api_types::NowPlaying;
@@ -270,6 +271,9 @@ struct DrawContext<'a> {
     leaderboard: &'a Arc<LeaderboardData>,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
+    /// The plain-ssh radio nudge (`audio/nudge.rs`), `None` while a client
+    /// is paired.
+    radio_nudge: Option<&'a str>,
     eq_state: crate::app::audio::viz::EqState,
     clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
@@ -341,6 +345,10 @@ struct DrawContext<'a> {
     /// everything; `None` unless it is playing. See `app/deadchannel`.
     breakthrough: Option<crate::app::deadchannel::haunt::ui::BreakthroughFrame>,
     listen_url: &'a str,
+    /// The comeback moment's box (`app/comeback`), `None` unless one is up.
+    comeback: Option<crate::app::comeback::state::Moment>,
+    /// A client is paired on the session's token, so the radio can be heard.
+    hears_music: bool,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     room_info_modal_open: bool,
@@ -449,6 +457,8 @@ impl App {
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
         let own_chat_open = crate::app::door::spectate::input::open_own_chat_game(self);
         let foreground_overlay_open = self.foreground_overlay_open();
+        // Read before the views borrow `self` mutably below.
+        let hears_music = self.paired_client_state().is_some();
         let crate::app::door::spectate::chat::WatcherCounts {
             own: own_watchers,
             held: held_watchers,
@@ -683,6 +693,15 @@ impl App {
         };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
+        let today = chrono::Utc::now().date_naive();
+        let return_push = self.return_push.line(
+            Instant::now(),
+            self.quest_state.snapshot(),
+            late_core::models::daily_rung::rung_for(today),
+            self.quest_state.rung_standing(today),
+        );
+        let return_push = return_push.as_deref();
+        let ladder_marks = self.chat.ladder_marks();
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
@@ -891,7 +910,9 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
+            return_push,
             bonsai_glyphs,
+            ladder_marks,
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
@@ -957,6 +978,10 @@ impl App {
         let showcase_unread_count = self.chat.showcase.unread_count();
         let web_base_url = self.web_url.as_str();
         let listen_url = crate::app::state::listen_url(&self.web_url);
+        let radio_nudge = match paired_client {
+            Some(_) => None,
+            None => Some(crate::app::audio::nudge::line(&listen_url)),
+        };
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
             selected_index: self.chat.work.selected_index(),
@@ -1052,7 +1077,9 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
+            return_push,
             bonsai_glyphs,
+            ladder_marks,
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
@@ -1144,7 +1171,9 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
+                    return_push,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
@@ -1216,7 +1245,9 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
+                    return_push,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
@@ -1291,7 +1322,9 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
+                    return_push,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
@@ -1365,7 +1398,9 @@ impl App {
                 mention_active: self.chat.mention_ac.active,
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
+                return_push,
                 bonsai_glyphs,
+                ladder_marks,
                 chat_badges,
                 profile_award_badges,
                 drunk_levels: &self.drunk_levels,
@@ -1480,7 +1515,9 @@ impl App {
                                 None
                             },
                             is_editing: active && self.chat.edited_message_id.is_some(),
+                            return_push,
                             bonsai_glyphs,
+                            ladder_marks,
                             chat_badges,
                             profile_award_badges,
                             drunk_levels: &self.drunk_levels,
@@ -1558,6 +1595,7 @@ impl App {
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
+            return_push,
             mention_active: self.chat.mention_ac.active,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
@@ -1595,6 +1633,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
+            || self.comeback.is_open()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -1618,6 +1657,7 @@ impl App {
             || self.show_bonsai_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
+            || self.comeback.is_open()
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
@@ -1803,6 +1843,7 @@ impl App {
                         leaderboard: &self.leaderboard,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
+                        radio_nudge: radio_nudge.as_deref(),
                         eq_state,
                         clock: &clock,
                         bonsai: &self.bonsai.tree,
@@ -1865,6 +1906,8 @@ impl App {
                             self.marquee_tick,
                         ),
                         listen_url: &listen_url,
+                        comeback: self.comeback.open(),
+                        hears_music,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
@@ -2179,15 +2222,31 @@ impl App {
 
         let foreground_overlay_open = ctx.foreground_overlay_open;
         // The tour stops that write into a real surface: the two modals take
-        // the header themselves, the practice table and the dungeon fight
-        // get it drawn across the top of the page.
+        // the header themselves, the practice table, the dungeon fight and
+        // today's board get it drawn across the top of the page.
         let tour_header = crate::app::clubhouse::ui::tour_header(
             ctx.clubhouse_state.tutorial,
+            ctx.clubhouse_state.tour_route,
             crate::app::clubhouse::ui::table_stop(inner, ctx.daily.practice_played()),
             ctx.clubhouse_state.tour_fight.won(),
+            crate::app::clubhouse::ui::board_stop(
+                inner,
+                ctx.netwalk_state.is_solved(),
+                ctx.clubhouse_state.board_skip_asked,
+                chrono::Utc::now(),
+            ),
         );
+        // On the Arcade a stop that holds a modal (the House route's lobby
+        // stop) has the modal take the header; only a stop without one
+        // draws it across the page.
         let board_area = match (&tour_header, screen) {
             (Some(header), Screen::DailyMatch | Screen::Games) => header.draw_above(frame, inner),
+            (Some(header), Screen::Arcade)
+                if ctx.clubhouse_state.tour_modal()
+                    == crate::app::clubhouse::state::TourModal::None =>
+            {
+                header.draw_above(frame, inner)
+            }
             (Some(_), _) | (None, _) => inner,
         };
         match screen {
@@ -2557,13 +2616,11 @@ impl App {
                 );
             }
             Screen::Arcade => {
-                let today_statuses = ctx
-                    .leaderboard
-                    .user_daily_statuses
-                    .on(chrono::Utc::now().date_naive());
+                let today = chrono::Utc::now().date_naive();
+                let today_statuses = ctx.leaderboard.user_daily_statuses.on(today);
                 crate::app::arcade::ui::draw_arcade_hub(
                     frame,
-                    inner,
+                    board_area,
                     &crate::app::arcade::ui::ArcadeHubView {
                         game_selection: ctx.game_selection,
                         is_playing_game: ctx.is_playing_game,
@@ -2586,6 +2643,7 @@ impl App {
                         session_daily_completion: ctx.session_daily_wins.today(),
                         quest_state: ctx.quest_state,
                         today_statuses,
+                        starred_today: ctx.leaderboard.user_daily_statuses.starred_on(today),
                         usernames: ctx.usernames,
                         user_id: ctx.user_id,
                         username: ctx.clubhouse_own_username,
@@ -2696,8 +2754,18 @@ impl App {
                 frame,
                 inner,
                 ctx.clubhouse_state.tutorial,
+                ctx.clubhouse_state.tour_route,
                 screen,
                 ctx.artboard_disclaimer_visible,
+                || {
+                    let today = chrono::Utc::now().date_naive();
+                    crate::app::arcade::week::Week::today(
+                        today,
+                        ctx.leaderboard.user_daily_statuses.starred_on(today),
+                        ctx.quest_state.rung_standing(today),
+                        ctx.user_id,
+                    )
+                },
             );
         }
 
@@ -2881,6 +2949,20 @@ impl App {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
         }
 
+        // A comeback moment's box, over the page the login landed on and
+        // under the guide its Enter opens.
+        if let Some(moment) = ctx.comeback {
+            crate::app::comeback::ui::draw(
+                frame,
+                inner,
+                &crate::app::comeback::ui::View {
+                    moment,
+                    hears: ctx.hears_music,
+                    listen_url: ctx.listen_url,
+                },
+            );
+        }
+
         if ctx.show_ultimate_modal {
             crate::app::ultimates::draw(frame, inner, ctx.ultimate_state, ctx.shop_state);
         }
@@ -2958,10 +3040,13 @@ impl App {
                 frame,
                 inner,
                 ctx.booth_modal_state,
-                &ctx.booth_snapshot,
-                ctx.booth_favorites,
-                ctx.booth_submit_enabled,
-                ctx.is_admin || ctx.is_moderator,
+                &crate::app::audio::booth::ui::BoothView {
+                    snapshot: &ctx.booth_snapshot,
+                    favorites: ctx.booth_favorites,
+                    submit_enabled: ctx.booth_submit_enabled,
+                    is_staff: ctx.is_admin || ctx.is_moderator,
+                    nudge: ctx.radio_nudge,
+                },
             );
         }
 
@@ -2977,6 +3062,7 @@ impl App {
                     current: ctx.selected_radio_station,
                     slots: ctx.radio_slots,
                     source: ctx.paired_source,
+                    nudge: ctx.radio_nudge,
                 },
                 tour_header.as_ref(),
             );
