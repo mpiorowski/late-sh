@@ -36,7 +36,10 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
   one `<file-id>\t<next-offset>\t<line>` frame per complete line with tail -f
   semantics, and stays **stateless**: no cursor storage, no parsing, no DB. All
   parsing lives in late-ssh, so a parser fix never needs a door redeploy, and
-  door pods never hold DB credentials. Chosen over a new HTTP ingest surface
+  door pods never hold DB credentials. dopewars is the one host that parses:
+  its game writes a binary top-18 table, not a log, so `late-dopewars`
+  (`scorelog.rs`) turns that table into the log lines it streams, and a fix to
+  that step does need a host redeploy. Chosen over a new HTTP ingest surface
   because it reuses the russh servers and shared secrets already there.
 - **Client side.** `app/door/ingest/`: `svc.rs` orchestration (one
   connect-with-retry task per enabled door, spawned from `main.rs` behind that
@@ -61,7 +64,9 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
   shapes (NetHack's legacy `late_<hex>` lines predate handles). dopewars is the
   exception: its playname is the account's `late.sh` username (the door skips
   its startup name prompt and passes it as `-P`), so its lines resolve through
-  `users` (`User::find_by_username`) instead of `arcade_handles`.
+  `users` (`User::find_by_username`) instead of `arcade_handles`. The `late_*`
+  reservation is not applied there: it guards handles, and an account may be
+  named `late_dealer`.
 - **Grants are idempotent; the badge is once, the chips repeat.** Badges and
   chips fire from `award.rs` on every win or pickup. The badge is guarded by a
   `NOT EXISTS` award insert and lands once per account for life. The chips go

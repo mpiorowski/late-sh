@@ -60,8 +60,10 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     });
 
-    // Backfill the append-only run log from whatever history the score file
-    // already holds (a rebuilt PVC, the first deploy of this host version).
+    // The first sync on a volume records the table as already seen and logs
+    // nothing (`scorelog`); doing it here keeps it from swallowing the first
+    // real game. On any later start this catches up a run the host died
+    // before logging.
     let now_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -69,9 +71,10 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = scorelog::sync_from_sco(
         std::path::Path::new(&config.score_file),
         &scorelog::runs_log_path(&config.score_file),
+        &scorelog::seen_path(&config.score_file),
         now_epoch,
     ) {
-        tracing::warn!(error = ?e, "failed to backfill dopewars run log");
+        tracing::warn!(error = ?e, "failed to sync dopewars run log at startup");
     }
 
     let listen_addr = config.listen_addr.clone();

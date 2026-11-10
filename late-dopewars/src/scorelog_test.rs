@@ -25,6 +25,22 @@ impl Fixture {
     fn runs(&self) -> PathBuf {
         runs_log_path(&self.score().to_string_lossy())
     }
+
+    fn seen(&self) -> PathBuf {
+        seen_path(&self.score().to_string_lossy())
+    }
+
+    fn sync(&self, now_epoch: i64) -> usize {
+        sync_from_sco(&self.score(), &self.runs(), &self.seen(), now_epoch).unwrap()
+    }
+
+    /// A volume whose first sync is behind it, as the host's startup sync
+    /// leaves one that had no score file yet.
+    fn started(tag: &str) -> Self {
+        let fixture = Self::new(tag);
+        assert_eq!(fixture.sync(NOW), 0);
+        fixture
+    }
 }
 
 impl Drop for Fixture {
@@ -115,7 +131,7 @@ fn parse_ignores_a_truncated_tail() {
 
 #[test]
 fn sync_appends_once_and_is_idempotent() {
-    let fixture = Fixture::new("sync");
+    let fixture = Fixture::started("sync");
     write_score(
         &fixture.score(),
         &[
@@ -123,12 +139,9 @@ fn sync_appends_once_and_is_idempotent() {
             record("Bob", "02-02-2026", "-500", 1),
         ],
     );
+    assert_eq!(fixture.sync(NOW), 2);
     assert_eq!(
-        sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap(),
-        2
-    );
-    assert_eq!(
-        sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap(),
+        fixture.sync(NOW),
         0,
         "a rewrite of the same table appends nothing"
     );
@@ -144,12 +157,12 @@ fn sync_appends_once_and_is_idempotent() {
 
 #[test]
 fn only_the_new_entry_is_appended() {
-    let fixture = Fixture::new("delta");
+    let fixture = Fixture::started("delta");
     write_score(
         &fixture.score(),
         &[record("Alice", "01-02-2026", "1000", 0)],
     );
-    sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap();
+    fixture.sync(NOW);
 
     write_score(
         &fixture.score(),
@@ -158,26 +171,24 @@ fn only_the_new_entry_is_appended() {
             record("Carol", "02-02-2026", "2000", 1),
         ],
     );
-    assert_eq!(
-        sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap(),
-        1
-    );
+    assert_eq!(fixture.sync(NOW), 1);
     let lines = log_lines(&fixture.runs());
     assert_eq!(lines.len(), 2);
     assert!(lines[1].starts_with("Carol\t2000\t1\t"), "{:?}", lines[1]);
 }
 
+/// A table that predates the run log holds names players typed at the old
+/// prompt. None of it may reach the log: ingest would credit each to whoever
+/// owns that username.
 #[test]
-fn cold_start_uses_the_score_date_and_later_syncs_use_now() {
-    let fixture = Fixture::new("cold");
+fn the_first_sync_logs_nothing_from_the_table_it_finds() {
+    let fixture = Fixture::new("first");
     write_score(
         &fixture.score(),
         &[record("Alice", "15-03-2026", "1000", 0)],
     );
-    sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap();
-    let backfilled = log_lines(&fixture.runs()).remove(0);
-    let ended: i64 = backfilled.split('\t').nth(3).unwrap().parse().unwrap();
-    assert_eq!(ended, date_noon_epoch("15-03-2026").unwrap());
+    assert_eq!(fixture.sync(NOW), 0);
+    assert!(!fixture.runs().exists());
 
     write_score(
         &fixture.score(),
@@ -186,18 +197,36 @@ fn cold_start_uses_the_score_date_and_later_syncs_use_now() {
             record("Bob", "16-03-2026", "2000", 0),
         ],
     );
-    sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap();
-    let live = log_lines(&fixture.runs()).remove(1);
-    let ended: i64 = live.split('\t').nth(3).unwrap().parse().unwrap();
-    assert_eq!(ended, NOW);
+    assert_eq!(fixture.sync(NOW), 1);
+    let lines = log_lines(&fixture.runs());
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("Bob\t2000\t0\t"), "{:?}", lines[0]);
+}
+
+/// `NOW` is 14-11-2023 UTC. A run the table dates to that day ended now; one
+/// it dates to another day is being caught up late and keeps its own day, so
+/// it lands on the board of the month it was played.
+#[test]
+fn a_run_found_on_a_later_day_keeps_the_day_it_was_played() {
+    let fixture = Fixture::started("late");
+    write_score(
+        &fixture.score(),
+        &[
+            record("Alice", "14-11-2023", "1000", 0),
+            record("Bob", "31-10-2023", "2000", 0),
+        ],
+    );
+    assert_eq!(fixture.sync(NOW), 2);
+    let ended: Vec<i64> = log_lines(&fixture.runs())
+        .iter()
+        .map(|line| line.split('\t').nth(3).unwrap().parse().unwrap())
+        .collect();
+    assert_eq!(ended, [NOW, date_noon_epoch("31-10-2023").unwrap()]);
 }
 
 #[test]
 fn sync_without_a_score_file_appends_nothing() {
     let fixture = Fixture::new("missing");
-    assert_eq!(
-        sync_from_sco(&fixture.score(), &fixture.runs(), NOW).unwrap(),
-        0
-    );
+    assert_eq!(fixture.sync(NOW), 0);
     assert!(!fixture.runs().exists());
 }

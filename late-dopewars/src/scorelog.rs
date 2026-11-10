@@ -4,9 +4,17 @@
 // src/serverside.c: ftruncate + rewind + the whole table again), so the
 // binary `-f` file holds only the current top `NUMHISCORE` (18) and forgets
 // every run that dropped off it. The leaderboard needs the history, so after
-// every game (and once at startup, to backfill a PVC's existing file) we
-// diff the table against `<score_file>.runs.log` — one TAB-separated line per
-// run ever seen — and append only the entries not already logged.
+// every game we diff the table against `<score_file>.runs.log` (one
+// TAB-separated line per run logged) and append only the entries not seen
+// before.
+//
+// The first sync on a volume appends nothing: it writes the table as it
+// stands to `<score_file>.runs.seen`, which the diff counts and the stats
+// stream never reads. Those entries predate the run log. On a host upgraded
+// from the name prompt they carry whatever name the player typed, which is no
+// account's, so ingesting them would credit a stranger's fortune to whoever
+// owns that username. The host syncs once at startup so that first sync never
+// swallows a real game.
 //
 // File format, from `HighScoreTypeWrite` (dopewars 1.6.2, src/serverside.c:
 // 1770): the NUL-terminated header "DOPEWARS SCORES V.1", then two arrays of
@@ -47,7 +55,7 @@ pub(crate) struct ScoEntry {
     pub(crate) date: String,
 }
 
-/// The startup backfill and a game's post-exit sync can race; one writer at a
+/// The startup sync and a game's post-exit sync can race; one writer at a
 /// time keeps the diff honest.
 static SYNC: Mutex<()> = Mutex::new(());
 
@@ -99,34 +107,42 @@ pub(crate) fn runs_log_path(score_file: &str) -> PathBuf {
     PathBuf::from(format!("{score_file}.{RUNS_FILE}.log"))
 }
 
-/// Append this score file's not-yet-logged entries to `runs_log`. Returns how
+/// The table as the first sync found it, beside the run log
+/// (`dopewars.sco` -> `dopewars.sco.runs.seen`): counted by the diff, never
+/// streamed.
+pub(crate) fn seen_path(score_file: &str) -> PathBuf {
+    PathBuf::from(format!("{score_file}.{RUNS_FILE}.seen"))
+}
+
+/// Append this score file's not-yet-seen entries to `runs_log`. Returns how
 /// many lines were appended.
 ///
-/// A log that did not exist yet (first deploy, rebuilt PVC) is a cold start:
-/// the dated history the score file still holds is stamped at noon UTC of its
-/// own day, so old runs land in the right month. Later discoveries are
-/// stamped `now_epoch` — they come from the game that just ended.
+/// A volume with no `seen` file yet is on its first sync: whatever the table
+/// holds goes to `seen` instead, and the log gets nothing (see the header).
 pub(crate) fn sync_from_sco(
     score_file: &Path,
     runs_log: &Path,
+    seen: &Path,
     now_epoch: i64,
 ) -> anyhow::Result<usize> {
     let _guard = SYNC.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let logged = read_runs_log(runs_log)?;
-    let cold_start = logged.is_empty();
-    let bytes = match fs::read(score_file) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+    let first_sync = !seen.try_exists()?;
+    let entries = match fs::read(score_file) {
+        Ok(bytes) => parse_sco(&bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(e.into()),
     };
 
     // Multiset difference: an entry still in the table that was already
-    // logged (same player, money, death flag and date) must not be appended
+    // seen (same player, money, death flag and date) must not be appended
     // twice, however many times the table is rewritten.
-    let mut remaining = logged;
+    let mut remaining = read_runs_log(runs_log)?;
+    for (key, count) in read_runs_log(seen)? {
+        *remaining.entry(key).or_default() += count;
+    }
     let mut out = String::new();
     let mut appended = 0;
-    for entry in parse_sco(&bytes) {
+    for entry in entries {
         let key = (
             entry.name.clone(),
             entry.money,
@@ -136,36 +152,61 @@ pub(crate) fn sync_from_sco(
         match remaining.get_mut(&key) {
             Some(count) if *count > 0 => *count -= 1,
             _ => {
-                let ended = match cold_start {
-                    true => date_noon_epoch(&entry.date).unwrap_or(now_epoch),
-                    false => now_epoch,
-                };
                 out.push_str(&format!(
                     "{}\t{}\t{}\t{}\t{}\n",
                     entry.name,
                     entry.money,
                     u8::from(entry.dead),
-                    ended,
+                    ended_epoch(&entry.date, now_epoch),
                     entry.date
                 ));
                 appended += 1;
             }
         }
     }
-    if appended > 0 {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(runs_log)?;
-        file.write_all(out.as_bytes())?;
+    match first_sync {
+        // Written even when empty: the file existing is what ends the
+        // first sync.
+        true => {
+            append(seen, &out)?;
+            Ok(0)
+        }
+        false => {
+            if appended > 0 {
+                append(runs_log, &out)?;
+            }
+            Ok(appended)
+        }
     }
-    Ok(appended)
+}
+
+fn append(path: &Path, lines: &str) -> anyhow::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(lines.as_bytes())?;
+    Ok(())
+}
+
+/// When a newly seen run ended: now, the game having just finished, unless
+/// the table dates it to another UTC day (a host that died between the
+/// game's write and this sync catches up later, maybe in another month).
+/// Then it is noon of the day the table recorded, so the run lands on the
+/// board of the month it was played.
+fn ended_epoch(date: &str, now_epoch: i64) -> i64 {
+    const HALF_DAY: i64 = 12 * 60 * 60;
+    match date_noon_epoch(date) {
+        Some(noon) if !(-HALF_DAY..HALF_DAY).contains(&(now_epoch - noon)) => noon,
+        Some(_) | None => now_epoch,
+    }
 }
 
 type LoggedKey = (String, i64, bool, String);
 
-/// Count the run log's lines by identity. Malformed lines are skipped rather
-/// than fatal: the log is a cache of history, not a source of record.
+/// Count a run log's (or the `seen` file's) lines by identity. Malformed
+/// lines are skipped rather than fatal: the log is a cache of history, not a
+/// source of record.
 fn read_runs_log(runs_log: &Path) -> anyhow::Result<HashMap<LoggedKey, usize>> {
     let text = match fs::read_to_string(runs_log) {
         Ok(text) => text,
@@ -211,8 +252,7 @@ fn parse_money(text: &str) -> Result<i64, std::num::ParseIntError> {
     }
 }
 
-/// Noon UTC of a dopewars `"%d-%m-%Y"` date, so a backfilled run lands in
-/// the right month. `None` for anything else.
+/// Noon UTC of a dopewars `"%d-%m-%Y"` date. `None` for anything else.
 fn date_noon_epoch(date: &str) -> Option<i64> {
     let mut parts = date.split('-');
     let day: i32 = parts.next()?.parse().ok()?;

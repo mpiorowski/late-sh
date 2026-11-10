@@ -1225,7 +1225,7 @@ struct DoorWindowBoards {
 /// log line's fields as uninterpreted strings, and an unguarded cast would
 /// let one malformed value error this query and take every board down with
 /// it. dopewars rides the same query for its one score board and is split
-/// out by [`DOPEWARS_GAME_KEY`], so the refresh stays at fifteen queries.
+/// out by [`DOPEWARS_GAME_KEY`], so the refresh stays at sixteen queries.
 async fn fetch_door_boards(
     client: &Client,
     window: DoorWindow,

@@ -60,7 +60,7 @@ pub struct DoorIngestTarget {
 /// Each maps to its `door_runs.game` key, its own identity derivation
 /// (per-door blake3 domain), and its own frame dispatch.
 #[derive(Clone, Copy, Debug)]
-enum DoorKind {
+pub enum DoorKind {
     Dcss,
     Nethack,
     Brogue,
@@ -68,9 +68,10 @@ enum DoorKind {
 }
 
 impl DoorKind {
-    /// The `door_runs.game` key. Dopewars is not in the roguelike board
-    /// roster (`DoorGame`), only in the leaderboard's own constant.
-    const fn key(self) -> &'static str {
+    /// The `door_runs.game` key, and the `game` label on the ingest metrics.
+    /// Dopewars is not in the roguelike board roster (`DoorGame`), only in
+    /// the leaderboard's own constant.
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Dcss => DoorGame::Dcss.key(),
             Self::Nethack => DoorGame::Nethack.key(),
@@ -156,7 +157,7 @@ impl DoorIngestService {
                 match self.run_session(kind, &target).await {
                     Ok(()) => tracing::info!(?kind, "door stats stream ended; reconnecting"),
                     Err(error) => {
-                        crate::metrics::record_door_ingest_session_failure(kind.key());
+                        crate::metrics::record_door_ingest_session_failure(kind);
                         tracing::warn!(?kind, ?error, "door stats session failed; reconnecting")
                     }
                 }
@@ -197,7 +198,7 @@ impl DoorIngestService {
                 DoorKind::Dopewars => self.handle_dopewars_frame(&frame).await,
             };
             match handled {
-                Ok(()) => crate::metrics::record_door_ingest_line(kind.key()),
+                Ok(()) => crate::metrics::record_door_ingest_line(kind),
                 Err(error) => {
                     // Do not advance past this line: drop the stream and let
                     // the retry loop resume from the last committed cursor.
@@ -620,13 +621,14 @@ impl DoorIngestService {
         Ok(())
     }
 
-    /// The live account behind a dopewars playname. Reserved `late`/`late_*`
-    /// shapes are skipped like every other door's (`late_stats` itself is the
-    /// stats session, never a score).
+    /// The live account behind a dopewars playname. The `late_*` reservation
+    /// is the arcade handles' (`resolve_handle`), not this path's: an account
+    /// may be named `late_dealer`, and dopewars has no orphaned saves to
+    /// guard. The door never sends `late_stats` as a playname
+    /// (`dopewars_playname` rewrites it to `late_stats_`, which no account
+    /// can be named: a username never ends in an underscore), so that one
+    /// account's runs match nobody and land nowhere.
     async fn resolve_username(&self, name: &str) -> Result<Option<Uuid>> {
-        if handle_reserved(name) {
-            return Ok(None);
-        }
         let client = self
             .db
             .get()

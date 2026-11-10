@@ -28,6 +28,7 @@ use crate::app::clubhouse::state::Tutorial;
 use crate::app::comeback::state::{Beat as ComebackBeat, Moment as ComebackMoment};
 use crate::app::common::primitives::Screen;
 use crate::app::deadchannel::haunt::state::GateVerdict;
+use crate::app::door::ingest::svc::DoorKind;
 use crate::app::door::realm::svc::{
     RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome, RealmPayout,
     RealmSeasonOpen, RealmSnapshotRowError,
@@ -820,6 +821,7 @@ mod inner {
 
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
+    use super::DoorKind;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
@@ -4330,10 +4332,9 @@ mod inner {
         })
     }
 
-    /// `game_key` is the ingesting door's own label (the roguelike roster's
-    /// key, or `dopewars`'s, which is not in that roster).
-    pub fn record_door_ingest_line(game_key: &'static str) {
-        door_ingest_lines_total().add(1, &[KeyValue::new("game", game_key)]);
+    /// `DoorKind::key` is the ingest roster's own exhaustive label map.
+    pub fn record_door_ingest_line(door: DoorKind) {
+        door_ingest_lines_total().add(1, &[KeyValue::new("game", door.key())]);
     }
 
     fn door_opening_result_label(result: DoorOpeningResult) -> &'static str {
@@ -4366,8 +4367,8 @@ mod inner {
         );
     }
 
-    pub fn record_door_ingest_session_failure(game_key: &'static str) {
-        door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game_key)]);
+    pub fn record_door_ingest_session_failure(door: DoorKind) {
+        door_ingest_session_failures_total().add(1, &[KeyValue::new("game", door.key())]);
     }
 
     fn door_watch_outcome_label(outcome: DoorWatchOutcome) -> &'static str {
@@ -4638,6 +4639,7 @@ mod inner {
 
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
+    use super::DoorKind;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
     use super::RadioNudgeSpot;
@@ -4851,9 +4853,9 @@ mod inner {
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
-    pub fn record_door_ingest_line(_game_key: &'static str) {}
+    pub fn record_door_ingest_line(_door: DoorKind) {}
     pub fn record_door_opening(_card: DoorCard, _result: DoorOpeningResult) {}
-    pub fn record_door_ingest_session_failure(_game_key: &'static str) {}
+    pub fn record_door_ingest_session_failure(_door: DoorKind) {}
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
     pub fn record_door_watch_chat_room_failure(_game: WatchDoor) {}

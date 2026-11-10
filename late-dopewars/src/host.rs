@@ -249,6 +249,7 @@ async fn run_bridge(
     if let Err(e) = crate::scorelog::sync_from_sco(
         std::path::Path::new(&cfg.score_file),
         &crate::scorelog::runs_log_path(&cfg.score_file),
+        &crate::scorelog::seen_path(&cfg.score_file),
         now_epoch,
     ) {
         tracing::warn!(error = ?e, "failed to sync dopewars run log");
