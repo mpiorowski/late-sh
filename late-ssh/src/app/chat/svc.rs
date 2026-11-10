@@ -1754,18 +1754,20 @@ struct ChatAuthorMaps {
     profile_award_badges: HashMap<Uuid, String>,
 }
 
-/// The two cells the ladder may add to a name: the streak's moon, then
-/// today's star. At most two, single-width, and nothing at all for most
+/// What the ladder may add to a name: the streak's moon, then today's
+/// star, a space between them when both show (glued, `●✦` reads as one
+/// smudge). At most three single-width cells, and nothing at all for most
 /// people, so the label's budget holds.
 fn ladder_marks(streak: Option<&DailyStreakSnapshot>, starred_today: bool) -> Option<String> {
-    let mut marks = String::new();
-    if let Some(mark) = streak.and_then(|s| StreakMark::for_days(s.consecutive_days)) {
-        marks.push(mark.glyph());
+    let moon = streak
+        .and_then(|s| StreakMark::for_days(s.consecutive_days))
+        .map(StreakMark::glyph);
+    match (moon, starred_today) {
+        (Some(moon), true) => Some(format!("{moon} {STAR_GLYPH}")),
+        (Some(moon), false) => Some(moon.to_string()),
+        (None, true) => Some(STAR_GLYPH.to_string()),
+        (None, false) => None,
     }
-    if starred_today {
-        marks.push(STAR_GLYPH);
-    }
-    (!marks.is_empty()).then_some(marks)
 }
 
 fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {

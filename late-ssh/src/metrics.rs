@@ -34,7 +34,6 @@ use crate::app::door::realm::svc::{
 };
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
-use crate::app::hub::dailies::return_push::RungStanding;
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
@@ -825,7 +824,6 @@ mod inner {
     use super::PosterBeat;
     use super::PulseSampleOutcome;
     use super::RadioNudgeSpot;
-    use super::RungStanding;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -3106,30 +3104,6 @@ mod inner {
         rung_stars_total().add(1, &[]);
     }
 
-    fn return_pushes_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_return_pushes_total")
-                .with_description(
-                    "Keypress-return pushes armed by a person's input after hours quiet, by whether the day's rung was still open",
-                )
-                .build()
-        })
-    }
-
-    fn rung_standing_label(standing: RungStanding) -> &'static str {
-        match standing {
-            RungStanding::Open => "open",
-            RungStanding::Done => "done",
-        }
-    }
-
-    /// A session came back after hours quiet and its composer took the push.
-    pub fn record_return_push(standing: RungStanding) {
-        return_pushes_total().add(1, &[KeyValue::new("rung", rung_standing_label(standing))]);
-    }
-
     fn radio_nudges_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -4667,7 +4641,6 @@ mod inner {
     use super::PosterBeat;
     use super::PulseSampleOutcome;
     use super::RadioNudgeSpot;
-    use super::RungStanding;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -4791,7 +4764,6 @@ mod inner {
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_daily_streak_day(_day: StreakDay) {}
     pub fn record_rung_star() {}
-    pub fn record_return_push(_standing: RungStanding) {}
     pub fn record_radio_nudge(_spot: RadioNudgeSpot) {}
     pub fn record_comeback(_moment: ComebackMoment, _beat: ComebackBeat) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}

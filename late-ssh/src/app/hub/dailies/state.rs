@@ -5,8 +5,14 @@ use uuid::Uuid;
 
 use crate::app::common::primitives::Banner;
 
-use super::return_push::RungStanding;
 use super::svc::{QuestEvent, QuestService, QuestSnapshot};
+
+/// Whether today's rung is still to be won, for the arcade week's badge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RungStanding {
+    Open,
+    Done,
+}
 
 /// `pub` (not `pub(crate)`) because the public `ArcadeHubView` carries a
 /// reference to it for the arcade quest strip.

@@ -1077,9 +1077,6 @@ pub struct App {
     /// This session's away flag as last written to the active-users roster,
     /// so the 1Hz edge writes only on a change (`App::sync_away`).
     pub(crate) away: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`): armed by
-    /// the person's first input after hours quiet, read by the composer.
-    pub(crate) return_push: crate::app::hub::dailies::return_push::ReturnPush,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -2037,7 +2034,6 @@ impl App {
             notify_outbox,
             sent_away: false,
             away: false,
-            return_push: Default::default(),
             is_draining: config.is_draining,
             handoff: crate::app::handoff::state::HandoffState::new(config.handoff_idle),
             icon_picker_open: false,
@@ -3137,18 +3133,11 @@ impl App {
                 event_end,
                 paste_open,
             } => {
-                let quiet = self.last_active_at.elapsed();
                 self.last_active_at = Instant::now();
                 self.newcomer_clock.note_input(chrono::Utc::now());
                 self.sent_away = false;
                 if self.away {
                     self.sync_away();
-                    if self.return_push.note_return(Instant::now(), quiet) {
-                        crate::metrics::record_return_push(
-                            self.quest_state
-                                .rung_standing(chrono::Utc::now().date_naive()),
-                        );
-                    }
                 }
                 // The held tail came from a chunk already swallowed, so the
                 // event ends this far into this one.
