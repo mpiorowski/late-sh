@@ -26,7 +26,7 @@ late-ssh/src/app/chat/
 |-- mod_modal/                   # `/mod` console modal: state/input/ui, opened by `take_requested_mod_modal`
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, `../ai/ROUND.md`, or a memory trigger, `../ai/MEMORY.md`)
 |-- special_badges.rs            # Hardcoded per-username badges in author labels (allowlist, edit and redeploy)
-|-- spoiler.rs                   # `||spoiler||` masking for every TUI surface that shows a body (`RENDERING.md`)
+|-- spoiler.rs                   # `||spoiler||` masking and reveal; `RENDERING.md` lists the surfaces that mask and the two that do not
 |-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
@@ -173,7 +173,7 @@ Keys:
 - `c` copies the selected message body.
 - `t` toggles the message's translation (see Translation below).
 - `g` opens the gild tier picker (see Gilds below). Consumed whenever a message is selected: on your own message, or one in a DM, a private room, or a game/stream chat, it banners the refusal instead of opening (`ChatState::gild_target_in_room` answers those room rules locally; the rest stay with the service).
-- Enter jumps from a reply to its loaded target.
+- Enter reveals the message's `||spoilers||` first (`RENDERING.md`); with nothing left to reveal it opens a News card, an image, a YouTube link, or jumps from a reply to its loaded target, in that order.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
 - Digits `1..9` and `w` (👋, wave hi) while reaction leader is active toggle quick reactions, exit reaction leader mode, and keep the message selected.

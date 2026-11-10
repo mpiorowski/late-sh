@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cell::Cell,
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
@@ -1724,6 +1725,11 @@ impl ChatState {
         changed
     }
 
+    /// A message's body as this session reads it (`spoiler::shown`).
+    fn shown_body<'a>(&self, message: &'a ChatMessage) -> Cow<'a, str> {
+        super::spoiler::shown(&message.body, self.spoilers_revealed.contains(&message.id))
+    }
+
     /// Enter on a selected message that still hides `||spoilers||` reveals
     /// them for this session. Returns false when there is nothing to reveal,
     /// so Enter falls through to its other actions.
@@ -2739,7 +2745,7 @@ impl ChatState {
 
     pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
         self.selected_message_in_room(room_id)
-            .and_then(|m| inline_image_url_in_body(&m.body))
+            .and_then(|m| inline_image_url_in_body(&self.shown_body(m)))
             .is_some()
     }
 
@@ -3028,7 +3034,7 @@ impl ChatState {
     /// instead.
     pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<WatchRequest> {
         let message = self.selected_message_in_room(room_id)?;
-        let video_id = match inline_preview_source_in_body(&message.body) {
+        let video_id = match inline_preview_source_in_text(&self.shown_body(message)) {
             Some(InlinePreviewSource::Video { video_id }) => video_id,
             Some(InlinePreviewSource::Image(_)) | None => return None,
         };
@@ -3054,7 +3060,7 @@ impl ChatState {
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
-            inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+            inline_image_url_in_body(&self.shown_body(message)).map(|url| (message.id, url))
         }) else {
             return false;
         };
@@ -3103,8 +3109,8 @@ impl ChatState {
             // One line, always: the picker prints the preview in a single
             // row, and a multi-line body would otherwise walk over the
             // tier rows below it.
-            preview: message
-                .body
+            preview: self
+                .shown_body(message)
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" "),
@@ -6684,8 +6690,13 @@ impl ChatState {
                         .into_iter()
                         .filter(|message| !self.message_is_ignored(message))
                         .map(|message| {
+                            // The result row shows bars too: a query that only
+                            // matches inside a spoiler highlights nothing.
                             let (snippet_prefix, snippet_match, snippet_suffix) =
-                                build_search_snippet(&message.body, &query);
+                                build_search_snippet(
+                                    &super::spoiler::mask_spoilers(&message.body),
+                                    &query,
+                                );
                             MessageSearchHit {
                                 message,
                                 snippet_prefix,
@@ -7625,10 +7636,15 @@ impl InlinePreviewSource {
 /// text, so a link there previews nothing (Enter jumps to the parent).
 pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewSource> {
     // A link inside a spoiler would give the secret away as a picture.
-    let body = &*super::spoiler::mask_spoilers(body);
-    match inline_image_url_in_body(body) {
+    inline_preview_source_in_text(&super::spoiler::mask_spoilers(body))
+}
+
+/// The same pick over text a reader is already shown (`spoiler::shown`):
+/// what Enter opens, so a revealed link opens and a hidden one does not.
+fn inline_preview_source_in_text(text: &str) -> Option<InlinePreviewSource> {
+    match inline_image_url_in_body(text) {
         Some(url) => Some(InlinePreviewSource::Image(url)),
-        None => body_links(body_without_reply_quote(body))
+        None => body_links(body_without_reply_quote(text))
             .find_map(crate::app::video::state::youtube_video_id)
             .map(|video_id| InlinePreviewSource::Video { video_id }),
     }

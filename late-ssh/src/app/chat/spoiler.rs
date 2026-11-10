@@ -48,6 +48,16 @@ pub(crate) fn unwrap_spoilers(body: &str) -> Cow<'_, str> {
     replace_spoilers(body, str::to_string)
 }
 
+/// The body as one reader sees it: bars until they revealed the message, the
+/// plain words after. Opening a message's link or quoting it in a picker
+/// reads this, never the stored body, so neither can reach past a bar.
+pub(crate) fn shown(body: &str, revealed: bool) -> Cow<'_, str> {
+    match revealed {
+        true => unwrap_spoilers(body),
+        false => mask_spoilers(body),
+    }
+}
+
 fn replace_spoilers(body: &str, with: impl Fn(&str) -> String) -> Cow<'_, str> {
     let ranges = spoiler_ranges(body);
     if ranges.is_empty() {

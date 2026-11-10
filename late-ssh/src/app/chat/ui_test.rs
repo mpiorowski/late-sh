@@ -342,6 +342,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -366,6 +367,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -509,7 +511,7 @@ fn spoilers_render_masked_until_revealed() {
     theme::set_current_by_id("late");
     let message_id = Uuid::from_u128(10);
 
-    let render = |revealed: bool| -> String {
+    let render = |body: &str, revealed: bool, plain_glyphs: bool| -> String {
         let current_user_id = Uuid::from_u128(2);
         let author_id = Uuid::from_u128(3);
         let created = Utc::now();
@@ -521,7 +523,7 @@ fn spoilers_render_masked_until_revealed() {
             reply_to_user_id: None,
             room_id: Uuid::from_u128(1),
             user_id: author_id,
-            body: "today is ||CRANE||".to_string(),
+            body: body.to_string(),
         };
         let usernames = HashMap::from([
             (current_user_id, "alice".to_string()),
@@ -537,11 +539,12 @@ fn spoilers_render_masked_until_revealed() {
             versions: ChatRowsVersions::default(),
             current_user_id,
             live_user_ids: &empty_ids,
-            show_flag_fallback: false,
+            show_flag_fallback: plain_glyphs,
             usernames: &username_lookup,
             countries: &HashMap::new(),
             friend_user_ids: &empty_ids,
             bonsai_glyphs: &HashMap::new(),
+            ladder_marks: &HashMap::new(),
             chat_badges: &HashMap::new(),
             profile_award_badges: &HashMap::new(),
             message_reactions: &HashMap::new(),
@@ -574,13 +577,19 @@ fn spoilers_render_masked_until_revealed() {
             .join("\n")
     };
 
-    let hidden = render(false);
+    let hidden = render("today is ||CRANE||", false, false);
     assert!(hidden.contains("today is ▒▒▒▒▒"), "{hidden}");
     assert!(!hidden.contains("CRANE"), "{hidden}");
 
-    let revealed = render(true);
+    let revealed = render("today is ||CRANE||", true, false);
     assert!(revealed.contains("today is CRANE"), "{revealed}");
     assert!(!revealed.contains("||"), "{revealed}");
+
+    // Plain glyphs drops the icon at the spoiler's edge; the words behind
+    // it must stay hidden all the same.
+    let plain = render("today is ||\u{e000} CRANE||", false, true);
+    assert!(!plain.contains("CRANE"), "{plain}");
+    assert!(plain.contains('▒'), "{plain}");
 }
 
 #[test]

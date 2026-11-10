@@ -4953,3 +4953,100 @@ async fn enter_reveals_a_messages_spoilers_once() {
     // Already revealed: a second Enter goes on to the message's other actions.
     assert!(!state.reveal_selected_spoilers_in_room(lounge.id));
 }
+
+/// One spoiled message in #lounge, a viewer's state with it loaded.
+async fn lounge_with_spoiled_message(
+    test_db: &late_core::test_utils::TestDb,
+    body: &str,
+) -> (ChatState, Uuid, Uuid) {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "spoiler_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "spoiler_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    for user in [&viewer, &author] {
+        ChatRoomMember::join(&client, lounge.id, user.id)
+            .await
+            .expect("join");
+    }
+    let spoiled = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: body.to_string(),
+        },
+    )
+    .await
+    .expect("spoiled message");
+
+    let mut state = counter_test_state(test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, spoiled.id).await;
+    state.selected_message_id = Some(spoiled.id);
+    (state, lounge.id, spoiled.id)
+}
+
+/// Enter's second press opens the link the first one revealed: before the
+/// reveal nothing can reach it, after it the URL is the author's, whole.
+#[tokio::test]
+async fn a_spoiled_image_link_opens_only_once_revealed() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, _) =
+        lounge_with_spoiled_message(&test_db, "||https://h.uguu.se/cat.png||").await;
+
+    assert!(!state.selected_message_has_inline_image_in_room(lounge_id));
+    assert!(!state.open_selected_image_modal_in_room(lounge_id));
+    let gild = state.gild_target_in_room(lounge_id).expect("gild target");
+    assert!(!gild.preview.contains("cat.png"), "{}", gild.preview);
+
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+    assert!(state.open_selected_image_modal_in_room(lounge_id));
+    assert_eq!(
+        state.image_modal.as_ref().map(|modal| modal.url.as_str()),
+        Some("https://h.uguu.se/cat.png")
+    );
+}
+
+#[tokio::test]
+async fn a_spoiled_youtube_link_plays_only_once_revealed() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, _) =
+        lounge_with_spoiled_message(&test_db, "||https://youtu.be/dQw4w9WgXcQ||").await;
+
+    assert!(state.selected_video_in_room(lounge_id).is_none());
+
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+    assert_eq!(
+        state
+            .selected_video_in_room(lounge_id)
+            .map(|request| request.url),
+        Some(crate::app::audio::youtube::watch_url("dQw4w9WgXcQ"))
+    );
+}
+
+/// The search result row is one more place the body is read: a hit on the
+/// words around a spoiler lists the bars, never the hidden word.
+#[tokio::test]
+async fn a_search_result_row_keeps_spoilers_hidden() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, _) =
+        lounge_with_spoiled_message(&test_db, "today is ||CRANE||").await;
+
+    state.start_message_search(Some(lounge_id), "today".to_string());
+    drain_events_until(&mut state, "the search lands its hit", |state| {
+        !state.message_search.hits.is_empty()
+    })
+    .await;
+
+    let hit = &state.message_search.hits[0];
+    assert_eq!(
+        format!(
+            "{}{}{}",
+            hit.snippet_prefix, hit.snippet_match, hit.snippet_suffix
+        ),
+        "today is ▒▒▒▒▒"
+    );
+}

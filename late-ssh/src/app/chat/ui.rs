@@ -40,7 +40,7 @@ use crate::app::files::{
 use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
-use super::spoiler::{has_spoiler, mask_spoilers, unwrap_spoilers};
+use super::spoiler::{self, has_spoiler};
 use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
@@ -1860,17 +1860,16 @@ fn ensure_chat_rows_cache(
         } else {
             reactions
         };
+        // Spoilers are read off the stored body, before the plain-glyphs
+        // pass: dropping an icon at a spoiler's edge would leave whitespace
+        // there, and the markers would stop reading as a spoiler.
+        let spoilers_revealed = ctx.spoilers_revealed.contains(&msg.id);
+        let spoilers_hidden = has_spoiler(&msg.body) && !spoilers_revealed;
+        let body = spoiler::shown(&msg.body, spoilers_revealed);
         let body = if ctx.show_flag_fallback {
-            without_nerd_font_glyphs(&msg.body)
+            Cow::Owned(without_nerd_font_glyphs(&body).into_owned())
         } else {
-            Cow::Borrowed(msg.body.as_str())
-        };
-        let has_spoilers = has_spoiler(&body);
-        let spoilers_hidden = has_spoilers && !ctx.spoilers_revealed.contains(&msg.id);
-        let body = match (has_spoilers, spoilers_hidden) {
-            (false, _) => body,
-            (true, true) => Cow::Owned(mask_spoilers(&body).into_owned()),
-            (true, false) => Cow::Owned(unwrap_spoilers(&body).into_owned()),
+            body
         };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
@@ -1950,7 +1949,10 @@ fn ensure_chat_rows_cache(
             (Some(lines), _) => Some(lines.as_slice()),
             (None, Some(preview)) => Some(preview.picture().as_slice()),
             (None, None) => None,
-        };
+        }
+        // A preview fetched before an edit wrapped its link in a spoiler
+        // would show the secret as a picture.
+        .filter(|_| !spoilers_hidden);
         let translation = ctx
             .translations
             .get(&msg.id)

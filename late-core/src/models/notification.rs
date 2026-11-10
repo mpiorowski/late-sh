@@ -27,6 +27,8 @@ pub struct NotificationView {
     pub room_id: Uuid,
     pub actor_username: String,
     pub room_slug: Option<String>,
+    /// The mentioning message's whole body: the reader cuts it down, after
+    /// masking what the cut must not split (late-ssh's `NotificationService`).
     pub message_preview: String,
     /// When this mention was read, `None` while it is unread: the one signal
     /// behind [`Notification::unread_count`], the list's dot and the attention
@@ -75,7 +77,7 @@ impl Notification {
                 "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id,
                         COALESCE(u.username, '') AS actor_username,
                         r.slug AS room_slug,
-                        LEFT(m.body, 120) AS message_preview,
+                        m.body AS message_preview,
                         n.read_at
                  FROM notifications n
                  JOIN users u ON u.id = n.actor_id

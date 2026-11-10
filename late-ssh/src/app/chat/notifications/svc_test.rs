@@ -11,7 +11,7 @@ use late_core::{
 
 use uuid::Uuid;
 
-use super::{NotificationEvent, NotificationService};
+use super::{NotificationEvent, NotificationService, mention_preview};
 use crate::test_helpers::new_test_db;
 
 /// One connection, so a step holding its own while the next checks one out
@@ -163,4 +163,16 @@ async fn a_list_is_not_lost_to_another_users_list() {
     assert_eq!(first_rows[0].user_id, first.id);
     assert_eq!(second_rows.len(), 1);
     assert_eq!(second_rows[0].user_id, second.id);
+}
+
+/// The Mentions list reads a cut of the body, so the mask has to land
+/// first: a cut through a spoiler would leave its opening words in clear.
+#[test]
+fn a_mention_preview_masks_spoilers_before_it_cuts() {
+    assert_eq!(mention_preview("hi ||CRANE||"), "hi ▒▒▒▒▒");
+
+    let long = format!("{} ||the butler did it||", "x".repeat(110));
+    let preview = mention_preview(&long);
+    assert_eq!(preview.chars().count(), 120);
+    assert!(!preview.contains("butler"), "{preview}");
 }
