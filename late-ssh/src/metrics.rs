@@ -2,6 +2,7 @@ use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
 use late_core::models::chat_room::WatchDoor;
 use late_core::models::chips::Difficulty;
+use late_core::models::daily_streak::StreakDay;
 use late_core::models::door_opening::DoorCard;
 use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::media_queue_item::SongQueueReward;
@@ -11,6 +12,7 @@ use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::audio::client_state::ClientPlatform;
+use crate::app::audio::nudge::RadioNudgeSpot;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
 use crate::app::audio::svc::{BoothFavoriteOutcome, ThumbnailFetch};
@@ -23,6 +25,7 @@ use crate::app::chat::news::svc::{
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::clubhouse::state::Tutorial;
+use crate::app::comeback::state::{Beat as ComebackBeat, Moment as ComebackMoment};
 use crate::app::common::primitives::Screen;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::door::realm::svc::{
@@ -820,9 +823,11 @@ mod inner {
     use super::HomeRoom;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
+    use super::RadioNudgeSpot;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
+    use super::StreakDay;
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
@@ -846,6 +851,7 @@ mod inner {
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
     };
+    use super::{ComebackBeat, ComebackMoment};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
@@ -2923,6 +2929,8 @@ mod inner {
             Tutorial::VisitArcade => "arcade",
             Tutorial::VisitLobby => "lobby",
             Tutorial::VisitTable => "table",
+            Tutorial::VisitBoard => "board",
+            Tutorial::VisitWeek => "week",
             Tutorial::VisitGames => "games",
             Tutorial::VisitDungeon => "dungeon",
             Tutorial::VisitArtboard => "artboard",
@@ -2955,6 +2963,23 @@ mod inner {
     /// reruns are not recorded.
     pub fn record_tour_stop(stop: Tutorial) {
         tour_stops_total().add(1, &[KeyValue::new("stop", tour_stop_label(stop))]);
+    }
+
+    fn tour_board_skips_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_tour_board_skips_total")
+                .with_description(
+                    "First-visit tours that left the board stop unsolved by its skip: read against the week stop's count",
+                )
+                .build()
+        })
+    }
+
+    /// A first visit's tour skipped the board, confirmed.
+    pub fn record_tour_board_skip() {
+        tour_board_skips_total().add(1, &[]);
     }
 
     fn session_ends_total() -> &'static Counter<u64> {
@@ -3037,6 +3062,109 @@ mod inner {
     /// One share card copied.
     pub fn record_share_card(kind: ShareCardKind) {
         share_cards_total().add(1, &[KeyValue::new("card", share_card_kind_label(kind))]);
+    }
+
+    fn daily_streak_days_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_daily_streak_days_total")
+                .with_description(
+                    "Days kept on the daily streak by a daily board win: the run's first, or one more",
+                )
+                .build()
+        })
+    }
+
+    fn streak_day_label(day: StreakDay) -> &'static str {
+        match day {
+            StreakDay::First => "first",
+            StreakDay::Kept { .. } => "kept",
+        }
+    }
+
+    /// A daily board win kept the day on the streak.
+    pub fn record_daily_streak_day(day: StreakDay) {
+        daily_streak_days_total().add(1, &[KeyValue::new("day", streak_day_label(day))]);
+    }
+
+    fn rung_stars_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_rung_stars_total")
+                .with_description("Stars earned by winning the day's rung on its day")
+                .build()
+        })
+    }
+
+    /// The day's rung won on its day: one star.
+    pub fn record_rung_star() {
+        rung_stars_total().add(1, &[]);
+    }
+
+    fn radio_nudges_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_radio_nudges_total")
+                .with_description(
+                    "Plain-ssh sessions told nothing plays over plain ssh, by where they reached for the music",
+                )
+                .build()
+        })
+    }
+
+    fn radio_nudge_spot_label(spot: RadioNudgeSpot) -> &'static str {
+        match spot {
+            RadioNudgeSpot::Stations => "stations",
+            RadioNudgeSpot::Booth => "booth",
+            RadioNudgeSpot::Keys => "keys",
+        }
+    }
+
+    /// A plain-ssh session reached for the music and got the nudge.
+    pub fn record_radio_nudge(spot: RadioNudgeSpot) {
+        radio_nudges_total().add(1, &[KeyValue::new("spot", radio_nudge_spot_label(spot))]);
+    }
+
+    fn comeback_moments_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_comeback_moments_total")
+                .with_description(
+                    "A comeback moment's box on a return day's login, by moment and what the login did with it",
+                )
+                .build()
+        })
+    }
+
+    fn comeback_moment_label(moment: ComebackMoment) -> &'static str {
+        match moment {
+            ComebackMoment::HearIt => "hear_it",
+            ComebackMoment::BigGames => "big_games",
+            ComebackMoment::People => "people",
+        }
+    }
+
+    fn comeback_beat_label(beat: ComebackBeat) -> &'static str {
+        match beat {
+            ComebackBeat::Shown => "shown",
+            ComebackBeat::Taken => "taken",
+            ComebackBeat::Skipped => "skipped",
+        }
+    }
+
+    /// A login's comeback moment opened, was taken, or was kept for later.
+    pub fn record_comeback(moment: ComebackMoment, beat: ComebackBeat) {
+        comeback_moments_total().add(
+            1,
+            &[
+                KeyValue::new("moment", comeback_moment_label(moment)),
+                KeyValue::new("beat", comeback_beat_label(beat)),
+            ],
+        );
     }
 
     fn sliding_puzzle_art_load_label(load: SlidingPuzzleArtLoad) -> &'static str {
@@ -4512,9 +4640,11 @@ mod inner {
     use super::BoothFavoriteOutcome;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
+    use super::RadioNudgeSpot;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
+    use super::StreakDay;
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
@@ -4538,6 +4668,7 @@ mod inner {
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
     };
+    use super::{ComebackBeat, ComebackMoment};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
@@ -4621,6 +4752,7 @@ mod inner {
     }
     pub fn record_place_visit(_screen: Screen, _place: Place, _tenure: Tenure) {}
     pub fn record_tour_stop(_stop: Tutorial) {}
+    pub fn record_tour_board_skip() {}
     pub fn record_session_end(_tenure: Tenure, _screen: Screen) {}
     pub fn record_screensaver(
         _trigger: ScreensaverTrigger,
@@ -4629,6 +4761,10 @@ mod inner {
     ) {
     }
     pub fn record_share_card(_kind: ShareCardKind) {}
+    pub fn record_daily_streak_day(_day: StreakDay) {}
+    pub fn record_rung_star() {}
+    pub fn record_radio_nudge(_spot: RadioNudgeSpot) {}
+    pub fn record_comeback(_moment: ComebackMoment, _beat: ComebackBeat) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}

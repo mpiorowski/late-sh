@@ -44,6 +44,12 @@ impl PaperState {
         self.modal.is_some()
     }
 
+    /// A comeback moment's box took the paper's place after the splash
+    /// (`app/comeback`): one box at login, never two.
+    pub(crate) fn disarm_login_pop(&mut self) {
+        self.login_pop_pending = false;
+    }
+
     /// Esc on the modal: closes it, and if it was still at the press or
     /// leafing to another edition, forgets the request so the answer is
     /// dropped when it lands. A login pop still on its way keeps coming.

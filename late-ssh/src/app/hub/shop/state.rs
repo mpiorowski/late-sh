@@ -465,7 +465,8 @@ impl ShopState {
             return Some(Banner::success("Write your title"));
         }
         // Rentals are bought outright, every time: there is no picker and no
-        // equip step, and a rebuy replaces the live row and resets its clock.
+        // equip step; a rebuy of the same look adds to the live row, any
+        // other look replaces it.
         if item.is_badge_rental() || item.is_title_rental() {
             self.service
                 .purchase_item_task(self.user_id, item.sku, None, None);

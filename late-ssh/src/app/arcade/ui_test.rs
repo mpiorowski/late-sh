@@ -244,9 +244,106 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
 /// `o` opens the roster over the selected daily: tiers hardest first, the
 /// names grouped under them, Esc closes it. A solver of another daily is
 /// neither counted nor listed.
+/// The lobby names the day's rung above the cards and marks its card, so
+/// the one board everyone is on today is never a guess.
+#[tokio::test]
+async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
+    use crate::{
+        app::common::primitives::Screen,
+        test_helpers::{make_app, new_test_db, render_plain},
+    };
+    use late_core::{
+        models::{daily_rung::rung_for, leaderboard::ArcadeGame},
+        test_utils::create_test_user,
+    };
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "rung-reader").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "rung-reader-token");
+    app.resize(120, 40).expect("resize test terminal");
+    app.set_screen(Screen::Arcade);
+
+    let today = chrono::Utc::now().date_naive();
+    let rung = rung_for(today);
+    let lobby = render_plain(&mut app);
+    // The week row: today first, then tomorrow, seven badges with
+    // tomorrow's heavy, and the rotation sentence in one line under the
+    // row. The plain render is one string with no line breaks and no
+    // unstyled gap cells, so the checks count glyphs over the whole frame.
+    let today_at = lobby.find("today").expect("today");
+    let tomorrow_at = lobby.find("tomorrow").expect("tomorrow");
+    assert!(today_at < tomorrow_at, "today comes first: {lobby}");
+    assert_eq!(lobby.matches("┌───────┐").count(), 6, "{lobby}");
+    assert_eq!(lobby.matches("┏━━━━━━━┓").count(), 1, "{lobby}");
+    assert!(
+        lobby.contains("11 boards, one a day, all new at 00:00 UTC."),
+        "{lobby}"
+    );
+    assert!(lobby.contains("0 ✦"), "today's stars so far: {lobby}");
+    assert!(
+        lobby.contains("─── Daily Games ───"),
+        "the list's head stays in view under the week: {lobby}"
+    );
+    // The rung's card can sit below the fold from the first card; selecting
+    // its game scrolls it into view, whatever day it is.
+    let first = app.game_selection;
+    app.game_selection = ArcadeGame::Puzzle(rung.puzzle);
+    let lobby = render_plain(&mut app);
+    let card = lobby
+        .lines()
+        .find(|line| line.contains(&format!("[ {} ]", rung.puzzle.title())))
+        .expect("the rung's card is in the lobby");
+    assert!(
+        card.contains("✦ "),
+        "the rung's card carries the star: {card}"
+    );
+    let other_cards = lobby
+        .lines()
+        .filter(|line| line.contains("[ ") && !line.contains(rung.puzzle.title()))
+        .filter(|line| line.contains('✦'))
+        .count();
+    assert_eq!(other_cards, 0, "only the rung's card is starred: {lobby}");
+    app.game_selection = first;
+
+    // A terminal with the room gets the week as a panel down the right
+    // instead, the list keeping its own width.
+    app.resize(170, 50).expect("resize test terminal");
+    let lobby = render_plain(&mut app);
+    assert!(lobby.contains("─── The Week ───"), "{lobby}");
+    assert!(lobby.contains("tomorrow · "), "{lobby}");
+    assert!(lobby.contains("all new at 00:00 UTC."), "{lobby}");
+    // The panel says the rotation in two lines; the one-line sentence is
+    // the row's alone.
+    assert!(
+        !lobby.contains("one a day, all new at 00:00 UTC."),
+        "the row is gone once the panel is up: {lobby}"
+    );
+
+    // A short terminal drops the week before the list loses its room, and
+    // the list's head stays in view: nothing scrolls the first card away.
+    app.resize(80, 24).expect("resize test terminal");
+    let lobby = render_plain(&mut app);
+    assert!(!lobby.contains("┌───────┐"), "no week at 80x24: {lobby}");
+    assert!(lobby.contains("─── Daily Games ───"), "{lobby}");
+    assert!(lobby.contains("Win once per UTC day"), "{lobby}");
+    app.resize(170, 50).expect("resize test terminal");
+    let lobby = render_plain(&mut app);
+    let share_line = lobby
+        .lines()
+        .find(|line| line.contains("Share your day card"))
+        .expect("the intro keeps its line");
+    assert!(
+        share_line.contains("Every finished puzzle has one too."),
+        "{share_line}"
+    );
+}
+
 #[tokio::test]
 async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use crate::{
         app::common::primitives::Screen,
@@ -285,6 +382,7 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
                 (bob, bob_status),
                 (carol, carol_status),
             ]),
+            HashSet::new(),
         ),
         ..LeaderboardData::default()
     });
@@ -354,7 +452,10 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
 /// refresh) must see today's dailies open, not yesterday's ticks.
 #[tokio::test]
 async fn yesterdays_marks_do_not_show_on_todays_lobby() {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use crate::{
         app::common::primitives::Screen,
@@ -383,7 +484,7 @@ async fn yesterdays_marks_do_not_show_on_todays_lobby() {
     let today = chrono::Utc::now().date_naive();
 
     app.leaderboard = Arc::new(LeaderboardData {
-        user_daily_statuses: DailyStatuses::new(today, statuses.clone()),
+        user_daily_statuses: DailyStatuses::new(today, statuses.clone(), HashSet::new()),
         ..LeaderboardData::default()
     });
     let fresh = render_plain(&mut app);
@@ -391,7 +492,11 @@ async fn yesterdays_marks_do_not_show_on_todays_lobby() {
     assert!(fresh.contains("2 solved"), "{fresh}");
 
     app.leaderboard = Arc::new(LeaderboardData {
-        user_daily_statuses: DailyStatuses::new(today - chrono::Duration::days(1), statuses),
+        user_daily_statuses: DailyStatuses::new(
+            today - chrono::Duration::days(1),
+            statuses,
+            HashSet::new(),
+        ),
         ..LeaderboardData::default()
     });
     let stale = render_plain(&mut app);

@@ -35,6 +35,9 @@ pub(crate) struct StationsView<'a> {
     pub current: RadioStation,
     pub slots: RadioSlots,
     pub source: AudioSource,
+    /// The plain-ssh nudge (`audio/nudge.rs`), `None` while a client is
+    /// paired. A row above the footer; the tour's pitch outranks it.
+    pub nudge: Option<&'a str>,
 }
 
 /// `tour` is the first-visit tour's pitch, written above the dial while the
@@ -52,9 +55,15 @@ pub(crate) fn draw(
         Some(header) => (header.rows() + 1, 0),
         None => (0, 1),
     };
+    let nudge = match tour {
+        Some(_) => None,
+        None => view.nudge,
+    };
+    let nudge_rows = u16::from(nudge.is_some());
     let wanted_height = CHROME_ROWS - 2
         + header_rows
         + 2 * footer_rows
+        + nudge_rows
         + list_lines(view, None, 0).0.len().max(1) as u16;
     let popup = centered_rect(
         area,
@@ -87,6 +96,7 @@ pub(crate) fn draw(
         Constraint::Length(1),                             // pinned slots
         Constraint::Length(1),                             // breathing
         Constraint::Min(1),                                // list
+        Constraint::Length(nudge_rows),                    // plain-ssh nudge
         Constraint::Length(1),                             // breathing
         Constraint::Length(footer_rows),                   // footer
         Constraint::Length(footer_rows),                   // breathing
@@ -95,7 +105,16 @@ pub(crate) fn draw(
 
     match tour {
         Some(header) => header.draw(frame, layout[1]),
-        None => frame.render_widget(Paragraph::new(footer_line()), layout[7]),
+        None => frame.render_widget(Paragraph::new(footer_line()), layout[8]),
+    }
+    if let Some(nudge) = nudge {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {nudge}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            layout[6],
+        );
     }
     frame.render_widget(
         Paragraph::new(pinned_line(view.slots, usize::from(layout[3].width))),

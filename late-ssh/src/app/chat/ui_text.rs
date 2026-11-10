@@ -33,6 +33,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
+    /// The ladder's marks glued to the name (the moon and the star), painted
+    /// in the name's own color.
+    pub marks_range: Option<(usize, usize)>,
     pub title_range: Option<(usize, usize)>,
     pub runner: Option<((usize, usize), Color)>,
     pub word: Option<(&'static str, Color)>,
@@ -99,6 +102,15 @@ fn push_author_prefix_spans(
     // the name's effect. A range that does not sit exactly where the
     // builder put it is left to the tail rather than trusted.
     let mut cursor = end;
+    if let Some((from, to)) = tint.marks_range
+        && from == cursor
+        && to > from
+        && to <= prefix.len()
+        && prefix.is_char_boundary(to)
+    {
+        spans.push(Span::styled(prefix[from..to].to_string(), author_style));
+        cursor = to;
+    }
     let (runner_range, runner_style) = match tint.runner {
         Some((range, color)) => (Some(range), Style::default().fg(color)),
         None => (None, Style::default()),

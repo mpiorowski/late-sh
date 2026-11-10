@@ -508,19 +508,39 @@ pub struct DoorBoards {
     pub score: BoardWindows,
 }
 
-/// Every user's daily marks, stamped with the UTC day they were read for. The
-/// snapshot refreshes every few minutes, so for a while after midnight it
-/// still holds yesterday's; reading through [`DailyStatuses::on`] keeps those
-/// off today's puzzles.
+/// Every user's daily marks and the day's rung stars (`daily_rung_stars`),
+/// stamped with the UTC day they were read for. The snapshot refreshes
+/// every few minutes, so for a while after midnight it still holds
+/// yesterday's; reading through [`DailyStatuses::on`] and
+/// [`DailyStatuses::starred_on`] keeps those off today's puzzles.
 #[derive(Clone, Default)]
 pub struct DailyStatuses {
     day: NaiveDate,
     by_user: HashMap<Uuid, DailyCompletionStatus>,
+    starred: HashSet<Uuid>,
 }
 
 impl DailyStatuses {
-    pub fn new(day: NaiveDate, by_user: HashMap<Uuid, DailyCompletionStatus>) -> Self {
-        Self { day, by_user }
+    pub fn new(
+        day: NaiveDate,
+        by_user: HashMap<Uuid, DailyCompletionStatus>,
+        starred: HashSet<Uuid>,
+    ) -> Self {
+        Self {
+            day,
+            by_user,
+            starred,
+        }
+    }
+
+    /// Who has the star of `today`'s rung: nobody once `today` has moved
+    /// past the day the snapshot was read for.
+    pub fn starred_on(&self, today: NaiveDate) -> &HashSet<Uuid> {
+        static NOBODY: LazyLock<HashSet<Uuid>> = LazyLock::new(HashSet::new);
+        match self.day == today {
+            true => &self.starred,
+            false => &NOBODY,
+        }
     }
 
     /// The marks for `today`: none at all once `today` has moved past the
@@ -959,9 +979,11 @@ pub async fn day_lobby_starts(client: &Client, day: NaiveDate) -> Result<Vec<Lob
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
+    let today = Utc::now().date_naive();
     let (
         today_champions,
-        user_daily_statuses,
+        daily_marks,
+        starred_today,
         user_chips,
         monthly_chip_earners,
         arcade_champions,
@@ -977,7 +999,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         door_all_time,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
-        fetch_daily_statuses(client, Utc::now().date_naive()),
+        fetch_daily_marks(client, today),
+        super::daily_rung::starred_on(client, today),
         UserChips::all_balances(client),
         fetch_monthly_chip_earners(client, BOARD_DEPTH),
         fetch_arcade_champions(client, BOARD_DEPTH),
@@ -1044,7 +1067,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
 
     Ok(LeaderboardData {
         today_champions,
-        user_daily_statuses,
+        user_daily_statuses: DailyStatuses::new(today, daily_marks, starred_today),
         user_chips,
         monthly_chip_earners,
         arcade_champions,
@@ -1868,7 +1891,10 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
 
 /// Every user's marks on `day`, a UTC date the caller reads once so the
 /// stamp and the rows name the same day.
-async fn fetch_daily_statuses(client: &Client, day: NaiveDate) -> Result<DailyStatuses> {
+async fn fetch_daily_marks(
+    client: &Client,
+    day: NaiveDate,
+) -> Result<HashMap<Uuid, DailyCompletionStatus>> {
     let arms: String = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| {
@@ -1901,5 +1927,5 @@ async fn fetch_daily_statuses(client: &Client, day: NaiveDate) -> Result<DailySt
             .mark_completed(game, difficulty);
     }
 
-    Ok(DailyStatuses::new(day, statuses))
+    Ok(statuses)
 }

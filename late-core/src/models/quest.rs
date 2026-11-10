@@ -13,8 +13,6 @@ use super::chips::{ChipMove, UserChips};
 
 pub const QUEST_USER_CHANGED_CHANNEL: &str = "quest_user_changed";
 pub const QUEST_ASSIGNMENTS_CHANGED_CHANNEL: &str = "quest_assignments_changed";
-pub const MAX_DAILY_QUEST_STREAK_BONUS_LEVEL: i32 = 5;
-pub const DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL: i64 = 100;
 
 #[derive(Clone, Debug)]
 pub struct QuestTemplate {
@@ -116,38 +114,6 @@ impl From<tokio_postgres::Row> for UserQuestProgress {
 }
 
 #[derive(Clone, Debug)]
-pub struct UserDailyQuestStreak {
-    pub user_id: Uuid,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-    pub last_completed_date: NaiveDate,
-    pub consecutive_days: i32,
-    pub bonus_level: i32,
-}
-
-impl From<tokio_postgres::Row> for UserDailyQuestStreak {
-    fn from(row: tokio_postgres::Row) -> Self {
-        Self {
-            user_id: row.get("user_id"),
-            created: row.get("created"),
-            updated: row.get("updated"),
-            last_completed_date: row.get("last_completed_date"),
-            consecutive_days: row.get("consecutive_days"),
-            bonus_level: row.get("bonus_level"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct DailyQuestStreakSnapshot {
-    pub consecutive_days: i32,
-    pub bonus_level: i32,
-    pub last_completed_date: Option<NaiveDate>,
-    pub current_bonus_chips: i64,
-    pub next_bonus_chips: i64,
-}
-
-#[derive(Clone, Debug)]
 pub struct QuestSnapshotRow {
     pub assignment: QuestAssignment,
     pub template: QuestTemplate,
@@ -165,13 +131,6 @@ pub struct QuestProgressOutcome {
     pub progress: UserQuestProgress,
     pub completed_now: bool,
     pub rewarded_chips: i64,
-    pub streak_reward: Option<DailyQuestStreakReward>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DailyQuestStreakReward {
-    pub bonus_level: i32,
-    pub reward_chips: i64,
 }
 
 pub fn daily_period(date: NaiveDate) -> (NaiveDate, NaiveDate) {
@@ -520,28 +479,6 @@ pub async fn list_active_snapshot_rows(
         .collect())
 }
 
-pub async fn get_daily_quest_streak_snapshot(
-    client: &Client,
-    user_id: Uuid,
-    today: NaiveDate,
-) -> Result<DailyQuestStreakSnapshot> {
-    let row = client
-        .query_opt(
-            "SELECT *
-             FROM user_daily_quest_streaks
-             WHERE user_id = $1",
-            &[&user_id],
-        )
-        .await?;
-    let Some(row) = row else {
-        return Ok(DailyQuestStreakSnapshot::default());
-    };
-    Ok(daily_streak_snapshot_from_row(
-        UserDailyQuestStreak::from(row),
-        today,
-    ))
-}
-
 pub async fn apply_progress_event(
     client: &mut Client,
     user_id: Uuid,
@@ -574,15 +511,13 @@ pub async fn apply_progress_event(
 
     let meta = tx
         .query_one(
-            "SELECT a.cadence, a.period_start, t.target, t.reward_chips
+            "SELECT t.target, t.reward_chips
              FROM quest_assignments a
              JOIN reward_templates t ON t.id = a.template_id
              WHERE a.id = $1",
             &[&assignment_id],
         )
         .await?;
-    let assignment_cadence: String = meta.get("cadence");
-    let assignment_period_start: NaiveDate = meta.get("period_start");
     let target: i32 = meta.get("target");
     let reward_chips: i64 = meta.get("reward_chips");
 
@@ -657,12 +592,6 @@ pub async fn apply_progress_event(
         .await?;
     }
 
-    let streak_reward = if completed_now && assignment_cadence == "daily" {
-        record_daily_quest_streak_if_complete(&tx, user_id, assignment_period_start).await?
-    } else {
-        None
-    };
-
     tx.execute(
         "SELECT pg_notify($1, $2)",
         &[&QUEST_USER_CHANGED_CHANNEL, &user_id.to_string()],
@@ -674,91 +603,7 @@ pub async fn apply_progress_event(
         progress: UserQuestProgress::from(row),
         completed_now,
         rewarded_chips,
-        streak_reward,
     }))
-}
-
-async fn record_daily_quest_streak_if_complete(
-    client: &impl GenericClient,
-    user_id: Uuid,
-    completion_date: NaiveDate,
-) -> Result<Option<DailyQuestStreakReward>> {
-    let completion = client
-        .query_one(
-            "SELECT
-                count(*)::int AS total,
-                count(*) FILTER (
-                    WHERE p.completed_at IS NOT NULL OR p.progress >= t.target
-                )::int AS completed
-             FROM quest_assignments a
-             JOIN reward_templates t ON t.id = a.template_id
-             LEFT JOIN user_quest_progress p
-               ON p.assignment_id = a.id AND p.user_id = $1
-             WHERE a.cadence = 'daily' AND a.period_start = $2",
-            &[&user_id, &completion_date],
-        )
-        .await?;
-    let total: i32 = completion.get("total");
-    let completed: i32 = completion.get("completed");
-    if total == 0 || completed == 0 {
-        return Ok(None);
-    }
-
-    let existing = client
-        .query_opt(
-            "SELECT *
-             FROM user_daily_quest_streaks
-             WHERE user_id = $1
-             FOR UPDATE",
-            &[&user_id],
-        )
-        .await?;
-    let existing = existing.map(UserDailyQuestStreak::from);
-    let Some(advance) = next_daily_streak_advance(
-        existing
-            .as_ref()
-            .map(|streak| (streak.last_completed_date, streak.consecutive_days)),
-        completion_date,
-    ) else {
-        return Ok(None);
-    };
-
-    client
-        .execute(
-            "INSERT INTO user_daily_quest_streaks
-                (user_id, last_completed_date, consecutive_days, bonus_level)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (user_id) DO UPDATE SET
-                last_completed_date = EXCLUDED.last_completed_date,
-                consecutive_days = EXCLUDED.consecutive_days,
-                bonus_level = EXCLUDED.bonus_level,
-                updated = current_timestamp",
-            &[
-                &user_id,
-                &completion_date,
-                &advance.consecutive_days,
-                &advance.bonus_level,
-            ],
-        )
-        .await?;
-
-    if advance.reward_chips > 0 {
-        credit_chip_reward(
-            client,
-            user_id,
-            advance.reward_chips,
-            ChipMove::DailyQuestStreakReward,
-            &completion_date.to_string(),
-        )
-        .await?;
-    }
-
-    Ok(
-        (advance.reward_chips > 0).then_some(DailyQuestStreakReward {
-            bonus_level: advance.bonus_level,
-            reward_chips: advance.reward_chips,
-        }),
-    )
 }
 
 async fn credit_chip_reward(
@@ -771,59 +616,6 @@ async fn credit_chip_reward(
     match UserChips::apply(client, user_id, chip_move, amount, source_ref).await? {
         Some(_) => Ok(()),
         None => anyhow::bail!("quest chip credit returned no row"),
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DailyStreakAdvance {
-    consecutive_days: i32,
-    bonus_level: i32,
-    reward_chips: i64,
-}
-
-fn next_daily_streak_advance(
-    existing: Option<(NaiveDate, i32)>,
-    completion_date: NaiveDate,
-) -> Option<DailyStreakAdvance> {
-    let consecutive_days = match existing {
-        Some((last_completed_date, _)) if last_completed_date == completion_date => return None,
-        Some((last_completed_date, consecutive_days))
-            if last_completed_date
-                == completion_date
-                    .checked_sub_signed(Duration::days(1))
-                    .unwrap_or(completion_date) =>
-        {
-            consecutive_days.max(1).saturating_add(1)
-        }
-        _ => 1,
-    };
-    let bonus_level = (consecutive_days - 1).clamp(0, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL);
-    Some(DailyStreakAdvance {
-        consecutive_days,
-        bonus_level,
-        reward_chips: i64::from(bonus_level) * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
-    })
-}
-
-fn daily_streak_snapshot_from_row(
-    streak: UserDailyQuestStreak,
-    today: NaiveDate,
-) -> DailyQuestStreakSnapshot {
-    let yesterday = today.checked_sub_signed(Duration::days(1)).unwrap_or(today);
-    if streak.last_completed_date != today && streak.last_completed_date != yesterday {
-        return DailyQuestStreakSnapshot::default();
-    }
-
-    let next_bonus_level = streak
-        .consecutive_days
-        .clamp(0, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL);
-    DailyQuestStreakSnapshot {
-        consecutive_days: streak.consecutive_days,
-        bonus_level: streak.bonus_level,
-        last_completed_date: Some(streak.last_completed_date),
-        current_bonus_chips: i64::from(streak.bonus_level)
-            * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
-        next_bonus_chips: i64::from(next_bonus_level) * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
     }
 }
 

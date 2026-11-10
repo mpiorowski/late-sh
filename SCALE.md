@@ -849,7 +849,6 @@ The target shape already exists in the tree and is the thing to copy: `app/deadc
 | `handle_chat_scroll_click`, `handle_chat_composer_click`, `chat_room_list_view`, `start_slash_command_composer` | `input.rs` (4 fns, ~280 lines) | `app/chat/input.rs`, which already exists | ~280 lines |
 | `handle_icon_picker_input`, `apply_icon_selection` | `input.rs` (~140 lines) | `app/icon_picker/input.rs` (domain has no `input.rs` yet) | ~140 lines |
 | `handle_directory_catalog_input` | `input.rs` (66 lines) | `app/directory/input.rs`, which already exists | ~70 lines |
-| `handle_tour_gate` | `input.rs` (32 lines) | wherever the tour state lives (clubhouse tutorial) | ~30 lines |
 | `push_quit_confirm_sayonara_placement` | `render.rs` (220 lines) | `app/quit_confirm/ui.rs`, which already exists | ~220 lines |
 | `app_frame_title` per-screen branches, `status_hud_title` | `render.rs` (480 lines) | a `title()` per domain `ui.rs`, root keeps the `match screen` | ~400 lines |
 | `App::new` field seeding | `state.rs` (634 lines) | each domain's `State::new(config)`; root becomes a list of constructor calls | ~400 lines |

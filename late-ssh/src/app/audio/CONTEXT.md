@@ -21,6 +21,7 @@ Owned by this domain:
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
 - Third-party stations are played by the paired CLI and the listen page straight from the station's own stream URL. late.sh never proxies or restreams third-party audio through Icecast/Liquidsoap; it fetches metadata only.
+- The plain-ssh nudge (`nudge.rs`): a session with no paired client that opens the Stations modal or the Music Booth, or presses a station slot or the source toggle, is told right there that nothing plays over plain ssh, with the help's Pair topic and the listen page. The modals take it as a dim row above the footer (the tour's pitch outranks it); the keys take it as the banner in place of their success. `late_ssh_radio_nudges_total{spot}` counts it by `stations`, `booth`, `keys`, once per open or key.
 
 Out of scope here (lives elsewhere):
 - LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, and pair-WS voice messages — see `../voice/CONTEXT.md`.
@@ -38,6 +39,7 @@ late-ssh/src/app/audio/
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── input.rs                # v+* music suffix handling: booth, source cycling, stream/station selection
+├── nudge.rs                # the plain-ssh nudge: where the hand was (RadioNudgeSpot) and the line
 ├── stations.rs             # server-side stream/station registry and URL resolution
 ├── viz.rs                  # render_eq + Spectrum: live client spectrum, wall-tick ambient fallback
 ├── youtube.rs              # URL parsing + watch_url + optional YouTube Data API validation client, thumbnail fetch
