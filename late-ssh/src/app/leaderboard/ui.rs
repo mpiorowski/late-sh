@@ -21,9 +21,12 @@ use super::state::{Board, LeaderboardPageState, Standings};
 
 const RAIL_WIDTH: u16 = 24;
 const WINDOW_GAP_MAX: u16 = 3;
-/// Smallest area the rail-plus-detail layout still fits in.
+/// Smallest area the rail-plus-detail layout still fits in. The height is
+/// the fixed rows (the breathing row, a board's title, hint and gap, the
+/// footer rule and the footer) plus the three a standings window needs to
+/// show its heading and a first entry.
 const MIN_WIDTH: u16 = 48;
-const MIN_HEIGHT: u16 = 8;
+const MIN_HEIGHT: u16 = 9;
 
 pub(crate) struct LeaderboardPageView<'a> {
     pub state: &'a LeaderboardPageState,

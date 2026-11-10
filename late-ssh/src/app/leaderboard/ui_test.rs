@@ -683,3 +683,50 @@ fn lateania_rows_show_the_class_note_until_width_runs_short() {
     ));
     assert!(kills.ends_with("14 kills"), "{kills}");
 }
+
+/// The smallest page the layout accepts still shows a standing. One row
+/// less gets the notice, never a title over an empty body.
+#[test]
+fn the_smallest_accepted_page_still_shows_a_standing() {
+    use late_core::models::leaderboard::LeaderboardData;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut state = LeaderboardPageState::new();
+    let top_chips = state
+        .boards()
+        .iter()
+        .position(|board| *board == Board::TopChips)
+        .expect("Top Chips is on the page");
+    state.select(top_chips);
+    let data = LeaderboardData {
+        monthly_chip_earners: vec![entry(1, "alice", Uuid::from_u128(7), 500)],
+        ..LeaderboardData::default()
+    };
+    let render = |height: u16| -> String {
+        let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                super::draw(
+                    frame,
+                    frame.area(),
+                    &super::LeaderboardPageView {
+                        state: &state,
+                        data: &data,
+                        user_id: viewer(),
+                    },
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>() + "\n")
+            .collect()
+    };
+
+    let smallest = render(9);
+    assert!(smallest.contains("alice"), "{smallest}");
+
+    let too_small = render(8);
+    assert!(!too_small.contains("alice"), "{too_small}");
+    assert!(too_small.contains("needs at least"), "{too_small}");
+}
