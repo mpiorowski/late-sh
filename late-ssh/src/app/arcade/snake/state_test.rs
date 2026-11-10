@@ -135,3 +135,20 @@ async fn eating_the_last_food_advances_the_level_on_that_step() {
     assert_eq!(state.field.food_left(), 4);
     assert_eq!(state.score, 210);
 }
+
+#[test]
+fn level_reset_clears_buffered_inputs_and_last_key() {
+    let mut state = restored(saved_game(0, false));
+    state.cobra.head_dir = Direction::Right;
+    state.input_queue = vec![b'A', b'D'];
+    state.last_key = Some(b'A');
+    state.stutter_left = 3;
+
+    state.reset_level_without_persist(false);
+
+    assert!(state.input_queue.is_empty());
+    assert!(state.last_key.is_none());
+    assert!(!state.tick());
+    assert_eq!(state.stutter_left, 2);
+    assert_eq!(state.cobra.head_dir, Direction::Right);
+}

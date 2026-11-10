@@ -187,6 +187,7 @@ impl State {
         }
         self.field.things.clear();
         self.field.gen_things(self.level.number, &self.cobra);
+        self.input_queue.clear();
         self.last_key = None;
         if persist {
             self.persist_progress();
