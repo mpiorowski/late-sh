@@ -28,7 +28,10 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
 
 - **Transport: a stats SSH session on the door host.** Each host reserves one
   SSH username, `late_stats` (inside the already-reserved `late_*` handle
-  namespace, so no player can claim it). Instead of a game child it opens a log
+  namespace, so no player can claim it as a handle; dopewars sends account
+  usernames instead, and an account may hold that name, so its door rewrites
+  it before connecting: `dopewars_playname` in `../dopewars/proxy.rs`, which
+  must stay). Instead of a game child it opens a log
   stream: the client pushes its per-file byte offsets in env requests
   (`LATE_DOOR_STATS_CURSORS`, `logfile:123,milestones:456`; a large cursor set,
   e.g. Brogue's one-file-per-player history, is split across several requests
@@ -66,7 +69,9 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
   its startup name prompt and passes it as `-P`), so its lines resolve through
   `users` (`User::find_by_username`) instead of `arcade_handles`. The `late_*`
   reservation is not applied there: it guards handles, and an account may be
-  named `late_dealer`.
+  named `late_dealer`. The name on a line is the one the account had when it
+  opened the door, looked up when the line lands: a rename in between leaves
+  the run with nobody, or with whoever took the old name.
 - **Grants are idempotent; the badge is once, the chips repeat.** Badges and
   chips fire from `award.rs` on every win or pickup. The badge is guarded by a
   `NOT EXISTS` award insert and lands once per account for life. The chips go

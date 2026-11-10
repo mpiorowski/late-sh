@@ -624,11 +624,10 @@ impl DoorIngestService {
     /// The live account behind a dopewars playname. The `late_*` reservation
     /// is the arcade handles' (`resolve_handle`), not this path's: an account
     /// may be named `late_dealer`, and dopewars has no orphaned saves to
-    /// guard. The door never sends `late_stats` as a playname
-    /// (`dopewars_playname` rewrites it to `late_stats_`, which no account
-    /// can be named: a username never ends in an underscore), so that one
-    /// account's runs match nobody and land nowhere.
+    /// guard. The door rewrites the one username the host reserves
+    /// (`late_stats`), and `username_of_playname` reads it back.
     async fn resolve_username(&self, name: &str) -> Result<Option<Uuid>> {
+        let name = crate::app::door::dopewars::proxy::username_of_playname(name);
         let client = self
             .db
             .get()

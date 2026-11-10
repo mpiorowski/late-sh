@@ -140,8 +140,9 @@ decisions are in `late-ssh/src/app/door/ingest/CONTEXT.md`.
 
 The dopewars door joins the same pipe with a host-written file of its own:
 `late-dopewars` diffs the game's binary top-18 score file into an append-only
-`dopewars.sco.runs.log` (`late-dopewars/src/scorelog.rs`) after every game and
-at startup, and streams it as the single `runs` file. The table a volume
+`dopewars.sco.runs.log` (`late-dopewars/src/scorelog.rs`) at startup, after
+each session and every 30 seconds in between, and streams it as the single
+`runs` file. The table a volume
 already held before its first sync is never logged, so the board starts with
 the first game played after the deploy. Its playname is the
 account's `late.sh` username, not an arcade handle, so the pipe resolves it

@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use super::identity::derive_client_key;
+use crate::app::door::ingest::stream::STATS_USERNAME;
 use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,8 +151,10 @@ impl Drop for DopewarsProcess {
 /// narrowed to characters safe in an SSH username and a dopewars playname.
 ///
 /// `late_stats` is rewritten because the host reserves that username for the
-/// stats stream; a player holding it must not collide. The host sanitizes again
-/// (defense in depth) before handing the name to `dopewars -P`.
+/// stats stream; a player holding it must not collide. The rewrite ends in an
+/// underscore, which no account's username does, so it can never be someone
+/// else's name and `username_of_playname` can undo it. The host sanitizes
+/// again (defense in depth) before handing the name to `dopewars -P`.
 pub fn dopewars_playname(username: &str) -> String {
     let cleaned: String = username
         .chars()
@@ -160,10 +163,22 @@ pub fn dopewars_playname(username: &str) -> String {
         .collect();
     if cleaned.is_empty() {
         "drifter".to_string()
-    } else if cleaned.eq_ignore_ascii_case("late_stats") {
-        "late_stats_".to_string()
+    } else if cleaned.eq_ignore_ascii_case(STATS_USERNAME) {
+        STATS_ACCOUNT_PLAYNAME.to_string()
     } else {
         cleaned
+    }
+}
+
+/// What the account named like the stats session plays as.
+const STATS_ACCOUNT_PLAYNAME: &str = "late_stats_";
+
+/// The account username behind a playname this door sent: `dopewars_playname`
+/// undone, for the log pipe that credits a run by it.
+pub fn username_of_playname(playname: &str) -> &str {
+    match playname == STATS_ACCOUNT_PLAYNAME {
+        true => STATS_USERNAME,
+        false => playname,
     }
 }
 

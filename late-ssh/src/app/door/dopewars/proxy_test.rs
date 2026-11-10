@@ -23,3 +23,10 @@ fn playname_avoids_the_reserved_stats_username() {
     assert_eq!(dopewars_playname("late_stats"), "late_stats_");
     assert_eq!(dopewars_playname("LATE_STATS"), "late_stats_");
 }
+
+#[test]
+fn a_playname_reads_back_as_the_username_it_came_from() {
+    for username in ["bob", "late_dealer", "late_stats"] {
+        assert_eq!(username_of_playname(&dopewars_playname(username)), username);
+    }
+}

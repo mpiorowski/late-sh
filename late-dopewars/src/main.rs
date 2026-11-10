@@ -26,6 +26,10 @@ use russh::keys::signature::rand_core::UnwrapErr;
 use crate::config::Config;
 use crate::server::Server;
 
+/// How often the score table is folded into the run log while the host runs,
+/// on top of the sync at startup and after each session.
+const SCORE_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -76,6 +80,30 @@ async fn main() -> anyhow::Result<()> {
     ) {
         tracing::warn!(error = ?e, "failed to sync dopewars run log at startup");
     }
+
+    // A finished game is often followed by another in the same child ("Play
+    // again?"), so a session's end is not every game's end: the table is
+    // also synced on a timer, before a later run can push one off it.
+    let score_file = config.score_file.clone();
+    tokio::spawn(async move {
+        let start = tokio::time::Instant::now() + SCORE_SYNC_INTERVAL;
+        let mut tick = tokio::time::interval_at(start, SCORE_SYNC_INTERVAL);
+        loop {
+            tick.tick().await;
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            if let Err(e) = scorelog::sync_from_sco(
+                std::path::Path::new(&score_file),
+                &scorelog::runs_log_path(&score_file),
+                &scorelog::seen_path(&score_file),
+                now_epoch,
+            ) {
+                tracing::warn!(error = ?e, "failed to sync dopewars run log on the timer");
+            }
+        }
+    });
 
     let listen_addr = config.listen_addr.clone();
     let port = config.port;

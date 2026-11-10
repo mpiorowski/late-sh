@@ -1,6 +1,7 @@
 // The stats session: a log-streaming SSH session for late-ssh's ingestion
-// task. late-ssh connects with the reserved `late_stats` username (inside the
-// reserved `late_*` handle namespace, so no player can ever claim it) and,
+// task. late-ssh connects with the reserved `late_stats` username (players
+// arrive under their account's username, and the late-ssh door rewrites the
+// one account that could hold this name before it connects) and,
 // instead of a dopewars child on a PTY, gets a tail of the append-only run log
 // `scorelog.rs` maintains beside the score file.
 //
