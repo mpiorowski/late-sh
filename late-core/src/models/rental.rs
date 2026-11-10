@@ -79,11 +79,8 @@ pub(crate) fn same_look(live: &Value, bought: &Value) -> bool {
 
 fn without_window(payload: &Value) -> Value {
     let mut look = payload.clone();
-    match look.as_object_mut() {
-        Some(fields) => {
-            fields.remove(DURATION_SECS_KEY);
-        }
-        None => {}
+    if let Some(fields) = look.as_object_mut() {
+        fields.remove(DURATION_SECS_KEY);
     }
     look
 }
