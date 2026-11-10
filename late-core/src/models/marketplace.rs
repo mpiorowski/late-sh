@@ -1000,10 +1000,10 @@ async fn activate_title_rental_in_tx(
     Ok(Some(effect))
 }
 
-/// Activates the Bonsai Decay Shield bought in this transaction. Unlike the
-/// username effect above, a live protection window is extended by the
-/// item's duration rather than reset (`extend_user_effect_in_tx`), so
-/// stacking never discards time the player already paid for.
+/// Activates the Bonsai Decay Shield bought in this transaction. A live
+/// protection window is extended by the item's duration rather than reset
+/// (`extend_user_effect_in_tx`), so stacking never discards time the player
+/// already paid for.
 async fn activate_bonsai_decay_protection_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,

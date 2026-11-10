@@ -606,3 +606,62 @@ fn graybeard_paper_notes_fit_the_budget_and_skip_an_empty_edition() {
     };
     assert_eq!(graybeard_paper_notes(&empty, room), None);
 }
+
+/// A day where only the stat-only "Yesterday" section printed holds nothing
+/// @graybeard wrote, so he reaches back to the newest edition that does.
+#[tokio::test]
+async fn graybeard_reaches_past_an_edition_with_only_the_numbers() {
+    use late_core::models::{
+        chat_room::ChatRoom,
+        paper::{PaperRoomEdition, PaperSectionRow},
+    };
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 10).expect("date");
+    let day_before = today.pred_opt().expect("date");
+
+    assert!(
+        PaperRoomEdition::claim_printing(
+            &client,
+            lounge.id,
+            day_before,
+            12,
+            4,
+            chrono::Utc::now(),
+            3
+        )
+        .await
+        .expect("claim room page")
+    );
+    PaperRoomEdition::finish(&client, lounge.id, day_before, Some("lounge talked shop"))
+        .await
+        .expect("print room page");
+    assert!(
+        PaperSectionRow::claim_printing(
+            &client,
+            today,
+            PaperSectionKind::Yesterday,
+            chrono::Utc::now(),
+            3
+        )
+        .await
+        .expect("claim numbers")
+    );
+    PaperSectionRow::finish(
+        &client,
+        today,
+        PaperSectionKind::Yesterday,
+        Some("42 messages"),
+    )
+    .await
+    .expect("print numbers");
+
+    let notes = latest_paper_notes(&client, today, lounge.id)
+        .await
+        .expect("read the paper")
+        .expect("notes from the day before");
+    assert!(notes.contains("The Late Edition dated 2026-01-09"));
+    assert!(notes.ends_with("#lounge:\nlounge talked shop"));
+}

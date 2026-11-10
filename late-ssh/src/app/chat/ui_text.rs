@@ -33,8 +33,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
-    /// The ladder's marks glued to the name: the moon in the name's own
-    /// color, the star in amber.
+    /// The ladder's marks glued to the name (the moon and the star), painted
+    /// in the name's own color.
     pub marks_range: Option<(usize, usize)>,
     pub title_range: Option<(usize, usize)>,
     pub runner: Option<((usize, usize), Color)>,

@@ -2734,8 +2734,8 @@ struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
-    /// The ladder's marks right after the name, for the painter to give
-    /// the star its amber.
+    /// The ladder's marks right after the name (the moon and the star), for
+    /// the painter to give them the name's own color.
     marks_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.

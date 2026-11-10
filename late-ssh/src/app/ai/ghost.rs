@@ -695,7 +695,7 @@ impl GhostService {
         gb: BotUser,
         trigger_message: ChatMessage,
     ) -> Result<()> {
-        let (messages, paper) = {
+        let (messages, paper_notes) = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, gb.id).await?;
 
@@ -711,24 +711,27 @@ impl GhostService {
             .await?;
             // The paper is what he can be asked about, never a reason not
             // to answer: a failed read leaves him replying without it.
-            let paper = match latest_printed_edition(&client, chrono::Utc::now().date_naive()).await
+            let paper_notes = match latest_paper_notes(
+                &client,
+                chrono::Utc::now().date_naive(),
+                trigger_message.room_id,
+            )
+            .await
             {
-                Ok(edition) => edition,
+                Ok(notes) => notes,
                 Err(e) => {
                     tracing::warn!(error = ?e, "graybeard could not read his paper");
                     None
                 }
             };
-            (messages, paper)
+            (messages, paper_notes)
         };
         if messages.is_empty() {
             return Ok(());
         }
 
         let (history_str, _) = self.build_chat_history(&messages).await?;
-        let paper_notes = paper
-            .as_ref()
-            .and_then(|edition| graybeard_paper_notes(edition, trigger_message.room_id))
+        let paper_notes = paper_notes
             .map(|notes| format!("{notes}\n\n"))
             .unwrap_or_default();
 
@@ -2169,20 +2172,32 @@ impl TinyRng {
     }
 }
 
-/// The newest edition with a printed page, up to `today`: today's once the
-/// press has run, the one before it until then.
-async fn latest_printed_edition(
+/// How many printed editions @graybeard looks back through for one he wrote
+/// in, before replying without the paper.
+const GRAYBEARD_PAPER_LOOKBACK: usize = 7;
+
+/// @graybeard's notes from the newest edition up to `today` that holds a
+/// column he wrote (`graybeard_paper_notes`). An edition can be printed and
+/// still hold nothing of his: the "Yesterday" numbers print with no model,
+/// and his columns can all come back quiet or fail. Such an edition is
+/// stepped over, at most `GRAYBEARD_PAPER_LOOKBACK` editions back.
+async fn latest_paper_notes(
     client: &tokio_postgres::Client,
     today: chrono::NaiveDate,
-) -> anyhow::Result<Option<PaperEdition>> {
-    let edition = PaperEdition::load(client, today).await?;
-    if edition.has_print() {
-        return Ok(Some(edition));
+    room_id: uuid::Uuid,
+) -> anyhow::Result<Option<String>> {
+    let mut day = today;
+    for _ in 0..GRAYBEARD_PAPER_LOOKBACK {
+        let edition = PaperEdition::load(client, day).await?;
+        if let Some(notes) = graybeard_paper_notes(&edition, room_id) {
+            return Ok(Some(notes));
+        }
+        match PaperEdition::nearest_printed(client, day, EditionStep::Earlier).await? {
+            Some(earlier) => day = earlier,
+            None => return Ok(None),
+        }
     }
-    match PaperEdition::nearest_printed(client, today, EditionStep::Earlier).await? {
-        Some(day) => Ok(Some(PaperEdition::load(client, day).await?)),
-        None => Ok(None),
-    }
+    Ok(None)
 }
 
 /// What @graybeard printed in `edition`, for his chat replies: the column on

@@ -55,14 +55,37 @@ pub fn duration_tag(duration_secs: i64) -> String {
     }
 }
 
+/// The payload key that carries a rental's window, the one field two tiers of
+/// one look differ in.
+const DURATION_SECS_KEY: &str = "duration_secs";
+
 /// How long the rental an item payload sells runs. `fallback` is required from
 /// the caller rather than defaulted here: a malformed payload must land on the
 /// window its own kind considers shortest, never on a shared guess.
 pub fn duration_secs(payload: &Value, fallback: i64) -> i64 {
     payload
-        .get("duration_secs")
+        .get(DURATION_SECS_KEY)
         .and_then(|value| value.as_i64())
         .unwrap_or(fallback)
+}
+
+/// Whether two rental payloads wear the same look: equal on everything but
+/// the window they were sold for, so a day and a month of one badge match.
+/// A rebuy of the same look extends the live row instead of replacing it
+/// (`ShopConsumableEffect::activate_user_effect_in_tx`).
+pub(crate) fn same_look(live: &Value, bought: &Value) -> bool {
+    without_window(live) == without_window(bought)
+}
+
+fn without_window(payload: &Value) -> Value {
+    let mut look = payload.clone();
+    match look.as_object_mut() {
+        Some(fields) => {
+            fields.remove(DURATION_SECS_KEY);
+        }
+        None => {}
+    }
+    look
 }
 
 /// Which of the two chat-label slots a badge rental fills. The strings are the

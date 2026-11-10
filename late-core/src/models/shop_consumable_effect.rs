@@ -38,48 +38,6 @@ impl From<tokio_postgres::Row> for ShopConsumableEffect {
 }
 
 impl ShopConsumableEffect {
-    pub async fn activate_room_effect(
-        client: &Client,
-        user_id: Uuid,
-        room_id: Uuid,
-        effect_kind: &str,
-        source_sku: &str,
-        duration_secs: i64,
-        payload: Value,
-    ) -> Result<Self> {
-        let duration_secs = duration_secs.max(1);
-        client
-            .execute(
-                "UPDATE shop_consumable_effects
-                 SET active = false, updated = current_timestamp
-                 WHERE room_id = $1
-                   AND effect_kind = $2
-                   AND active = true
-                   AND ends_at > current_timestamp",
-                &[&room_id, &effect_kind],
-            )
-            .await?;
-
-        let ends_at = Utc::now() + Duration::seconds(duration_secs);
-        let row = client
-            .query_one(
-                "INSERT INTO shop_consumable_effects
-                    (user_id, room_id, effect_kind, source_sku, payload, ends_at)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 RETURNING *",
-                &[
-                    &user_id,
-                    &room_id,
-                    &effect_kind,
-                    &source_sku,
-                    &payload,
-                    &ends_at,
-                ],
-            )
-            .await?;
-        Ok(Self::from(row))
-    }
-
     pub async fn activate_room_effect_in_tx(
         tx: &tokio_postgres::Transaction<'_>,
         user_id: Uuid,
@@ -124,7 +82,7 @@ impl ShopConsumableEffect {
     /// Activate a user-scoped rental (`room_id IS NULL`), deactivating every
     /// prior active effect of the same kind for the user in the same
     /// transaction, so there is one live row per user per kind. A rebuy of
-    /// the same look (`same_look`: the payload less the window it was sold
+    /// the same look (`rental::same_look`: the payload less the window it was sold
     /// for, so a day and a month of one badge match) adds its window to the
     /// live one's expiry: a renewal never throws away time already paid
     /// for. A different look replaces the live row and starts its clock now.
@@ -158,7 +116,7 @@ impl ShopConsumableEffect {
         let renewed_from = deactivated
             .iter()
             .filter(|row| row.get::<_, DateTime<Utc>>("ends_at") > now)
-            .filter(|row| same_look(&row.get::<_, Value>("payload"), &payload))
+            .filter(|row| super::rental::same_look(&row.get::<_, Value>("payload"), &payload))
             .map(|row| row.get::<_, DateTime<Utc>>("ends_at"))
             .max();
         let ends_at = renewed_from.unwrap_or(now) + Duration::seconds(duration_secs);
@@ -363,21 +321,4 @@ impl ShopConsumableEffect {
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
     }
-}
-
-/// Whether two rental payloads wear the same look: equal on everything but
-/// the `duration_secs` window they were sold for.
-fn same_look(live: &Value, bought: &Value) -> bool {
-    without_window(live) == without_window(bought)
-}
-
-fn without_window(payload: &Value) -> Value {
-    let mut look = payload.clone();
-    match look.as_object_mut() {
-        Some(fields) => {
-            fields.remove("duration_secs");
-        }
-        None => {}
-    }
-    look
 }
