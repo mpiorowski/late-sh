@@ -22,15 +22,25 @@ use super::state::{BoothFocus, BoothModalState, HistoryRow};
 const MODAL_WIDTH: u16 = 120;
 const MODAL_HEIGHT: u16 = 40;
 
-pub(crate) fn draw(
-    frame: &mut Frame,
-    area: Rect,
-    state: &BoothModalState,
-    snapshot: &QueueSnapshot,
-    favorites: &[FavoriteItemView],
-    submit_enabled: bool,
-    is_staff: bool,
-) {
+/// What the booth paints beside its state.
+pub(crate) struct BoothView<'a> {
+    pub snapshot: &'a QueueSnapshot,
+    pub favorites: &'a [FavoriteItemView],
+    pub submit_enabled: bool,
+    pub is_staff: bool,
+    /// The plain-ssh nudge (`audio/nudge.rs`), `None` while a client is
+    /// paired. A row above the footer.
+    pub nudge: Option<&'a str>,
+}
+
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &BoothModalState, view: &BoothView<'_>) {
+    let BoothView {
+        snapshot,
+        favorites,
+        submit_enabled,
+        is_staff,
+        nudge,
+    } = *view;
     let popup = centered_rect(
         area,
         MODAL_WIDTH.min(area.width),
@@ -56,20 +66,21 @@ pub(crate) fn draw(
     }
 
     let layout = Layout::vertical([
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // Submit heading
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // submit row
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // Now Playing heading
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // now playing line
-        Constraint::Length(1), // now playing link + copy hint
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // Queue heading
-        Constraint::Length(1), // breathing
-        Constraint::Min(4),    // queue list
-        Constraint::Length(1), // footer
+        Constraint::Length(1),                          // breathing
+        Constraint::Length(1),                          // Submit heading
+        Constraint::Length(1),                          // breathing
+        Constraint::Length(1),                          // submit row
+        Constraint::Length(1),                          // breathing
+        Constraint::Length(1),                          // Now Playing heading
+        Constraint::Length(1),                          // breathing
+        Constraint::Length(1),                          // now playing line
+        Constraint::Length(1),                          // now playing link + copy hint
+        Constraint::Length(1),                          // breathing
+        Constraint::Length(1),                          // Queue heading
+        Constraint::Length(1),                          // breathing
+        Constraint::Min(4),                             // queue list
+        Constraint::Length(u16::from(nudge.is_some())), // plain-ssh nudge
+        Constraint::Length(1),                          // footer
     ])
     .split(inner);
 
@@ -107,7 +118,16 @@ pub(crate) fn draw(
         _ => draw_queue(frame, layout[12], state, &snapshot.queue),
     }
 
-    draw_footer(frame, layout[13], state.focus(), submit_enabled, is_staff);
+    if let Some(nudge) = nudge {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {nudge}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            layout[13],
+        );
+    }
+    draw_footer(frame, layout[14], state.focus(), submit_enabled, is_staff);
 }
 
 fn draw_submit(

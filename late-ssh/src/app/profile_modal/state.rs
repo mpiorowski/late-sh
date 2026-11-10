@@ -13,7 +13,9 @@ use uuid::Uuid;
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::hub::aquarium::state::AquariumState;
 use crate::app::profile::ledger::LedgerRow;
-use crate::app::profile::svc::{ProfilePet, ProfileRunner, ProfileService, ProfileSnapshot};
+use crate::app::profile::svc::{
+    ProfileLadder, ProfilePet, ProfileRunner, ProfileService, ProfileSnapshot,
+};
 
 /// The vertical extent the last draw measured: how tall the composed body
 /// is, how many rows the viewport showed, and where the chips section
@@ -44,6 +46,7 @@ pub(crate) struct ProfileModalState {
     fallback_name: String,
     profile: Option<Profile>,
     chip_balance: Option<i64>,
+    ladder: ProfileLadder,
     /// Read-only bonsai for the viewed user. Built non-persisting, so
     /// viewing never mutates the owner's tree.
     bonsai: Option<BonsaiState>,
@@ -91,6 +94,7 @@ impl ProfileModalState {
             fallback_name: String::new(),
             profile: None,
             chip_balance: None,
+            ladder: ProfileLadder::default(),
             bonsai: None,
             aquarium_fish: Vec::new(),
             pet: None,
@@ -191,6 +195,7 @@ impl ProfileModalState {
         if !matches {
             self.profile = None;
             self.chip_balance = None;
+            self.ladder = ProfileLadder::default();
             self.bonsai = None;
             self.profile_awards.clear();
             self.gild_counts = GildCounts::default();
@@ -209,6 +214,7 @@ impl ProfileModalState {
 
         self.profile = snapshot.profile;
         self.chip_balance = snapshot.chip_balance;
+        self.ladder = snapshot.ladder;
         self.profile_awards = snapshot.profile_awards;
         self.gild_counts = snapshot.gild_counts;
         self.gallery_counts = snapshot.gallery_counts;
@@ -315,6 +321,10 @@ impl ProfileModalState {
 
     pub(crate) fn chip_balance(&self) -> Option<i64> {
         self.chip_balance
+    }
+
+    pub(crate) fn ladder(&self) -> ProfileLadder {
+        self.ladder
     }
 
     pub(crate) fn fallback_name(&self) -> &str {

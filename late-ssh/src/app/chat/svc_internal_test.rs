@@ -2,6 +2,22 @@ use super::*;
 use chrono::Duration as ChronoDuration;
 use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
 
+/// The moon and the star stand apart when a name carries both, and each
+/// stands alone otherwise.
+#[test]
+fn ladder_marks_put_a_space_between_the_moon_and_the_star() {
+    let streak = |consecutive_days| DailyStreakSnapshot {
+        consecutive_days,
+        last_completed_date: None,
+    };
+    let marks = |days, starred| ladder_marks(Some(&streak(days)), starred);
+    assert_eq!(marks(30, true).as_deref(), Some("● ✦"));
+    assert_eq!(marks(30, false).as_deref(), Some("●"));
+    assert_eq!(marks(1, true).as_deref(), Some("✦"));
+    assert_eq!(marks(1, false), None);
+    assert_eq!(ladder_marks(None, true).as_deref(), Some("✦"));
+}
+
 #[test]
 fn contains_link_catches_schemes_www_and_bare_domains() {
     for spam in [

@@ -40,7 +40,8 @@ badges are in [`AWARDS.md`](AWARDS.md).
 only while at least one session is subscribed, publishing it through a
 `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse:
 a 30s pass measured 13% of all DB execution time (SCALE.md, DB Cost
-Ranking). The pass is **fifteen queries**: each board family is
+Ranking). The pass is **sixteen queries**: the day's rung stars are one
+(`daily_rung::starred_on`); each board family is
 one union query ranked with `PARTITION BY game`; the Lateania boards add two
 (both O(players) over `mud_characters`) and the roguelike-door boards two
 (one query per window over `door_runs`/`door_milestones`, all three families
@@ -65,10 +66,12 @@ services publish only after the win row commits, and the card ORs it with the
 snapshot's `user_daily_statuses`, which also feeds the Arcade card's `N solved`
 count and its `o` roster (`arcade/solvers.rs`, named through the app's username
 directory). Other players' standings still wait. The statuses carry the UTC
-day they were read for (`DailyStatuses`), and every reader goes through
-`DailyStatuses::on(today)`, which is empty once the day has moved on: for the
-few minutes after midnight before the next pass, every card shows today's
-puzzles open rather than yesterday's ticks.
+day they were read for (`DailyStatuses`), with the day's rung stars beside
+them (`daily_rung::starred_on`, the only read of `daily_rung_stars` the
+leaderboard makes, for the week's count in the Arcade), and every reader goes
+through `DailyStatuses::on(today)` or `starred_on(today)`, which are empty once
+the day has moved on: for the few minutes after midnight before the next
+pass, every card shows today's puzzles open rather than yesterday's ticks.
 
 ### Late Time persistence
 

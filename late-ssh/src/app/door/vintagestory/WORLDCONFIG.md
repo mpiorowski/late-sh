@@ -114,7 +114,10 @@ real terrain colors, food spoils at a quarter of the normal rate (half the
 Exploration preset's), and months last 15 days instead of 9.
 Every perishable ages on the shared world clock, so food a player leaves in
 a chest or carries when logging out keeps rotting while others play; the
-slower rate softens that. `foodSpoilSpeed`, `daysPerMonth` and
+slower rate softens that. The Food Shelves mod's coolers stack on it
+(35 to 55% longer while closed, up to 235% longer with Cut Ice), so food in an
+iced cooler lasts up to about 13 times as long as at the vanilla rate.
+`foodSpoilSpeed`, `daysPerMonth` and
 `lightningFires` were first set on the live save with `/worldconfig` and also
 written into the block on the volume by hand, so `/worldconfig <key>` on the
 console and the file agree on every key. `lightningFires` needed a restart to

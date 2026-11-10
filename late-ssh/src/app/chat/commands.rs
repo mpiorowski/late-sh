@@ -108,6 +108,7 @@ const COMMANDS: &[Command] = &[
     global("buy", "@bartender: /buy round, or /buy @user a drink"),
     global("chips", "chip ledger (/chips @user; bare = you)"),
     global("coffee", "post coffee cup"),
+    global("comeback", "rerun a comeback moment's box (1, 2 or 3)"),
     global("cs", "cyberspace (/cs post, chat, link, unlink)"),
     global("cyberspace", "open the cyberspace tab (alias /cs)"),
     global("dm", "open a DM (/dm @user)"),

@@ -149,6 +149,7 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
@@ -1210,6 +1211,7 @@ pub fn draw_dashboard_chat_card(
                 countries: view.countries,
                 friend_user_ids: view.friend_user_ids,
                 bonsai_glyphs: view.bonsai_glyphs,
+                ladder_marks: view.ladder_marks,
                 chat_badges: view.chat_badges,
                 profile_award_badges: view.profile_award_badges,
                 message_reactions: view.message_reactions,
@@ -1305,6 +1307,7 @@ struct ChatRowsContext<'a> {
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
+    ladder_marks: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
     profile_award_badges: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1778,6 +1781,7 @@ fn ensure_chat_rows_cache(
             prefix,
             segments,
             author_range,
+            marks_range,
             title_range,
             runner_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
@@ -1785,6 +1789,7 @@ fn ensure_chat_rows_cache(
             author: &author,
             title: flair.and_then(|flair| flair.title.as_deref()),
             milestone: flair.and_then(|flair| flair.milestone.as_deref()),
+            ladder_marks: ctx.ladder_marks.get(&msg.user_id).map(String::as_str),
             special_badges: special_list,
             chat_badges: &chat_badge_refs,
             bonsai_glyph: bonsai_opt,
@@ -1806,10 +1811,12 @@ fn ensure_chat_rows_cache(
         };
         let author_tint = (drunk_word.is_some()
             || name_style.is_some()
+            || marks_range.is_some()
             || title_range.is_some()
             || runner_tint.is_some())
         .then_some(AuthorTint {
             range: author_range,
+            marks_range,
             title_range,
             runner: runner_tint,
             word: drunk_word,
@@ -2681,6 +2688,7 @@ fn build_author_prefix_and_segments(
         author,
         title: None,
         milestone: None,
+        ladder_marks: None,
         special_badges,
         chat_badges: &chat_badges,
         bonsai_glyph,
@@ -2702,6 +2710,10 @@ struct AuthorPrefixInput<'a> {
     /// the name, so it joins the badge stack rather than trailing the
     /// username the way the title does.
     milestone: Option<&'a str>,
+    /// The ladder's marks, the streak's moon and today's star, one space
+    /// after the name and ahead of the title: a mark on who this is, not
+    /// a badge.
+    ladder_marks: Option<&'a str>,
     special_badges: &'a [&'a str],
     chat_badges: &'a [(HeaderTarget, &'a str)],
     bonsai_glyph: Option<&'a str>,
@@ -2722,6 +2734,9 @@ struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
+    /// The ladder's marks right after the name (the moon and the star), for
+    /// the painter to give them the name's own color.
+    marks_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.
     runner_range: Option<(usize, usize)>,
@@ -2734,6 +2749,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         author,
         title,
         milestone,
+        ladder_marks,
         special_badges,
         chat_badges,
         bonsai_glyph,
@@ -2763,11 +2779,16 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         col += 1;
     }
 
+    // The ladder's marks widen the name's own click target: they are part
+    // of who this is, and the profile is where their numbers live.
+    let ladder_marks = ladder_marks.filter(|marks| !marks.is_empty());
     let author_w = UnicodeWidthStr::width(author) as u16;
-    if author_w > 0 {
+    // The space between the name and its marks is theirs.
+    let marks_w = ladder_marks.map_or(0, |marks| 1 + UnicodeWidthStr::width(marks) as u16);
+    if author_w + marks_w > 0 {
         segments.push(HeaderSegment {
             start_col: col,
-            end_col: col + author_w,
+            end_col: col + author_w + marks_w,
             target: HeaderTarget::Profile,
         });
     }
@@ -2777,6 +2798,13 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     prefix.push_str(author);
     let author_range = (author_range_start, prefix.len());
     col += author_w;
+    let marks_range = ladder_marks.map(|marks| {
+        let start = prefix.len();
+        prefix.push(' ');
+        prefix.push_str(marks);
+        col += marks_w;
+        (start, prefix.len())
+    });
 
     // The rented title reads as an aside on the name (`mira, the
     // insufferable`), so it sits between the name and the badge stack and is
@@ -2865,6 +2893,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         prefix,
         segments,
         author_range,
+        marks_range,
         title_range,
         runner_range,
     }
@@ -3086,6 +3115,7 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
@@ -3263,6 +3293,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
@@ -3459,6 +3490,7 @@ fn draw_embedded_messages(
             countries: view.countries,
             friend_user_ids: view.friend_user_ids,
             bonsai_glyphs: view.bonsai_glyphs,
+            ladder_marks: view.ladder_marks,
             chat_badges: view.chat_badges,
             profile_award_badges: view.profile_award_badges,
             message_reactions: view.message_reactions,
@@ -4971,6 +5003,7 @@ fn draw_selected_content(
                     countries: view.countries,
                     friend_user_ids: view.friend_user_ids,
                     bonsai_glyphs: view.bonsai_glyphs,
+                    ladder_marks: view.ladder_marks,
                     chat_badges: view.chat_badges,
                     profile_award_badges: view.profile_award_badges,
                     message_reactions: view.message_reactions,

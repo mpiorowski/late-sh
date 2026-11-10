@@ -23,5 +23,11 @@
   "The bottom statusline is yours: Ctrl+O, then the Statusline tab. Hide the shortcut hints or add a clock, quests, the pot, or who's online",
   "A new realm rises within a day of the last one falling ~ page 3, Realm",
   "Your work profile verifies on Mastodon: put your Mastodon profile URL (https://your.instance/@you) in its links, and late.sh/profiles/<slug> in your Mastodon profile links",
-  "The Late Edition is on the web too: late.sh/paper, with an RSS feed at late.sh/paper/feed.xml"
+  "The Late Edition is on the web too: late.sh/paper, with an RSS feed at late.sh/paper/feed.xml",
+  "Did you know? The radio stations and the YouTube booth play in the late CLI, or in a browser at late.sh/listen",
+  "Did you know? Today's rung is up in The Arcade: any daily win starts your streak, the rung's adds a star",
+  "Did you know? People (5) has a map of who is where, and p on any name in chat opens their profile",
+  "Did you know? v then v opens the Music Booth: queue a YouTube track for the whole house, it pays chips",
+  "Did you know? Artboard (4) is one ASCII canvas the whole house draws on; the best of it hangs in the gallery",
+  "Did you know? n in the Clubhouse opens Nightcap, the quiet bar out back: six stools, drinks on d, carve a line with c"
 ]

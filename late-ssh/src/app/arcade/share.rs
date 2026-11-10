@@ -15,7 +15,7 @@
 //! banner, and telemetry stay in `arcade/input.rs`.
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::DailyPuzzle;
+use late_core::models::{daily_rung::STAR_GLYPH, leaderboard::DailyPuzzle};
 
 /// The footer of every card. Never a URL.
 pub const FOOTER: &str = "ssh late.sh";
@@ -177,8 +177,13 @@ pub const fn icon(puzzle: DailyPuzzle) -> &'static str {
 
 /// The day card: one glyph per daily in lobby order (`DailyPuzzle::ALL`),
 /// filled for each won today, with each daily's icon beneath its box, plus
-/// the daily-quest streak. `won` answers for each puzzle.
-pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: i32) -> ShareCard {
+/// the daily streak and the stars. `won` answers for each puzzle.
+pub fn day_card(
+    day: NaiveDate,
+    won: impl Fn(DailyPuzzle) -> bool,
+    streak_days: i32,
+    stars: i64,
+) -> ShareCard {
     let marks: Vec<Glyph> = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| {
@@ -195,11 +200,13 @@ pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: 
         .collect();
     let won_count = marks.iter().filter(|g| **g == Glyph::Green).count();
     let number = puzzle_number(day);
-    let result = if streak_days > 0 {
-        format!("{won_count}/{} · 🔥 {streak_days}", DailyPuzzle::ALL.len())
-    } else {
-        format!("{won_count}/{}", DailyPuzzle::ALL.len())
-    };
+    let mut result = format!("{won_count}/{}", DailyPuzzle::ALL.len());
+    if streak_days > 0 {
+        result.push_str(&format!(" · 🔥 {streak_days}"));
+    }
+    if stars > 0 {
+        result.push_str(&format!(" · {STAR_GLYPH} {stars}"));
+    }
     ShareCard {
         title: title("Daily", number, Some(&result)),
         rows: vec![Row::Glyphs(marks), Row::Text(icons)],

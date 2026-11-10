@@ -937,6 +937,7 @@ pub struct ChatState {
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
     pub(crate) bonsai_glyphs: HashMap<Uuid, String>,
+    pub(crate) ladder_marks: HashMap<Uuid, String>,
     pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1040,6 +1041,8 @@ pub struct ChatState {
     requested_usermap: bool,
     requested_shop_modal: bool,
     requested_onboard: bool,
+    /// Set by `/comeback N`; `App` opens the moment's box.
+    requested_comeback: Option<crate::app::comeback::state::Moment>,
     requested_lobby_toggle: bool,
     /// Set by `/edit`; `App` runs the Ctrl+E chord.
     requested_home_arrange: bool,
@@ -1356,6 +1359,7 @@ impl ChatState {
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
             bonsai_glyphs: HashMap::new(),
+            ladder_marks: HashMap::new(),
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
@@ -1415,6 +1419,7 @@ impl ChatState {
             requested_usermap: false,
             requested_shop_modal: false,
             requested_onboard: false,
+            requested_comeback: None,
             requested_lobby_toggle: false,
             requested_home_arrange: false,
             requested_guide: false,
@@ -2142,6 +2147,10 @@ impl ChatState {
 
     pub fn take_requested_onboard(&mut self) -> bool {
         std::mem::take(&mut self.requested_onboard)
+    }
+
+    pub fn take_requested_comeback(&mut self) -> Option<crate::app::comeback::state::Moment> {
+        self.requested_comeback.take()
     }
 
     pub fn take_requested_lobby_toggle(&mut self) -> bool {
@@ -3818,6 +3827,17 @@ impl ChatState {
         if body.trim() == "/onboard" {
             self.clear_composer_after_submit();
             self.requested_onboard = true;
+            return None;
+        }
+
+        // `/comeback N` reruns a comeback moment's box, like `/onboard`
+        // reruns the tour.
+        if let Some(parsed) = crate::app::comeback::state::parse_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(moment) = parsed else {
+                return Some(Banner::error("Usage: /comeback 1, 2 or 3"));
+            };
+            self.requested_comeback = Some(moment);
             return None;
         }
 
@@ -5905,6 +5925,10 @@ impl ChatState {
         &self.bonsai_glyphs
     }
 
+    pub fn ladder_marks(&self) -> &HashMap<Uuid, String> {
+        &self.ladder_marks
+    }
+
     pub fn chat_badges(&self) -> &HashMap<Uuid, String> {
         &self.chat_badges
     }
@@ -5915,6 +5939,13 @@ impl ChatState {
 
     fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
         let changed = set_context_value(&mut self.bonsai_glyphs, user_id, glyph);
+        if changed {
+            self.context_epoch += 1;
+        }
+    }
+
+    fn set_ladder_marks(&mut self, user_id: Uuid, marks: Option<&str>) {
+        let changed = set_context_value(&mut self.ladder_marks, user_id, marks);
         if changed {
             self.context_epoch += 1;
         }
@@ -6092,6 +6123,9 @@ impl ChatState {
             if !snapshot.bonsai_glyphs.contains_key(user_id) {
                 context_changed |= self.bonsai_glyphs.remove(user_id).is_some();
             }
+            if !snapshot.ladder_marks.contains_key(user_id) {
+                context_changed |= self.ladder_marks.remove(user_id).is_some();
+            }
             if !snapshot.chat_badges.contains_key(user_id) {
                 context_changed |= self.chat_badges.remove(user_id).is_some();
             }
@@ -6194,6 +6228,7 @@ impl ChatState {
             changed = true;
         }
         context_changed |= extend_changed(&mut self.bonsai_glyphs, snapshot.bonsai_glyphs);
+        context_changed |= extend_changed(&mut self.ladder_marks, snapshot.ladder_marks);
         context_changed |= extend_changed(&mut self.chat_badges, snapshot.chat_badges);
         context_changed |= extend_changed(
             &mut self.profile_award_badges,
@@ -6246,6 +6281,7 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_ladder_marks,
                     author_chat_badge,
                     author_profile_award_badges,
                 } => {
@@ -6294,6 +6330,7 @@ impl ChatState {
                         self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
+                    self.set_ladder_marks(message.user_id, author_ladder_marks.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
@@ -6361,6 +6398,7 @@ impl ChatState {
                     message_gilds,
                     usernames,
                     bonsai_glyphs,
+                    ladder_marks,
                     chat_badges,
                     profile_award_badges,
                 } if self.user_id == user_id => {
@@ -6372,6 +6410,9 @@ impl ChatState {
                             context_changed |=
                                 self.bonsai_glyphs.remove(&message.user_id).is_some();
                         }
+                        if !ladder_marks.contains_key(&message.user_id) {
+                            context_changed |= self.ladder_marks.remove(&message.user_id).is_some();
+                        }
                         if !chat_badges.contains_key(&message.user_id) {
                             context_changed |= self.chat_badges.remove(&message.user_id).is_some();
                         }
@@ -6381,6 +6422,7 @@ impl ChatState {
                         }
                     }
                     context_changed |= extend_changed(&mut self.bonsai_glyphs, bonsai_glyphs);
+                    context_changed |= extend_changed(&mut self.ladder_marks, ladder_marks);
                     context_changed |= extend_changed(&mut self.chat_badges, chat_badges);
                     context_changed |=
                         extend_changed(&mut self.profile_award_badges, profile_award_badges);
@@ -6577,6 +6619,7 @@ impl ChatState {
                     target_user_ids,
                     author_username,
                     author_bonsai_glyph,
+                    author_ladder_marks,
                     author_chat_badge,
                     author_profile_award_badges,
                 } => {
@@ -6589,6 +6632,7 @@ impl ChatState {
                         self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
+                    self.set_ladder_marks(message.user_id, author_ladder_marks.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
                     self.set_profile_award_badge(
                         message.user_id,
