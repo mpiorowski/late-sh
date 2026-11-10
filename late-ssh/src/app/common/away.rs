@@ -21,9 +21,7 @@
 //!
 //! The per-session AFK line (`chat/state.rs`, `AFK_LINE_IDLE`) is a different
 //! thing on the same clock: it marks where *you* stopped reading, and only
-//! you see it. Away is what everyone else sees about you. The keypress-return
-//! push (`hub/dailies/return_push.rs`) rides the same clock too: the first
-//! input after hours quiet puts the ladder in your empty composer.
+//! you see it. Away is what everyone else sees about you.
 
 use std::{
     collections::{HashMap, HashSet},

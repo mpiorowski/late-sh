@@ -22,7 +22,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
-use crate::app::{common::theme, hub::dailies::return_push::RungStanding};
+use crate::app::{common::theme, hub::dailies::state::RungStanding};
 
 /// Days in the week: today and the six after it.
 pub(crate) const DAYS: usize = 7;

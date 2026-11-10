@@ -1041,7 +1041,6 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         reaction_picker_active: false,
         reply_author: None,
         is_editing: false,
-        return_push: None,
         mention_active: false,
         mention_matches: &[],
         mention_selected: 0,
@@ -1185,7 +1184,6 @@ fn chat_view<'a>(
         mention_active: false,
         reply_author: None,
         is_editing: false,
-        return_push: None,
         bonsai_glyphs,
         ladder_marks: LADDER_MARKS.get_or_init(HashMap::new),
         chat_badges,
@@ -1551,44 +1549,6 @@ fn reaction_picker_placeholder_keeps_custom_zero_choice_at_mid_width() {
     assert!(
         rendered.contains("0 icon"),
         "custom icon reaction choice missing from {rendered:?}",
-    );
-}
-
-/// The return push takes the empty composer's one row, idle or focused,
-/// and the first typed character puts the text back in its place.
-#[test]
-fn draw_composer_block_shows_the_return_push_in_the_empty_composer() {
-    use ratatui::{Terminal, backend::TestBackend};
-
-    let ta = TextArea::default();
-    let mut view = composer_view(&ta);
-    view.composing = false;
-    view.return_push = Some("back after 9 h · streak day 4 · the rung: medium Sudoku, open");
-
-    let backend = TestBackend::new(96, 3);
-    let mut terminal = Terminal::new(backend).expect("term");
-    terminal
-        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
-        .unwrap();
-    let buf = terminal.backend().buffer();
-    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-    assert!(
-        row_1.contains("back after 9 h · streak day 4 · the rung: medium Sudoku, open"),
-        "no push in {row_1:?}"
-    );
-
-    let mut typed = TextArea::default();
-    typed.insert_str("on it");
-    let mut view = composer_view(&typed);
-    view.return_push = Some("back after 9 h · the rung: medium Sudoku, open");
-    terminal
-        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
-        .unwrap();
-    let buf = terminal.backend().buffer();
-    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-    assert!(
-        row_1.contains("on it") && !row_1.contains("back after"),
-        "{row_1:?}"
     );
 }
 
