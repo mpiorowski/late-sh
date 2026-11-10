@@ -209,7 +209,8 @@ impl ShopCatalogItem {
         self.custom_title
     }
 
-    /// Every timed item: the shop quotes a window and a rebuy resets it.
+    /// Every timed item: the shop quotes a window; a rebuy of the same look
+    /// adds it to the live one, any other look replaces it.
     pub fn is_rental(&self) -> bool {
         self.is_username_effect() || self.is_badge_rental() || self.is_title_rental()
     }

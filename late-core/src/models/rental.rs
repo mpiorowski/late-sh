@@ -5,7 +5,8 @@
 //! quotes them, and the payload readers each rental kind needs. Every rental
 //! lands as a user-scoped `shop_consumable_effects` row (`room_id IS NULL`)
 //! whose `effect_kind` names the slot it fills, so one active row per user per
-//! kind, a rebuy replaces the live row and resets its clock, and expiry is
+//! kind, a rebuy of the same look adds its window to the live row's expiry
+//! while any other look replaces it and starts now, and expiry is
 //! read-time only (`ends_at > current_timestamp` in the queries that read it).
 
 use serde_json::Value;
@@ -54,14 +55,37 @@ pub fn duration_tag(duration_secs: i64) -> String {
     }
 }
 
+/// The payload key that carries a rental's window, the one field two tiers of
+/// one look differ in.
+const DURATION_SECS_KEY: &str = "duration_secs";
+
 /// How long the rental an item payload sells runs. `fallback` is required from
 /// the caller rather than defaulted here: a malformed payload must land on the
 /// window its own kind considers shortest, never on a shared guess.
 pub fn duration_secs(payload: &Value, fallback: i64) -> i64 {
     payload
-        .get("duration_secs")
+        .get(DURATION_SECS_KEY)
         .and_then(|value| value.as_i64())
         .unwrap_or(fallback)
+}
+
+/// Whether two rental payloads wear the same look: equal on everything but
+/// the window they were sold for, so a day and a month of one badge match.
+/// A rebuy of the same look extends the live row instead of replacing it
+/// (`ShopConsumableEffect::activate_user_effect_in_tx`).
+pub(crate) fn same_look(live: &Value, bought: &Value) -> bool {
+    without_window(live) == without_window(bought)
+}
+
+fn without_window(payload: &Value) -> Value {
+    let mut look = payload.clone();
+    match look.as_object_mut() {
+        Some(fields) => {
+            fields.remove(DURATION_SECS_KEY);
+        }
+        None => {}
+    }
+    look
 }
 
 /// Which of the two chat-label slots a badge rental fills. The strings are the
