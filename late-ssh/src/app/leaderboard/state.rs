@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate};
 use ratatui::layout::{Position, Rect};
 
 use late_core::models::{
@@ -41,8 +41,9 @@ pub(crate) enum Board {
 /// exactly one of these; the renderer matches every arm, so a new shape
 /// cannot fall through to a wrong heading.
 pub(crate) enum Standings<'a> {
-    /// The four monthly chat and News races, in reading order.
-    TopChat([&'a [RankedEntry]; 4]),
+    /// The four monthly chat and News races in reading order, each under
+    /// its own heading.
+    TopChat([(&'static str, &'a [RankedEntry]); 4]),
     /// One window of month-scoped standings, headed "this month".
     MonthlyOnly(&'a [RankedEntry]),
     /// One window over all recorded history, headed "all time" (the door
@@ -174,7 +175,9 @@ impl Board {
         }
     }
 
-    pub(crate) fn standings(self, data: &LeaderboardData) -> Standings<'_> {
+    /// `today` is the caller's clock: a month-stamped board (Top Chat) shows
+    /// nothing once its snapshot's month is over.
+    pub(crate) fn standings(self, data: &LeaderboardData, today: NaiveDate) -> Standings<'_> {
         match self {
             Self::LateaniaAdventurers => Standings::Snapshot(&data.lateania_adventurers),
             Self::LateaniaPvp => Standings::Snapshot(&data.lateania_pvp),
@@ -206,17 +209,22 @@ impl Board {
                 yearly: &data.top_drinkers.yearly,
             },
             Self::TopChat => {
-                let chat = &data.top_chat;
-                Standings::TopChat(if chat.in_month(Utc::now().date_naive()) {
-                    [
-                        &chat.all_rooms,
-                        &chat.outside_lounge,
-                        &chat.daily_streak,
-                        &chat.news_posts,
-                    ]
-                } else {
-                    [EMPTY; 4]
-                })
+                let chat = match data.top_chat.in_month(today) {
+                    true => Some(&data.top_chat),
+                    false => None,
+                };
+                Standings::TopChat([
+                    ("all rooms", chat.map_or(EMPTY, |chat| &chat.all_rooms)),
+                    (
+                        "outside the lounge",
+                        chat.map_or(EMPTY, |chat| &chat.outside_lounge),
+                    ),
+                    (
+                        "daily streak (days)",
+                        chat.map_or(EMPTY, |chat| &chat.daily_streak),
+                    ),
+                    ("news posts", chat.map_or(EMPTY, |chat| &chat.news_posts)),
+                ])
             }
             Self::Daily(puzzle) => {
                 let windows = data.daily_board(puzzle);

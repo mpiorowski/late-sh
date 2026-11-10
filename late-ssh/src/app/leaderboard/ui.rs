@@ -33,7 +33,8 @@ pub(crate) struct LeaderboardPageView<'a> {
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
     view.state.clear_hit_regions();
-    view.state.sync_month(chrono::Utc::now().date_naive());
+    let today = chrono::Utc::now().date_naive();
+    view.state.sync_month(today);
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         view.state.set_content_area(Rect::default(), 0);
         crate::app::common::primitives::draw_too_small(
@@ -56,7 +57,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
         Layout::horizontal([Constraint::Length(RAIL_WIDTH + 1), Constraint::Min(0)]).split(rows[0]);
 
     draw_rail(frame, columns[0], view.state);
-    let center = draw_detail(frame, below_breathing_row(columns[1]), view);
+    let center = draw_detail(frame, below_breathing_row(columns[1]), view, today);
     draw_footer_rule(frame, rows[1], columns[0].right() - 1, center);
     frame.render_widget(
         Paragraph::new(hint_line(&[
@@ -182,9 +183,14 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize, Vec<u
     (lines, selected_line, board_lines)
 }
 
-fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) -> Option<u16> {
+fn draw_detail(
+    frame: &mut Frame,
+    area: Rect,
+    view: &LeaderboardPageView<'_>,
+    today: chrono::NaiveDate,
+) -> Option<u16> {
     let board = view.state.selected_board();
-    let standings = board.standings(view.data);
+    let standings = board.standings(view.data, today);
     if let Standings::TopChat(panels) = standings {
         return draw_top_chat(frame, area, view, panels);
     }
@@ -320,19 +326,12 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) ->
     None
 }
 
-const CHAT_HEADINGS: [&str; 4] = [
-    "all rooms",
-    "outside the lounge",
-    "daily streak (days)",
-    "news posts",
-];
-
 /// A fixed grid, with one shared offset and per-panel bottom clamping.
 fn draw_top_chat(
     frame: &mut Frame,
     area: Rect,
     view: &LeaderboardPageView<'_>,
-    panels: [&[RankedEntry]; 4],
+    panels: [(&'static str, &[RankedEntry]); 4],
 ) -> Option<u16> {
     if area.width < 25 || area.height < 9 {
         view.state.set_content_area(Rect::default(), 0);
@@ -391,7 +390,7 @@ fn draw_top_chat(
     let max_scroll = panels
         .iter()
         .zip(areas)
-        .map(|(entries, pane)| {
+        .map(|((_, entries), pane)| {
             entries
                 .len()
                 .saturating_sub(pane.height.saturating_sub(1) as usize)
@@ -400,7 +399,7 @@ fn draw_top_chat(
         .unwrap_or(0);
     view.state.set_content_area(area, max_scroll);
     view.state.set_content_dividers([columns[1], halves[1]]);
-    for ((entries, pane), heading) in panels.into_iter().zip(areas).zip(CHAT_HEADINGS) {
+    for ((heading, entries), pane) in panels.into_iter().zip(areas) {
         let lines = scrolled_window_lines(
             heading,
             entries,

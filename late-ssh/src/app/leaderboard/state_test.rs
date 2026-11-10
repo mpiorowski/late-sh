@@ -30,9 +30,17 @@ fn top_chat_month_change_resets_scroll_and_hides_previous_month() {
             value: 99,
             note: None,
         });
-    assert!(
-        matches!(Board::TopChat.standings(&data), Standings::TopChat(panels) if panels.iter().all(|p| p.is_empty()))
-    );
+    // Read in the month it was taken for, the snapshot shows, each race
+    // under its own heading; read a month later, none of it does.
+    assert!(matches!(
+        Board::TopChat.standings(&data, data.top_chat.month_start),
+        Standings::TopChat([("all rooms", all_rooms), ("outside the lounge", outside), ..])
+            if all_rooms.len() == 1 && outside.is_empty()
+    ));
+    assert!(matches!(
+        Board::TopChat.standings(&data, month),
+        Standings::TopChat(panels) if panels.iter().all(|(_, entries)| entries.is_empty())
+    ));
 }
 
 #[test]
@@ -96,7 +104,7 @@ fn top_drinkers_shows_monthly_and_yearly_buzz() {
     assert_eq!(board.format_value(12_400), "12,400 buzz");
     let data = LeaderboardData::default();
     assert!(matches!(
-        board.standings(&data),
+        board.standings(&data, chrono::NaiveDate::default()),
         Standings::MonthlyYearly { .. }
     ));
 }
@@ -121,7 +129,10 @@ fn online_time_uses_compact_two_unit_values() {
         online_time: BoardWindows::default(),
         ..LeaderboardData::default()
     };
-    assert!(matches!(board.standings(&data), Standings::Paired { .. }));
+    assert!(matches!(
+        board.standings(&data, chrono::NaiveDate::default()),
+        Standings::Paired { .. }
+    ));
 }
 
 #[test]

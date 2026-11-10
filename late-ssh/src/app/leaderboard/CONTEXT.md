@@ -58,7 +58,9 @@ Two rules keep the coarse cadence from reading as a broken screen:
 
 Refresh is polling-based, so Activity events can appear before the page
 catches up: a score set at minute 0 shows on the board within 5 minutes, not
-at once. The boards are never *empty*, just up to one interval behind; there
+at once. The boards are never *empty*, just up to one interval behind, with
+one exception: at a UTC month change Top Chat hides last month's snapshot
+until a refresh for the new month lands (see its bullet below); there
 is no leaderboard notify path (quest/shop snapshots have one, this does not).
 The one surface that does not wait is the Arcade lobby card's own-user
 ✓/✗ tier marks: `App.session_daily_wins` (`arcade/daily.rs::SessionDailyWins`)
