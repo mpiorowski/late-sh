@@ -1,4 +1,5 @@
 use super::*;
+use late_core::models::paper::{PaperRoomPage, PaperSection};
 
 #[test]
 fn merge_ghost_settings_preserves_existing_profile_fields() {
@@ -499,4 +500,109 @@ async fn remember_and_forget_me_cannot_talk_past_the_ladder() {
             .is_empty(),
         "every wipe still lands while throttled"
     );
+}
+
+fn paper_page(
+    label: &str,
+    room_id: Uuid,
+    status: PaperStatus,
+    text: Option<&str>,
+) -> PaperRoomPage {
+    PaperRoomPage {
+        room_id,
+        label: label.to_string(),
+        member_count: 10,
+        kind: "topic".to_string(),
+        permanent: false,
+        status,
+        message_count: 20,
+        author_count: 4,
+        text: text.map(str::to_string),
+    }
+}
+
+fn paper_section(section: PaperSectionKind, text: &str) -> PaperSection {
+    PaperSection {
+        section,
+        status: PaperStatus::Ready,
+        text: Some(text.to_string()),
+    }
+}
+
+/// @graybeard carries what he printed into a chat reply: the room he is
+/// asked in first, then the other printed rooms, then his two edition
+/// columns. Unprinted pages and the numbers section (no model wrote it)
+/// stay out.
+#[test]
+fn graybeard_paper_notes_lead_with_the_room_he_is_asked_in() {
+    let lounge = Uuid::now_v7();
+    let rust = Uuid::now_v7();
+    let edition = PaperEdition {
+        edition: chrono::NaiveDate::from_ymd_opt(2026, 11, 10).expect("date"),
+        rooms: vec![
+            paper_page(
+                "lounge",
+                lounge,
+                PaperStatus::Ready,
+                Some("lounge talked shop"),
+            ),
+            paper_page("quiet", Uuid::now_v7(), PaperStatus::Quiet, None),
+            paper_page(
+                "rust",
+                rust,
+                PaperStatus::Ready,
+                Some("rust argued lifetimes"),
+            ),
+        ],
+        sections: vec![
+            paper_section(PaperSectionKind::Yesterday, "42 messages"),
+            paper_section(PaperSectionKind::Reading, "someone shared a link"),
+            paper_section(PaperSectionKind::Outside, "the world kept turning"),
+        ],
+    };
+
+    assert_eq!(
+        graybeard_paper_notes(&edition, rust).as_deref(),
+        Some(
+            "You wrote The Late Edition dated 2026-11-10, the clubhouse's daily paper, which \
+             covers the UTC day before that date. These are your own columns. When someone \
+             asks about the paper, answer from them, and say plainly that you did not cover \
+             anything that is not here.\n\n\
+             #rust:\nrust argued lifetimes\n\n\
+             #lounge:\nlounge talked shop\n\n\
+             What we were reading:\nsomeone shared a link\n\n\
+             Outside:\nthe world kept turning"
+        )
+    );
+}
+
+/// The notes stay inside their budget a whole column at a time, and an
+/// edition with nothing he wrote gives no notes at all.
+#[test]
+fn graybeard_paper_notes_fit_the_budget_and_skip_an_empty_edition() {
+    let room = Uuid::now_v7();
+    let long = "x".repeat(GRAYBEARD_PAPER_BUDGET_CHARS);
+    let edition = PaperEdition {
+        edition: chrono::NaiveDate::from_ymd_opt(2026, 11, 10).expect("date"),
+        rooms: vec![
+            paper_page("lounge", room, PaperStatus::Ready, Some(&long)),
+            paper_page(
+                "rust",
+                Uuid::now_v7(),
+                PaperStatus::Ready,
+                Some("short column"),
+            ),
+        ],
+        sections: vec![paper_section(PaperSectionKind::Yesterday, "42 messages")],
+    };
+    let notes = graybeard_paper_notes(&edition, room).expect("one column fits");
+    assert!(notes.len() <= GRAYBEARD_PAPER_BUDGET_CHARS);
+    assert!(notes.ends_with("#rust:\nshort column"));
+    assert!(!notes.contains("#lounge"));
+
+    let empty = PaperEdition {
+        rooms: vec![paper_page("quiet", room, PaperStatus::Quiet, None)],
+        ..edition
+    };
+    assert_eq!(graybeard_paper_notes(&empty, room), None);
 }

@@ -5,7 +5,8 @@
 //! quotes them, and the payload readers each rental kind needs. Every rental
 //! lands as a user-scoped `shop_consumable_effects` row (`room_id IS NULL`)
 //! whose `effect_kind` names the slot it fills, so one active row per user per
-//! kind, a rebuy replaces the live row and resets its clock, and expiry is
+//! kind, a rebuy of the same look adds its window to the live row's expiry
+//! while any other look replaces it and starts now, and expiry is
 //! read-time only (`ends_at > current_timestamp` in the queries that read it).
 
 use serde_json::Value;

@@ -121,11 +121,15 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
-    /// Activate a user-scoped effect (`room_id IS NULL`), deactivating every
+    /// Activate a user-scoped rental (`room_id IS NULL`), deactivating every
     /// prior active effect of the same kind for the user in the same
-    /// transaction. Keyed on `effect_kind`, not sku, so rebuying any username
-    /// effect replaces the previous one and resets its clock. Expired rows
-    /// are deactivated too, keeping them out of the active partial index.
+    /// transaction, so there is one live row per user per kind. A rebuy of
+    /// the same look (`same_look`: the payload less the window it was sold
+    /// for, so a day and a month of one badge match) adds its window to the
+    /// live one's expiry: a renewal never throws away time already paid
+    /// for. A different look replaces the live row and starts its clock now.
+    /// Expired rows are deactivated too, keeping them out of the active
+    /// partial index.
     pub async fn activate_user_effect_in_tx(
         tx: &tokio_postgres::Transaction<'_>,
         user_id: Uuid,
@@ -135,18 +139,29 @@ impl ShopConsumableEffect {
         payload: Value,
     ) -> Result<Self> {
         let duration_secs = duration_secs.max(1);
-        tx.execute(
-            "UPDATE shop_consumable_effects
-             SET active = false, updated = current_timestamp
-             WHERE user_id = $1
-               AND effect_kind = $2
-               AND room_id IS NULL
-               AND active = true",
-            &[&user_id, &effect_kind],
-        )
-        .await?;
+        let now = Utc::now();
+        let deactivated = tx
+            .query(
+                "UPDATE shop_consumable_effects
+                 SET active = false, updated = current_timestamp
+                 WHERE user_id = $1
+                   AND effect_kind = $2
+                   AND room_id IS NULL
+                   AND active = true
+                 RETURNING payload, ends_at",
+                &[&user_id, &effect_kind],
+            )
+            .await?;
 
-        let ends_at = Utc::now() + Duration::seconds(duration_secs);
+        // Expiry is read-time only, so a deactivated row may already have
+        // lapsed; only a live one carries its remaining time forward.
+        let renewed_from = deactivated
+            .iter()
+            .filter(|row| row.get::<_, DateTime<Utc>>("ends_at") > now)
+            .filter(|row| same_look(&row.get::<_, Value>("payload"), &payload))
+            .map(|row| row.get::<_, DateTime<Utc>>("ends_at"))
+            .max();
+        let ends_at = renewed_from.unwrap_or(now) + Duration::seconds(duration_secs);
         let row = tx
             .query_one(
                 "INSERT INTO shop_consumable_effects
@@ -160,9 +175,9 @@ impl ShopConsumableEffect {
     }
 
     /// Activate-or-extend a user-scoped effect (`room_id IS NULL`). Unlike
-    /// `activate_user_effect_in_tx`, which always resets the clock to
-    /// `duration_secs` from now, this extends any live expiry of the same
-    /// kind by `duration_secs` instead of restarting it, so a stacking
+    /// `activate_user_effect_in_tx`, which extends only a live row of the
+    /// same look and restarts the clock otherwise, this extends any live
+    /// expiry of the same kind by `duration_secs`, so a stacking
     /// consumable (the Bonsai Decay Shield) never discards time the player
     /// already paid for. Every prior row is deactivated in the same
     /// transaction, leaving exactly one active row per (user, effect_kind,
@@ -348,4 +363,21 @@ impl ShopConsumableEffect {
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
     }
+}
+
+/// Whether two rental payloads wear the same look: equal on everything but
+/// the `duration_secs` window they were sold for.
+fn same_look(live: &Value, bought: &Value) -> bool {
+    without_window(live) == without_window(bought)
+}
+
+fn without_window(payload: &Value) -> Value {
+    let mut look = payload.clone();
+    match look.as_object_mut() {
+        Some(fields) => {
+            fields.remove("duration_secs");
+        }
+        None => {}
+    }
+    look
 }

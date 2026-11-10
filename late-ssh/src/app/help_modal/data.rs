@@ -556,7 +556,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Badges, flags, titles, and name effects are rented for 24 hours or 30 days, one live at a time per slot.".to_string(),
         "  The one title on sale is Your Own Title (1,000 / 24h, 40,000 / 30d): you write it, up to 20 characters.".to_string(),
         "  It is screened before the chips move, so a refused title costs you nothing.".to_string(),
-        "  A rebuy replaces whatever is live in that slot and restarts its clock; when a rental lapses the slot simply empties.".to_string(),
+        "  Renting the same look again adds its time to the one running; a different one replaces it and starts fresh. When a rental lapses the slot simply empties.".to_string(),
         "  @bartender drinks in the Clubhouse, and the fixed menu at Nightcap, the bar out back (n from the Clubhouse; a round there is for the stools).".to_string(),
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
@@ -1500,7 +1500,7 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+S / /shop    open the Shop; /shop works from any composer",
         "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
         "  name effects      Name Glow / Gradient / Shimmer sell by the day or by the month",
-        "  badges and flags  rented for 24h or 30 days; a rebuy replaces the live one",
+        "  badges and flags  rented for 24h or 30 days; the same one again adds time",
         "  title             your own words after your name in chat, 20 characters, rented the same way",
         "                    and screened before you are charged",
         "  burn milestones   Ultimates tab: permanent glyphs at 50,000 / 150,000 / 500,000,",
@@ -1962,6 +1962,7 @@ fn settings_help_lines() -> Vec<String> {
         "Burned-out senior who still shows up to heckle modern software.".to_string(),
         "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
+        "He writes the daily paper (/paper) and remembers his newest edition, so ask him about it.".to_string(),
     ]
 }
 

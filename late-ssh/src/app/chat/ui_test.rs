@@ -320,7 +320,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
-    let ladder_marks = HashMap::from([(author_id, "☽✦".to_string())]);
+    let ladder_marks = HashMap::from([(author_id, "☽ ✦".to_string())]);
     let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -386,7 +386,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     assert!(
         rendered
             .iter()
-            .any(|row| row.contains("bob ☽✦, the night clerk 🐱")),
+            .any(|row| row.contains("bob ☽ ✦, the night clerk 🐱")),
         "no marked author header in {rendered:#?}"
     );
 }
@@ -2555,7 +2555,7 @@ fn header_segments_cover_the_ladder_marks_with_the_name() {
         author: "alice",
         title: None,
         milestone: None,
-        ladder_marks: Some("◑✦"),
+        ladder_marks: Some("◑ ✦"),
         special_badges: &[],
         chat_badges: &[],
         bonsai_glyph: Some("🌱"),
@@ -2563,21 +2563,21 @@ fn header_segments_cover_the_ladder_marks_with_the_name() {
         presence_badges: &[],
         runner_badge: None,
     });
-    assert_eq!(built.prefix, "alice ◑✦ 🌱");
+    assert_eq!(built.prefix, "alice ◑ ✦ 🌱");
     assert_eq!(built.author_range, (0, 5));
     assert_eq!(
         built.marks_range,
-        Some((5, 12)),
-        "the space and two three-byte glyphs"
+        Some((5, 13)),
+        "the leading space, two three-byte glyphs and the space between them"
     );
     assert_eq!(built.segments.len(), 2);
     assert_eq!(built.segments[0].target, HeaderTarget::Profile);
     assert_eq!(
         (built.segments[0].start_col, built.segments[0].end_col),
-        (1, 9)
+        (1, 10)
     );
     assert_eq!(
-        built.segments[1].start_col, 10,
+        built.segments[1].start_col, 11,
         "the bonsai follows the gap"
     );
 }

@@ -883,7 +883,8 @@ async fn activate_chat_consumable_in_tx(
 /// effect purchase must carry the buyer's style choice, and the choice must
 /// belong to the bought item's variant; failing the transaction means the
 /// buyer is never charged for an effect that could not activate. Any prior
-/// live username effect is replaced (one active effect per user).
+/// live username effect is replaced, or extended when it is the same
+/// style (one active effect per user, `activate_user_effect_in_tx`).
 async fn activate_username_effect_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -927,8 +928,9 @@ pub fn rental_duration_secs(item: &MarketplaceItem) -> i64 {
 
 /// Activates the chat badge or flag rental bought in this transaction. The
 /// rental fills its slot through a user-scoped effect row rather than the
-/// legacy `equipped_slot` path, so it expires on its own and a rebuy of any
-/// badge for the same slot replaces the live row and resets the clock. A
+/// legacy `equipped_slot` path, so it expires on its own; a rebuy of the
+/// same badge adds its window to the live row, any other badge for the slot
+/// replaces it. A
 /// payload nothing could render fails the transaction: never charge for a
 /// badge that would not appear.
 async fn activate_badge_rental_in_tx(
@@ -955,7 +957,8 @@ async fn activate_badge_rental_in_tx(
 }
 
 /// Activates the title rental bought in this transaction. One active title per
-/// user, rebuy replaces, exactly the username-effect path; a title and a
+/// user, a rebuy extends the same text and replaces any other, exactly the
+/// username-effect path; a title and a
 /// username color are separate effect kinds, so buying one never clears the
 /// other.
 ///

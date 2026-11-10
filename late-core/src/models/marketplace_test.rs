@@ -1129,6 +1129,68 @@ async fn badge_rental_activates_one_row_per_slot_and_a_rebuy_replaces_it() {
 }
 
 #[tokio::test]
+async fn renting_the_same_look_again_adds_its_window_to_the_live_one() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "rental-renewal").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::admin_grant(
+        &**client,
+        user.id,
+        BADGE_RENTAL_DAY_PRICE + BADGE_RENTAL_MONTH_PRICE + USERNAME_GLOW_PRICE * 2,
+    )
+    .await
+    .expect("fund chips");
+
+    // The same badge, day then month: the month is added to the day still
+    // running, across tiers, in one live row.
+    let first = purchase_item_by_sku_with_chat_effect(&mut client, user.id, "badge_cat_day", None)
+        .await
+        .expect("rent cat for a day")
+        .badge_rental
+        .expect("first row");
+    let renewed =
+        purchase_item_by_sku_with_chat_effect(&mut client, user.id, "badge_cat_month", None)
+            .await
+            .expect("rent cat for a month")
+            .badge_rental
+            .expect("renewed row");
+    assert_eq!(
+        renewed.ends_at,
+        first.ends_at + chrono::Duration::seconds(RENTAL_MONTH_SECS)
+    );
+    let rows = active_effect_rows(&client, user.id, CHAT_BADGE_SLOT).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, renewed.id);
+
+    // The same glow color twice: the second day follows the first.
+    let first = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Ember),
+    )
+    .await
+    .expect("first glow")
+    .username_effect
+    .expect("first glow row");
+    let renewed = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Ember),
+    )
+    .await
+    .expect("same glow again")
+    .username_effect
+    .expect("renewed glow row");
+    assert_eq!(
+        renewed.ends_at,
+        first.ends_at + chrono::Duration::seconds(RENTAL_DAY_SECS)
+    );
+    assert_eq!(active_username_effect_rows(&client, user.id).await.len(), 1);
+}
+
+#[tokio::test]
 async fn a_permanent_badge_equip_never_reaches_the_chat_label() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "badge-rental-legacy").await;
