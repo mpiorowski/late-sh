@@ -1051,8 +1051,10 @@ fn fresh_bubble_messages(
     fresh
 }
 
-/// The bubble body: replies drop their quote line; whitespace collapses.
+/// The bubble body: `||spoilers||` stay bars (nothing here reveals one; the
+/// chat pane does), replies drop their quote line, whitespace collapses.
 fn bubble_text(body: &str) -> String {
+    let body = &*crate::app::chat::spoiler::mask_spoilers(body);
     let body = match body.split_once('\n') {
         Some((first, rest)) if first.trim_start().starts_with("> ") && !rest.trim().is_empty() => {
             rest
