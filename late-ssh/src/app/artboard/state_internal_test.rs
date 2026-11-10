@@ -1028,6 +1028,21 @@ fn an_empty_swatch_chord_leaves_the_brush_colors_alone() {
     assert_eq!(state.snapshot.canvas, expected);
 }
 
+/// The same chord leaves a sampled glyph brush as it was: the glyph still
+/// floats and stamps, so the brush mode must still name it.
+#[test]
+fn an_empty_swatch_chord_keeps_a_sampled_glyph_brush() {
+    let mut state = test_state();
+    state.type_char('A', (80, 24));
+    assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
+    assert_eq!(state.brush_mode(), BrushMode::Glyph('A'));
+
+    let _ = state.handle_editor_action(EditorAction::ActivateSwatch(2));
+
+    assert!(state.has_floating());
+    assert_eq!(state.brush_mode(), BrushMode::Glyph('A'));
+}
+
 #[test]
 fn selecting_a_paint_color_overrides_floating_cell_colors_to_uniform_color() {
     let mut state = test_state();

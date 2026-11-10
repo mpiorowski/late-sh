@@ -876,8 +876,10 @@ impl State {
 
     pub fn activate_swatch(&mut self, idx: usize) {
         let activation = self.editor.activate_swatch(idx);
-        self.active_brush = None;
         if activation == SwatchActivation::ActivatedFloating {
+            // Only a swatch that took over the brush retires the sampled one:
+            // an ignored chord (an empty slot) leaves it floating.
+            self.active_brush = None;
             if let Some(floating) = self.editor.floating.as_mut() {
                 floating.transparent = true;
             }
@@ -1363,7 +1365,7 @@ impl State {
         // The sampler is the eyedropper too: the glyph's colour becomes the
         // paint colour, so Esc and typing carry it on.
         if let Some(fg) = self.snapshot.canvas.fg(glyph.pos) {
-            self.paint_color = Some(fg);
+            self.set_paint_color(fg);
         }
         true
     }
