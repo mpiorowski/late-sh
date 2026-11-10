@@ -491,7 +491,7 @@ fn draw_message_detail(
     }
 
     let wrapped = wrap_plain(
-        &crate::app::chat::spoiler::mask_spoilers(&hit.message.body),
+        &crate::app::common::spoiler::mask_spoilers(&hit.message.body),
         inner.width.saturating_sub(2) as usize,
     );
     let truncated = wrapped.len() > hit_rows;
@@ -541,7 +541,7 @@ fn context_line(
         .get(&message.user_id)
         .cloned()
         .unwrap_or_else(|| "?".to_string());
-    let body = crate::app::chat::spoiler::mask_spoilers(&message.body).replace(['\n', '\r'], " ");
+    let body = crate::app::common::spoiler::mask_spoilers(&message.body).replace(['\n', '\r'], " ");
     let text = format!("  {author}: {body}");
     Line::from(Span::styled(
         truncate_to_width(&text, width),

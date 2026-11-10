@@ -40,7 +40,6 @@ use crate::app::files::{
 use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
-use super::spoiler::{self, has_spoiler};
 use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
@@ -52,6 +51,7 @@ use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
     without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
+use crate::app::common::spoiler::{self, has_spoiler};
 
 /// The picker's choices in paint order: the key to press and the reaction
 /// kind it toggles.

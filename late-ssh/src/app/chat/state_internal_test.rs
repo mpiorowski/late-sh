@@ -391,11 +391,33 @@ fn reply_preview_text_keeps_spoilers_hidden() {
     );
 }
 
+/// A link behind a spoiler bar would give the secret away as a picture, so
+/// nothing fetches it until this session reveals the message; then it
+/// previews like any other link, by the author's URL exactly.
 #[test]
-fn inline_preview_source_ignores_a_link_inside_a_spoiler() {
+fn a_spoiled_link_is_fetched_for_a_preview_only_once_revealed() {
+    let now = Instant::now();
+    let mut spoiled = make_msg(Uuid::from_u128(1));
+    spoiled.body = "||https://h.uguu.se/cat.png||".to_string();
+    let messages = vec![spoiled.clone()];
+    let candidates = |revealed: &HashSet<Uuid>| {
+        inline_image_request_candidates(
+            &messages,
+            revealed,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        )
+    };
+
+    assert_eq!(candidates(&HashSet::new()), vec![]);
     assert_eq!(
-        inline_preview_source_in_body("||https://h.uguu.se/cat.png||"),
-        None
+        candidates(&HashSet::from([spoiled.id])),
+        vec![(
+            spoiled.id,
+            InlinePreviewSource::Image("https://h.uguu.se/cat.png".to_string())
+        )]
     );
 }
 
@@ -2168,6 +2190,7 @@ fn inline_image_request_candidates_scan_newest_messages_first() {
     let requests = inline_image_request_candidates(
         &messages,
         &HashSet::new(),
+        &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
         now,
@@ -2195,6 +2218,7 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
 
     let requests = inline_image_request_candidates(
         &messages,
+        &HashSet::new(),
         &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
@@ -2240,6 +2264,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
         inline_image_request_candidates(
             &messages,
             &HashSet::new(),
+            &HashSet::new(),
             &HashMap::new(),
             &failures,
             now,
@@ -2257,6 +2282,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert_eq!(
         inline_image_request_candidates(
             &messages,
+            &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,
@@ -2278,6 +2304,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert!(
         inline_image_request_candidates(
             &messages,
+            &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,
@@ -5049,4 +5076,31 @@ async fn a_search_result_row_keeps_spoilers_hidden() {
         ),
         "today is ▒▒▒▒▒"
     );
+}
+
+/// A reveal is of the words then on screen. When the author edits the
+/// message, the new words are hidden again and need their own Enter.
+#[tokio::test]
+async fn an_edit_hides_a_revealed_message_again() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, spoiled_id) =
+        lounge_with_spoiled_message(&test_db, "today is ||CRANE||").await;
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+
+    let mut edited = state
+        .find_message_in_room(lounge_id, spoiled_id)
+        .expect("loaded message")
+        .clone();
+    edited.body = "today is ||HERON||".to_string();
+    state.replace_message(edited.clone());
+
+    assert!(!state.spoilers_revealed.contains(&spoiled_id));
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+
+    // The same edit arriving with a tail reload instead of the live event.
+    edited.body = "today is ||EGRET||".to_string();
+    state.merge_room_tail(lounge_id, vec![edited]);
+
+    assert!(!state.spoilers_revealed.contains(&spoiled_id));
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
 }

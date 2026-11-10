@@ -26,7 +26,6 @@ late-ssh/src/app/chat/
 |-- mod_modal/                   # `/mod` console modal: state/input/ui, opened by `take_requested_mod_modal`
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, `../ai/ROUND.md`, or a memory trigger, `../ai/MEMORY.md`)
 |-- special_badges.rs            # Hardcoded per-username badges in author labels (allowlist, edit and redeploy)
-|-- spoiler.rs                   # `||spoiler||` masking and reveal; `RENDERING.md` lists the surfaces that mask and what reads the raw text
 |-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox

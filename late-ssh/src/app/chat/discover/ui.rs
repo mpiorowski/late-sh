@@ -173,7 +173,7 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
                 ),
             ]));
             lines.push(Line::from(Span::styled(
-                crate::app::chat::spoiler::mask_spoilers(&msg.body).into_owned(),
+                crate::app::common::spoiler::mask_spoilers(&msg.body).into_owned(),
                 Style::default().fg(theme::TEXT()),
             )));
             lines.push(Line::from(""));

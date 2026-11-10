@@ -14,18 +14,6 @@ use uuid::Uuid;
 
 use crate::app::common::mentions;
 
-/// How much of a mentioning message the Mentions list is handed.
-const MENTION_PREVIEW_CHARS: usize = 120;
-
-/// A mention's preview: `||spoilers||` masked first, then cut, so the cut
-/// can never split one and leave its first words in clear.
-fn mention_preview(body: &str) -> String {
-    crate::app::chat::spoiler::mask_spoilers(body)
-        .chars()
-        .take(MENTION_PREVIEW_CHARS)
-        .collect()
-}
-
 #[derive(Clone, Default)]
 pub struct NotificationSnapshot {
     pub items: Vec<NotificationView>,
@@ -114,10 +102,7 @@ impl NotificationService {
 
     async fn do_list(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
-        let mut items = Notification::list_for_user(&client, user_id, 50).await?;
-        for item in &mut items {
-            item.message_preview = mention_preview(&item.message_preview);
-        }
+        let items = Notification::list_for_user(&client, user_id, 50).await?;
         let sender = self.snapshot_txs.lock_recover().get(&user_id).cloned();
         // No sender: the session left while the list was loading, nobody to tell.
         if let Some(sender) = sender {

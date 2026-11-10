@@ -84,7 +84,7 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   so a slow night's old lines read as old. There is no scrollback on this
   screen and no other screen shows the room, so what is said here scrolls
   off it. Storage is ordinary chat. A `||spoiler||` is drawn as bars
-  (`chat::spoiler::mask_spoilers`) and, with no selection on the wall and no
+  (`common::spoiler::mask_spoilers`) and, with no selection on the wall and no
   other screen for the room, nothing here can reveal it.
 
 ## 4. The stools (multiplayer contract)

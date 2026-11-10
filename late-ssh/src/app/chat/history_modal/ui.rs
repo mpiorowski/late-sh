@@ -243,7 +243,7 @@ fn wrapped_body(state: &ChatHistoryModalState, message: &ChatMessage, width: usi
         .unwrap_or("?");
     let text = format!(
         "{author}: {}",
-        crate::app::chat::spoiler::mask_spoilers(&message.body).replace('\r', "")
+        crate::app::common::spoiler::mask_spoilers(&message.body).replace('\r', "")
     );
     let mut out: Vec<String> = text
         .lines()
