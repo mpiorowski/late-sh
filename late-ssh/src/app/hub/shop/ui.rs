@@ -411,7 +411,7 @@ fn draw_item_detail(
             Span::raw("  lasts  "),
             Span::styled(
                 format!(
-                    "{}, rebuy replaces the active style",
+                    "{}; the same style again adds its time, another replaces it",
                     duration_label(item.rental_duration())
                 ),
                 Style::default().fg(theme::TEXT_DIM()),
@@ -445,7 +445,7 @@ fn draw_item_detail(
             Span::raw("  lasts  "),
             Span::styled(
                 format!(
-                    "{}, rebuy replaces the active {slot_word}",
+                    "{}; the same {slot_word} again adds its time, another replaces it",
                     duration_label(item.rental_duration())
                 ),
                 Style::default().fg(theme::TEXT_DIM()),

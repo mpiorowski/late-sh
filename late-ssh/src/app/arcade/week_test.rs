@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use super::*;
-use crate::app::hub::dailies::return_push::RungStanding;
+use crate::app::hub::dailies::state::RungStanding;
 
 fn day(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).unwrap()

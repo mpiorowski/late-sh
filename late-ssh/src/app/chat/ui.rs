@@ -148,9 +148,6 @@ pub struct DashboardChatView<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -219,9 +216,6 @@ pub(crate) struct ComposerBlockView<'a> {
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub mention_active: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -520,10 +514,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
             )));
         }
         ComposerInert::No => {}
-    }
-
-    if let Some(push) = view.return_push {
-        return Paragraph::new(Line::from(Span::styled(push.to_string(), dim)));
     }
 
     if view.composing {
@@ -1117,7 +1107,6 @@ pub fn draw_dashboard_chat_card(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
@@ -1290,7 +1279,6 @@ pub fn draw_dashboard_chat_card(
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
-            return_push: view.return_push,
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
@@ -2746,8 +2734,8 @@ struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
-    /// The ladder's marks right after the name, for the painter to give
-    /// the star its amber.
+    /// The ladder's marks right after the name (the moon and the star), for
+    /// the painter to give them the name's own color.
     marks_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.
@@ -3126,9 +3114,6 @@ pub struct ChatRenderInput<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -3307,9 +3292,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -3403,7 +3385,6 @@ pub fn draw_embedded_room_chat(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
@@ -3428,7 +3409,6 @@ pub fn draw_embedded_room_chat(
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
-            return_push: view.return_push,
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
@@ -3644,7 +3624,6 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
-                        return_push: view.return_push,
                         mention_active: view.mention_active,
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
@@ -5289,7 +5268,6 @@ fn draw_selected_content(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,

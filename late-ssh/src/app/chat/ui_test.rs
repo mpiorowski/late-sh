@@ -320,7 +320,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
-    let ladder_marks = HashMap::from([(author_id, "☽✦".to_string())]);
+    let ladder_marks = HashMap::from([(author_id, "☽ ✦".to_string())]);
     let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -386,7 +386,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     assert!(
         rendered
             .iter()
-            .any(|row| row.contains("bob ☽✦, the night clerk 🐱")),
+            .any(|row| row.contains("bob ☽ ✦, the night clerk 🐱")),
         "no marked author header in {rendered:#?}"
     );
 }
@@ -1041,7 +1041,6 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         reaction_picker_active: false,
         reply_author: None,
         is_editing: false,
-        return_push: None,
         mention_active: false,
         mention_matches: &[],
         mention_selected: 0,
@@ -1185,7 +1184,6 @@ fn chat_view<'a>(
         mention_active: false,
         reply_author: None,
         is_editing: false,
-        return_push: None,
         bonsai_glyphs,
         ladder_marks: LADDER_MARKS.get_or_init(HashMap::new),
         chat_badges,
@@ -1551,44 +1549,6 @@ fn reaction_picker_placeholder_keeps_custom_zero_choice_at_mid_width() {
     assert!(
         rendered.contains("0 icon"),
         "custom icon reaction choice missing from {rendered:?}",
-    );
-}
-
-/// The return push takes the empty composer's one row, idle or focused,
-/// and the first typed character puts the text back in its place.
-#[test]
-fn draw_composer_block_shows_the_return_push_in_the_empty_composer() {
-    use ratatui::{Terminal, backend::TestBackend};
-
-    let ta = TextArea::default();
-    let mut view = composer_view(&ta);
-    view.composing = false;
-    view.return_push = Some("back after 9 h · streak day 4 · the rung: medium Sudoku, open");
-
-    let backend = TestBackend::new(96, 3);
-    let mut terminal = Terminal::new(backend).expect("term");
-    terminal
-        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
-        .unwrap();
-    let buf = terminal.backend().buffer();
-    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-    assert!(
-        row_1.contains("back after 9 h · streak day 4 · the rung: medium Sudoku, open"),
-        "no push in {row_1:?}"
-    );
-
-    let mut typed = TextArea::default();
-    typed.insert_str("on it");
-    let mut view = composer_view(&typed);
-    view.return_push = Some("back after 9 h · the rung: medium Sudoku, open");
-    terminal
-        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
-        .unwrap();
-    let buf = terminal.backend().buffer();
-    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-    assert!(
-        row_1.contains("on it") && !row_1.contains("back after"),
-        "{row_1:?}"
     );
 }
 
@@ -2595,7 +2555,7 @@ fn header_segments_cover_the_ladder_marks_with_the_name() {
         author: "alice",
         title: None,
         milestone: None,
-        ladder_marks: Some("◑✦"),
+        ladder_marks: Some("◑ ✦"),
         special_badges: &[],
         chat_badges: &[],
         bonsai_glyph: Some("🌱"),
@@ -2603,21 +2563,21 @@ fn header_segments_cover_the_ladder_marks_with_the_name() {
         presence_badges: &[],
         runner_badge: None,
     });
-    assert_eq!(built.prefix, "alice ◑✦ 🌱");
+    assert_eq!(built.prefix, "alice ◑ ✦ 🌱");
     assert_eq!(built.author_range, (0, 5));
     assert_eq!(
         built.marks_range,
-        Some((5, 12)),
-        "the space and two three-byte glyphs"
+        Some((5, 13)),
+        "the leading space, two three-byte glyphs and the space between them"
     );
     assert_eq!(built.segments.len(), 2);
     assert_eq!(built.segments[0].target, HeaderTarget::Profile);
     assert_eq!(
         (built.segments[0].start_col, built.segments[0].end_col),
-        (1, 9)
+        (1, 10)
     );
     assert_eq!(
-        built.segments[1].start_col, 10,
+        built.segments[1].start_col, 11,
         "the bonsai follows the gap"
     );
 }

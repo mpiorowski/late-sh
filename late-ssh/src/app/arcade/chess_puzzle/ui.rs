@@ -213,9 +213,11 @@ fn panel_lines(state: &State) -> Vec<Line<'static>> {
     lines
 }
 
+/// A heart per life left, a dot per life lost. Not ♡: beside ♥ it is a
+/// near twin in most terminal fonts, so a lost life would not show.
 fn lives_text(left: usize) -> String {
     (0..LIVES)
-        .map(|life| if life < left { '♥' } else { '♡' })
+        .map(|life| if life < left { '♥' } else { '·' })
         .collect()
 }
 

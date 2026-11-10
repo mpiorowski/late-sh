@@ -83,6 +83,7 @@ the complete App input path. `ui_test.rs` also checks wrapped scroll extents.
 
 - The reading and outside prompts inherit `GRAYBEARD_PERSONA` from `app/ai/ghost.rs`, whose chat rules say never to name people; the column rules are appended after it and explicitly override that, because a paper that names nobody is useless.
 - A room made private after its page printed keeps the row and loses the reader: `PaperEdition::load` joins on `visibility = 'public'`.
+- @graybeard's chat replies read the printed edition too (`app/ai/ghost.rs`, `graybeard_paper_notes`), so he can answer for what he wrote; a change to a column's shape reaches his chat prompt.
 - The grounded path is prompt-enforced only (see `AiService::generate_json_with_search`); `tidy_column` is what makes the Outside reply safe to render.
 - **Lines carry ink, never colour.** `theme`'s palette lives in a thread
   local that `App::render` sets from the reader's profile, but the modal is
