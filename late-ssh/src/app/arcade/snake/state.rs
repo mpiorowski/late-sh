@@ -196,6 +196,7 @@ impl State {
     fn level_up(&mut self) {
         self.level.number = self.level.number.saturating_add(1).min(MAX_LEVEL);
         self.stutter_left = self.level.get_stutter();
+        self.score_up(100 * self.level.number as i32);
         self.reset_level(false);
     }
 
@@ -276,16 +277,17 @@ impl State {
             }
         }
 
-        if let Some(CobraEffect::Blow) = effect {
-            self.end_game();
-            return false;
-        } else if let Some(CobraEffect::Grow) = effect {
-            self.score_up(10);
-        } else if let Some(CobraEffect::PowerUp) = effect {
-            self.score_up(25);
-        } else if self.field.food_left() == 0 {
+        match effect {
+            Some(CobraEffect::Blow) => {
+                self.end_game();
+                return false;
+            }
+            Some(CobraEffect::Grow) => self.score_up(10),
+            Some(CobraEffect::PowerUp) => self.score_up(25),
+            None => {}
+        }
+        if self.field.food_left() == 0 {
             self.level_up();
-            self.score_up(100 * self.level.number as i32);
         }
         self.field_tick += 1;
         true

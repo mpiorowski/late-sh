@@ -113,3 +113,25 @@ fn rock_spawns_keep_clear_of_the_head_and_forward_runway() {
         }
     }
 }
+
+#[tokio::test]
+async fn eating_the_last_food_advances_the_level_on_that_step() {
+    let mut game = saved_game(0, false);
+    game.level = 1;
+    let mut state = restored(game);
+    let head = state.cobra.body.last().expect("cobra head").clone();
+    state.cobra.head_dir = Direction::Right;
+    state.field.things = vec![ThingOnScreen::from_kind_at_pos(
+        ThingKind::Food,
+        Position {
+            x: head.x + 1,
+            y: head.y,
+        },
+    )];
+    state.stutter_left = 0;
+
+    assert!(state.tick());
+    assert_eq!(state.level.number, 2);
+    assert_eq!(state.field.food_left(), 4);
+    assert_eq!(state.score, 210);
+}
