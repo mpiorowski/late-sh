@@ -5,6 +5,8 @@ use super::svc::SnakeService;
 use rand::Rng;
 
 const MAX_LEVEL: u8 = 125;
+const ROCK_HEAD_HALO: u32 = 2;
+const ROCK_RUNWAY_STEPS: u32 = 4;
 
 pub struct State {
     pub user_id: Uuid,
@@ -312,30 +314,22 @@ impl Position {
         }
     }
 
-    fn gen_without_collision(field: &Field, cobra: &Cobra) -> Self {
-        let mut new_pos = Self::new(field);
+    fn gen_without_collision(field: &Field, cobra: &Cobra, avoid_head: bool) -> Self {
         loop {
-            if cobra.collide(&new_pos) {
-                new_pos = Self::new(field);
+            let new_pos = Self::new(field);
+            if cobra.collide(&new_pos) || (avoid_head && cobra.is_rock_hazard(&new_pos)) {
                 continue;
             }
-            let mut has_collided = false;
-            let mut all_things = Vec::new();
-            all_things.extend(&field.things);
-            all_things.extend(&field.edges);
-            for thing in all_things {
-                if thing.collide(&new_pos) {
-                    has_collided = true;
-                    break;
-                }
-            }
-            if has_collided {
-                new_pos = Self::new(field);
+            if field
+                .things
+                .iter()
+                .chain(&field.edges)
+                .any(|thing| thing.collide(&new_pos))
+            {
                 continue;
             }
-            break;
+            return new_pos;
         }
-        new_pos
     }
 }
 
@@ -437,7 +431,8 @@ impl ThingOnScreen {
     }
 
     fn gen_at_the_field(kind: ThingKind, field: &Field, cobra: &Cobra) -> Self {
-        let position = Position::gen_without_collision(field, cobra);
+        let position =
+            Position::gen_without_collision(field, cobra, matches!(kind, ThingKind::Rock));
         Self::from_kind_at_pos(kind, position)
     }
 
@@ -565,6 +560,29 @@ impl Cobra {
             }
         }
         false
+    }
+
+    fn is_rock_hazard(&self, pos: &Position) -> bool {
+        let Some(head) = self.body.last() else {
+            return false;
+        };
+        if head.x.abs_diff(pos.x) <= ROCK_HEAD_HALO && head.y.abs_diff(pos.y) <= ROCK_HEAD_HALO {
+            return true;
+        }
+        match self.head_dir {
+            Direction::Right => {
+                pos.y == head.y && pos.x > head.x && pos.x - head.x <= ROCK_RUNWAY_STEPS
+            }
+            Direction::Left => {
+                pos.y == head.y && pos.x < head.x && head.x - pos.x <= ROCK_RUNWAY_STEPS
+            }
+            Direction::Down => {
+                pos.x == head.x && pos.y > head.y && pos.y - head.y <= ROCK_RUNWAY_STEPS
+            }
+            Direction::Up => {
+                pos.x == head.x && pos.y < head.y && head.y - pos.y <= ROCK_RUNWAY_STEPS
+            }
+        }
     }
 
     /// Whether the head stepping onto `pos` runs into the body, checked

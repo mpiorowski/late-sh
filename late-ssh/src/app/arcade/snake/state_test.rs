@@ -80,3 +80,36 @@ fn the_head_running_into_the_body_ends_the_run() {
     assert!(matches!(effect, Some(CobraEffect::Blow)));
     assert!(matches!(cobra.state, CobraState::Dead));
 }
+
+#[test]
+fn rock_spawns_keep_clear_of_the_head_and_forward_runway() {
+    for dir in [
+        Direction::Right,
+        Direction::Left,
+        Direction::Down,
+        Direction::Up,
+    ] {
+        let mut field = Field::new_empty(22, 58);
+        let mut cobra = Cobra::new(&field, 1);
+        cobra.head_dir = dir;
+        for _ in 0..50 {
+            field.things.clear();
+            field.gen_things(10, &cobra);
+            for thing in &field.things {
+                if matches!(thing.kind, ThingKind::Rock) {
+                    assert!(
+                        !cobra.collide(&thing.position),
+                        "rock spawned on cobra body at {:?}",
+                        thing.position
+                    );
+                    assert!(
+                        !cobra.is_rock_hazard(&thing.position),
+                        "rock spawned inside head halo or forward runway at {:?} facing {:?}",
+                        thing.position,
+                        dir
+                    );
+                }
+            }
+        }
+    }
+}
