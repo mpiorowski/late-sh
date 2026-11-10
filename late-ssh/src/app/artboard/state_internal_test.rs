@@ -1114,10 +1114,15 @@ fn selecting_a_paint_color_overrides_floating_cell_colors_to_uniform_color() {
     let _ = state.handle_pointer_event(pointer(0, 4, AppPointerKind::Down(AppPointerButton::Left)));
     let _ = state.handle_pointer_event(pointer(3, 4, AppPointerKind::Drag(AppPointerButton::Left)));
     let _ = state.handle_pointer_event(pointer(3, 4, AppPointerKind::Up(AppPointerButton::Left)));
-    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 4 }), Some(green));
-    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 4 }), Some(green));
-    assert_eq!(state.snapshot.canvas.fg(Pos { x: 3, y: 4 }), Some(green));
-    assert_eq!(state.snapshot.canvas.fg(Pos { x: 4, y: 4 }), Some(green));
+    // A two-wide brush dragged along a row stamps in brush-width steps
+    // from where it went down: at column 0, then at column 2.
+    for x in 0..=3 {
+        assert_eq!(
+            state.snapshot.canvas.fg(Pos { x, y: 4 }),
+            Some(green),
+            "column {x}"
+        );
+    }
 
     // Toggling transparency on the already-active swatch via keyboard preserves the uniform override.
     assert!(state.floating_is_transparent());
