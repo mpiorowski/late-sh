@@ -3,6 +3,8 @@ use late_core::models::user::AudioSource;
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 
+use super::nudge::{self, RadioNudgeSpot};
+
 pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bool {
     if allow_poll_vote
         && let Some(option_position) = poll_option_position(byte)
@@ -15,10 +17,16 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
         b'1'..=b'9' => select_slot(app, (byte - b'1') as usize),
         b'r' | b'R' => {
             app.stations_modal_state.open(app.selected_radio_station);
+            if plain_ssh(app) {
+                crate::metrics::record_radio_nudge(RadioNudgeSpot::Stations);
+            }
             true
         }
         b'v' | b'V' => {
             super::booth::input::open(app);
+            if plain_ssh(app) {
+                crate::metrics::record_radio_nudge(RadioNudgeSpot::Booth);
+            }
             true
         }
         b's' | b'S' => {
@@ -30,10 +38,29 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
                 AudioSource::Youtube => "Audio source: YouTube",
                 AudioSource::Radio => "Audio source: Radio",
             };
-            app.banner = Some(Banner::success(banner));
+            app.banner = Some(key_banner(app, banner));
             true
         }
         _ => false,
+    }
+}
+
+/// No client is paired on the session's token: the music keys change a
+/// saved preference and nothing else.
+fn plain_ssh(app: &App) -> bool {
+    app.paired_client_state().is_none()
+}
+
+/// A music key's banner: the success it names, or over plain ssh the nudge
+/// (`audio/nudge.rs`), since nothing it did can be heard. The choice is
+/// counted.
+fn key_banner(app: &App, success: &str) -> Banner {
+    match plain_ssh(app) {
+        true => {
+            crate::metrics::record_radio_nudge(RadioNudgeSpot::Keys);
+            Banner::info(&nudge::line(&crate::app::state::listen_url(&app.web_url)))
+        }
+        false => Banner::success(success),
     }
 }
 
@@ -49,10 +76,13 @@ fn select_slot(app: &mut App, index: usize) -> bool {
         return true;
     };
     app.select_radio_station(station);
-    app.banner = Some(Banner::success(&format!(
-        "Station: {}",
-        super::stations_modal::input::sentence_case(station.label())
-    )));
+    app.banner = Some(key_banner(
+        app,
+        &format!(
+            "Station: {}",
+            super::stations_modal::input::sentence_case(station.label())
+        ),
+    ));
     true
 }
 

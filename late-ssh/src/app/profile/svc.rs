@@ -6,6 +6,8 @@ use late_core::models::bonsai::Tree;
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
 use late_core::models::chips::{MonthChips, PROFILE_LEDGER_ROWS, UserChips};
+use late_core::models::daily_rung::count_stars;
+use late_core::models::daily_streak::get_daily_streak_snapshot;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::drink_round::{DrinkCredit, DrinkRound};
 use late_core::models::game_payout::GamePayout;
@@ -75,9 +77,19 @@ pub struct ProfileRunner {
     pub poster: Option<dartboard_core::Canvas>,
 }
 
+/// The numbers behind the marks beside the name in chat.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProfileLadder {
+    /// The daily streak's day, zero once a whole day went by without a win.
+    pub streak_days: i32,
+    /// Every star, one per rung won on its day.
+    pub stars: i64,
+}
+
 #[derive(Clone, Default)]
 pub struct ProfileSnapshot {
     pub user_id: Option<Uuid>,
+    pub ladder: ProfileLadder,
     pub profile: Option<Profile>,
     pub chip_balance: Option<i64>,
     pub bonsai: Option<Tree>,
@@ -388,6 +400,13 @@ impl ProfileService {
         let profile = Profile::load_with_chip_balance(&client, user_id).await?;
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
         let bonsai_decay_protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
+        let today = Utc::now().date_naive();
+        let ladder = ProfileLadder {
+            streak_days: get_daily_streak_snapshot(&**client, user_id, today)
+                .await?
+                .consecutive_days,
+            stars: count_stars(&**client, user_id).await?,
+        };
         let aquarium_fish =
             marketplace::active_aquarium_creatures_for_user(&client, user_id).await?;
         let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
@@ -480,6 +499,7 @@ impl ProfileService {
             user_id,
             ProfileSnapshot {
                 user_id: Some(user_id),
+                ladder,
                 profile: Some(profile.profile),
                 chip_balance: Some(profile.chip_balance),
                 bonsai,
@@ -651,6 +671,26 @@ impl ProfileService {
                 }
             }
             .instrument(info_span!("profile.clubhouse_tutorial_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: stamp the comeback moment a login just showed
+    /// (`app/comeback`). A failure is only logged: worst case the moment
+    /// shows once more on the next login.
+    pub fn set_comeback_mark(&self, user_id: Uuid, mark: late_core::models::user::ComebackMark) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_comeback_mark(&client, user_id, mark).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, step = mark.step, "failed to persist the comeback mark");
+                }
+            }
+            .instrument(info_span!("profile.comeback_mark_task", user_id = %user_id)),
         );
     }
 

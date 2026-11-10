@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use late_core::models::leaderboard::{
     ArcadeGame, DailyCompletionStatus, DailyPuzzle, ScoreGame, Tiers,
@@ -11,6 +11,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use uuid::Uuid;
+
+use late_core::models::daily_rung::{Rung, STAR_GLYPH};
 
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
@@ -59,6 +61,16 @@ pub fn single_board_chips(puzzle: DailyPuzzle) -> i64 {
 /// Narrower lobbies drop the `[o who]` hint from the selected card; the
 /// count stays, the key is still in the guide.
 const SOLVERS_HINT_MIN_WIDTH: u16 = 62;
+
+/// Columns the list keeps for itself before the week gets a panel beside
+/// it: its longest intro line, unwrapped, plus its padding.
+const LIST_WIDTH_BESIDE_WEEK: u16 = 112;
+/// Columns the lobby's list and the week block above it sit in from the
+/// page edge.
+const LIST_INDENT: u16 = 4;
+/// Rows the game list keeps under the inline week; a shorter lobby drops
+/// the week, the way it drops the quest strip, at the strip's floor.
+const WEEK_MIN_LIST_ROWS: u16 = 13;
 
 // ── Arcade game frame ─────────────────────────────────────────
 
@@ -347,6 +359,9 @@ pub struct ArcadeHubView<'a> {
     /// `session_daily_completion` is OR'd in for the viewer, as it is for
     /// the ✓ marks.
     pub today_statuses: &'a HashMap<Uuid, DailyCompletionStatus>,
+    /// Everyone with today's star, for the week's count; the viewer's own
+    /// comes off `quest_state` ahead of it.
+    pub starred_today: &'a HashSet<Uuid>,
     pub usernames: &'a UsernameLookup<'a>,
     pub user_id: Uuid,
     pub username: &'a str,
@@ -402,6 +417,32 @@ pub fn draw_arcade_hub(
         return;
     }
 
+    // The week: today's rung and the six after it. A terminal with the
+    // room gets it as a panel down the right, beside the quests and the
+    // list; the rest get it in the list above the daily cards.
+    let today = chrono::Utc::now().date_naive();
+    let week = super::week::Week::today(
+        today,
+        view.starred_today,
+        view.quest_state.rung_standing(today),
+        view.user_id,
+    );
+    let (area, week_inline) = if area.width >= LIST_WIDTH_BESIDE_WEEK + super::week::PANEL_WIDTH
+        && area.height >= super::week::PANEL_HEIGHT
+    {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(LIST_WIDTH_BESIDE_WEEK),
+                Constraint::Length(super::week::PANEL_WIDTH),
+            ])
+            .split(area);
+        frame.render_widget(Paragraph::new(week.panel_lines()), columns[1]);
+        (columns[0], None)
+    } else {
+        (area, Some(&week))
+    };
+
     // Quests live at the top of the lobby, not in a modal: they are all
     // arcade quests, so they belong where the games are launched. Short
     // terminals drop the strip before the game list loses room.
@@ -417,9 +458,35 @@ pub fn draw_arcade_hub(
         area
     };
 
+    // The week the lobby has no panel for: a block above the daily cards,
+    // fixed like the strip so the list's scroll never carries it off, and
+    // dropped the same way when it would leave the list short.
+    let content_area = match week_inline {
+        Some(inline) => {
+            let lines = inline.lobby_lines(content_area.width.saturating_sub(LIST_INDENT));
+            let height = lines.len() as u16 + 1;
+            if content_area.height >= height + WEEK_MIN_LIST_ROWS {
+                let rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(height), Constraint::Min(0)])
+                    .split(content_area);
+                let block = Rect {
+                    x: rows[0].x + LIST_INDENT,
+                    width: rows[0].width.saturating_sub(LIST_INDENT),
+                    ..rows[0]
+                };
+                frame.render_widget(Paragraph::new(lines), block);
+                rows[1]
+            } else {
+                content_area
+            }
+        }
+        None => content_area,
+    };
+
     // No banner art above the list: with the quest strip on top, every row
     // belongs to the games, and small terminals never had the headroom.
-    draw_game_list(frame, content_area, view);
+    draw_game_list(frame, content_area, view, week.days[0].rung);
 
     if view.show_solvers
         && let ArcadeGame::Puzzle(game) = view.game_selection
@@ -626,7 +693,14 @@ fn wrap_names(names: &[String], width: usize) -> Vec<Vec<String>> {
     rows
 }
 
-fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
+/// Whether the board the first-visit tour lends draws at all in the Arcade
+/// page `area`, for the tour's gate and its header.
+pub(crate) fn lent_board_fits(area: Rect) -> bool {
+    super::netwalk::ui::lent_board_fits(area)
+}
+
+/// The lobby's list, today's `rung` starred on its card.
+fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung: Rung) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
@@ -683,7 +757,20 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_MUTED())
         };
         let status = if card.available {
-            card_status_spans(view, &today, puzzle, show_hint && game == selection)
+            let mut status = Vec::new();
+            if puzzle == rung.puzzle {
+                status.push(Span::styled(
+                    format!("{STAR_GLYPH} "),
+                    Style::default().fg(theme::AMBER()),
+                ));
+            }
+            status.extend(card_status_spans(
+                view,
+                &today,
+                puzzle,
+                show_hint && game == selection,
+            ));
+            status
         } else {
             vec![Span::styled(
                 "Coming Soon",
@@ -744,15 +831,16 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         );
     }
 
-    // Scroll so the selected game stays at the vertical center of the viewport.
-    // No scrolling until the selection passes the midpoint.
+    // Scroll so the selected game stays at the vertical center of the
+    // viewport: nothing moves until the selection passes the midpoint, so
+    // the list's head is in view while the first card is selected.
     let visible = area.height as usize;
-    let third = visible / 3;
+    let midpoint = visible / 2;
     let scroll_y = if visible >= lines.len() {
         0
     } else {
         selected_line
-            .saturating_sub(third)
+            .saturating_sub(midpoint)
             .min(lines.len().saturating_sub(visible))
     };
 
@@ -762,10 +850,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
 
     let layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(4), // Left padding
-            Constraint::Min(0),
-        ])
+        .constraints([Constraint::Length(LIST_INDENT), Constraint::Min(0)])
         .split(area);
 
     frame.render_widget(paragraph, layout[1]);

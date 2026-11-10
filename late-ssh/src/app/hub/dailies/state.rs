@@ -1,9 +1,18 @@
+use chrono::NaiveDate;
+use late_core::models::daily_rung::STAR_GLYPH;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::primitives::Banner;
 
 use super::svc::{QuestEvent, QuestService, QuestSnapshot};
+
+/// Whether today's rung is still to be won, for the arcade week's badge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RungStanding {
+    Open,
+    Done,
+}
 
 /// `pub` (not `pub(crate)`) because the public `ArcadeHubView` carries a
 /// reference to it for the arcade quest strip.
@@ -48,22 +57,20 @@ impl QuestState {
                     user_id,
                     title,
                     reward_chips,
-                    streak_reward_chips,
-                    streak_bonus_level,
                 } if user_id == self.user_id => {
-                    let message = if streak_reward_chips > 0 {
-                        let bonus_level = streak_bonus_level.unwrap_or_default();
-                        format!(
-                            "Quest complete: {title} (+{reward_chips} chips, streak {bonus_level} +{streak_reward_chips})"
-                        )
-                    } else if reward_chips > 0 {
+                    let message = if reward_chips > 0 {
                         format!("Quest complete: {title} (+{reward_chips} chips)")
                     } else {
                         format!("Quest complete: {title}")
                     };
                     banner = Some(Banner::success(&message));
                 }
-                _ => {}
+                QuestEvent::RungStar { user_id, stars } if user_id == self.user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "{STAR_GLYPH} Today's rung, done. That is star {stars}."
+                    )));
+                }
+                QuestEvent::Completed { .. } | QuestEvent::RungStar { .. } => {}
             }
         }
 
@@ -75,6 +82,15 @@ impl QuestState {
 
     pub(crate) fn snapshot(&self) -> &QuestSnapshot {
         &self.snapshot
+    }
+
+    /// Whether today's rung is still to be won, off the snapshot's newest
+    /// star; the hub refreshes the snapshot the moment a star lands.
+    pub(crate) fn rung_standing(&self, today: NaiveDate) -> RungStanding {
+        match self.snapshot.latest_star == Some(today) {
+            true => RungStanding::Done,
+            false => RungStanding::Open,
+        }
     }
 
     pub(crate) fn is_loaded(&self) -> bool {

@@ -867,6 +867,20 @@ impl russh::server::Handler for ClientHandler {
                 .activity_feed
                 .send(ActivityEvent::joined(user_id, user.username.clone()));
         }
+        // The same rule counts the login: a handoff is not one.
+        if resume.is_none() {
+            match self.state.db.get().await {
+                Ok(client) => match User::note_login(&client, user_id).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = ?e, user_id = %user_id, "failed to count login");
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to get db client to count login");
+                }
+            }
+        }
         let permissions = AuthzPermissions::new(
             user.is_admin || self.state.config.force_admin,
             user.is_moderator,
@@ -1191,6 +1205,7 @@ impl russh::server::Handler for ClientHandler {
             artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
 
             is_new_user: self.is_new_user,
+            comeback_mark: late_core::models::user::extract_comeback_mark(&user.settings),
             landing_page: late_core::models::user::extract_landing_page(&user.settings),
             paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
 
