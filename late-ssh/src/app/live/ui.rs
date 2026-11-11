@@ -23,7 +23,6 @@ use ratatui::{
 
 use crate::app::{
     audio::booth::live as booth_live,
-    calendar::live as event_live,
     common::theme,
     door::{realm::live as realm_live, spectate::live as door_live},
     games::pool_core::canvas::Rgb,
@@ -147,7 +146,6 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Track(track) => booth_live::body(budget, track),
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
         LiveStripView::DoorGame(game) => door_live::body(budget, game),
-        LiveStripView::Event(event) => event_live::body(budget, event),
         LiveStripView::Realm(realm) => realm_live::body(budget, realm),
     };
     frame_lines(width, host, body)
@@ -252,7 +250,6 @@ pub(crate) fn live_strip_compact_line(
         LiveStripView::Track(track) => booth_live::glow(track),
         LiveStripView::Stream(_) => stream_live::glow(),
         LiveStripView::DoorGame(_) => door_live::glow(),
-        LiveStripView::Event(event) => event_live::glow(event),
         LiveStripView::Realm(realm) => realm_live::glow(realm),
     };
     let mut spans = match host {
@@ -276,7 +273,6 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
         LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
         LiveStripView::DoorGame(game) => door_live::compact_spans(rest, game),
-        LiveStripView::Event(event) => event_live::compact_spans(rest, event),
         LiveStripView::Realm(realm) => realm_live::compact_spans(rest, realm),
     }
 }

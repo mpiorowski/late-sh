@@ -4,7 +4,9 @@ use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::ChatMessage,
+    chat_room::{ChatRoom, RoomKind, RoomVisibility},
+    chat_room_member::ChatRoomMember,
 };
 use ratatui::{
     Frame,
@@ -26,7 +28,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint, truncate_cells},
     theme,
     username_effect::ResolvedName,
 };
@@ -44,13 +46,14 @@ use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
     compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
-    is_deadchannel_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    is_deadchannel_room, is_rail_room, is_selected_slot, synthetic_favorite_id,
+    synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
     without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
+use crate::app::common::spoiler::{self, has_spoiler};
 
 /// The picker's choices in paint order: the key to press and the reaction
 /// kind it toggles.
@@ -149,9 +152,6 @@ pub struct DashboardChatView<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -173,6 +173,7 @@ pub struct DashboardChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub active_poll: Option<&'a ActiveChatPoll>,
     /// The #lounge live strip (`app/live/`): one thing that just happened
     /// in the house, drawn above the poll strip. `None` when nothing is
@@ -224,9 +225,6 @@ pub(crate) struct ComposerBlockView<'a> {
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub mention_active: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -525,10 +523,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
             )));
         }
         ComposerInert::No => {}
-    }
-
-    if let Some(push) = view.return_push {
-        return Paragraph::new(Line::from(Span::styled(push.to_string(), dim)));
     }
 
     if view.composing {
@@ -1088,28 +1082,6 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     }
 }
 
-pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    let ellipsis_width = UnicodeWidthStr::width("…");
-    for ch in text.chars() {
-        let width = UnicodeWidthStr::width(ch.to_string().as_str());
-        if used + width + ellipsis_width > max_width {
-            break;
-        }
-        out.push(ch);
-        used += width;
-    }
-    out.push('…');
-    out
-}
-
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -1128,7 +1100,6 @@ pub fn draw_dashboard_chat_card(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
@@ -1249,6 +1220,7 @@ pub fn draw_dashboard_chat_card(
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
+                spoilers_revealed: view.spoilers_revealed,
                 runner_looks: view
                     .room
                     .filter(|room| super::state::room_shows_portraits(room))
@@ -1304,7 +1276,6 @@ pub fn draw_dashboard_chat_card(
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
-            return_push: view.return_push,
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
@@ -1353,6 +1324,7 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
+    spoilers_revealed: &'a HashSet<Uuid>,
     /// `Some` only while `state::room_shows_portraits` says so for the
     /// rendered room: the list keeps a portrait gutter on the right of
     /// every entry and paints each author's face beside their block
@@ -1886,10 +1858,16 @@ fn ensure_chat_rows_cache(
         } else {
             reactions
         };
+        // Spoilers are read off the stored body, before the plain-glyphs
+        // pass: dropping an icon at a spoiler's edge would leave whitespace
+        // there, and the markers would stop reading as a spoiler.
+        let spoilers_revealed = ctx.spoilers_revealed.contains(&msg.id);
+        let spoilers_hidden = has_spoiler(&msg.body) && !spoilers_revealed;
+        let body = spoiler::shown(&msg.body, spoilers_revealed);
         let body = if ctx.show_flag_fallback {
-            without_nerd_font_glyphs(&msg.body)
+            Cow::Owned(without_nerd_font_glyphs(&body).into_owned())
         } else {
-            Cow::Borrowed(msg.body.as_str())
+            body
         };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
@@ -1969,11 +1947,16 @@ fn ensure_chat_rows_cache(
             (Some(lines), _) => Some(lines.as_slice()),
             (None, Some(preview)) => Some(preview.picture().as_slice()),
             (None, None) => None,
-        };
+        }
+        // A preview fetched before an edit wrapped its link in a spoiler
+        // would show the secret as a picture.
+        .filter(|_| !spoilers_hidden);
         let translation = ctx
             .translations
             .get(&msg.id)
-            .filter(|_| !ctx.translation_hidden.contains(&msg.id));
+            .filter(|_| !ctx.translation_hidden.contains(&msg.id))
+            // The translation would carry the hidden words in clear.
+            .filter(|_| !spoilers_hidden);
         // The #deadchannel portrait gutter (`app/deadchannel/runner`): in
         // the wire every author is a runner, and the message list keeps
         // `PORTRAIT_GUTTER` cells on the right where the author's face sits
@@ -2792,8 +2775,8 @@ struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
-    /// The ladder's marks right after the name, for the painter to give
-    /// the star its amber.
+    /// The ladder's marks right after the name (the moon and the star), for
+    /// the painter to give them the name's own color.
     marks_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.
@@ -3175,9 +3158,6 @@ pub struct ChatRenderInput<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -3199,6 +3179,7 @@ pub struct ChatRenderInput<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -3359,9 +3340,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -3379,6 +3357,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3456,7 +3435,6 @@ pub fn draw_embedded_room_chat(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
@@ -3482,7 +3460,6 @@ pub fn draw_embedded_room_chat(
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
-            return_push: view.return_push,
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
@@ -3580,6 +3557,7 @@ fn draw_embedded_messages(
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
+            spoilers_revealed: view.spoilers_revealed,
             // Embedded game chats are house tables and daily boards, never
             // the wire.
             runner_looks: None,
@@ -3701,7 +3679,6 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
-                        return_push: view.return_push,
                         mention_active: view.mention_active,
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
@@ -4282,7 +4259,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             None => view
                 .chat_rooms
                 .iter()
-                .any(|(r, _)| r.id == *id && is_chat_list_room(r)),
+                .any(|(r, _)| r.id == *id && is_rail_room(r, view.favorite_room_ids)),
         })
         .collect();
     let favorited = |slot: RoomSlot| -> bool {
@@ -4372,13 +4349,20 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
 
     // Stream: live "watch me" streams, directly under Core, mirroring
     // `visual_order_for_rooms`. The section only exists while somebody is
-    // live; a pending stream gets no row.
-    if view.live_streams.iter().any(|stream| stream.live) {
+    // live; a pending stream gets no row. A favorited stream room keeps its
+    // Favorites row instead, live or not.
+    let section_streams: Vec<Uuid> = view
+        .live_streams
+        .iter()
+        .filter(|stream| stream.live && !favorite_ids.contains(&stream.room_id))
+        .map(|stream| stream.room_id)
+        .collect();
+    if !section_streams.is_empty() {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Stream), None, false);
         if !collapsed_set.contains(&RoomSection::Stream) {
-            for stream in view.live_streams.iter().filter(|stream| stream.live) {
-                push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
+            for room_id in section_streams {
+                push_slot(RoomSlot::Room(room_id), &mut push_row);
             }
         }
     }
@@ -4410,9 +4394,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind == "dm"
-                && !favorite_ids.contains(&r.id)
+            let dm = match r.kind {
+                RoomKind::Dm => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
+            dm && !favorite_ids.contains(&r.id)
                 && !dm_peer_is_ignored(r, view.current_user_id, view.ignored_user_ids)
         })
         .partition(|(r, _)| dm_is_promoted_unread(r.id, view.unread_counts, view.sticky_unread_dm));
@@ -4443,11 +4434,15 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind != "dm"
+            let channel = match r.kind {
+                RoomKind::Lounge | RoomKind::Language | RoomKind::Topic(_) => true,
+                RoomKind::Dm | RoomKind::Game(_) | RoomKind::Deadchannel | RoomKind::Nightcap => {
+                    false
+                }
+            };
+            channel
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && r.slug.as_deref() != Some("voice")
-                && !is_deadchannel_room(r)
                 && !favorite_ids.contains(&r.id)
         })
         .collect();
@@ -4634,9 +4629,18 @@ pub(crate) fn bumped_join_room_slugs(
         .values()
         .filter_map(|effects| {
             let first = effects.first()?;
+            let public_topic = match first.room_kind {
+                RoomKind::Topic(RoomVisibility::Public) => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Private)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
             (has_room_effect(effects, "room_bump")
-                && first.room_kind == "topic"
-                && first.room_visibility == "public"
+                && public_topic
                 && !first.room_permanent
                 && first
                     .room_slug
@@ -4661,18 +4665,23 @@ fn room_display_label(
     current_user_id: Uuid,
     away_user_ids: &HashSet<Uuid>,
 ) -> String {
-    if room.kind == "dm" {
-        return dm_display_label(room, usernames, current_user_id, away_user_ids);
-    }
-    let base_label = room
-        .slug
-        .as_deref()
-        .map(str::to_string)
-        .unwrap_or_else(|| room.kind.clone());
-    if room.visibility == "private" {
-        format!("🔒 {}", base_label)
-    } else {
-        base_label
+    let base_label = || {
+        room.slug
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| room.kind.as_str().to_string())
+    };
+    match room.kind {
+        RoomKind::Dm => dm_display_label(room, usernames, current_user_id, away_user_ids),
+        RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+            format!("🔒 {}", base_label())
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Game(RoomVisibility::Public)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => base_label(),
     }
 }
 
@@ -5001,9 +5010,10 @@ fn draw_selected_content(
         let selected_room = selected_room_id
             .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
             // Stream rooms are `kind='game'` (not chat-list rooms) but are
-            // openable from the rail's stream section, so they render here.
+            // openable from the rail's stream section, and a favorited game
+            // room from Favorites, so they render here.
             .filter(|(room, _)| {
-                is_chat_list_room(room)
+                is_rail_room(room, view.favorite_room_ids)
                     || view
                         .live_streams
                         .iter()
@@ -5100,6 +5110,7 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
+                    spoilers_revealed: view.spoilers_revealed,
                     runner_looks: super::state::room_shows_portraits(room)
                         .then_some(view.runner_looks),
                 },
@@ -5349,7 +5360,6 @@ fn draw_selected_content(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,

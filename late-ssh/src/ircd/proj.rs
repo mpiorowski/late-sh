@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use irc_proto::message::Tag;
-use late_core::models::chat_room::ChatRoom;
+use late_core::models::chat_room::{ChatRoom, RoomKind, RoomVisibility};
 use uuid::Uuid;
 
 /// Max bytes of message body per PRIVMSG line. Conservative: leaves room for
@@ -206,10 +206,15 @@ pub fn channel_name(room: &ChatRoom) -> Option<String> {
     if !is_irc_channel_kind(room) {
         return None;
     }
-    let prefix = if room.visibility == "private" {
-        "##"
-    } else {
-        "#"
+    let prefix = match room.kind {
+        RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => "##",
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Dm
+        | RoomKind::Game(RoomVisibility::Public)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => "#",
     };
     room.slug.as_deref().map(|slug| format!("{prefix}{slug}"))
 }
@@ -217,15 +222,22 @@ pub fn channel_name(room: &ChatRoom) -> Option<String> {
 /// Whether a room kind/visibility combination is exposed as an IRC channel.
 /// Game-room chat and DMs are not (FRD §6.1).
 pub fn is_irc_channel_kind(room: &ChatRoom) -> bool {
-    match room.kind.as_str() {
-        "lounge" | "language" => true,
-        "topic" => room.visibility == "public" || room.visibility == "private",
-        _ => false,
+    match room.kind {
+        RoomKind::Lounge | RoomKind::Language | RoomKind::Topic(_) => true,
+        RoomKind::Dm | RoomKind::Game(_) | RoomKind::Deadchannel | RoomKind::Nightcap => false,
     }
 }
 
 pub fn is_lounge(room: &ChatRoom) -> bool {
-    room.kind == "lounge"
+    match room.kind {
+        RoomKind::Lounge => true,
+        RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Dm
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => false,
+    }
 }
 
 /// Normalize a channel name for case-insensitive matching (CASEMAPPING=ascii).
@@ -235,11 +247,11 @@ pub fn normalize_channel(name: &str) -> String {
 
 /// Visibility and slug for a client-supplied channel name.
 /// `#foo` addresses the public room; `##foo` addresses the private room.
-pub fn channel_parts(name: &str) -> Option<(&'static str, &str)> {
+pub fn channel_parts(name: &str) -> Option<(RoomVisibility, &str)> {
     let rest = name.strip_prefix('#')?;
     let (visibility, slug) = match rest.strip_prefix('#') {
-        Some(slug) => ("private", slug),
-        None => ("public", rest),
+        Some(slug) => (RoomVisibility::Private, slug),
+        None => (RoomVisibility::Public, rest),
     };
     (!slug.is_empty() && !slug.contains('#')).then_some((visibility, slug))
 }

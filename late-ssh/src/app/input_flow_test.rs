@@ -571,8 +571,13 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
             .collect(),
         ..LeaderboardData::default()
     });
-    // Top Drinkers leads the rail; step down to the board the fixture fills.
-    app.leaderboard_page.select_next();
+    let chips_index = app
+        .leaderboard_page
+        .boards()
+        .iter()
+        .position(|b| *b == Board::TopChips)
+        .unwrap();
+    app.leaderboard_page.select(chips_index);
     app.render().unwrap();
     app.handle_input(b"\n\n\x0b");
     assert_eq!(app.leaderboard_page.scroll(), 1);
@@ -599,7 +604,7 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
 
     let board = (0..24)
         .flat_map(|y| (0..100).map(move |x| Position::new(x, y)))
-        .find(|point| app.leaderboard_page.board_at(*point) == Some(2))
+        .find(|point| app.leaderboard_page.board_at(*point) == Some(chips_index + 1))
         .unwrap();
     let click = format!("\x1b[<0;{};{}M", board.x + 1, board.y + 1);
     app.handle_input(click.as_bytes());
@@ -608,7 +613,7 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
     app.render().unwrap();
     let rail_wheel = format!("\x1b[<65;{};{}M", board.x + 1, board.y + 1);
     app.handle_input(rail_wheel.as_bytes());
-    assert_eq!(app.leaderboard_page.selected_board(), Board::TimeOnline);
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChat);
     app.handle_input(b"k\x1b[A");
     assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
     app.resize(40, 10).unwrap();
@@ -7494,6 +7499,52 @@ async fn f_favorites_the_mentions_entry() {
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "Removed from favorites").await;
     assert!(!app.chat.favorite_room_ids().contains(&mentions_id));
+}
+
+/// A game room is on the rail only while it is a favorite. Unfavoriting the
+/// one open on Home moves the selection to a room the rail still lists
+/// right away, so the next draft goes to the room on screen and not to the
+/// game chat that just left it.
+#[tokio::test]
+async fn unfavoriting_the_open_game_room_moves_the_draft_with_the_screen() {
+    use late_core::models::game_room::GameKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-unfav-game").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let game = ChatRoom::get_or_create_game_room(&client, GameKind::Poker, "unfav-open")
+        .await
+        .expect("game room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    ChatRoomMember::join(&client, game.id, viewer.id)
+        .await
+        .expect("join game room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-unfav-game-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "\u{258C}lounge").await;
+
+    // `/fav` typed in the game's own chat is what puts it on the rail.
+    app.chat.start_composing_in_room(game.id);
+    app.handle_input(b"/fav\r");
+    wait_for_render_contains(&mut app, "Added to favorites").await;
+    wait_for_render_contains(&mut app, "favorites").await;
+
+    // Favorites sit above Core: one step left of lounge is the game room.
+    app.handle_input(b"h");
+    assert_eq!(app.chat.selected_room_id, Some(game.id));
+
+    // No tick between the two keys: no snapshot gets to repair anything.
+    app.handle_input(b"f");
+    app.handle_input(b"i");
+    assert!(!app.chat.favorite_room_ids().contains(&game.id));
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    assert_eq!(app.chat.composer_room_id(), Some(lounge.id));
 }
 
 /// The Chat badges picker lists every badge; a game's ladder is one row, and

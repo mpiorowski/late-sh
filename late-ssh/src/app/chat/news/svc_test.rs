@@ -234,6 +234,30 @@ async fn a_share_posts_its_lounge_card_and_a_delete_takes_it_out() {
         .expect("reload article")
         .expect("article");
     assert_eq!(linked.lounge_message_id, Some(lounge_lines[0].id));
+    let data = late_core::models::leaderboard::fetch_leaderboard_data(&client)
+        .await
+        .unwrap();
+    assert_eq!(
+        data.top_chat
+            .news_posts
+            .iter()
+            .find(|r| r.user_id == sharer.id)
+            .unwrap()
+            .value,
+        1
+    );
+    assert!(
+        data.top_chat
+            .all_rooms
+            .iter()
+            .all(|r| r.user_id != sharer.id)
+    );
+    assert!(
+        data.top_chat
+            .daily_streak
+            .iter()
+            .all(|r| r.user_id != sharer.id)
+    );
 
     service.delete_article(admin.id, article.id, true);
     wait_until(

@@ -2,6 +2,22 @@ use super::*;
 use chrono::Duration as ChronoDuration;
 use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
 
+/// The moon and the star stand apart when a name carries both, and each
+/// stands alone otherwise.
+#[test]
+fn ladder_marks_put_a_space_between_the_moon_and_the_star() {
+    let streak = |consecutive_days| DailyStreakSnapshot {
+        consecutive_days,
+        last_completed_date: None,
+    };
+    let marks = |days, starred| ladder_marks(Some(&streak(days)), starred);
+    assert_eq!(marks(30, true).as_deref(), Some("● ✦"));
+    assert_eq!(marks(30, false).as_deref(), Some("●"));
+    assert_eq!(marks(1, true).as_deref(), Some("✦"));
+    assert_eq!(marks(1, false), None);
+    assert_eq!(ladder_marks(None, true).as_deref(), Some("✦"));
+}
+
 #[test]
 fn contains_link_catches_schemes_www_and_bare_domains() {
     for spam in [
@@ -102,12 +118,11 @@ fn report_kind_maps_room_slugs() {
 /// the slug and stays free text.
 #[test]
 fn report_kind_enforces_public_topic_rooms_only() {
-    let room = |kind: &str, visibility: &str, slug: &str| ChatRoom {
+    let room = |kind: RoomKind, slug: &str| ChatRoom {
         id: Uuid::from_u128(1),
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        kind: kind.to_string(),
-        visibility: visibility.to_string(),
+        kind,
         auto_join: false,
         permanent: false,
         slug: Some(slug.to_string()),
@@ -119,20 +134,26 @@ fn report_kind_enforces_public_topic_rooms_only() {
         created_by: None,
     };
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "bugs")),
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Public), "bugs")),
         Some(ReportKind::Bug)
     );
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "suggestions")),
+        ReportKind::for_room(&room(
+            RoomKind::Topic(RoomVisibility::Public),
+            "suggestions"
+        )),
         Some(ReportKind::Suggestion)
     );
     assert_eq!(
-        ReportKind::for_room(&room("topic", "private", "bugs")),
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Private), "bugs")),
         None
     );
-    assert_eq!(ReportKind::for_room(&room("game", "public", "bugs")), None);
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "lounge")),
+        ReportKind::for_room(&room(RoomKind::Game(RoomVisibility::Public), "bugs")),
+        None
+    );
+    assert_eq!(
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Public), "lounge")),
         None
     );
 }

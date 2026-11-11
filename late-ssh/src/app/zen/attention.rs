@@ -4,68 +4,13 @@
 //! result you have not looked at, a DM or a mention unread, a companion
 //! uncared for today), and each row clears on the act that answers it:
 //! the care rows on the UTC day, so they come back each morning, the rest
-//! on the read or the move. Nothing here fetches: `unread_rows` derives
-//! the DM and mention rows from the chat state, `items` orders what the
-//! glue hands it (`App::attention_items`), and `ui.rs` paints the rows.
+//! on the read or the move. Nothing here fetches or decides what is
+//! unread: `items` orders what the glue hands it (`App::attention_items`,
+//! which asks chat and the daily board), and `ui.rs` paints the rows.
 //! Pure, so the renderer and Enter read the same rows: the row under the
 //! marker is the row that opens.
 
-use std::collections::{HashMap, HashSet};
-
-use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, notification::NotificationView,
-};
 use uuid::Uuid;
-
-use crate::app::chat::state::{dm_peer_id, dm_peer_is_ignored};
-
-/// Unread DMs first, the most unread on top, then the unread mentions,
-/// newest first. A DM with an ignored peer never shows, as in the room rail.
-pub fn unread_rows(
-    user_id: Uuid,
-    rooms: &[(ChatRoom, Vec<ChatMessage>)],
-    unread_counts: &HashMap<Uuid, i64>,
-    usernames: &HashMap<Uuid, String>,
-    ignored: &HashSet<Uuid>,
-    mentions: &[NotificationView],
-) -> Vec<Item> {
-    let mut dms: Vec<(i64, String, Uuid)> = Vec::new();
-    for (room, _) in rooms {
-        if room.kind != "dm" || dm_peer_is_ignored(room, user_id, ignored) {
-            continue;
-        }
-        let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
-        if unread == 0 {
-            continue;
-        }
-        let peer = match dm_peer_id(room, user_id).and_then(|id| usernames.get(&id)) {
-            Some(name) => name.clone(),
-            None => "someone".to_string(),
-        };
-        dms.push((unread, peer, room.id));
-    }
-    dms.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-
-    let mut mentions: Vec<&NotificationView> = mentions
-        .iter()
-        .filter(|mention| mention.read_at.is_none())
-        .collect();
-    mentions.sort_by_key(|mention| std::cmp::Reverse(mention.created));
-
-    dms.into_iter()
-        .map(|(unread, peer, room_id)| Item::Dm {
-            room_id,
-            peer,
-            unread,
-        })
-        .chain(mentions.into_iter().map(|mention| Item::Mention {
-            room_id: mention.room_id,
-            message_id: mention.message_id,
-            actor: mention.actor_username.clone(),
-            room: mention.room_slug.clone(),
-        }))
-        .collect()
-}
 
 /// One row of the list, in the order `items` puts them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,7 +107,8 @@ pub struct Inputs {
     pub my_moves: Vec<Match>,
     /// Finished matches you have not looked at, newest finish first.
     pub results: Vec<Match>,
-    /// The unread DMs and mentions, as `unread_rows` orders them.
+    /// The unread DMs, then the unread mentions, each in chat's order
+    /// (`ChatState::unread_dms`, `ChatState::unread_mentions`).
     pub unread: Vec<Item>,
     pub tank_due: bool,
     pub tree_due: bool,

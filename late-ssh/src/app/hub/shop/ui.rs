@@ -98,13 +98,17 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet: ShopPet, care: &AquariumCare) {
-    let columns =
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
+    let columns = Layout::horizontal([
+        Constraint::Percentage(45),
+        Constraint::Length(1), // Keep list actions separate from detail labels.
+        Constraint::Fill(1),
+    ])
+    .split(area);
     let today = Utc::now().date_naive();
     draw_item_list(frame, columns[0], state, care.sprout_status_on(today));
     draw_item_detail(
         frame,
-        columns[1],
+        columns[2],
         state,
         state.selected_item(),
         pet,
@@ -407,7 +411,7 @@ fn draw_item_detail(
             Span::raw("  lasts  "),
             Span::styled(
                 format!(
-                    "{}, rebuy replaces the active style",
+                    "{}; the same style again adds its time, another replaces it",
                     duration_label(item.rental_duration())
                 ),
                 Style::default().fg(theme::TEXT_DIM()),
@@ -441,7 +445,7 @@ fn draw_item_detail(
             Span::raw("  lasts  "),
             Span::styled(
                 format!(
-                    "{}, rebuy replaces the active {slot_word}",
+                    "{}; the same {slot_word} again adds its time, another replaces it",
                     duration_label(item.rental_duration())
                 ),
                 Style::default().fg(theme::TEXT_DIM()),
@@ -772,6 +776,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, pet: ShopPet) {
         Span::raw("  "),
         Span::styled("j/k", key),
         Span::styled(" select  ", text),
+        Span::styled("PgUp/Dn", key),
+        Span::styled(" page  ", text),
         Span::styled("h/l", key),
         Span::styled(" subtab  ", text),
         Span::styled("Enter", key),

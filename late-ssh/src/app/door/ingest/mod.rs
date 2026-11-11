@@ -11,6 +11,9 @@ mod brogue_test;
 pub mod dcss;
 #[cfg(test)]
 mod dcss_test;
+pub mod dopewars;
+#[cfg(test)]
+mod dopewars_test;
 pub mod nethack;
 #[cfg(test)]
 mod nethack_test;

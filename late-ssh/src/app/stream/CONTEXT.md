@@ -70,7 +70,8 @@ Cross-domain touchpoints:
 - `late-core/src/models/chat_room.rs::get_or_create_stream_room`: the
   permanent per-streamer room: `kind='game'`, `game_kind='stream'`, slug
   `{username}-live`, public. Chat history persists between streams; `kind='game'`
-  keeps it out of the normal rail/IRC surfaces, and the public game-room
+  keeps it out of the normal rail/IRC surfaces (unless the viewer favorites
+  it), and the public game-room
   join path (`ChatService::join_game_room_task`) lets anyone enter from the
   rail. `game_kind` is free-form TEXT, so the kind needs no migration. The room
   follows the **account**, not the name: lookup is by `created_by` first, so
@@ -136,7 +137,9 @@ Cross-domain touchpoints:
 - `app/chat/state.rs` / `app/chat/ui.rs`: `ChatState::live_streams` (copied
   from the registry watch ~1/s in `App::tick_stream`, epoch-bumped on
   change), the rail's `RoomSection::Stream` (under Core, above
-  Cyberspace/Channels, live streams only: a pending stream has no row; the
+  Cyberspace/Channels, live streams only: a pending stream has no row, and a
+  stream room the viewer favorited (`f` on its row, or `/fav` inside it)
+  rides in Favorites instead, where it stays after the stream ends; the
   `Ctrl+/` room picker lists the same live streams as `#{username}-live`,
   pickable before joining), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
@@ -232,7 +235,8 @@ Cross-domain touchpoints:
      the rail record intent, `App` owns the service.
 4. Ending: `/golive stop`, or close the tab / stop sharing → grace
    (~30s, survives a refresh) → the registry sweeps the stream, watch and
-   publisher URLs die, the rail row disappears. A registered stream whose
+   publisher URLs die, the stream-section row disappears (a favorited
+   stream room keeps its Favorites row). A registered stream whose
    page never reports media is swept after 5 minutes. **Teardown kills the
    media, not just the URLs**: every path out of the registry (`stop`, a
    moderation voice kick, grace/pending sweep) also force-disconnects the

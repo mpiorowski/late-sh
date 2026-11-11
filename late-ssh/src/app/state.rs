@@ -1078,9 +1078,6 @@ pub struct App {
     /// This session's away flag as last written to the active-users roster,
     /// so the 1Hz edge writes only on a change (`App::sync_away`).
     pub(crate) away: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`): armed by
-    /// the person's first input after hours quiet, read by the composer.
-    pub(crate) return_push: crate::app::hub::dailies::return_push::ReturnPush,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -2040,7 +2037,6 @@ impl App {
             notify_outbox,
             sent_away: false,
             away: false,
-            return_push: Default::default(),
             is_draining: config.is_draining,
             handoff: crate::app::handoff::state::HandoffState::new(config.handoff_idle),
             icon_picker_open: false,
@@ -2438,8 +2434,17 @@ impl App {
         if self.dopewars_state.is_some() {
             return;
         }
+        // The playname is how a run finds its account, so it is the name the
+        // account has now: `self.username` is the one the session started
+        // with, and a rename since then would send runs to nobody. It stands
+        // in only until the profile has loaded.
+        let profile_username = &self.profile_state.profile().username;
+        let username = match profile_username.is_empty() {
+            true => self.username.clone(),
+            false => profile_username.clone(),
+        };
         self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
-            self.user_id,
+            username,
             self.dopewars_host.clone(),
             self.dopewars_port,
             self.dopewars_secret.clone(),
@@ -3174,18 +3179,11 @@ impl App {
                 event_end,
                 paste_open,
             } => {
-                let quiet = self.last_active_at.elapsed();
                 self.last_active_at = Instant::now();
                 self.newcomer_clock.note_input(chrono::Utc::now());
                 self.sent_away = false;
                 if self.away {
                     self.sync_away();
-                    if self.return_push.note_return(Instant::now(), quiet) {
-                        crate::metrics::record_return_push(
-                            self.quest_state
-                                .rung_standing(chrono::Utc::now().date_naive()),
-                        );
-                    }
                 }
                 // The held tail came from a chunk already swallowed, so the
                 // event ends this far into this one.
@@ -3586,17 +3584,16 @@ impl App {
     pub(crate) fn home_tiles_area(&self) -> Rect {
         crate::app::zen::layout::rice_areas(
             self.content_area(),
-            self.home_board_day().is_some(),
+            !self.home_board_day().is_empty(),
             self.home.arrange,
         )
         .tiles
     }
 
-    /// The board's day for Home's banner (`calendar::live::day_text`):
-    /// today's all-day posts, `None` on any other day.
-    pub(crate) fn home_board_day(&self) -> Option<String> {
-        let now = chrono::Utc::now();
-        crate::app::calendar::live::day_text(&self.calendar.live_at(now), now)
+    /// The board's day for Home's banner (`calendar::banner`): today's
+    /// board posts, empty on a day it has none.
+    pub(crate) fn home_board_day(&self) -> Vec<crate::app::calendar::banner::DayPost> {
+        self.calendar.day_posts(chrono::Utc::now())
     }
 
     /// Every tile's rect on Home, in layout order, with the chrome's inner
@@ -3714,11 +3711,12 @@ impl App {
 
     /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions (`unread_rows`), and today's care still
+    /// the unread DMs and mentions (chat's `unread_dms` and
+    /// `unread_mentions`), and today's care still
     /// due. Read each frame while the page hosts the guest and on each of
     /// its keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
-        use crate::app::zen::attention::{Chore, Inputs, Match, items, unread_rows};
+        use crate::app::zen::attention::{Chore, Inputs, Item, Match, items};
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3755,14 +3753,22 @@ impl App {
                 ),
             })
             .collect();
-        let unread = unread_rows(
-            self.user_id,
-            &self.chat.rooms,
-            &self.chat.unread_counts,
-            self.chat.usernames(),
-            self.chat.ignored_user_ids(),
-            self.chat.notifications.all_items(),
-        );
+        let unread_dms = self.chat.unread_dms().into_iter().map(|dm| Item::Dm {
+            room_id: dm.room_id,
+            peer: dm.peer,
+            unread: dm.unread,
+        });
+        let unread_mentions =
+            self.chat
+                .unread_mentions()
+                .into_iter()
+                .map(|mention| Item::Mention {
+                    room_id: mention.room_id,
+                    message_id: mention.message_id,
+                    actor: mention.actor_username.clone(),
+                    room: mention.room_slug.clone(),
+                });
+        let unread = unread_dms.chain(unread_mentions).collect();
         let care = self.care_today();
         items(Inputs {
             my_moves,

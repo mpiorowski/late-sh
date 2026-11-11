@@ -334,13 +334,13 @@ fn wrap_message_empty_body() {
     assert_eq!(lines.len(), 1);
 }
 
-/// The ladder's marks after the name: the moon in the name's color, the
-/// star in amber, the rest of the prefix untouched.
+/// The ladder's marks after the name: the moon and the star both in the
+/// name's color, the rest of the prefix untouched.
 #[test]
-fn wrap_message_author_tint_paints_the_star_amber_and_the_moon_as_the_name() {
+fn wrap_message_author_tint_paints_the_ladder_marks_as_the_name() {
     let tint = AuthorTint {
         range: (0, 3),
-        marks_range: Some((3, 10)), // " ☽✦", the glyphs three bytes each
+        marks_range: Some((3, 11)), // " ☽ ✦", the glyphs three bytes each
         title_range: None,
         runner: None,
         word: None,
@@ -350,7 +350,7 @@ fn wrap_message_author_tint_paints_the_star_amber_and_the_moon_as_the_name() {
     let lines = wrap_message_to_lines(
         "hello",
         "[1m]",
-        "bob ☽✦ 🌱",
+        "bob ☽ ✦ 🌱",
         80,
         author,
         Some(tint),
@@ -360,10 +360,9 @@ fn wrap_message_author_tint_paints_the_star_amber_and_the_moon_as_the_name() {
     );
     let header = &lines[0];
     let texts: Vec<&str> = header.spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(texts, [" ", "bob", " ", "☽", "✦", " 🌱", " [1m]"]);
+    assert_eq!(texts, [" ", "bob", " ☽ ✦", " 🌱", " [1m]"]);
     assert_eq!(header.spans[1].style.fg, Some(Color::Cyan));
-    assert_eq!(header.spans[3].style.fg, Some(Color::Cyan));
-    assert_eq!(header.spans[4].style.fg, Some(theme::AMBER()));
+    assert_eq!(header.spans[2].style.fg, Some(Color::Cyan));
 }
 
 #[test]

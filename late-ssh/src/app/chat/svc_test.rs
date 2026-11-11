@@ -13,7 +13,7 @@ use late_core::models::{
     artboard::Snapshot as ArtboardSnapshot,
     artboard_ban::ArtboardBan,
     chat_message::{ChatMessage, ChatMessageParams},
-    chat_room::{ChatRoom, ChatRoomParams},
+    chat_room::{ChatRoom, RoomKind, RoomVisibility},
     chat_room_member::ChatRoomMember,
     chat_slow_mode::ChatSlowMode,
     game_room::GameKind,
@@ -486,24 +486,9 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     let target_user = create_test_user(&test_db.db, "target").await;
     let author_user = create_test_user(&test_db.db, "author").await;
 
-    let lounge_room = ChatRoom::create(
-        &client,
-        ChatRoomParams {
-            kind: "lounge".to_string(),
-            visibility: "public".to_string(),
-            auto_join: true,
-            permanent: true,
-            slug: Some("lounge".to_string()),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-            topic: None,
-            rules: None,
-            created_by: None,
-        },
-    )
-    .await
-    .expect("create lounge room");
+    let lounge_room = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "en")
         .await
         .expect("language room");
@@ -593,24 +578,9 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     let target_user = create_test_user(&test_db.db, "target2").await;
     let author_user = create_test_user(&test_db.db, "author2").await;
 
-    let lounge_room = ChatRoom::create(
-        &client,
-        ChatRoomParams {
-            kind: "lounge".to_string(),
-            visibility: "public".to_string(),
-            auto_join: true,
-            permanent: true,
-            slug: Some("lounge".to_string()),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-            topic: None,
-            rules: None,
-            created_by: None,
-        },
-    )
-    .await
-    .expect("create lounge room");
+    let lounge_room = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "fr")
         .await
         .expect("language room");
@@ -4162,7 +4132,7 @@ async fn opening_a_new_public_room_asks_the_creator_and_reports_to_moderators() 
 async fn wait_for_public_room(db: &late_core::db::Db, slug: &str) -> Uuid {
     for _ in 0..50 {
         let client = db.get().await.expect("db client");
-        let found = ChatRoom::find_topic_room(&client, "public", slug)
+        let found = ChatRoom::find_topic_room(&client, RoomVisibility::Public, slug)
             .await
             .expect("find room");
         drop(client);
@@ -4736,24 +4706,9 @@ mod gild {
 
     async fn public_room(db: &late_core::db::Db, slug: &str) -> ChatRoom {
         let client = db.get().await.expect("db client");
-        ChatRoom::create(
-            &client,
-            ChatRoomParams {
-                kind: "topic".to_string(),
-                visibility: "public".to_string(),
-                auto_join: false,
-                permanent: false,
-                slug: Some(slug.to_string()),
-                language_code: None,
-                dm_user_a: None,
-                dm_user_b: None,
-                topic: None,
-                rules: None,
-                created_by: None,
-            },
-        )
-        .await
-        .expect("create room")
+        ChatRoom::get_or_create_public_room(&client, slug)
+            .await
+            .expect("create room")
     }
 
     async fn message_in(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) -> ChatMessage {
@@ -4995,24 +4950,9 @@ mod gild {
         let buyer = create_test_user(&test_db.db, "gild-private-buyer").await;
         let room = {
             let client = test_db.db.get().await.expect("db client");
-            ChatRoom::create(
-                &client,
-                ChatRoomParams {
-                    kind: "topic".to_string(),
-                    visibility: "private".to_string(),
-                    auto_join: false,
-                    permanent: false,
-                    slug: Some("gild-private".to_string()),
-                    language_code: None,
-                    dm_user_a: None,
-                    dm_user_b: None,
-                    topic: None,
-                    rules: None,
-                    created_by: None,
-                },
-            )
-            .await
-            .expect("create room")
+            ChatRoom::create_private_room(&client, "gild-private", author.id)
+                .await
+                .expect("create room")
         };
         join(&test_db.db, room.id, author.id).await;
         join(&test_db.db, room.id, buyer.id).await;
@@ -5054,7 +4994,8 @@ mod gild {
             .expect("game room")
         };
         assert_eq!(
-            room.visibility, "public",
+            room.kind,
+            RoomKind::Game(RoomVisibility::Public),
             "the fixture must be the public game room shape"
         );
         join(&test_db.db, room.id, author.id).await;
@@ -5350,7 +5291,7 @@ async fn deadchannel_join_requires_the_invitation() {
                 .await
                 .expect("list mentions")
                 .iter()
-                .any(|mention| mention.message_preview.contains("welcome to the wire"))
+                .any(|mention| mention.message_body.contains("welcome to the wire"))
         },
         "the welcome's mention",
     )

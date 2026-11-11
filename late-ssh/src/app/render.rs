@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Context;
 use late_core::api_types::NowPlaying;
@@ -407,8 +406,9 @@ struct DrawContext<'a> {
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
-    /// Today's all-day board posts for the banner over Home's tiles.
-    home_board_day: Option<String>,
+    /// Today's board posts for the banner over Home's tiles; empty on a day
+    /// the board has nothing.
+    home_board_day: Vec<crate::app::calendar::banner::DayPost>,
     /// The day of headcount buckets for the pulse tile (`PresenceSession::history`).
     pulse_history: crate::app::presence::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
@@ -442,7 +442,7 @@ impl App {
         };
         let home_board_day = match self.on_home() {
             true => self.home_board_day(),
-            false => None,
+            false => Vec::new(),
         };
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
         let realm_live = HubGame::Realm.live_screen(self).is_some();
@@ -693,14 +693,6 @@ impl App {
         };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
-        let today = chrono::Utc::now().date_naive();
-        let return_push = self.return_push.line(
-            Instant::now(),
-            self.quest_state.snapshot(),
-            late_core::models::daily_rung::rung_for(today),
-            self.quest_state.rung_standing(today),
-        );
-        let return_push = return_push.as_deref();
         let ladder_marks = self.chat.ladder_marks();
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
@@ -743,10 +735,6 @@ impl App {
         let live_panel_rows = crate::app::live::panel::rows(
             &self.chat.live_streams,
             &live_rows,
-            &crate::app::calendar::live::panel_events(
-                &self.calendar.live_at(live_panel_now),
-                self.calendar.tz,
-            ),
             self.chat.news.all_articles(),
             self.chat.news.reads(),
             self.live_games.open_watches(),
@@ -767,7 +755,6 @@ impl App {
                 &self.chat.live_streams,
                 &live_rows,
                 &self.live_games,
-                &self.calendar,
                 &self.realm,
             )
         } else {
@@ -827,7 +814,6 @@ impl App {
                     &self.chat.live_streams,
                     &live_rows,
                     &self.live_games,
-                    &self.calendar,
                     &self.realm,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
@@ -910,7 +896,6 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
-            return_push,
             bonsai_glyphs,
             ladder_marks,
             chat_badges,
@@ -922,6 +907,7 @@ impl App {
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
+            spoilers_revealed: &self.chat.spoilers_revealed,
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
@@ -1077,7 +1063,6 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
-            return_push,
             bonsai_glyphs,
             ladder_marks,
             chat_badges,
@@ -1089,6 +1074,7 @@ impl App {
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
+            spoilers_revealed: &self.chat.spoilers_revealed,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -1171,7 +1157,6 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
-                    return_push,
                     bonsai_glyphs,
                     ladder_marks,
                     chat_badges,
@@ -1182,6 +1167,7 @@ impl App {
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
+                    spoilers_revealed: &self.chat.spoilers_revealed,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1245,7 +1231,6 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
-                    return_push,
                     bonsai_glyphs,
                     ladder_marks,
                     chat_badges,
@@ -1256,6 +1241,7 @@ impl App {
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
+                    spoilers_revealed: &self.chat.spoilers_revealed,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1322,7 +1308,6 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
-                    return_push,
                     bonsai_glyphs,
                     ladder_marks,
                     chat_badges,
@@ -1333,6 +1318,7 @@ impl App {
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
+                    spoilers_revealed: &self.chat.spoilers_revealed,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1398,7 +1384,6 @@ impl App {
                 mention_active: self.chat.mention_ac.active,
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
-                return_push,
                 bonsai_glyphs,
                 ladder_marks,
                 chat_badges,
@@ -1409,6 +1394,7 @@ impl App {
                 name_flicker,
                 translations: &self.chat.translations,
                 translation_hidden: &self.chat.translation_hidden,
+                spoilers_revealed: &self.chat.spoilers_revealed,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
                 composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1515,7 +1501,6 @@ impl App {
                                 None
                             },
                             is_editing: active && self.chat.edited_message_id.is_some(),
-                            return_push,
                             bonsai_glyphs,
                             ladder_marks,
                             chat_badges,
@@ -1526,6 +1511,7 @@ impl App {
                             name_flicker,
                             translations: &self.chat.translations,
                             translation_hidden: &self.chat.translation_hidden,
+                            spoilers_revealed: &self.chat.spoilers_revealed,
                             keep_composer_focused: self
                                 .profile_state
                                 .profile()
@@ -1595,7 +1581,6 @@ impl App {
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
-            return_push,
             mention_active: self.chat.mention_ac.active,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
@@ -2300,7 +2285,7 @@ impl App {
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
-                    board_day: ctx.home_board_day.as_deref(),
+                    board_day: &ctx.home_board_day,
                     live_panel: crate::app::live::panel::LivePanelProps {
                         rows: &ctx.live_panel_rows,
                         hit: ctx.live_panel_hit,

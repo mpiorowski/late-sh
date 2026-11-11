@@ -83,7 +83,7 @@ fn drawing_lines() -> Vec<String> {
         "  Ctrl+K             color picker: R/G/B bars, hex, presets",
         "  Alt+K              take the color under the cursor",
         "  click a cell       in the Info box's palette rows picks that preset",
-        "  Typed glyphs, sampled glyph brushes, and fills paint in this color; copied swatches keep each cell's color.",
+        "  Typed glyphs, sampled glyph brushes, and fills paint in this color; copied swatches keep each cell's color until you pick a new paint color.",
         "",
         "Selection",
         "  Shift+arrows       start or extend selection",

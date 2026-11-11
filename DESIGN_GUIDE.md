@@ -73,7 +73,7 @@ required dimensions, and available space. Existing thresholds include:
 | Traffic | 70×20, checked inside its own frame |
 | Games Hub | 60×6 |
 | Arcade Lobby | 50×10 |
-| Leaderboards | 48×8 |
+| Leaderboards | 48×9 |
 | Rubik's Cube | 42×18 |
 | Rice | 40×12 |
 | Green Dragon | 30×10 |
@@ -212,10 +212,12 @@ use brighter text. This avoids a separate key badge competing with the label.
 Toolbar controls use the calendar canvas background.
 See [calendar toolbar](late-ssh/src/app/calendar/toolbar.rs).
 
-Calendar uses a subtle today background where the day has a paintable canvas,
-with stronger emphasis reserved for the selected event. Terminal-owned
-backgrounds are preserved. Today-date emphasis does not use underlining, which
-can render poorly in terminals.
+Calendar uses a subtle background on the selected date where the day has a
+paintable canvas, with stronger emphasis reserved for the selected event.
+Terminal-owned backgrounds are preserved. Today is marked by a heavy outline
+around its cell (heavy side borders in the compact grid) and an underlined day
+number. The outline carries the emphasis on its own, so today still reads in a
+terminal that draws underlining poorly.
 See [calendar rendering](late-ssh/src/app/calendar/ui.rs).
 
 **Suggested:** consider these treatments for similar controls elsewhere, and
@@ -523,7 +525,7 @@ References: [Banner and drawing](late-ssh/src/app/common/primitives.rs),
 
 | Component | Current split behavior | Reference |
 | :--- | :--- | :--- |
-| Leaderboards | 25-column rail including divider; split retained down to its 48×8 area minimum | [Leaderboards](late-ssh/src/app/leaderboard/ui.rs) |
+| Leaderboards | 25-column rail including divider; 48×9 page minimum. Top Chat's 2×2 detail grid needs 25×9 cells; its size message retains the rail. All boards have a rule above the controls footer. | [Leaderboards](late-ssh/src/app/leaderboard/ui.rs) |
 | Games Hub | 19-column sidebar including rule; 60×6 area minimum | [Games](late-ssh/src/app/door/hub/ui.rs) |
 | Artboard | 21-column allocation; visibility follows editing/focus state | [Artboard](late-ssh/src/app/artboard/ui.rs) |
 | Artboard gallery | Preview omitted below 56 pane columns; listing requires 24×6 | [Gallery](late-ssh/src/app/artboard/gallery/ui.rs) |

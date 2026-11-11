@@ -12,7 +12,7 @@ use late_core::{
     models::{
         aquarium_shield::AquariumShield,
         bonsai_decay_protection::BonsaiDecayProtection,
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind},
         chips::UserChips,
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
@@ -28,8 +28,9 @@ use late_core::{
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
-            BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
-            TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title, title_from_payload,
+            BADGE_RENTAL_ITEM_KIND, BadgeRental, BadgeSlot, CustomTitle, RENTAL_DAY_SECS,
+            TITLE_EFFECT_KIND, TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title,
+            title_from_payload,
         },
         shop_consumable_effect::ShopConsumableEffect,
         user::User,
@@ -100,8 +101,7 @@ pub struct ActiveUsernameEffect {
 pub struct ActiveChatRoomEffect {
     pub effect_kind: String,
     pub source_sku: String,
-    pub room_kind: String,
-    pub room_visibility: String,
+    pub room_kind: RoomKind,
     pub room_permanent: bool,
     pub room_slug: Option<String>,
     pub ends_at: DateTime<Utc>,
@@ -135,10 +135,12 @@ pub struct ShopCatalogItem {
     /// transaction reads it, so the shop never quotes a window the activation
     /// would not honour.
     pub rental_duration_secs: Option<i64>,
-    /// Which chat-label slot this item fills, read from the rental payload.
-    /// Only a rental fills one: the Badges and Flags tabs are rentals top to
-    /// bottom, and a rental never touches `equipped_slot`.
-    pub badge_slot: Option<String>,
+    /// Which chat-label slot this item fills, read from the rental payload
+    /// the way activation reads it (`BadgeRental::from_payload`), so the
+    /// tabs list exactly what a purchase accepts. Only a rental fills one:
+    /// the Badges and Flags tabs are rentals top to bottom, and a rental
+    /// never touches `equipped_slot`.
+    pub badge_slot: Option<BadgeSlot>,
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.
     pub custom_title: bool,
@@ -209,7 +211,8 @@ impl ShopCatalogItem {
         self.custom_title
     }
 
-    /// Every timed item: the shop quotes a window and a rebuy resets it.
+    /// Every timed item: the shop quotes a window; a rebuy of the same look
+    /// adds it to the live one, any other look replaces it.
     pub fn is_rental(&self) -> bool {
         self.is_username_effect() || self.is_badge_rental() || self.is_title_rental()
     }
@@ -225,7 +228,10 @@ impl ShopCatalogItem {
     }
 
     pub fn is_flag_badge(&self) -> bool {
-        self.badge_slot.as_deref() == Some(CHAT_FLAG_SLOT)
+        match self.badge_slot {
+            Some(BadgeSlot::Flag) => true,
+            Some(BadgeSlot::Badge) | None => false,
+        }
     }
 
     pub fn is_ultimate_spell(&self) -> bool {
@@ -989,16 +995,13 @@ impl ShopService {
             .collect::<Vec<_>>();
         let mut active_effect_room_meta = HashMap::new();
         for room in ChatRoom::list_by_ids(&client, &active_effect_room_ids).await? {
-            active_effect_room_meta.insert(
-                room.id,
-                (room.kind, room.visibility, room.permanent, room.slug),
-            );
+            active_effect_room_meta.insert(room.id, (room.kind, room.permanent, room.slug));
         }
         for effect in active_effect_rows {
             let Some(room_id) = effect.room_id else {
                 continue;
             };
-            let Some((room_kind, room_visibility, room_permanent, room_slug)) =
+            let Some((room_kind, room_permanent, room_slug)) =
                 active_effect_room_meta.get(&room_id).cloned()
             else {
                 continue;
@@ -1010,7 +1013,6 @@ impl ShopService {
                     effect_kind: effect.effect_kind,
                     source_sku: effect.source_sku,
                     room_kind,
-                    room_visibility,
                     room_permanent,
                     room_slug,
                     ends_at: effect.ends_at,
@@ -1153,12 +1155,9 @@ impl ShopService {
                 // never equips anything. Nothing else on sale fills one: the
                 // Badges and Flags tabs are rentals top to bottom.
                 let badge_slot = match item_kind.as_str() {
-                    BADGE_RENTAL_ITEM_KIND => item
-                        .payload
-                        .get("slot")
-                        .and_then(|value| value.as_str())
-                        .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
-                        .map(ToOwned::to_owned),
+                    BADGE_RENTAL_ITEM_KIND => {
+                        BadgeRental::from_payload(&item.payload).map(|rental| rental.slot)
+                    }
                     _ => None,
                 };
                 let custom_title =

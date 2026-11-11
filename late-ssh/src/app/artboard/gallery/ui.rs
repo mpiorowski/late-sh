@@ -20,7 +20,7 @@ use super::frame::Credit;
 use super::state::{Focus, GallerySection, GalleryState, HangFlow, RailRow};
 use super::svc::{GalleryPiece, SplashPiece, applause_label};
 
-use crate::app::chat::ui::truncate_cells;
+use crate::app::common::primitives::truncate_cells;
 use dartboard_core::{CellValue, Pos, RgbColor};
 use ratatui::style::Color;
 use unicode_width::UnicodeWidthChar;

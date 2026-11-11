@@ -27,7 +27,7 @@ pub struct CalendarBanListItem {
 
 impl CalendarBan {
     pub async fn find_active_for_user(
-        client: &Client,
+        client: &impl GenericClient,
         target_user_id: Uuid,
     ) -> Result<Option<Self>> {
         let row = client

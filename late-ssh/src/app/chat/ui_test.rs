@@ -242,6 +242,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -268,6 +269,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -322,7 +324,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     ]);
     let countries = HashMap::new();
     let bonsai_glyphs = HashMap::new();
-    let ladder_marks = HashMap::from([(author_id, "☽✦".to_string())]);
+    let ladder_marks = HashMap::from([(author_id, "☽ ✦".to_string())]);
     let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
     let friend_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
@@ -342,6 +344,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -359,6 +362,8 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_disclaimer: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -366,6 +371,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -388,7 +394,7 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
     assert!(
         rendered
             .iter()
-            .any(|row| row.contains("bob ☽✦, the night clerk 🐱")),
+            .any(|row| row.contains("bob ☽ ✦, the night clerk 🐱")),
         "no marked author header in {rendered:#?}"
     );
 }
@@ -447,6 +453,7 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
         let away_user_ids = HashSet::new();
         let translations = HashMap::new();
         let translation_hidden = HashSet::new();
+        let spoilers_revealed = HashSet::new();
         let username_lookup = UsernameLookup::new(&usernames, None);
         let ctx = ChatRowsContext {
             versions: ChatRowsVersions::default(),
@@ -473,6 +480,7 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
             name_flicker: None,
             translations: &translations,
             translation_hidden: &translation_hidden,
+            spoilers_revealed: &spoilers_revealed,
             runner_looks: None,
         };
 
@@ -505,6 +513,94 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
 }
 
 #[test]
+fn spoilers_render_masked_until_revealed() {
+    theme::set_current_by_id("late");
+    let message_id = Uuid::from_u128(10);
+
+    let render = |body: &str, revealed: bool, plain_glyphs: bool| -> String {
+        let current_user_id = Uuid::from_u128(2);
+        let author_id = Uuid::from_u128(3);
+        let created = Utc::now();
+        let message = ChatMessage {
+            id: message_id,
+            created,
+            updated: created,
+            reply_to_message_id: None,
+            reply_to_user_id: None,
+            room_id: Uuid::from_u128(1),
+            user_id: author_id,
+            body: body.to_string(),
+        };
+        let usernames = HashMap::from([
+            (current_user_id, "alice".to_string()),
+            (author_id, "bob".to_string()),
+        ]);
+        let empty_ids = HashSet::new();
+        let spoilers_revealed = match revealed {
+            true => HashSet::from([message_id]),
+            false => HashSet::new(),
+        };
+        let username_lookup = UsernameLookup::new(&usernames, None);
+        let ctx = ChatRowsContext {
+            versions: ChatRowsVersions::default(),
+            current_user_id,
+            live_user_ids: &empty_ids,
+            show_flag_fallback: plain_glyphs,
+            usernames: &username_lookup,
+            countries: &HashMap::new(),
+            friend_user_ids: &empty_ids,
+            bonsai_glyphs: &HashMap::new(),
+            ladder_marks: &HashMap::new(),
+            chat_badges: &HashMap::new(),
+            profile_award_badges: &HashMap::new(),
+            message_reactions: &HashMap::new(),
+            message_gilds: &HashMap::new(),
+            inline_images: &HashMap::new(),
+            news_cards: &HashMap::new(),
+            gallery_cards: &HashMap::new(),
+            artboard_disclaimer: false,
+            dividers: ChatDividers::default(),
+            drunk_levels: &HashMap::new(),
+            name_flair: &HashMap::new(),
+            away_user_ids: &empty_ids,
+            name_flicker: None,
+            translations: &HashMap::new(),
+            translation_hidden: &empty_ids,
+            spoilers_revealed: &spoilers_revealed,
+            runner_looks: None,
+        };
+
+        let mut cache = ChatRowsCache::default();
+        ensure_chat_rows_cache(&mut cache, vec![&message], 60, ctx);
+        cache
+            .all_rows
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let hidden = render("today is ||CRANE||", false, false);
+    assert!(hidden.contains("today is ▒▒▒▒▒"), "{hidden}");
+    assert!(!hidden.contains("CRANE"), "{hidden}");
+
+    let revealed = render("today is ||CRANE||", true, false);
+    assert!(revealed.contains("today is CRANE"), "{revealed}");
+    assert!(!revealed.contains("||"), "{revealed}");
+
+    // Plain glyphs drops the icon at the spoiler's edge; the words behind
+    // it must stay hidden all the same.
+    let plain = render("today is ||\u{e000} CRANE||", false, true);
+    assert!(!plain.contains("CRANE"), "{plain}");
+    assert!(plain.contains('▒'), "{plain}");
+}
+
+#[test]
 fn chat_rows_cache_key_changes_when_theme_changes() {
     let user_id = Uuid::from_u128(2);
     let usernames = HashMap::from([(user_id, "alice".to_string())]);
@@ -523,6 +619,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let ctx = ChatRowsContext {
@@ -550,6 +647,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -583,6 +681,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let news_cards = HashMap::new();
     let gallery_cards = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
@@ -618,6 +717,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -690,6 +790,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -716,6 +817,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -906,6 +1008,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -932,6 +1035,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -994,6 +1098,7 @@ fn background_wash_fills_the_whole_row_width() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -1020,6 +1125,7 @@ fn background_wash_fills_the_whole_row_width() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: None,
     };
 
@@ -1057,7 +1163,6 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         reaction_picker_active: false,
         reply_author: None,
         is_editing: false,
-        return_push: None,
         mention_active: false,
         mention_matches: &[],
         mention_selected: 0,
@@ -1098,6 +1203,7 @@ fn chat_view<'a>(
     static TRANSLATIONS: OnceLock<HashMap<Uuid, crate::app::chat::state::TranslationDisplay>> =
         OnceLock::new();
     static TRANSLATION_HIDDEN: OnceLock<HashSet<Uuid>> = OnceLock::new();
+    static SPOILERS_REVEALED: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
         OnceLock::new();
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
@@ -1206,7 +1312,6 @@ fn chat_view<'a>(
         mention_active: false,
         reply_author: None,
         is_editing: false,
-        return_push: None,
         bonsai_glyphs,
         ladder_marks: LADDER_MARKS.get_or_init(HashMap::new),
         chat_badges,
@@ -1218,6 +1323,7 @@ fn chat_view<'a>(
         name_flicker: None,
         translations: TRANSLATIONS.get_or_init(HashMap::new),
         translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
+        spoilers_revealed: SPOILERS_REVEALED.get_or_init(HashSet::new),
         news_composer,
         news_composing: false,
         news_processing: false,
@@ -1575,44 +1681,6 @@ fn reaction_picker_placeholder_keeps_custom_zero_choice_at_mid_width() {
     );
 }
 
-/// The return push takes the empty composer's one row, idle or focused,
-/// and the first typed character puts the text back in its place.
-#[test]
-fn draw_composer_block_shows_the_return_push_in_the_empty_composer() {
-    use ratatui::{Terminal, backend::TestBackend};
-
-    let ta = TextArea::default();
-    let mut view = composer_view(&ta);
-    view.composing = false;
-    view.return_push = Some("back after 9 h · streak day 4 · the rung: medium Sudoku, open");
-
-    let backend = TestBackend::new(96, 3);
-    let mut terminal = Terminal::new(backend).expect("term");
-    terminal
-        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
-        .unwrap();
-    let buf = terminal.backend().buffer();
-    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-    assert!(
-        row_1.contains("back after 9 h · streak day 4 · the rung: medium Sudoku, open"),
-        "no push in {row_1:?}"
-    );
-
-    let mut typed = TextArea::default();
-    typed.insert_str("on it");
-    let mut view = composer_view(&typed);
-    view.return_push = Some("back after 9 h · the rung: medium Sudoku, open");
-    terminal
-        .draw(|f| draw_composer_block(f, Rect::new(0, 0, 96, 3), &view))
-        .unwrap();
-    let buf = terminal.backend().buffer();
-    let row_1: String = (0..96).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-    assert!(
-        row_1.contains("on it") && !row_1.contains("back after"),
-        "{row_1:?}"
-    );
-}
-
 #[test]
 fn draw_composer_block_renders_reaction_picker_in_placeholder() {
     use ratatui::{Terminal, backend::TestBackend};
@@ -1844,8 +1912,7 @@ fn room_list_hit_test_follows_the_rail_scroll_nudge() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         slug: Some(slug),
         permanent: false,
@@ -1926,8 +1993,7 @@ fn cozy_room_rail_displays_lounge() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "lounge".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Lounge,
         auto_join: true,
         slug: Some("lounge".to_string()),
         permanent: true,
@@ -2029,8 +2095,7 @@ fn cozy_room_rail_places_news_and_feeds_under_lounge_with_jump_keys() {
         id: Uuid::from_u128(1),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "lounge".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Lounge,
         auto_join: true,
         slug: Some("lounge".to_string()),
         permanent: true,
@@ -2045,8 +2110,7 @@ fn cozy_room_rail_places_news_and_feeds_under_lounge_with_jump_keys() {
         id: Uuid::from_u128(2),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         slug: Some("rust".to_string()),
         permanent: false,
@@ -2116,8 +2180,7 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
         id: Uuid::from_u128(1),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "lounge".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Lounge,
         auto_join: true,
         slug: Some("lounge".to_string()),
         permanent: true,
@@ -2132,8 +2195,7 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
         id: Uuid::from_u128(2),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         slug: Some("rust".to_string()),
         permanent: false,
@@ -2148,8 +2210,7 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
         id: Uuid::from_u128(3),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "dm".to_string(),
-        visibility: "private".to_string(),
+        kind: RoomKind::Dm,
         auto_join: false,
         slug: None,
         permanent: false,
@@ -2216,8 +2277,7 @@ fn rail_dm(id: u128, peer: Uuid) -> ChatRoom {
         id: Uuid::from_u128(id),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "dm".to_string(),
-        visibility: "dm".to_string(),
+        kind: RoomKind::Dm,
         auto_join: false,
         slug: None,
         permanent: false,
@@ -2235,8 +2295,7 @@ fn rail_channel(id: u128, slug: &str) -> ChatRoom {
         id: Uuid::from_u128(id),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         slug: Some(slug.to_string()),
         permanent: false,
@@ -2451,8 +2510,7 @@ fn cozy_room_rail_skips_game_rooms() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "lounge".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Lounge,
         auto_join: true,
         slug: Some("lounge".to_string()),
         permanent: true,
@@ -2467,8 +2525,7 @@ fn cozy_room_rail_skips_game_rooms() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "game".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Game(RoomVisibility::Public),
         auto_join: false,
         slug: Some("bj-abc123".to_string()),
         permanent: false,
@@ -2518,8 +2575,7 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "lounge".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Lounge,
         auto_join: true,
         slug: Some("lounge".to_string()),
         permanent: true,
@@ -2534,8 +2590,7 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         slug: Some("rust".to_string()),
         permanent: false,
@@ -2641,7 +2696,7 @@ fn header_segments_cover_the_ladder_marks_with_the_name() {
         author: "alice",
         title: None,
         milestone: None,
-        ladder_marks: Some("◑✦"),
+        ladder_marks: Some("◑ ✦"),
         special_badges: &[],
         chat_badges: &[],
         bonsai_glyph: Some("🌱"),
@@ -2649,21 +2704,21 @@ fn header_segments_cover_the_ladder_marks_with_the_name() {
         presence_badges: &[],
         runner_badge: None,
     });
-    assert_eq!(built.prefix, "alice ◑✦ 🌱");
+    assert_eq!(built.prefix, "alice ◑ ✦ 🌱");
     assert_eq!(built.author_range, (0, 5));
     assert_eq!(
         built.marks_range,
-        Some((5, 12)),
-        "the space and two three-byte glyphs"
+        Some((5, 13)),
+        "the leading space, two three-byte glyphs and the space between them"
     );
     assert_eq!(built.segments.len(), 2);
     assert_eq!(built.segments[0].target, HeaderTarget::Profile);
     assert_eq!(
         (built.segments[0].start_col, built.segments[0].end_col),
-        (1, 9)
+        (1, 10)
     );
     assert_eq!(
-        built.segments[1].start_col, 10,
+        built.segments[1].start_col, 11,
         "the bonsai follows the gap"
     );
 }
@@ -3100,8 +3155,7 @@ fn room_with_info(topic: Option<&str>, rules: Option<&str>) -> ChatRoom {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         slug: Some("book-club".to_string()),
         permanent: false,
@@ -3446,6 +3500,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     // One entry per painted row (a message is a header row plus a body
@@ -3477,6 +3532,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             name_flicker: None,
             translations: &translations,
             translation_hidden: &translation_hidden,
+            spoilers_revealed: &spoilers_revealed,
             runner_looks: None,
         };
         let mut cache = ChatRowsCache::default();
@@ -3659,6 +3715,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let spoilers_revealed = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -3685,6 +3742,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         name_flicker: None,
         translations: &translations,
         translation_hidden: &translation_hidden,
+        spoilers_revealed: &spoilers_revealed,
         runner_looks: Some(&looks),
     };
 

@@ -112,7 +112,12 @@ so (`Undercity · f road · p patch · ? guide`,
   on the clubhouse, or Enter on the hub card), on every walk up to the static, and on every
   directory edge in `tick.rs` (a leaver drops the mirror there instead),
   so the strip never shows yesterday's bars and the road is today's;
-  each action answers with the stored sheet. Another device's action
+  each action answers with the stored sheet. A reload and an action
+  answer race each other and can land out of order: a reload carries
+  the session's count of answers from when it was asked
+  (`answers_seen`), and `FightSession::tick` drops one an answer has
+  overtaken and asks again, so a late reload never takes the mirror
+  back behind an action. Another device's action
   shows up on the next descent, action, or level change (the migration
   202 trigger notifies on `level`), the acceptable case (root
   CONTEXT.md, "Replica-ready, not over-engineered"): no per-card notify.

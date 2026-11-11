@@ -18,7 +18,7 @@ use late_core::{
     MutexRecover,
     models::{
         chat_message::{ChatMessage, IrcHistoryMessage},
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind, RoomVisibility},
         chat_room_member::ChatRoomMember,
         irc_history::{HistoryReader, Page, ReadError, Selection},
         room_ban::RoomBan,
@@ -1182,12 +1182,16 @@ impl Session {
                     .items
                     .into_iter()
                     .filter_map(|target| {
-                        let name = if target.room.kind == "dm" {
-                            target
+                        let name = match target.room.kind {
+                            RoomKind::Dm => target
                                 .peer_username
-                                .map(|username| proj::nick_for_username(&username))
-                        } else {
-                            proj::channel_name(&target.room)
+                                .map(|username| proj::nick_for_username(&username)),
+                            RoomKind::Lounge
+                            | RoomKind::Language
+                            | RoomKind::Topic(_)
+                            | RoomKind::Game(_)
+                            | RoomKind::Deadchannel
+                            | RoomKind::Nightcap => proj::channel_name(&target.room),
                         }?;
                         Some(replies::server_msg(Command::Raw(
                             "CHATHISTORY".to_string(),
@@ -1742,9 +1746,19 @@ impl Session {
                 .await?;
             return Ok(());
         };
-        if room.visibility == "private"
-            && !ChatRoomMember::is_member(&client, room.id, self.user_id).await?
-        {
+        let invite_only = match room.kind {
+            RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+                true
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => false,
+        };
+        if invite_only && !ChatRoomMember::is_member(&client, room.id, self.user_id).await? {
             // Private channels present as invite-only (FRD §6.3 J4).
             framed
                 .send(replies::numeric(
@@ -2585,8 +2599,18 @@ impl Session {
             self.forget_joined_channel(room_id, &channel_name);
             return Ok(None);
         };
-        let is_allowed_private = room.visibility != "private"
-            || ChatRoomMember::is_member(&client, room_id, self.user_id).await?;
+        let is_allowed_private = match room.kind {
+            RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+                ChatRoomMember::is_member(&client, room_id, self.user_id).await?
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => true,
+        };
         let is_banned = ChatRoomMember::is_banned_from_room(&client, room_id, self.user_id).await?;
         if !proj::is_irc_channel_kind(&room) || !is_allowed_private || is_banned {
             drop(client);
@@ -2708,9 +2732,17 @@ impl Session {
             let Some(room) = ChatRoom::get(&client, message.room_id).await? else {
                 return Ok(());
             };
-            if room.kind != "dm" {
-                self.non_dm_target_rooms.insert(message.room_id);
-                return Ok(());
+            match room.kind {
+                RoomKind::Dm => {}
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {
+                    self.non_dm_target_rooms.insert(message.room_id);
+                    return Ok(());
+                }
             }
             drop(client);
             let directory = usernames::snapshot(&self.state.username_directory);
@@ -2865,9 +2897,17 @@ impl Session {
         let Some(room) = ChatRoom::get(&client, room_id).await? else {
             return Ok(None);
         };
-        if room.kind != "dm" {
-            self.non_dm_target_rooms.insert(room_id);
-            return Ok(None);
+        match room.kind {
+            RoomKind::Dm => {}
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {
+                self.non_dm_target_rooms.insert(room_id);
+                return Ok(None);
+            }
         }
         drop(client);
 

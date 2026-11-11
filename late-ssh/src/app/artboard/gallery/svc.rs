@@ -346,7 +346,7 @@ impl GalleryService {
             format!("🎨 \"{title}\" {url}")
         };
         let posted = chat_service
-            .send_lounge_message_returning(piece.user_id, body, true, Wording::Quoted)
+            .send_lounge_message_returning(piece.user_id, body, true, Wording::NewsCard)
             .await;
         let message = match posted {
             Ok(Some(message)) => message,

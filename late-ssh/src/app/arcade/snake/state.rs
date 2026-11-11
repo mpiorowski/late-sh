@@ -5,23 +5,23 @@ use super::svc::SnakeService;
 use rand::Rng;
 
 const MAX_LEVEL: u8 = 125;
+const ROCK_HEAD_HALO: u32 = 2;
+const ROCK_RUNWAY_STEPS: u32 = 4;
 
 pub struct State {
-    pub user_id: Uuid,
+    user_id: Uuid,
     pub score: i32,
     pub best_score: i32,
     pub is_game_over: bool,
     pub is_paused: bool,
-    pub svc: SnakeService,
-    pub field_tick: i32,
+    svc: SnakeService,
     pub level: Level,
     pub field: Field,
     pub cobra: Cobra,
-    pub set_exit: bool,
-    pub input_queue: Vec<u8>,
-    pub stutter_left: u8,
+    pub(super) input_queue: Vec<Direction>,
+    stutter_left: u8,
     score_event_recorded: bool,
-    last_key: Option<u8>,
+    last_key: Option<Direction>,
 }
 
 impl State {
@@ -61,11 +61,9 @@ impl State {
         let cobra = Cobra::new(&field, 1);
         Self {
             score: 0,
-            field_tick: 0,
             level: Level::new(1),
             field,
             cobra,
-            set_exit: false,
             is_game_over: false,
             input_queue: vec![],
             last_key: None,
@@ -120,18 +118,11 @@ impl State {
         }
     }
 
-    fn bye(&mut self) {
-        println!("You pressed Q, Good bye!!!");
-    }
-
-    pub fn handle_key(&mut self) -> bool {
+    fn handle_key(&mut self) -> bool {
         let key = self.input_queue.pop();
         let mut accel = false;
-        if let Some(k) = key {
-            let key_dir = self.cobra.dir_from_key(&k);
-            if let Some(d) = key_dir
-                && d != self.cobra.head_dir
-            {
+        if let Some(dir) = key {
+            if dir != self.cobra.head_dir {
                 accel = true;
             }
             if key == self.last_key {
@@ -139,13 +130,10 @@ impl State {
             }
             self.last_key = key;
         }
-        if let Some(k) = self.last_key {
-            let dir = self.cobra.dir_from_key(&k);
-            if let Some(d) = dir
-                && d != self.cobra.head_dir
-            {
-                self.cobra.set_direction(d);
-            }
+        if let Some(dir) = self.last_key
+            && dir != self.cobra.head_dir
+        {
+            self.cobra.set_direction(dir);
         }
         accel
     }
@@ -160,7 +148,6 @@ impl State {
 
     pub fn reset_game(&mut self) {
         self.submit_final_score();
-        self.field_tick = 0;
         self.cobra.lives = 1;
         self.score = 0;
         self.level.number = 1;
@@ -171,7 +158,7 @@ impl State {
         self.reset_level(true);
     }
 
-    pub fn reset_level(&mut self, reset_cobra: bool) {
+    fn reset_level(&mut self, reset_cobra: bool) {
         self.reset_level_inner(reset_cobra, true);
     }
 
@@ -185,6 +172,7 @@ impl State {
         }
         self.field.things.clear();
         self.field.gen_things(self.level.number, &self.cobra);
+        self.input_queue.clear();
         self.last_key = None;
         if persist {
             self.persist_progress();
@@ -194,6 +182,7 @@ impl State {
     fn level_up(&mut self) {
         self.level.number = self.level.number.saturating_add(1).min(MAX_LEVEL);
         self.stutter_left = self.level.get_stutter();
+        self.score_up(100 * self.level.number as i32);
         self.reset_level(false);
     }
 
@@ -240,10 +229,6 @@ impl State {
         if self.is_paused || self.is_game_over {
             return false;
         }
-        if self.set_exit {
-            self.bye();
-            return false;
-        }
         if self.stutter_left == 0 || accel {
             // reset stutter_left
             let stutter = self.level.get_stutter();
@@ -274,18 +259,18 @@ impl State {
             }
         }
 
-        if let Some(CobraEffect::Blow) = effect {
-            self.end_game();
-            return false;
-        } else if let Some(CobraEffect::Grow) = effect {
-            self.score_up(10);
-        } else if let Some(CobraEffect::PowerUp) = effect {
-            self.score_up(25);
-        } else if self.field.food_left() == 0 {
-            self.level_up();
-            self.score_up(100 * self.level.number as i32);
+        match effect {
+            Some(CobraEffect::Blow) => {
+                self.end_game();
+                return false;
+            }
+            Some(CobraEffect::Grow) => self.score_up(10),
+            Some(CobraEffect::PowerUp) => self.score_up(25),
+            None => {}
         }
-        self.field_tick += 1;
+        if self.field.food_left() == 0 {
+            self.level_up();
+        }
         true
     }
 }
@@ -312,30 +297,29 @@ impl Position {
         }
     }
 
-    fn gen_without_collision(field: &Field, cobra: &Cobra) -> Self {
-        let mut new_pos = Self::new(field);
+    fn gen_without_collision(kind: &ThingKind, field: &Field, cobra: &Cobra) -> Self {
         loop {
+            let new_pos = Self::new(field);
             if cobra.collide(&new_pos) {
-                new_pos = Self::new(field);
                 continue;
             }
-            let mut has_collided = false;
-            let mut all_things = Vec::new();
-            all_things.extend(&field.things);
-            all_things.extend(&field.edges);
-            for thing in all_things {
-                if thing.collide(&new_pos) {
-                    has_collided = true;
-                    break;
-                }
-            }
-            if has_collided {
-                new_pos = Self::new(field);
+            let too_close = match kind {
+                ThingKind::Rock => cobra.is_rock_hazard(&new_pos),
+                ThingKind::Food | ThingKind::Drug | ThingKind::Cobra | ThingKind::Edge => false,
+            };
+            if too_close {
                 continue;
             }
-            break;
+            if field
+                .things
+                .iter()
+                .chain(&field.edges)
+                .any(|thing| thing.collide(&new_pos))
+            {
+                continue;
+            }
+            return new_pos;
         }
-        new_pos
     }
 }
 
@@ -394,7 +378,7 @@ impl ThingOnScreen {
         }
     }
 
-    pub fn get_cobra_pixel(value: String, position: Position) -> Self {
+    fn get_cobra_pixel(value: String, position: Position) -> Self {
         Self {
             position,
             kind: ThingKind::Cobra,
@@ -437,7 +421,7 @@ impl ThingOnScreen {
     }
 
     fn gen_at_the_field(kind: ThingKind, field: &Field, cobra: &Cobra) -> Self {
-        let position = Position::gen_without_collision(field, cobra);
+        let position = Position::gen_without_collision(&kind, field, cobra);
         Self::from_kind_at_pos(kind, position)
     }
 
@@ -475,7 +459,7 @@ impl Level {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Direction {
+pub(super) enum Direction {
     Up,
     Down,
     Right,
@@ -484,13 +468,12 @@ enum Direction {
 
 impl Direction {
     fn is_opposite(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Self::Up, Self::Down)
-                | (Self::Down, Self::Up)
-                | (Self::Right, Self::Left)
-                | (Self::Left, Self::Right)
-        )
+        match self {
+            Self::Up => other == Self::Down,
+            Self::Down => other == Self::Up,
+            Self::Right => other == Self::Left,
+            Self::Left => other == Self::Right,
+        }
     }
 }
 
@@ -567,6 +550,27 @@ impl Cobra {
         false
     }
 
+    fn is_rock_hazard(&self, pos: &Position) -> bool {
+        let head = &self.body[self.body.len() - 1];
+        if head.x.abs_diff(pos.x) <= ROCK_HEAD_HALO && head.y.abs_diff(pos.y) <= ROCK_HEAD_HALO {
+            return true;
+        }
+        match self.head_dir {
+            Direction::Right => {
+                pos.y == head.y && pos.x > head.x && pos.x - head.x <= ROCK_RUNWAY_STEPS
+            }
+            Direction::Left => {
+                pos.y == head.y && pos.x < head.x && head.x - pos.x <= ROCK_RUNWAY_STEPS
+            }
+            Direction::Down => {
+                pos.x == head.x && pos.y > head.y && pos.y - head.y <= ROCK_RUNWAY_STEPS
+            }
+            Direction::Up => {
+                pos.x == head.x && pos.y < head.y && head.y - pos.y <= ROCK_RUNWAY_STEPS
+            }
+        }
+    }
+
     /// Whether the head stepping onto `pos` runs into the body, checked
     /// before the step moves the tail. Three parts are never in the way: the
     /// head itself and the neck behind it (`set_direction` refuses the
@@ -583,16 +587,6 @@ impl Cobra {
             }
         }
         collides
-    }
-
-    fn dir_from_key(&self, key: &u8) -> Option<Direction> {
-        match key {
-            b'A' => Some(Direction::Up),
-            b'B' => Some(Direction::Down),
-            b'C' => Some(Direction::Right),
-            b'D' => Some(Direction::Left),
-            _ => None,
-        }
     }
 
     fn set_direction(&mut self, direction: Direction) {
@@ -653,7 +647,7 @@ impl Cobra {
             }
             Some(CobraEffect::Grow) => (),
             // move cobra
-            _ => {
+            None => {
                 self.body.remove(0);
             }
         }

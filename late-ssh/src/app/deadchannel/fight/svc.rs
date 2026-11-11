@@ -74,6 +74,11 @@ pub(crate) enum FightOutcome {
     Reloaded {
         sheet: Sheet,
         lookout: Lookout,
+        /// The asking session's count of action answers when it asked,
+        /// handed back untouched: a reload and an action answer race each
+        /// other, and the session tells by this which one read the row
+        /// first.
+        answers_seen: u64,
     },
     /// No standing runner for this user: the door is shut or was never
     /// opened. The city's gate should have kept them out; logged as such.
@@ -946,7 +951,12 @@ impl FightService {
     /// catches up with a change made elsewhere on the next press. A mark
     /// the row still owes is paid here too, so a grant lost to a restart
     /// heals at the next connect; its line goes to the log only.
-    pub(crate) fn reload_task(&self, user_id: Uuid, reply: mpsc::UnboundedSender<FightOutcome>) {
+    pub(crate) fn reload_task(
+        &self,
+        user_id: Uuid,
+        answers_seen: u64,
+        reply: mpsc::UnboundedSender<FightOutcome>,
+    ) {
         let svc = self.clone();
         let span = info_span!("deadchannel.fight.reload_task", user_id = %user_id);
         tokio::spawn(
@@ -962,7 +972,11 @@ impl FightService {
                             tracing::info!(mark, line = %line, "old signal mark settled on reload");
                         }
                         let lookout = svc.lookout_for(&sheet).await;
-                        let _ = reply.send(FightOutcome::Reloaded { sheet, lookout });
+                        let _ = reply.send(FightOutcome::Reloaded {
+                            sheet,
+                            lookout,
+                            answers_seen,
+                        });
                     }
                     Ok(None) => {
                         let _ = reply.send(FightOutcome::NoRunner);

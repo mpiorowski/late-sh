@@ -605,6 +605,22 @@ impl ChatMessage {
         Ok(Self::from(row))
     }
 
+    /// The generated lounge line of a News share. Its origin is recorded in
+    /// the insert, before the separate article-link step can race a refresh.
+    pub async fn create_news_card(
+        client: &impl GenericClient,
+        params: ChatMessageParams,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO chat_messages (room_id, user_id, body, is_news_card)
+                 VALUES ($1, $2, $3, true) RETURNING *",
+                &[&params.room_id, &params.user_id, &params.body],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn edit_by_author(
         client: &impl GenericClient,
         message_id: Uuid,

@@ -113,6 +113,7 @@ const COMMANDS: &[Command] = &[
     global("cyberspace", "open the cyberspace tab (alias /cs)"),
     global("dm", "open a DM (/dm @user)"),
     global("exit", "quit confirm"),
+    global("fav", "favorite this room, game chats included"),
     global("friend", "mark a friend (/friend @user; bare lists)"),
     global("friends", "list friends"),
     global("gift", "send chips (/gift @user 50 [note])"),

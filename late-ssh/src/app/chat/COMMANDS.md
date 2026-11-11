@@ -12,7 +12,7 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows each carrying the other party's id as `source_ref`, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`. Neither gift reason counts on Top Chips.
 
-`/buy round` and `/buy @user` post `@bartender round for everyone` / `@bartender buy @user a drink` to the composer's room as a normal message (`buy_order_body`), so the purchase, its price, every refusal and his answer run through the bartender exactly as if the phrase had been typed (see `ai/ROUND.md`). Only in auto-join public rooms (`visibility == "public" && auto_join`), refused with a banner elsewhere: those are the rooms he is joined to, and in any other room the order would go unanswered (he leaves a mention in a room he is not in alone).
+`/buy round` and `/buy @user` post `@bartender round for everyone` / `@bartender buy @user a drink` to the composer's room as a normal message (`buy_order_body`), so the purchase, its price, every refusal and his answer run through the bartender exactly as if the phrase had been typed (see `ai/ROUND.md`). Only in auto-join public rooms (`auto_join`, which the DB allows on a public room alone), refused with a banner elsewhere: those are the rooms he is joined to, and in any other room the order would go unanswered (he leaves a mention in a room he is not in alone).
 
 `/grant @user <chips>` is the admin mint. `parse_grant_command` takes a user and an amount and nothing else; the composer refuses it for non-admins, and `ChatService::grant_chips` decides admin by the session bootstrap's own rule, `users.is_admin || force_admin`, re-read from the database rather than trusted from the session (the `force_admin` half is what makes local and staging accounts admins). The credit goes through `ChipService::grant_chips` to `UserChips::admin_grant`, which by decision writes **no ledger row**: the ledger records what players did, and a grant is the house's doing. The recipient's row is ensured first, so a player who has never logged in lands on the stipend plus the grant. Both parties get a banner (`ChatEvent::GrantSucceeded` / `GrantFailed`).
 
@@ -49,7 +49,7 @@ Reply mode:
 - Enters compose mode and clears edit.
 - On submit, stores `reply_to_message_id` and prefixes the stored body with a visible quote line for backward-compatible rendering.
 - Enter on a selected reply jumps only if the target is already loaded in the current room tail.
-- `G` on a selected reply also jumps to the loaded target. Enter is overloaded (an inline image opens first, then a YouTube link plays), so a reply whose own text carries either can only be followed with `G`, not Enter. A link inside the quote line does not count: it is the parent's, so Enter jumps there and a second Enter opens it. Lowercase `g` is the gild key.
+- `G` on a selected reply also jumps to the loaded target. Enter is overloaded: it first reveals the reply's own `||spoilers||`, once, and a second Enter then moves on. After that an inline image opens, else a YouTube link plays, so a reply whose own text carries either of those can only be followed with `G`, not Enter; a reply with nothing but a spoiler is followed by the second Enter. A link inside the quote line does not count: it is the parent's, so Enter jumps there and a second Enter opens it. Lowercase `g` is the gild key.
 
 Edit mode:
 - Allowed for the message author or admins.
@@ -107,6 +107,7 @@ User commands:
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
 - `/ignore [@user]` mutes a user or lists muted users.
 - `/invite @user` adds a user to the selected non-DM room.
+- `/fav` favorites or unfavorites the composer's room (else the selected real room), the same toggle as `f` on the rail. It is how a game room's chat (a door watch room, a Realm world, a house table, a stream room) gets onto the Home rail: `f` is the game's key on those screens and they have no rail row to press it on. Parsed in `submit_composer` into `requested_favorite_toggle`, drained in `handle_post_submit_requests` (the favorites live on the profile).
 - `/leave` leaves the selected non-permanent room.
 - `/list` lists public rooms.
 - `/members` lists selected-room members.
@@ -236,8 +237,8 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
 | `i` | Start composing in selected room, or start News composer when selected |
 | `/` | Start command composer in selected room |
-| `Enter` | Submit composer; jump reply target; open the reader in News; join Discover; jump Mention; on a selected message, open its image, else watch its YouTube link (`../video/CONTEXT.md`) |
-| `G` | Jump a selected reply to its loaded original, even when the reply contains an inline image or a YouTube link (Enter opens the image or watches the video instead) |
+| `Enter` | Submit composer; jump reply target; open the reader in News; join Discover; jump Mention; on a selected message, reveal its `||spoilers||`, else open its image, else watch its YouTube link (`../video/CONTEXT.md`) |
+| `G` | Jump a selected reply to its loaded original, even when the reply contains an inline image or a YouTube link (Enter reveals its spoilers, opens the image or watches the video instead) |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
 | `Ctrl+R` | Redo in the main chat composer (ratatui-textarea's keymap via `ctrl_byte_to_input`). An open composer takes it ahead of the global repaint chord in `app/input.rs::handle_reserved_global_chord`; `/redraw` repaints from inside one |
 | `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |
@@ -249,7 +250,7 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `c` | Copy selected message body |
 | `t` | Translate selected message; press again to collapse, again to reopen. A message already in your target language banners instead of spending a call. |
 | `g` | Open the gild tier picker on the selected message (your own message, a DM, a private room, or a game/stream chat banners the refusal instead of opening). In the picker: `j`/`k` or `1`-`3` pick a tier, `Enter` buys, `Esc` cancels. |
-| `f` | Favorite/unfavorite the selected real room |
+| `f` | Favorite/unfavorite the selected real room or live stream row (`/fav` does the same from inside a game's chat) |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
 | `f` then `1..9` | Quick-react to selected message |
 | `f` then `w` | Wave hi (👋) on selected message |
@@ -294,7 +295,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | `i` | Compose in `#lounge` |
 | `j` / `k` / arrows | Move message selection |
 | `r` / `e` / `d` / `p` / `c` / `f` | Same selected-message actions as Home chat center |
-| `Enter` | Jump selected reply target when loaded |
+| `Enter` | Reveal the selected message's `||spoilers||`; jump selected reply target when loaded |
 
 ### Synthetic Entries
 

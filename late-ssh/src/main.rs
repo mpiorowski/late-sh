@@ -631,6 +631,16 @@ async fn main() -> anyhow::Result<()> {
             singleton_shutdown.clone(),
         )
     });
+    let _dopewars_ingest_task = state.config.dopewars_enabled.then(|| {
+        door_ingest_service.clone().start_dopewars_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.dopewars_host.clone(),
+                port: state.config.dopewars_port,
+                secret: state.config.dopewars_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
 
     // The live-game rosters behind spectating: one roster stream per door
     // whose host serves watch sessions, gated on that door's client flag.
