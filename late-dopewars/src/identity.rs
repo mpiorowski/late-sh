@@ -10,11 +10,10 @@ const KEY_DOMAIN: &[u8] = b"late.sh/dopewars/v1\0dopewars\0";
 ///
 /// late.sh owns both ends of this connection, so there is no per-user key: the
 /// key proves *authorization* (the connection came from late-ssh, which holds
-/// the same secret). Unlike the nethack host the SSH username carries no
-/// identity either -- dopewars single-player takes no `-u` name; the player
-/// types their handle in-game and it lands in the shared high-score table. The
-/// server accepts exactly this one derived public key; both ends recompute it
-/// from `LATE_DOPEWARS_SECRET`.
+/// the same secret). The SSH username carries the player's handle, which the
+/// server sanitizes and passes to dopewars as `-P` (it is not part of the auth
+/// check). The server accepts exactly this one derived public key; both ends
+/// recompute it from `LATE_DOPEWARS_SECRET`.
 pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())

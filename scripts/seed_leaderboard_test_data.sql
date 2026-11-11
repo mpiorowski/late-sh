@@ -568,6 +568,24 @@ SELECT
 FROM seed_players p
 WHERE p.idx <= 28;
 
+-- dopewars board, fed by the host's append-only run log: every player's
+-- best final net worth, ordering deliberately its own. A dopewars run never
+-- wins and carries no depth, so only the score family ranks.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'dopewars',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 4 = 0 THEN (p.idx % 12) ELSE 25 + p.idx END * interval '1 day',
+    'leaving',
+    18500000 - p.idx * 520000,
+    NULL,
+    NULL,
+    '{}'::jsonb,
+    'seed:dopewars',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 26;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -606,6 +624,23 @@ WHERE NOT EXISTS (
     WHERE l.user_id = c.user_id
       AND l.source_ref = 'leaderboard-v2-current-player'
 );
+
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'dopewars',
+    user_id,
+    current_timestamp - interval '2 days',
+    'leaving',
+    4250000,
+    NULL,
+    NULL,
+    '{}'::jsonb,
+    'seed:dopewars',
+    999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO UPDATE SET
+    ended_at = EXCLUDED.ended_at,
+    score = EXCLUDED.score;
 
 INSERT INTO tetris_high_scores (user_id, score, created, updated)
 SELECT user_id, 17190, current_timestamp - interval '180 days', current_timestamp - interval '60 days'

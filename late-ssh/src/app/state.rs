@@ -2431,8 +2431,17 @@ impl App {
         if self.dopewars_state.is_some() {
             return;
         }
+        // The playname is how a run finds its account, so it is the name the
+        // account has now: `self.username` is the one the session started
+        // with, and a rename since then would send runs to nobody. It stands
+        // in only until the profile has loaded.
+        let profile_username = &self.profile_state.profile().username;
+        let username = match profile_username.is_empty() {
+            true => self.username.clone(),
+            false => profile_username.clone(),
+        };
         self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
-            self.user_id,
+            username,
             self.dopewars_host.clone(),
             self.dopewars_port,
             self.dopewars_secret.clone(),

@@ -42,11 +42,15 @@ fn board_list_follows_the_rosters() {
     let door_boards = 3 * DoorGame::ALL.len();
     assert_eq!(
         boards.len(),
-        6 + door_boards + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
+        6 + door_boards + 1 + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
     );
-    assert_eq!(boards[6 + door_boards], Board::Daily(DailyPuzzle::ALL[0]));
+    assert_eq!(boards[6 + door_boards], Board::DopewarsScore);
     assert_eq!(
-        boards[6 + door_boards + DailyPuzzle::ALL.len()],
+        boards[6 + door_boards + 1],
+        Board::Daily(DailyPuzzle::ALL[0])
+    );
+    assert_eq!(
+        boards[6 + door_boards + 1 + DailyPuzzle::ALL.len()],
         Board::Score(ScoreGame::ALL[0])
     );
     assert_eq!(
@@ -54,6 +58,19 @@ fn board_list_follows_the_rosters() {
         Some(&Board::BadgeGuide),
         "guide trails every board"
     );
+}
+
+/// The dopewars board ranks final net worth and shows it as cash, negative
+/// debt included.
+#[test]
+fn dopewars_top_score_shows_dollar_values() {
+    let board = Board::DopewarsScore;
+    assert_eq!(board.title(), "dopewars Top Score");
+    assert_eq!(board.format_value(1_250_000), "$1,250,000");
+    assert_eq!(board.format_value(-500), "-$500");
+    assert_eq!(board.format_value(0), "$0");
+    let data = LeaderboardData::default();
+    assert!(matches!(board.standings(&data), Standings::Paired { .. }));
 }
 
 /// Top Drinkers races by month and by year, never all time.
