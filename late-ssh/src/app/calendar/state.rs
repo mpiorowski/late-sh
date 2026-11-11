@@ -31,6 +31,7 @@ pub enum Action {
     Today,
     New,
     Edit,
+    Duplicate,
     Delete,
     Rsvp,
     Date(NaiveDate),
@@ -451,6 +452,7 @@ impl CalendarState {
                         if self.reload_request {
                             if let Some(Modal::Editor(e)) = &mut self.modal {
                                 e.existing = Some((latest.id, latest.revision));
+                                e.original_source = Some(latest.source());
                                 e.conflict = false;
                                 e.error = Some(format!(
                                     "Reloaded revision {}: {}. Your draft is retained; review before saving.",

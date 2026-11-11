@@ -88,18 +88,18 @@ fn patch_line(mut line: Line<'static>, style: Style) -> Line<'static> {
     }
     line
 }
-fn today_background() -> Color {
+fn date_background() -> Color {
     theme::blend_toward(theme::BG_CANVAS(), theme::BORDER_ACTIVE(), 0.16)
 }
 /// Tint the day's unfilled cells after its contents are drawn, preserving
 /// the stronger selection fill. The tint is blended from the theme's canvas,
 /// so a palette whose canvas is the terminal's own (`Reset`) has nothing to
 /// blend and leaves the day untouched.
-fn shade_today(frame: &mut Frame, area: Rect, date: NaiveDate, s: &CalendarState) {
-    if date != s.today() || theme::BG_CANVAS() == Color::Reset {
+fn shade_selected(frame: &mut Frame, area: Rect, date: NaiveDate, s: &CalendarState) {
+    if date != s.selected || theme::BG_CANVAS() == Color::Reset {
         return;
     }
-    let fill = today_background();
+    let fill = date_background();
     let buffer = frame.buffer_mut();
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -408,6 +408,7 @@ fn footer_hints(s: &CalendarState) -> Vec<(&'static str, &'static str)> {
             if access.delete {
                 hints.push(("d", "delete"));
             }
+            hints.push(("c", "duplicate"));
             hints.push(("right-click", "menu"));
             hints
         }
@@ -429,6 +430,91 @@ fn grid_rule(
         text.push_str(if i == 6 { right } else { middle });
     }
     row(frame, Rect::new(area.x, y, area.width, 1), text, rule());
+}
+
+/// Overlay the outline after the shared grid rules, preserving their light arms
+/// outside today's cell. The rectangle includes all four border lines.
+pub(super) fn outline_today(frame: &mut Frame, cell: Rect, grid: Rect) {
+    let left = cell.x == grid.x;
+    let right = cell.right() == grid.right();
+    let top = cell.y == grid.y + 1;
+    let bottom = cell.bottom() == grid.bottom();
+    let corners = [
+        (
+            cell.x,
+            cell.y,
+            match (left, top) {
+                (true, true) => "┏",
+                (true, false) => "┢",
+                (false, true) => "┲",
+                (false, false) => "╆",
+            },
+        ),
+        (
+            cell.right() - 1,
+            cell.y,
+            match (right, top) {
+                (true, true) => "┓",
+                (true, false) => "┪",
+                (false, true) => "┱",
+                (false, false) => "╅",
+            },
+        ),
+        (
+            cell.x,
+            cell.bottom() - 1,
+            match (left, bottom) {
+                (true, true) => "┗",
+                (true, false) => "┡",
+                (false, true) => "┺",
+                (false, false) => "╄",
+            },
+        ),
+        (
+            cell.right() - 1,
+            cell.bottom() - 1,
+            match (right, bottom) {
+                (true, true) => "┛",
+                (true, false) => "┩",
+                (false, true) => "┹",
+                (false, false) => "╃",
+            },
+        ),
+    ];
+    let style = rule().add_modifier(Modifier::BOLD);
+    for y in [cell.y, cell.bottom() - 1] {
+        row(
+            frame,
+            Rect::new(cell.x + 1, y, cell.width - 2, 1),
+            "━".repeat(usize::from(cell.width - 2)),
+            style,
+        );
+    }
+    for y in cell.y + 1..cell.bottom() - 1 {
+        for x in [cell.x, cell.right() - 1] {
+            row(frame, Rect::new(x, y, 1, 1), "┃", style);
+        }
+    }
+    for (x, y, glyph) in corners {
+        row(frame, Rect::new(x, y, 1, 1), glyph, style);
+    }
+}
+
+fn date_style(date: NaiveDate, s: &CalendarState) -> Style {
+    let style = if date == s.selected {
+        bright().add_modifier(Modifier::BOLD)
+    } else if date == s.today() {
+        accent()
+    } else if date.month() != s.selected.month() {
+        dim()
+    } else {
+        base()
+    };
+    if date == s.today() {
+        style.add_modifier(Modifier::UNDERLINED)
+    } else {
+        style
+    }
 }
 fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
     if area.width < 15 || area.height < 9 {
@@ -462,15 +548,7 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 let date = first + Duration::days((week * 7 + col) as i64);
                 let count = s.day_events(date).len();
                 let rect = Rect::new(x + 1, area.y + 2 + week as u16, w - 1, 1);
-                let style = if date == s.selected {
-                    bright().add_modifier(Modifier::BOLD)
-                } else if date == s.today() {
-                    accent()
-                } else if date.month() != s.selected.month() {
-                    dim()
-                } else {
-                    base()
-                };
+                let style = date_style(date, s);
                 let label = if count > 0 {
                     format!("{}+{count}", date.day())
                 } else {
@@ -479,14 +557,8 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 // Keep counts intact before spending the remaining cells on markers.
                 let spare =
                     usize::from(rect.width).saturating_sub(Line::from(label.as_str()).width());
-                let marker = if date == s.today() && date != s.selected && spare > 0 {
-                    "•"
-                } else {
-                    ""
-                };
                 row(frame, Rect::new(x, rect.y, 1, 1), "│", rule());
-                let mut line =
-                    Line::from(vec![Span::styled(format!("{marker}{}", date.day()), style)]);
+                let mut line = Line::from(vec![Span::styled(date.day().to_string(), style)]);
                 if count > 0 {
                     line.spans.push(Span::styled(
                         format!("+{count}"),
@@ -498,7 +570,7 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
                     rect,
                     marked_line(line, date == s.selected && spare > 0),
                 );
-                shade_today(frame, rect, date, s);
+                shade_selected(frame, rect, date, s);
                 hit(s, rect, Action::Date(date));
                 x += w;
             }
@@ -510,10 +582,25 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
             );
         }
         grid_rule(frame, area, &widths, area.y + 8, "╰", "┴", "╯");
+        // There are no horizontal rules between compact weeks.
+        if let Some(index) = (0..42).find(|n| first + Duration::days(*n) == s.today()) {
+            let col = index as usize % 7;
+            let x = area.x + widths[..col].iter().sum::<u16>();
+            let y = area.y + 2 + index as u16 / 7;
+            for edge in [x, x + widths[col]] {
+                row(
+                    frame,
+                    Rect::new(edge, y, 1, 1),
+                    "┃",
+                    rule().add_modifier(Modifier::BOLD),
+                );
+            }
+        }
         return;
     }
     let first = s.range().0;
     let today = s.today();
+    let mut today_cell = None;
     let mut x = area.x + 1;
     for (col, width) in widths.iter().enumerate() {
         row(
@@ -539,6 +626,9 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
         let mut x = area.x;
         for (col, width) in widths.iter().enumerate() {
             let date = first + Duration::days((week * 7 + col) as i64);
+            if date == today {
+                today_cell = Some(Rect::new(x, y, width + 1, height + 1));
+            }
             let events = s.day_events(date);
             let cell = Rect::new(
                 x + 1,
@@ -547,28 +637,9 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 height.saturating_sub(1),
             );
             if cell.height > 0 {
-                let style = if date == s.selected {
-                    bright().add_modifier(Modifier::BOLD)
-                } else if date == today {
-                    accent()
-                } else if date.month() != s.selected.month() {
-                    dim()
-                } else {
-                    base()
-                };
+                let style = date_style(date, s);
                 let capacity = cell.height.saturating_sub(1) as usize;
-                let mut date_label = Line::styled(
-                    format!(
-                        "{}{}",
-                        if date == today && date != s.selected {
-                            "• "
-                        } else {
-                            ""
-                        },
-                        date.day()
-                    ),
-                    style,
-                );
+                let mut date_label = Line::from(Span::styled(date.day().to_string(), style));
                 if capacity == 0 && !events.is_empty() {
                     date_label.spans.push(Span::styled(
                         format!(" +{}", events.len()),
@@ -603,7 +674,7 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
                     );
                     hit(s, rect, Action::Date(date));
                 }
-                shade_today(frame, cell, date, s);
+                shade_selected(frame, cell, date, s);
             }
             for line in 1..*height {
                 row(frame, Rect::new(x, y + line, 1, 1), "│", rule());
@@ -629,18 +700,15 @@ fn draw_month(frame: &mut Frame, area: Rect, s: &CalendarState) {
             if week == 5 { "╯" } else { "┤" },
         );
     }
+    if let Some(cell) = today_cell {
+        outline_today(frame, cell, area);
+    }
 }
 fn draw_agenda(frame: &mut Frame, area: Rect, s: &CalendarState) {
     let mut title = vec![
         Span::styled(
             format!(" {}", s.selected),
-            bright()
-                .add_modifier(Modifier::BOLD)
-                .bg(if s.selected == s.today() {
-                    today_background()
-                } else {
-                    Color::Reset
-                }),
+            bright().add_modifier(Modifier::BOLD).bg(date_background()),
         ),
         separator(),
     ];
@@ -706,8 +774,8 @@ fn list_lines<'a>(
             rows.push((
                 Line::styled(
                     date.format("%A, %B %d, %Y").to_string(),
-                    accent().bg(if date == s.today() {
-                        today_background()
+                    accent().bg(if date == s.selected {
+                        date_background()
                     } else {
                         Color::Reset
                     }),
@@ -893,6 +961,28 @@ fn draw_modal_content(frame: &mut Frame, area: Rect, s: &CalendarState) {
         Modal::Details(e) => {
             let access = event_access(e, s.viewer, s.staff);
             let going = s.going(e.id);
+            let mut actions = Vec::new();
+            if access.rsvp {
+                actions.push((if going { "i I'm out" } else { "i I'm in" }, Action::Rsvp));
+            }
+            if access.edit {
+                actions.push(("e Edit", Action::Edit));
+            }
+            actions.push(("c Duplicate", Action::Duplicate));
+            if access.delete {
+                actions.push(("d Delete", Action::Delete));
+            }
+            actions.push(("Close", Action::Cancel));
+            let mut action_rows = 1;
+            let mut used = 0;
+            for (label, _) in &actions {
+                let width = button_line(label).width() as u16;
+                if used > 0 && used + width > inner.width {
+                    action_rows += 1;
+                    used = 0;
+                }
+                used += width;
+            }
             let mut who = vec![source_span(e)];
             if e.is_board() {
                 who.push(separator());
@@ -917,7 +1007,7 @@ fn draw_modal_content(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 inner.x,
                 inner.y,
                 inner.width,
-                inner.height.saturating_sub(2),
+                inner.height.saturating_sub(action_rows + 1),
             );
             pane(s, content, Pane::List);
             let p = Paragraph::new(lines)
@@ -932,53 +1022,16 @@ fn draw_modal_content(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 content,
             );
             let mut x = inner.x;
-            let y = inner.bottom() - 1;
-            if access.rsvp {
-                button(
-                    frame,
-                    s,
-                    &mut x,
-                    y,
-                    inner.right(),
-                    if going { "i I'm out" } else { "i I'm in" },
-                    Action::Rsvp,
-                    false,
-                );
+            let mut y = inner.bottom() - action_rows.min(inner.height);
+            for (label, action) in actions {
+                if x > inner.x && x + button_line(label).width() as u16 > inner.right() {
+                    x = inner.x;
+                    y += 1;
+                }
+                if y < inner.bottom() {
+                    button(frame, s, &mut x, y, inner.right(), label, action, false);
+                }
             }
-            if access.edit {
-                button(
-                    frame,
-                    s,
-                    &mut x,
-                    y,
-                    inner.right(),
-                    "e Edit",
-                    Action::Edit,
-                    false,
-                );
-            }
-            if access.delete {
-                button(
-                    frame,
-                    s,
-                    &mut x,
-                    y,
-                    inner.right(),
-                    "d Delete",
-                    Action::Delete,
-                    false,
-                );
-            }
-            button(
-                frame,
-                s,
-                &mut x,
-                y,
-                inner.right(),
-                "Close",
-                Action::Cancel,
-                false,
-            );
         }
     }
     if s.pending {

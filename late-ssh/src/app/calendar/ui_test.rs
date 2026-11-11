@@ -92,6 +92,68 @@ fn action_area(s: &CalendarState, action: Action) -> Option<Rect> {
 
 const READABILITY_THEMES: [&str; 5] = ["late", "github-light", "contrast", "mono-ink", "terminal"];
 
+#[test]
+fn heavy_today_outline_keeps_the_light_grid_connected_at_outer_edges() {
+    for (cell, expected) in [
+        (
+            Rect::new(0, 1, 5, 3),
+            [
+                "┏━━━┱───╮",
+                "┃   ┃   │",
+                "┡━━━╃───┤",
+                "│   │   │",
+                "╰───┴───╯",
+            ],
+        ),
+        (
+            Rect::new(4, 1, 5, 3),
+            [
+                "╭───┲━━━┓",
+                "│   ┃   ┃",
+                "├───╄━━━┩",
+                "│   │   │",
+                "╰───┴───╯",
+            ],
+        ),
+        (
+            Rect::new(0, 3, 5, 3),
+            [
+                "╭───┬───╮",
+                "│   │   │",
+                "┢━━━╅───┤",
+                "┃   ┃   │",
+                "┗━━━┹───╯",
+            ],
+        ),
+        (
+            Rect::new(4, 3, 5, 3),
+            [
+                "╭───┬───╮",
+                "│   │   │",
+                "├───╆━━━┪",
+                "│   ┃   ┃",
+                "╰───┺━━━┛",
+            ],
+        ),
+    ] {
+        let mut terminal = Terminal::new(TestBackend::new(9, 6)).unwrap();
+        terminal
+            .draw(|frame| {
+                let grid = "╭───┬───╮\n│   │   │\n├───┼───┤\n│   │   │\n╰───┴───╯";
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(grid),
+                    Rect::new(0, 1, 9, 5),
+                );
+                outline_today(frame, cell, Rect::new(0, 0, 9, 6));
+            })
+            .unwrap();
+        assert_eq!(
+            rendered_text(terminal.backend().buffer(), Rect::new(0, 1, 9, 5)),
+            expected.join("\n")
+        );
+    }
+}
+
 /// Themes are thread-local; restore the calling test's palette even on panic.
 struct RestoreTheme(&'static str);
 
@@ -221,6 +283,61 @@ async fn details_offer_the_viewers_actions_and_count_who_is_in() {
     assert!(action_area(&s, Action::Rsvp).is_none());
     assert!(action_area(&s, Action::Edit).is_some());
     assert!(action_area(&s, Action::Delete).is_some());
+    for (width, height) in [(40, 16), (60, 20), (100, 30)] {
+        render(&s, width, height);
+        for action in [
+            Action::Edit,
+            Action::Duplicate,
+            Action::Delete,
+            Action::Cancel,
+        ] {
+            assert!(
+                action_area(&s, action.clone()).is_some(),
+                "{width}x{height}: {action:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn today_has_an_underlined_number_and_heavy_edges_while_tint_follows_selection() {
+    let _restore = RestoreTheme::new();
+    theme::set_current_by_id("late");
+    let mut s = state();
+    let today = s.today();
+    let tint = theme::blend_toward(theme::BG_CANVAS(), theme::BORDER_ACTIVE(), 0.16);
+    for (width, height) in [(120, 40), (80, 16)] {
+        for selected in [today + Duration::days(1), today] {
+            s.select_date(selected);
+            let buffer = render(&s, width, height);
+            let today_area = action_area(&s, Action::Date(today)).unwrap();
+            let selected_area = action_area(&s, Action::Date(selected)).unwrap();
+            assert!(selected_area.positions().all(|p| buffer[p].bg == tint));
+            if selected != today {
+                assert!(
+                    today_area
+                        .positions()
+                        .all(|p| buffer[p].bg == ratatui::style::Color::Reset)
+                );
+            }
+            assert_eq!(buffer[(today_area.x - 1, today_area.y)].symbol(), "┃");
+            let number_cells: Vec<_> = (today_area.x..today_area.right())
+                .map(|x| &buffer[(x, today_area.y)])
+                .filter(|c| c.symbol().bytes().all(|b| b.is_ascii_digit()))
+                .collect();
+            assert!(!number_cells.is_empty());
+            assert!(
+                number_cells
+                    .iter()
+                    .all(|c| c.modifier.contains(ratatui::style::Modifier::UNDERLINED))
+            );
+            assert!(!rendered_text(&buffer, today_area).contains('•'));
+            if height == 40 {
+                assert_eq!(buffer[(today_area.x, today_area.y - 1)].symbol(), "━");
+                assert_eq!(buffer[(today_area.x, today_area.bottom())].symbol(), "━");
+            }
+        }
+    }
 }
 
 /// Taking down a stranger's post says whose it was, so a moderator reads
@@ -293,14 +410,14 @@ async fn the_list_groups_the_month_by_day() {
 /// The terminal owns the page's background: "Sync terminal background"
 /// paints it to the theme's canvas through OSC 11, and with the setting off
 /// it stays the user's own. A cell painted with the theme's canvas ignores
-/// that choice, so no view may lay the canvas down itself. Today's tint is a
-/// fill of its own and stays.
+/// that choice, so no view may lay the canvas down itself. The selected date
+/// has a fill of its own.
 #[tokio::test]
 async fn the_page_leaves_the_background_to_the_terminal() {
     let _restore = RestoreTheme::new();
     theme::set_current_by_id("late");
     let canvas = theme::BG_CANVAS();
-    let today_tint = theme::blend_toward(canvas, theme::BORDER_ACTIVE(), 0.16);
+    let selected_tint = theme::blend_toward(canvas, theme::BORDER_ACTIVE(), 0.16);
     let mut s = state();
     s.selected = s.today();
     let post = event(1, 21, true, 2);
@@ -332,8 +449,8 @@ async fn the_page_leaves_the_background_to_the_terminal() {
         month
             .area()
             .positions()
-            .any(|position| month[position].bg == today_tint),
-        "today keeps its tint"
+            .any(|position| month[position].bg == selected_tint),
+        "the selected date has a tint"
     );
 }
 

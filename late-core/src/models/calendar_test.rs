@@ -45,6 +45,178 @@ fn refusal(error: CalendarError) -> CalendarRefusal {
     }
 }
 
+#[tokio::test]
+async fn visibility_conversion_keeps_identity_and_clears_board_state() {
+    let db = test_db().await;
+    let owner = create_test_user(&db.db, "cal_owner").await;
+    let guest = create_test_user(&db.db, "cal_guest").await;
+    let store = CalendarStore::new(db.db.clone());
+    let draft = timed_at(Utc::now(), -Duration::minutes(10));
+    let personal = store
+        .save(owner.id, CalendarSource::Personal, None, &draft)
+        .await
+        .unwrap();
+    assert!(personal.created && !personal.board_posted);
+    let published = store
+        .save(
+            owner.id,
+            CalendarSource::Board,
+            Some((personal.event.id, personal.event.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+    assert!(!published.created && published.board_posted);
+    let published = published.event;
+    assert_eq!(published.id, personal.event.id);
+    assert_eq!(published.creator_id, owner.id);
+    assert_eq!(published.timing, personal.event.timing);
+    assert_eq!(published.revision, personal.event.revision + 1);
+    store.set_rsvp(guest.id, published.id, true).await.unwrap();
+    assert_eq!(store.claim_started(Utc::now()).await.unwrap().len(), 1);
+
+    // Staff may delete a post, but cannot convert one they do not own.
+    let c = db.db.get().await.unwrap();
+    c.execute("UPDATE users SET is_admin=true WHERE id=$1", &[&guest.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal(
+            store
+                .save(
+                    guest.id,
+                    CalendarSource::Personal,
+                    Some((published.id, published.revision)),
+                    &draft
+                )
+                .await
+                .unwrap_err()
+        ),
+        CalendarRefusal::ReadOnly
+    );
+    assert_eq!(
+        refusal(
+            store
+                .save(
+                    owner.id,
+                    CalendarSource::Personal,
+                    Some((published.id, personal.event.revision)),
+                    &draft
+                )
+                .await
+                .unwrap_err()
+        ),
+        CalendarRefusal::Revision
+    );
+    assert_eq!(store.rsvps(guest.id).await.unwrap(), vec![published.id]);
+
+    let private = store
+        .save(
+            owner.id,
+            CalendarSource::Personal,
+            Some((published.id, published.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+    assert!(!private.created && !private.board_posted);
+    assert_eq!(private.event.id, published.id);
+    assert_eq!(private.event.going, 0);
+    assert!(store.rsvps(guest.id).await.unwrap().is_empty());
+    assert_eq!(
+        refusal(store.event(guest.id, published.id).await.unwrap_err()),
+        CalendarRefusal::Gone
+    );
+    assert!(store.live_board(Utc::now()).await.unwrap().is_empty());
+    let announced: Option<chrono::DateTime<Utc>> = c
+        .query_one(
+            "SELECT announced_at FROM calendar_events WHERE id=$1",
+            &[&published.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(announced.is_none());
+    let again = store
+        .save(
+            owner.id,
+            CalendarSource::Board,
+            Some((private.event.id, private.event.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+    assert!(again.board_posted);
+    assert_eq!(again.event.going, 0);
+    assert_eq!(store.claim_started(Utc::now()).await.unwrap().len(), 1);
+    let posts: i64 = c
+        .query_one(
+            "SELECT count(*) FROM calendar_posts WHERE user_id=$1",
+            &[&owner.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(posts, 2, "every publication uses a slot");
+}
+
+#[tokio::test]
+async fn publishing_conversions_obey_bans_and_the_concurrent_daily_cap() {
+    let db = test_db().await;
+    let owner = create_test_user(&db.db, "cal_publish").await;
+    let staff = create_test_user(&db.db, "cal_staff").await;
+    let store = CalendarStore::new(db.db.clone());
+    let event = store
+        .save(owner.id, CalendarSource::Personal, None, &draft())
+        .await
+        .unwrap()
+        .event;
+    let c = db.db.get().await.unwrap();
+    CalendarBan::activate(&c, owner.id, staff.id, "spam", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal(
+            store
+                .save(
+                    owner.id,
+                    CalendarSource::Board,
+                    Some((event.id, event.revision)),
+                    &draft()
+                )
+                .await
+                .unwrap_err()
+        ),
+        CalendarRefusal::Banned
+    );
+    assert!(!store.event(owner.id, event.id).await.unwrap().is_board());
+    CalendarBan::delete_for_user(&c, owner.id).await.unwrap();
+    for _ in 0..BOARD_POSTS_PER_DAY - 1 {
+        store
+            .save(owner.id, CalendarSource::Board, None, &draft())
+            .await
+            .unwrap();
+    }
+    let d = draft();
+    let (publish, create) = tokio::join!(
+        store.save(
+            owner.id,
+            CalendarSource::Board,
+            Some((event.id, event.revision)),
+            &d
+        ),
+        store.save(owner.id, CalendarSource::Board, None, &d),
+    );
+    let mut successes = 0;
+    for result in [publish, create] {
+        match result {
+            Ok(_) => successes += 1,
+            Err(e) => assert_eq!(refusal(e), CalendarRefusal::DailyCap),
+        }
+    }
+    assert_eq!(successes, 1);
+}
+
 #[test]
 fn calendar_dst_and_inclusive_dates() {
     let tz = chrono_tz::America::New_York;

@@ -77,6 +77,7 @@ pub(super) fn handle_key(s: &mut CalendarState, event: &ParsedInput) -> bool {
         Some('t' | 'T') => Some(Action::Today),
         Some('n' | 'N') => Some(Action::New),
         Some('e') => Some(Action::Edit),
+        Some('c') => Some(Action::Duplicate),
         Some('d') => Some(Action::Delete),
         Some('i' | 'I') => Some(Action::Rsvp),
         Some('\r') => Some(enter(s)),
@@ -394,6 +395,13 @@ pub fn act(s: &mut CalendarState, action: Action) {
             ))));
         }
         Action::Rsvp => s.toggle_rsvp(),
+        Action::Duplicate => {
+            if let Some(event) = s.selected_target_event() {
+                s.push_modal(Modal::Editor(Box::new(Editor::duplicate(&event, s.tz))));
+            } else {
+                s.error = Some("Select an event first".into());
+            }
+        }
         Action::Edit | Action::Delete => {
             let event = if let Some(Modal::Details(e)) = &s.modal {
                 Some(e.clone())
@@ -460,6 +468,7 @@ pub fn act(s: &mut CalendarState, action: Action) {
                 },
                 MenuAction::New => act(s, Action::New),
                 MenuAction::Edit => act(s, Action::Edit),
+                MenuAction::Duplicate => act(s, Action::Duplicate),
                 MenuAction::Delete => act(s, Action::Delete),
                 MenuAction::Rsvp(_) => act(s, Action::Rsvp),
             }
@@ -516,6 +525,7 @@ pub(super) fn handle_modal(s: &mut CalendarState, event: &ParsedInput) {
     match &s.modal {
         Some(Modal::Details(_)) => match event {
             ParsedInput::Byte(b'e') => act(s, Action::Edit),
+            ParsedInput::Byte(b'c') => act(s, Action::Duplicate),
             ParsedInput::Byte(b'd') | ParsedInput::Delete => act(s, Action::Delete),
             ParsedInput::Byte(b'i' | b'I') => act(s, Action::Rsvp),
             ParsedInput::Byte(b'q') => escape(s),

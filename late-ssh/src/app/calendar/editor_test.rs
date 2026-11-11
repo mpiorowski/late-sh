@@ -67,7 +67,7 @@ fn value_target(e: &Editor, control: EditorControl) -> Target {
         .unwrap()
 }
 
-/// A new draft offers where it goes; an opened event does not. The time
+/// New and owned events offer where they go. The time
 /// fields appear once all-day is off, and a draft typed into the title
 /// fills them in.
 #[test]
@@ -124,13 +124,91 @@ fn a_new_draft_picks_its_target_and_infers_its_timing_from_the_title() {
 
     let opened = Editor::from_event(&board_event(), Uuid::nil(), false, chrono_tz::UTC);
     assert!(
-        !opened.visible_controls(today()).contains(&Target),
-        "where a saved event lives is fixed"
+        opened.visible_controls(today()).contains(&Target),
+        "an owned event can change where it lives"
     );
     assert_eq!(opened.existing, Some((Uuid::from_u128(7), 2)));
     assert_eq!(opened.text(0), "Movie night");
     assert_eq!(opened.text(3), "21:00");
     assert!(!opened.dirty());
+}
+
+#[test]
+fn hour_only_clocks_work_for_both_ends_and_dst_choices() {
+    for (start, end, hour) in [("0", "1", 0), ("9", "10", 9), ("09", "23", 9)] {
+        let mut e = editor();
+        e.fields[0] = field("Session");
+        e.all_day = false;
+        e.fields[3] = field(start);
+        e.fields[5] = field(end);
+        let timing = e.draft(today()).unwrap().timing;
+        assert!(
+            matches!(timing, EventTiming::Timed { start, end: Some(end) }
+            if start == Utc.with_ymd_and_hms(2026, 10, 3, hour, 0, 0).unwrap() && end > start)
+        );
+    }
+    for bad in ["24", "-1", "999", "9pm"] {
+        let mut e = editor();
+        e.fields[0] = field("Session");
+        e.all_day = false;
+        e.fields[3] = field(bad);
+        assert!(
+            e.draft(today())
+                .unwrap_err()
+                .to_string()
+                .contains("Start time")
+        );
+        e.fields[3] = field("9");
+        e.fields[5] = field(bad);
+        assert!(
+            e.draft(today())
+                .unwrap_err()
+                .to_string()
+                .contains("End time")
+        );
+    }
+    let mut e = Editor::new(
+        CalendarSource::Personal,
+        today(),
+        chrono_tz::America::New_York,
+    );
+    e.fields[0] = field("DST session");
+    e.fields[2] = field("2026-11-01");
+    e.fields[3] = field("1");
+    e.all_day = false;
+    assert!(
+        e.visible_controls(today())
+            .contains(&EditorControl::StartOccurrence)
+    );
+    assert!(e.draft(today()).is_err());
+    e.occurrence = Some(late_core::models::calendar::Occurrence::Later);
+    assert!(e.draft(today()).is_ok());
+}
+
+#[test]
+fn copies_are_editable_personal_drafts_without_title_inference() {
+    let mut original = board_event();
+    original.title = "Meeting tomorrow at 9pm".into();
+    original.creator_id = Uuid::from_u128(99);
+    original.description = "Same details, different sessions".into();
+    for timing in [
+        original.timing.clone(),
+        EventTiming::AllDay {
+            start: today(),
+            end_exclusive: today() + chrono::Duration::days(3),
+        },
+    ] {
+        original.timing = timing;
+        let mut copy = Editor::duplicate(&original, chrono_tz::America::Denver);
+        assert_eq!(copy.source, CalendarSource::Personal);
+        assert!(copy.existing.is_none());
+        assert!(copy.access.edit);
+        assert!(copy.dirty(), "the populated draft needs discard protection");
+        assert_eq!(copy.draft(today()).unwrap(), (&original).into());
+        copy.focus(EditorControl::Target, today());
+        handle_key(&mut copy, &ParsedInput::Byte(b' '), today());
+        assert_eq!(copy.source, CalendarSource::Board);
+    }
 }
 
 #[test]

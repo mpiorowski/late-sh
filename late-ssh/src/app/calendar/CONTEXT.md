@@ -22,7 +22,8 @@ owner scope inside every statement; `calendar_ban.rs` the ban rows.
 
 Posting has two guards, both decided inside the post transaction:
 `BOARD_POSTS_PER_DAY` (5) board posts per account per UTC day, and a board
-ban. Edits and personal events never count. A deleted post still does: the cap
+ban. Publishing a personal event counts, including republishing; ordinary
+edits and personal events never count. A deleted post still does: the cap
 counts `calendar_posts`, a log of every board post made, which deletes never
 touch. `/mod ban calendar @name [duration] [reason]`, `/mod unban calendar
 @name`, `/mod view bans calendar`; a ban stops new posts and nothing else.
@@ -38,6 +39,10 @@ the grid; under 14 rows the grid is compact (`2+12` counts). List is the month
 in day order. Board posts read amber, own events green; the header says
 `loading` while a month is fetched.
 
+Today's number is underlined and its cell has a heavy outline with mixed
+junctions; compact grids use heavy side borders. The date tint follows the
+selected date.
+
 The cursor is an amber dot on the selected day's first event, never a fill;
 `j`/`k` move it along the day. A foot row says what the keys do to the
 selection.
@@ -45,23 +50,33 @@ selection.
 | Key | Action |
 |-----|--------|
 | `n`, `e`, `d` | New, edit, delete (confirmation) as the rules allow |
+| `c` | Duplicate any visible event into a new personal draft |
 | `i` | I'm in / I'm out on a board post |
 | `[` / `]`, `t` | Month back / forward, today |
 | `v`, `b` | Month or List; board shown or hidden |
 | `j` / `k`, arrows | Events in the day; days (List: events) |
 | `Enter` | Open the marked event, or start one on an empty day |
 | PageUp / PageDown | Scroll |
-| mouse | Click selects, double click opens, right-click offers Open, I'm in/out, Edit, Delete as the rules allow |
+| mouse | Click selects, double click opens, right-click offers Open, Duplicate, I'm in/out, Edit, Delete as the rules allow |
 
 Details show the title, the timing in the viewer's zone, the poster, who is in
 (`6 in, you included`), the description, then the allowed buttons. The editor
 takes a title, a description, the target (just me by default, or the board;
-fixed once saved), all-day or a start and end. A title like `movie night
+editable on owned events), all-day or a start and end. A title like `movie night
 tomorrow at 9pm` fills the date and time once (`parser.rs`); it never infers
-again. Date fields take `Oct 2`, `2026-10-02`, `+2w`, `tomorrow`. Escape offers
-to discard a changed draft and keeps it by default. A save that lost to a
+again. Start and end times accept an hour (`9`, `09`, `23`), `HH:MM`, or
+`HH:MM:SS` in 24-hour time. Date fields take `Oct 2`, `2026-10-02`, `+2w`,
+`tomorrow`. Escape offers to discard a changed draft and keeps it by default.
+A save that lost to a
 newer edit elsewhere shows an error; `Ctrl+L` or a click on it reloads the
 newer revision and keeps the draft.
+
+Changing a board event to personal keeps its identity and clears its RSVPs
+and start-announcement claim in the save transaction. Publishing a personal
+event uses the posting guards and ships the usual post line. Earlier chat
+announcements remain in history. Copies preserve the visible details and timing,
+with no RSVPs or link to the original; the new draft can have different dates
+and times and can target the board. Its title is not inferred again.
 
 The session keeps the view, the date and whether the board is shown.
 
@@ -106,8 +121,8 @@ event also carries derived `starts_at`/`ends_at`: a timed post is live for
   event its owner), `calendar_rsvps` (one row per person per post),
   `calendar_posts` (the cap's log), `calendar_bans`.
 - Row triggers fire `calendar_changed` only for what another session can see:
-  a board post's insert, edit or delete, and an "I'm in". A personal write or a
-  statement that changes no row wakes nobody.
+  a board post's insert, edit, conversion to personal, or delete, and an "I'm in".
+  A personal write or a statement that changes no row wakes nobody.
 - The central listener's `CalendarChanged` channel bumps an epoch every session
   reads on its tick: it drops what it loaded, re-reads at once when the page or
   a calendar modal is open, otherwise when it next opens the page. An open
@@ -139,7 +154,7 @@ event also carries derived `starts_at`/`ends_at`: a timed post is live for
   never queries.
 - `navigation.rs`: selection, double-click identity, the context menu's items
   from `event_access`, modal frames that restore the cursor on pop.
-- `editor.rs`: the form; the `Target` control only on a new draft; DST
+- `editor.rs`: the form; the `Target` control on new drafts and owned events; DST
   occurrence controls only for a repeated local hour; `conflict` on a lost save.
 - `date_entry.rs`, `parser.rs`, `toolbar.rs`, `ui.rs`, `input.rs` (page keys
   and clicks on screen 7 and while a calendar modal is up, nothing elsewhere).

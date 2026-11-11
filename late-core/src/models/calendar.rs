@@ -383,12 +383,12 @@ fn refuse<T>(refusal: CalendarRefusal) -> Result<T, CalendarError> {
     Err(CalendarError::Refused(refusal))
 }
 
-/// A save, and whether it made a new event: a new board post is a story,
-/// an edit is not.
+/// A save, whether it made a new event, and whether it published to the board.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Saved {
     pub event: CalendarEvent,
     pub created: bool,
+    pub board_posted: bool,
 }
 
 /// A delete, and whether staff did it to someone else's post.
@@ -544,9 +544,6 @@ impl CalendarStore {
                     return refuse(CalendarRefusal::Gone);
                 };
                 let e = CalendarEvent::from_row(row);
-                if e.source() != source {
-                    return refuse(CalendarRefusal::ReadOnly);
-                }
                 if !event_access(&e, viewer, actor.staff).edit {
                     return refuse(CalendarRefusal::ReadOnly);
                 }
@@ -555,15 +552,18 @@ impl CalendarStore {
                 }
                 Some(e)
             }
-            None => {
-                if source == CalendarSource::Board {
-                    if Self::banned(&tx, viewer).await? {
-                        return refuse(CalendarRefusal::Banned);
-                    }
-                    // The post log, not the events: a deleted post still
-                    // used its slot. The day is UTC whatever the session's
-                    // TimeZone.
-                    let today: i64 = tx
+            None => None,
+        };
+        let board_posted =
+            source == CalendarSource::Board && old.as_ref().is_none_or(|e| !e.is_board());
+        if board_posted {
+            if Self::banned(&tx, viewer).await? {
+                return refuse(CalendarRefusal::Banned);
+            }
+            // The post log, not the events: a deleted post still
+            // used its slot. The day is UTC whatever the session's
+            // TimeZone.
+            let today: i64 = tx
                         .query_one(
                             "SELECT count(*) FROM calendar_posts WHERE user_id=$1 \
                              AND created >= date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
@@ -571,15 +571,12 @@ impl CalendarStore {
                         )
                         .await?
                         .get(0);
-                    if today >= BOARD_POSTS_PER_DAY {
-                        return refuse(CalendarRefusal::DailyCap);
-                    }
-                    tx.execute("INSERT INTO calendar_posts(user_id) VALUES($1)", &[&viewer])
-                        .await?;
-                }
-                None
+            if today >= BOARD_POSTS_PER_DAY {
+                return refuse(CalendarRefusal::DailyCap);
             }
-        };
+            tx.execute("INSERT INTO calendar_posts(user_id) VALUES($1)", &[&viewer])
+                .await?;
+        }
         let creator_timezone = old
             .as_ref()
             .map(|e| e.creator_timezone.clone())
@@ -604,11 +601,15 @@ impl CalendarStore {
             CalendarSource::Board => None,
             CalendarSource::Personal => Some(viewer),
         };
+        if old.as_ref().is_some_and(CalendarEvent::is_board) && source == CalendarSource::Personal {
+            tx.execute("DELETE FROM calendar_rsvps WHERE event_id=$1", &[&id])
+                .await?;
+        }
         let saved: Uuid = tx
             .query_one(
                 "INSERT INTO calendar_events(id,owner_id,creator_id,title,description,start_date,end_date,start_at,end_at,creator_timezone,starts_at,ends_at) \
                  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
-                 ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,description=EXCLUDED.description,start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at,revision=calendar_events.revision+1 \
+                 ON CONFLICT(id) DO UPDATE SET owner_id=EXCLUDED.owner_id,title=EXCLUDED.title,description=EXCLUDED.description,start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at,announced_at=CASE WHEN EXCLUDED.owner_id IS NOT NULL THEN NULL ELSE calendar_events.announced_at END,revision=calendar_events.revision+1 \
                  RETURNING id",
                 &[
                     &id,
@@ -639,6 +640,7 @@ impl CalendarStore {
         Ok(Saved {
             event: CalendarEvent::from_row(row),
             created: old.is_none(),
+            board_posted,
         })
     }
     async fn banned<C: GenericClient + Sync>(c: &C, viewer: Uuid) -> Result<bool> {

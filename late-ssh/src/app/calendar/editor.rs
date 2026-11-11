@@ -32,8 +32,7 @@ use uuid::Uuid;
 pub enum EditorControl {
     Title,
     Description,
-    /// Where a new event goes: the board, or the viewer's own calendar.
-    /// Fixed once saved.
+    /// Where the event goes: the board, or the viewer's own calendar.
     Target,
     AllDay,
     StartDate,
@@ -125,6 +124,7 @@ pub(super) struct Geometry {
 pub struct Editor {
     pub existing: Option<(Uuid, i64)>,
     pub source: CalendarSource,
+    pub(super) original_source: Option<CalendarSource>,
     /// The zone the clock fields are shown and read in, fixed when the
     /// editor opens: an account timezone change mid-edit must not move the
     /// event on save.
@@ -184,8 +184,12 @@ fn clock(time: impl Timelike) -> String {
 }
 
 fn parse_clock(text: &str) -> Result<NaiveTime, chrono::ParseError> {
-    NaiveTime::parse_from_str(text.trim(), "%H:%M")
-        .or_else(|_| NaiveTime::parse_from_str(text.trim(), "%H:%M:%S"))
+    let text = text.trim();
+    let hour = ((1..=2).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| format!("{text}:00"));
+    let text = hour.as_deref().unwrap_or(text);
+    NaiveTime::parse_from_str(text, "%H:%M")
+        .or_else(|_| NaiveTime::parse_from_str(text, "%H:%M:%S"))
 }
 
 impl Editor {
@@ -195,6 +199,7 @@ impl Editor {
         let mut e = Self {
             existing: None,
             source,
+            original_source: None,
             tz,
             fields: vec![
                 field(""),
@@ -235,11 +240,22 @@ impl Editor {
         let mut e = Self::new(event.source(), event.timing.dates(tz).0, tz);
         e.access = access;
         e.existing = Some((event.id, event.revision));
+        e.original_source = Some(event.source());
         e.fields[0] = field(&event.title);
         e.fields[1] = field(&event.description);
         e.set_timing(&event.timing);
         e.ever_assigned = true;
         e.initial = e.fingerprint();
+        e
+    }
+
+    /// A standalone personal draft, including when the source belongs to someone else.
+    pub fn duplicate(event: &CalendarEvent, tz: Tz) -> Self {
+        let mut e = Self::new(CalendarSource::Personal, event.timing.dates(tz).0, tz);
+        e.fields[0] = field(&event.title);
+        e.fields[1] = field(&event.description);
+        e.set_timing(&event.timing);
+        e.ever_assigned = true;
         e
     }
 
@@ -347,7 +363,7 @@ impl Editor {
             StartOccurrence, StartTime, Target, Title,
         };
         let mut controls = vec![Title, Description];
-        if self.existing.is_none() {
+        if self.access.edit {
             controls.push(Target);
         }
         controls.extend([AllDay, StartDate]);
@@ -409,7 +425,7 @@ impl Editor {
                     self.fields[3] = field("09:00");
                 }
             }
-            EditorControl::Target if self.existing.is_none() => {
+            EditorControl::Target if self.access.edit => {
                 self.source = self.source.toggled();
             }
             EditorControl::StartOccurrence => self.occurrence = next_occurrence(self.occurrence),
@@ -447,15 +463,17 @@ impl Editor {
                     .ok_or_else(|| anyhow::anyhow!("End date out of range"))?,
             }
         } else {
-            let time = parse_clock(&self.text(3))
-                .map_err(|_| anyhow::anyhow!("Start time must be HH:MM or HH:MM:SS (24-hour)"))?;
+            let time = parse_clock(&self.text(3)).map_err(|_| {
+                anyhow::anyhow!("Start time must be H, HH:MM or HH:MM:SS (24-hour)")
+            })?;
             let begin = local_instant(start.and_time(time), self.tz, self.occurrence)?;
             let end = if end_date.is_none() && end_time.trim().is_empty() {
                 None
             } else {
                 let d = end_date.unwrap_or(start);
-                let t = parse_clock(&end_time)
-                    .map_err(|_| anyhow::anyhow!("End time must be HH:MM or HH:MM:SS"))?;
+                let t = parse_clock(&end_time).map_err(|_| {
+                    anyhow::anyhow!("End time must be H, HH:MM or HH:MM:SS (24-hour)")
+                })?;
                 Some(local_instant(d.and_time(t), self.tz, self.end_occurrence)?)
             };
             EventTiming::Timed { start: begin, end }
@@ -681,6 +699,9 @@ fn value_text(e: &Editor, control: EditorControl) -> String {
         EditorControl::AllDay => if e.all_day { "[x]" } else { "[ ]" }.into(),
         EditorControl::Target => match e.source {
             CalendarSource::Board => "the board · everyone sees it, anyone can say I'm in".into(),
+            CalendarSource::Personal if e.original_source == Some(CalendarSource::Board) => {
+                "just me · clears RSVPs on save".into()
+            }
             CalendarSource::Personal => "just me · private, nobody else ever sees it".into(),
         },
         EditorControl::StartOccurrence | EditorControl::EndOccurrence => {

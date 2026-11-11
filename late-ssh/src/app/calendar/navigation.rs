@@ -42,6 +42,7 @@ pub enum MenuAction {
     Open,
     New,
     Edit,
+    Duplicate,
     Delete,
     /// Say you are in (`true`) or take it back.
     Rsvp(bool),
@@ -53,6 +54,7 @@ impl MenuAction {
             Self::Open => "Open",
             Self::New => "New event",
             Self::Edit => "Edit",
+            Self::Duplicate => "Duplicate",
             Self::Delete => "Delete",
             Self::Rsvp(true) => "I'm in",
             Self::Rsvp(false) => "I'm out",
@@ -462,6 +464,7 @@ impl CalendarState {
                 self.select_event(id, date);
                 let access = event_access(&event, self.viewer, self.staff);
                 let mut items = vec![MenuAction::Open];
+                items.push(MenuAction::Duplicate);
                 if access.rsvp {
                     items.push(MenuAction::Rsvp(!self.going(id)));
                 }
