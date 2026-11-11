@@ -10,7 +10,7 @@ navigated on the Home rail. The service and refresh contracts are in
 Room model:
 - `chat_rooms.kind`: `lounge`, `language`, `dm`, `topic`, `game`, `deadchannel`, `nightcap`.
 - `chat_rooms.visibility`: `public`, `private`, `dm`. Only `topic` and `game` rooms come in both `public` and `private`; a DM is `dm` and every other kind is `public`.
-- In Rust the two columns are one value, `chat_room::RoomKind`, read once when a row becomes a `ChatRoom` (`Topic` and `Game` carry a `RoomVisibility`). A pair the writers never produce panics there. Every decision by kind is a `match` with no catch-all arm, so a new kind fails to build until each site says what it does with it.
+- In Rust the two columns are one value, `chat_room::RoomKind`, read once when a row becomes a `ChatRoom` (`Topic` and `Game` carry a `RoomVisibility`). The table refuses any other pair (`chat_rooms_kind_visibility_known`, migration 283), so the reader's panic on one guards a row that cannot be stored; a new kind is added to that CHECK and to the enum together. Every decision by kind is a `match` with no catch-all arm, so a new kind fails to build until each site says what it does with it.
 - `lounge` must have slug `lounge`, is public, auto-join, and permanent.
 - `language` rooms are public, opt-in, unique by `language_code`, with slug `lang-{code}`.
 - `topic` rooms are unique by `(visibility, slug)`.

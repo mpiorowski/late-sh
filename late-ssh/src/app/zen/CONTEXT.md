@@ -340,7 +340,7 @@ Every row is a fact the session already holds, and every row clears on the act t
 |---|---|---|
 | your move: `game` vs `name` | a daily match's turn is yours (`DailyState::my_turn_matches`) | the move |
 | result in: `game` vs `name` | a finished daily match you have not looked at (`DailyState::my_finished`) | opening the board |
-| `@peer`: n unread | a DM room with unread messages (`attention::unread_rows`) | reading it |
+| `@peer`: n unread | a DM room with unread messages (`ChatState::unread_dms`) | reading it |
 | `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | Enter on the row, its message rendering in its room, or opening Mentions: each stamps `read_at`, the one read signal |
 | the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, a click or `a` on the tank |
 | the tree is unwatered today | `last_watered` is not today | watering |
@@ -362,7 +362,7 @@ late-ssh/src/app/zen/
 |-- state.rs      # TileKind and its key table (TileHint: TileKey, HouseKey), Guest, Node (split tree), Look, RiceLayout (serde), ZenState + edits
 |-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects and row_gutters over the hidden tiles' mask (deal_split), tile_inner, neighbour_side, pet_neighbours
 |-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
-|-- attention.rs  # the attention guest's facts: unread_rows (the DMs and mentions, from the chat state), Item and items (the ordered list), Care / Chore (today's three chores, App::care_today)
+|-- attention.rs  # the attention guest's facts: Item and items (the ordered list; what is unread is chat's call, ChatState::unread_dms and unread_mentions), Care / Chore (today's three chores, App::care_today)
 |-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests (draw_attention_tile: the rows flush with the tile's edge, the selected one lit, the act word at the row's end), the pickers, the layouts list, the clock and blank tiles
 |-- input.rs      # handle_home_event (arrange mode's layout keys, the tiles' keys: act, one arm per TileKey), handle_home_key / handle_home_arrow (Home's keys outside arrange mode: the music prefix, backtick, the chat's), room walk, focus, the layouts (load, save, the list, /layout, /zen)
 `-- bigclock.rs   # block digit font for the clock tile
@@ -374,7 +374,7 @@ the rest (`hub/aquarium/ui::TankView`, `presence/ui::PresenceView`,
 `music_dock::MusicStageProps`, `pet/ui::PetView`, `live/panel::LivePanelProps`),
 one chat view per chat tile over `App::home_chat_rows_caches`, the
 arrange footer, and the guests' inputs (`StripGuest`, `attention`, the
-rows `App::attention_items` gathers from `DailyState`, `unread_rows` and
+rows `App::attention_items` gathers from `DailyState`, `ChatState` and
 `App::care_today` once per frame and once per key of the guest). Each tile's drawing lives in its
 domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
 `draw_tank_tile`, `pet/ui::draw_tile`, `music_dock::draw_music_tile`,

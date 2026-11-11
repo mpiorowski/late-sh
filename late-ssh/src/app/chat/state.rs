@@ -18,6 +18,7 @@ use late_core::{
         chat_poll::ActiveChatPoll,
         chat_room::{ChatRoom, RoomKind, RoomVisibility},
         message_translation::{TRANSLATE_MAX_BODY_CHARS, TranslateLang, needs_translation},
+        notification::NotificationView,
         voice_channel::VoiceChannel,
     },
 };
@@ -1658,6 +1659,24 @@ impl ChatState {
             })
             .filter_map(|(room, _)| self.unread_counts.get(&room.id))
             .sum()
+    }
+
+    /// The DMs holding unread messages, as Home's attention list shows
+    /// them (`unread_dms`).
+    pub(crate) fn unread_dms(&self) -> Vec<UnreadDm> {
+        unread_dms(
+            self.user_id,
+            &self.rooms,
+            &self.unread_counts,
+            &self.usernames,
+            &self.ignored_user_ids,
+        )
+    }
+
+    /// The mentions not read yet, as Home's attention list shows them
+    /// (`unread_mentions`).
+    pub(crate) fn unread_mentions(&self) -> Vec<&NotificationView> {
+        unread_mentions(self.notifications.all_items())
     }
 
     pub fn mark_room_read(&mut self, room_id: Uuid) {
@@ -8209,7 +8228,7 @@ pub(crate) fn room_activity_at(
 }
 
 /// The other participant in a DM room, from `user_id`'s perspective.
-pub(crate) fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+pub(super) fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
     if room.dm_user_a == Some(user_id) {
         room.dm_user_b
     } else {
@@ -8217,10 +8236,76 @@ pub(crate) fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
     }
 }
 
+/// A DM holding unread messages: `peer` is the other person's name,
+/// `someone` when the session does not know it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnreadDm {
+    pub room_id: Uuid,
+    pub peer: String,
+    pub unread: i64,
+}
+
+/// The DMs with unread messages, the most unread on top and then by the
+/// peer's name. A DM with an ignored peer never shows, as in the room rail.
+fn unread_dms(
+    user_id: Uuid,
+    rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    unread_counts: &HashMap<Uuid, i64>,
+    usernames: &HashMap<Uuid, String>,
+    ignored: &HashSet<Uuid>,
+) -> Vec<UnreadDm> {
+    let mut dms: Vec<UnreadDm> = Vec::new();
+    for (room, _) in rooms {
+        match room.kind {
+            RoomKind::Dm => {}
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => continue,
+        }
+        if dm_peer_is_ignored(room, user_id, ignored) {
+            continue;
+        }
+        let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
+        if unread == 0 {
+            continue;
+        }
+        let peer = match dm_peer_id(room, user_id).and_then(|id| usernames.get(&id)) {
+            Some(name) => name.clone(),
+            None => "someone".to_string(),
+        };
+        dms.push(UnreadDm {
+            room_id: room.id,
+            peer,
+            unread,
+        });
+    }
+    dms.sort_by(|left, right| {
+        right
+            .unread
+            .cmp(&left.unread)
+            .then_with(|| left.peer.cmp(&right.peer))
+    });
+    dms
+}
+
+/// The mentions with no read stamp, newest first. A read one answered
+/// itself and never comes back.
+fn unread_mentions(mentions: &[NotificationView]) -> Vec<&NotificationView> {
+    let mut unread: Vec<&NotificationView> = mentions
+        .iter()
+        .filter(|mention| mention.read_at.is_none())
+        .collect();
+    unread.sort_by_key(|mention| std::cmp::Reverse(mention.created));
+    unread
+}
+
 /// Whether `room` is a DM whose other participant is ignored. Such DMs are
 /// hidden from every room-list section (favorites included) so an ignored peer
 /// can't resurface the DM or its unread state by sending again.
-pub(crate) fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+pub(super) fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
     match room.kind {
         RoomKind::Dm => dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer)),
         RoomKind::Lounge

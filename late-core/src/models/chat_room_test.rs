@@ -687,10 +687,46 @@ fn room_kind_reads_every_pair_the_writers_produce() {
     }
 }
 
-/// A pair no writer produces is a corrupt row: it stops at the boundary
-/// instead of travelling on as a room nothing knows how to treat.
+/// A pair outside the nine is one the table refuses, so reading one stops
+/// at the boundary instead of travelling on as a room nothing knows how to
+/// treat.
 #[test]
 #[should_panic(expected = "unknown room kind in the database: lounge (private)")]
 fn room_kind_refuses_a_pair_no_writer_produces() {
     RoomKind::from_columns("lounge", "private");
+}
+
+/// The schema holds the same nine pairs `RoomKind` reads, so the parser's
+/// panic guards a row the database cannot store. Each row below is refused
+/// as private and stored as public, so the pair is what refuses it.
+#[tokio::test]
+async fn the_schema_refuses_a_pair_room_kind_cannot_read() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    for (kind, columns) in [
+        (
+            "language",
+            "slug, language_code) VALUES ('language', 'private', false, 'lang-xx', 'xx'",
+        ),
+        (
+            "deadchannel",
+            "slug) VALUES ('deadchannel', 'private', false, 'off-pair'",
+        ),
+        (
+            "lounge",
+            "slug) VALUES ('lounge', 'private', false, 'lounge'",
+        ),
+    ] {
+        let insert = format!("INSERT INTO chat_rooms (kind, visibility, auto_join, {columns})");
+        let refused = client.execute(&insert, &[]).await;
+        assert!(refused.is_err(), "a private {kind} room was stored");
+        let stored = client
+            .execute(&insert.replace("'private'", "'public'"), &[])
+            .await;
+        assert!(
+            stored.is_ok(),
+            "a public {kind} room was refused: {stored:?}"
+        );
+    }
 }

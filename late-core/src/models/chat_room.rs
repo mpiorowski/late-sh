@@ -88,8 +88,9 @@ impl RoomKind {
         }
     }
 
-    /// Reads the two columns. A pair outside the ones `ChatRoom`'s writers
-    /// produce is a corrupt row, not a room.
+    /// Reads the two columns. The table holds these nine pairs and no other
+    /// (`chat_rooms_kind_visibility_known`, migration 283), so anything else
+    /// is impossible and crashes rather than inventing a room.
     pub(crate) fn from_columns(kind: &str, visibility: &str) -> Self {
         match (kind, visibility) {
             ("lounge", "public") => Self::Lounge,

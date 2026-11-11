@@ -3674,11 +3674,12 @@ impl App {
 
     /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions (`unread_rows`), and today's care still
+    /// the unread DMs and mentions (chat's `unread_dms` and
+    /// `unread_mentions`), and today's care still
     /// due. Read each frame while the page hosts the guest and on each of
     /// its keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
-        use crate::app::zen::attention::{Chore, Inputs, Match, items, unread_rows};
+        use crate::app::zen::attention::{Chore, Inputs, Item, Match, items};
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3715,14 +3716,22 @@ impl App {
                 ),
             })
             .collect();
-        let unread = unread_rows(
-            self.user_id,
-            &self.chat.rooms,
-            &self.chat.unread_counts,
-            self.chat.usernames(),
-            self.chat.ignored_user_ids(),
-            self.chat.notifications.all_items(),
-        );
+        let unread_dms = self.chat.unread_dms().into_iter().map(|dm| Item::Dm {
+            room_id: dm.room_id,
+            peer: dm.peer,
+            unread: dm.unread,
+        });
+        let unread_mentions =
+            self.chat
+                .unread_mentions()
+                .into_iter()
+                .map(|mention| Item::Mention {
+                    room_id: mention.room_id,
+                    message_id: mention.message_id,
+                    actor: mention.actor_username.clone(),
+                    room: mention.room_slug.clone(),
+                });
+        let unread = unread_dms.chain(unread_mentions).collect();
         let care = self.care_today();
         items(Inputs {
             my_moves,

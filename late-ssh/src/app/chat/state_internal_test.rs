@@ -5241,3 +5241,109 @@ async fn an_edit_hides_a_revealed_message_again() {
     assert!(!state.spoilers_revealed.contains(&spoiled_id));
     assert!(state.reveal_selected_spoilers_in_room(lounge_id));
 }
+
+fn unread_dm_room(user_a: Uuid, user_b: Uuid) -> (ChatRoom, Vec<ChatMessage>) {
+    let (mut room, messages) = make_room(Uuid::now_v7(), RoomKind::Dm, false, None);
+    room.dm_user_a = Some(user_a);
+    room.dm_user_b = Some(user_b);
+    (room, messages)
+}
+
+fn mention_at(
+    actor: &str,
+    minute: u32,
+    read_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> NotificationView {
+    use chrono::TimeZone;
+    NotificationView {
+        id: Uuid::now_v7(),
+        created: chrono::Utc
+            .with_ymd_and_hms(2026, 9, 14, 12, minute, 0)
+            .single()
+            .expect("valid time"),
+        user_id: Uuid::now_v7(),
+        actor_id: Uuid::now_v7(),
+        message_id: Uuid::now_v7(),
+        room_id: Uuid::now_v7(),
+        actor_username: actor.to_string(),
+        room_slug: Some("lounge".to_string()),
+        message_body: "hi".to_string(),
+        read_at,
+    }
+}
+
+#[test]
+fn unread_dms_list_the_most_unread_first_and_skip_read_and_ignored_ones() {
+    let viewer = Uuid::now_v7();
+    let (alice, bob, carol, dave, erin) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let with_alice = unread_dm_room(viewer, alice);
+    let with_bob = unread_dm_room(bob, viewer);
+    let with_carol = unread_dm_room(viewer, carol);
+    let with_dave = unread_dm_room(viewer, dave);
+    let with_erin = unread_dm_room(viewer, erin);
+    // A room that is not a DM never lists, whatever it holds.
+    let lounge = make_room(Uuid::now_v7(), RoomKind::Lounge, true, Some("lounge"));
+    let unread_counts = HashMap::from([
+        (with_alice.0.id, 1),
+        (with_bob.0.id, 3),
+        (with_carol.0.id, 5),
+        (with_dave.0.id, 0),
+        (with_erin.0.id, 3),
+        (lounge.0.id, 9),
+    ]);
+    // Erin's name is not in the session's directory.
+    let usernames = HashMap::from([
+        (alice, "alice".to_string()),
+        (bob, "bob".to_string()),
+        (carol, "carol".to_string()),
+        (dave, "dave".to_string()),
+    ]);
+    // Carol is ignored: her DM stays hidden however much it holds.
+    let ignored = HashSet::from([carol]);
+    let (alice_room, bob_room, erin_room) = (with_alice.0.id, with_bob.0.id, with_erin.0.id);
+    let rooms = vec![
+        with_alice, with_bob, with_carol, with_dave, with_erin, lounge,
+    ];
+
+    assert_eq!(
+        unread_dms(viewer, &rooms, &unread_counts, &usernames, &ignored),
+        vec![
+            UnreadDm {
+                room_id: bob_room,
+                peer: "bob".to_string(),
+                unread: 3,
+            },
+            UnreadDm {
+                room_id: erin_room,
+                peer: "someone".to_string(),
+                unread: 3,
+            },
+            UnreadDm {
+                room_id: alice_room,
+                peer: "alice".to_string(),
+                unread: 1,
+            },
+        ]
+    );
+}
+
+#[test]
+fn unread_mentions_are_newest_first_and_a_read_one_never_comes_back() {
+    let read = mention_at("alice", 1, Some(chrono::Utc::now()));
+    let older = mention_at("alice", 3, None);
+    let fresh = mention_at("bob", 5, None);
+    let (older_id, fresh_id) = (older.id, fresh.id);
+    let mentions = [read, older, fresh];
+
+    let listed: Vec<Uuid> = unread_mentions(&mentions)
+        .into_iter()
+        .map(|mention| mention.id)
+        .collect();
+    assert_eq!(listed, vec![fresh_id, older_id]);
+}
