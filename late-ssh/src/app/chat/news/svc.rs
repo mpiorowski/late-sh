@@ -702,7 +702,7 @@ impl ArticleService {
         let body = format!("📰 {title} {}", article.url);
         let posted = self
             .chat_service
-            .send_lounge_message_returning(article.user_id, body, true, Wording::Quoted)
+            .send_lounge_message_returning(article.user_id, body, true, Wording::NewsCard)
             .await;
         let message = match posted {
             Ok(Some(message)) => message,

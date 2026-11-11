@@ -20,7 +20,7 @@ badges are in [`AWARDS.md`](AWARDS.md).
 
 ## Source Map
 
-- `state.rs`: `Board` (the closed page-board enum; page order: Top Drinkers, Top Chips, Arcade Wins, Late Time, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`, `MonthlyYearly`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (page order: Top Drinkers, Top Chat, Top Chips, Arcade Wins, Late Time, then the games and daily/score rosters), `Standings` (including the four-panel `TopChat` shape), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, online-time accumulator (wall-clock spans)/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
@@ -30,7 +30,7 @@ badges are in [`AWARDS.md`](AWARDS.md).
 ## Page navigation
 
 - `j/k` and arrows select boards with keyboard wraparound. Clicking a visible board row selects it; headings, separators, and the rail divider are inert. The wheel over the rail selects one board per event and stops at either end.
-- `Ctrl+J`/`Ctrl+K` scroll the detail pane down/up one row; the wheel over that pane scrolls three rows. Monthly and all-time share an offset, with each column stopping at its own bottom. Titles and window headings stay fixed. The Badge Guide scrolls by wrapped rows.
+- `Ctrl+J`/`Ctrl+K` scroll the detail pane down/up one row; the wheel over that pane scrolls three rows. All windows share an offset, including Top Chat's four panels, with each stopping at its own bottom. Titles and window headings stay fixed. Divider rows and columns are inert. The Badge Guide scrolls by wrapped rows.
 - Offset zero retains the leaders-and-your-rank summary when at least three rows fit; scrolling shows loaded ranks in order. Column widths and the value alignment inside them come from the whole loaded snapshot, so nothing shifts sideways while scrolling. Changing boards resets the offset; clicking the current board preserves it. No extra queries: the existing 500-rank snapshot depth and refresh cadence still apply.
 - Hit regions come from the rendered rail lines, including its viewport offset. Resize and page rendering invalidate stale targets. Keyboard-only mode and overlying modals block page mouse actions.
 
@@ -40,14 +40,15 @@ badges are in [`AWARDS.md`](AWARDS.md).
 only while at least one session is subscribed, publishing it through a
 `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse:
 a 30s pass measured 13% of all DB execution time (SCALE.md, DB Cost
-Ranking). The pass is **sixteen queries**: the day's rung stars are one
+Ranking). The pass is **seventeen queries**: the day's rung stars are one
 (`daily_rung::starred_on`); each board family is
 one union query ranked with `PARTITION BY game`; the Lateania boards add two
 (both O(players) over `mud_characters`) and the roguelike-door boards two
 (one query per window over `door_runs`/`door_milestones`, all three families
 ranked `PARTITION BY (family, game)`), Late Time adds one query over its
 indexed all-time and current-month O(users) rollups, and Top Drinkers one
-over the current year of `drink_pours` (indexed on `created`). Do not make it hot again
+over the current year of `drink_pours` (indexed on `created`), and Top Chat one
+bounded current-month read over messages and News. Do not make it hot again
 without re-reading that ranking.
 
 Two rules keep the coarse cadence from reading as a broken screen:
@@ -57,7 +58,9 @@ Two rules keep the coarse cadence from reading as a broken screen:
 
 Refresh is polling-based, so Activity events can appear before the page
 catches up: a score set at minute 0 shows on the board within 5 minutes, not
-at once. The boards are never *empty*, just up to one interval behind; there
+at once. The boards are never *empty*, just up to one interval behind, with
+one exception: at a UTC month change Top Chat hides last month's snapshot
+until a refresh for the new month lands (see its bullet below); there
 is no leaderboard notify path (quest/shop snapshots have one, this does not).
 The one surface that does not wait is the Arcade lobby card's own-user
 ✓/✗ tier marks: `App.session_daily_wins` (`arcade/daily.rs::SessionDailyWins`)
@@ -126,6 +129,7 @@ rosters).
 - `Late Time` is a bespoke paired board over the current-month and all-time online-time rollups. It ranks exact milliseconds and renders the largest two useful units. Last month's first place gets the rankless `LATE` badge (see Monthly profile awards); no chips are attached.
 - The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short). Experience keeps accruing at the level cap, so past 100 the value keeps counting **paragon levels**, one per 75k xp beyond the cap's threshold (the summit's own per-level price), rendered `lvl 100 +37`; the curve numbers are restated in `leaderboard.rs` (`LATEANIA_LEVEL_CAP`, `LATEANIA_XP_AT_LEVEL_CAP`, `LATEANIA_XP_PER_PARAGON_LEVEL`) and pinned to the game's `xp_for_level` by `lateania/classes_test.rs`, so a rebalance that forgets them fails there. `lateania_pvp` ranks the blob's lifetime `pvp_kills` (rivals slain in the Wildbound Waste); characters with no kills stay off it. A reset character leaves both boards; the page shows one "right now" window (`Standings::Snapshot`).
 - `Top Drinkers` is a bespoke monthly + yearly board (`Standings::MonthlyYearly`, the one board with a yearly window) over `drink_pours`, the per-drink log written by `UserDrinks::record_pour` in the same statement as the buzz (`late-core/src/models/drinks.rs`): the sum of each drink's buzz points in the UTC month and the UTC year. What counts is the drink taken, never the chips: a paid drink, a round credit cashed and the round buyer's own drink all count their points (a tavern round's 400, a Nightcap round's 100), buying for others counts nothing, and the newcomer's welcome pour is never logged. Points are the drink's full worth before the `MAX_DRUNK_POINTS` cap. Last month's first place gets the rankless `DRNK` badge (see Monthly profile awards); no chips, and the yearly window awards nothing.
+- `Top Chat` contains four UTC-month races: all public-room messages, public-room messages outside #lounge, the longest consecutive run of chat days achieved within the month (`daily streak (days)`), and News items posted. The first three exclude bot/system authors, complete case-insensitive `@bartender` mentions anywhere in the stored body, and generated News cards. A day counts once across all public rooms; gaps end a run but keep that month's best. News counts `articles`, once per item, whether its lounge card succeeds or not, independently of chip rewards. Private rooms and DMs never count. Deleting source rows changes the next refresh's totals. No badges or prizes. `TopChatBoards` carries its UTC month: the page hides a previous-month snapshot and resets scrolling at rollover. Chat first reduces to one row per user/day before finding runs; nothing scans chat history outside the month.
 - There is no Le Word win-streak board, by decision: its gaps-and-islands query was the most expensive in the pass.
 
 Monthly windows use UTC calendar months. No refresh query scans full history.
@@ -152,13 +156,17 @@ post nothing to #lounge.
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
-(Top Drinkers, Top Chips, Arcade Wins, Late Time), then the Games group (the Lateania boards,
+(Top Drinkers, Top Chat, Top Chips, Arcade Wins, Late Time), then the Games group (the Lateania boards,
 then each roguelike door's board triple, then dopewars Top Score), Daily Wins,
 and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Drinkers. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
 replaces the last two rows below the fold). Ctrl+J/K and the wheel scroll the
 standings through every loaded rank (see Page navigation).
+Top Chat uses a fixed 2×2 grid with equal columns and rows; its detail area
+needs 25×9 cells, otherwise a size message leaves the rail and footer usable.
+Every board has a full-width divider above the controls footer, joined to
+the frame and rail, and to Top Chat's central rule when that grid is visible.
 
 ## Monthly profile awards
 
@@ -177,7 +185,8 @@ modal (`app/help_modal/data.rs`) by hand.** The full rules are in
 An empty local database renders every panel as "no scores yet".
 `make seed-leaderboard` (`scripts/seed_leaderboard_test_data.{sh,sql}`) fills
 the Compose database with 48 synthetic players spread across every board,
-including online-time totals, `mud_characters` blobs for the Lateania boards,
+including distinct monthly chat/streak/News rankings and marked lounge cards,
+online-time totals, `mud_characters` blobs for the Lateania boards,
 and per-door `door_runs`/`door_milestones` rows for the three roguelike doors
 (winners, quits, spread depths, DCSS Orb milestones carrying the dive depth,
 Brogue escapes and masteries) plus dopewars score runs under `seed:dopewars`; each door's block is offset from the others so no two boards
@@ -186,7 +195,7 @@ from ever colliding with real ingested lines). Local
 development only: it owns the `seed:leaderboard:` fingerprints, prefixes
 usernames with `lb_`, and rewrites their stats on every rerun. With no
 argument it also gives the most recently active real user a representative
-deep-rank row on every board without lowering or overwriting real state;
+deep-rank row on the game and economy boards without lowering or overwriting real state;
 pass a username to target that enrichment explicitly.
 
 ## Testing guidance

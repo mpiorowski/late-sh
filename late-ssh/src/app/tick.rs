@@ -1094,6 +1094,9 @@ impl App {
         }
 
         // Leaderboard
+        changed |= self
+            .leaderboard_page
+            .sync_month(chrono::Utc::now().date_naive());
         if let Some(rx) = &mut self.leaderboard_rx
             && rx.has_changed().unwrap_or(false)
         {
