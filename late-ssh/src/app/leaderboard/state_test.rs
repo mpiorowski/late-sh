@@ -9,7 +9,12 @@ fn top_chat_month_change_resets_scroll_and_hides_previous_month() {
     use chrono::{Datelike, Duration, Utc};
     use ratatui::layout::Rect;
     let mut state = LeaderboardPageState::new();
-    state.select(1);
+    let top_chat = state
+        .boards()
+        .iter()
+        .position(|board| *board == Board::TopChat)
+        .unwrap();
+    state.select(top_chat);
     let month = Utc::now().date_naive().with_day(1).unwrap();
     assert!(state.sync_month(month));
     state.set_content_area(Rect::new(25, 1, 70, 30), 100);
@@ -70,9 +75,9 @@ fn wheel_selection_stops_at_ends_and_only_board_changes_reset_scroll() {
 fn board_list_follows_the_rosters() {
     let boards = Board::all();
     assert_eq!(boards[0], Board::TopDrinkers);
-    assert_eq!(boards[1], Board::TopChat);
-    assert_eq!(boards[2], Board::TopChips);
-    assert_eq!(boards[3], Board::ArcadeWins);
+    assert_eq!(boards[1], Board::TopChips);
+    assert_eq!(boards[2], Board::ArcadeWins);
+    assert_eq!(boards[3], Board::TopChat);
     assert_eq!(boards[4], Board::TimeOnline);
     assert_eq!(boards[5], Board::LateaniaAdventurers);
     assert_eq!(boards[6], Board::LateaniaPvp);

@@ -613,7 +613,7 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
     app.render().unwrap();
     let rail_wheel = format!("\x1b[<65;{};{}M", board.x + 1, board.y + 1);
     app.handle_input(rail_wheel.as_bytes());
-    assert_eq!(app.leaderboard_page.selected_board(), Board::TimeOnline);
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChat);
     app.handle_input(b"k\x1b[A");
     assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
     app.resize(40, 10).unwrap();

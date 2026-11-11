@@ -20,7 +20,7 @@ badges are in [`AWARDS.md`](AWARDS.md).
 
 ## Source Map
 
-- `state.rs`: `Board` (page order: Top Drinkers, Top Chat, Top Chips, Arcade Wins, Late Time, then the games and daily/score rosters), `Standings` (including the four-panel `TopChat` shape), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (page order: Top Drinkers, Top Chips, Arcade Wins, Top Chat, Late Time, then the games and daily/score rosters), `Standings` (including the four-panel `TopChat` shape), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, online-time accumulator (wall-clock spans)/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
@@ -156,7 +156,7 @@ post nothing to #lounge.
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
-(Top Drinkers, Top Chat, Top Chips, Arcade Wins, Late Time), then the Games group (the Lateania boards,
+(Top Drinkers, Top Chips, Arcade Wins, Top Chat, Late Time), then the Games group (the Lateania boards,
 then each roguelike door's board triple, then dopewars Top Score), Daily Wins,
 and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Drinkers. The detail pane shows

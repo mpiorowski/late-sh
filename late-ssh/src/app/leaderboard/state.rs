@@ -73,9 +73,9 @@ impl Board {
     pub(crate) fn all() -> Vec<Self> {
         let mut boards = vec![
             Self::TopDrinkers,
-            Self::TopChat,
             Self::TopChips,
             Self::ArcadeWins,
+            Self::TopChat,
             Self::TimeOnline,
             Self::LateaniaAdventurers,
             Self::LateaniaPvp,

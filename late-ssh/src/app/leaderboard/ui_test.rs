@@ -40,7 +40,12 @@ fn top_chat_grid_shares_scroll_and_joins_the_footer_frame() {
         widgets::{Block, Borders},
     };
     let mut state = LeaderboardPageState::new();
-    state.select(1);
+    let top_chat = state
+        .boards()
+        .iter()
+        .position(|board| *board == Board::TopChat)
+        .unwrap();
+    state.select(top_chat);
     let entries: Vec<_> = (1..=80)
         .map(|rank| {
             entry(
@@ -152,7 +157,12 @@ fn every_board_has_a_footer_rule_and_top_chat_keeps_navigation_when_small() {
         assert_eq!(buffer[(30, 22)].symbol(), "─");
         assert!(!state.over_content(Position::new(30, 22)));
     }
-    state.select(1);
+    let top_chat = state
+        .boards()
+        .iter()
+        .position(|board| *board == Board::TopChat)
+        .unwrap();
+    state.select(top_chat);
     let mut small = Terminal::new(TestBackend::new(48, 10)).unwrap();
     small
         .draw(|frame| {
