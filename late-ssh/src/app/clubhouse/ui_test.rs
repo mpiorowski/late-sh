@@ -70,6 +70,11 @@ fn bubble_text_drops_reply_quotes_and_flattens_lines() {
 }
 
 #[test]
+fn bubble_text_keeps_spoilers_hidden() {
+    assert_eq!(bubble_text("today is ||CRANE||"), "today is ▒▒▒▒▒");
+}
+
+#[test]
 fn wrap_bubble_wraps_and_ellipsizes() {
     let (lines, truncated) = wrap_bubble("hello there".to_string(), 28, 3);
     assert_eq!(lines, vec!["hello there"]);

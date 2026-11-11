@@ -172,7 +172,7 @@ Keys:
 - `c` copies the selected message body.
 - `t` toggles the message's translation (see Translation below).
 - `g` opens the gild tier picker (see Gilds below). Consumed whenever a message is selected: on your own message, or one in a DM, a private room, or a game/stream chat, it banners the refusal instead of opening (`ChatState::gild_target_in_room` answers those room rules locally; the rest stay with the service).
-- Enter jumps from a reply to its loaded target.
+- Enter reveals the message's `||spoilers||` first (`RENDERING.md`); with nothing left to reveal it opens a News card, an image, a YouTube link, or jumps from a reply to its loaded target, in that order.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
 - Digits `1..9` and `w` (👋, wave hi) while reaction leader is active toggle quick reactions, exit reaction leader mode, and keep the message selected.
