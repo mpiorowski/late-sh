@@ -50,6 +50,7 @@ use late_core::{
         drinks::{
             DRINK_PRICE_MAX, DRINK_PRICE_MIN, SOFT_DRINK_PRICE, UserDrinks, drunk_level_word,
         },
+        paper::{EditionStep, PaperEdition, PaperSectionKind, PaperStatus},
         user::{User, UserParams},
     },
 };
@@ -163,6 +164,9 @@ pub(crate) const GRAYBEARD_PERSONA: &str = "You are a burned-out senior develope
     Vary the opener, vary the close, do not repeat catchphrases. \
     Never be cruel, never go after a real person's identity. The complaint is the tooling, not the human.";
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
+/// The most of his own paper @graybeard carries into a chat reply, notes
+/// header included.
+const GRAYBEARD_PAPER_BUDGET_CHARS: usize = 4000;
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = LadderBot::Bartender.handle();
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
@@ -691,7 +695,7 @@ impl GhostService {
         gb: BotUser,
         trigger_message: ChatMessage,
     ) -> Result<()> {
-        let messages = {
+        let (messages, paper_notes) = {
             let client = self.db.get().await?;
             ChatRoomMember::auto_join_public_rooms(&client, gb.id).await?;
 
@@ -699,18 +703,42 @@ impl GhostService {
                 return Ok(());
             }
 
-            ChatMessage::list_recent(&client, trigger_message.room_id, GHOST_MENTION_HISTORY_SIZE)
-                .await?
+            let messages = ChatMessage::list_recent(
+                &client,
+                trigger_message.room_id,
+                GHOST_MENTION_HISTORY_SIZE,
+            )
+            .await?;
+            // The paper is what he can be asked about, never a reason not
+            // to answer: a failed read leaves him replying without it.
+            let paper_notes = match latest_paper_notes(
+                &client,
+                chrono::Utc::now().date_naive(),
+                trigger_message.room_id,
+            )
+            .await
+            {
+                Ok(notes) => notes,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "graybeard could not read his paper");
+                    None
+                }
+            };
+            (messages, paper_notes)
         };
         if messages.is_empty() {
             return Ok(());
         }
 
         let (history_str, _) = self.build_chat_history(&messages).await?;
+        let paper_notes = paper_notes
+            .map(|notes| format!("{notes}\n\n"))
+            .unwrap_or_default();
 
         let system_prompt = format!(
             "Your username is: {username}\n\n\
             {persona}\n\n\
+            {paper_notes}\
             Someone mentioned you in the chat. You must reply — you always do when someone talks to you. \
             Stay in character: burned out, nostalgic, weary. React to what they said but drag it back to how everything was better before.\n\
             Keep your reply VERY short, 1-2 lines maximum. Do NOT use markdown.\n\n\
@@ -2142,6 +2170,79 @@ impl TinyRng {
         }
         min + self.next_usize(max - min + 1)
     }
+}
+
+/// How many printed editions @graybeard looks back through for one he wrote
+/// in, before replying without the paper.
+const GRAYBEARD_PAPER_LOOKBACK: usize = 7;
+
+/// @graybeard's notes from the newest edition up to `today` that holds a
+/// column he wrote (`graybeard_paper_notes`). An edition can be printed and
+/// still hold nothing of his: the "Yesterday" numbers print with no model,
+/// and his columns can all come back quiet or fail. Such an edition is
+/// stepped over, at most `GRAYBEARD_PAPER_LOOKBACK` editions back.
+async fn latest_paper_notes(
+    client: &tokio_postgres::Client,
+    today: chrono::NaiveDate,
+    room_id: uuid::Uuid,
+) -> anyhow::Result<Option<String>> {
+    let mut day = today;
+    for _ in 0..GRAYBEARD_PAPER_LOOKBACK {
+        let edition = PaperEdition::load(client, day).await?;
+        if let Some(notes) = graybeard_paper_notes(&edition, room_id) {
+            return Ok(Some(notes));
+        }
+        match PaperEdition::nearest_printed(client, day, EditionStep::Earlier).await? {
+            Some(earlier) => day = earlier,
+            None => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// What @graybeard printed in `edition`, for his chat replies: the column on
+/// the room he was asked in first, then the other printed rooms in the
+/// paper's order, then "What we were reading" and "Outside". The
+/// "Yesterday" numbers are left out (no model wrote them, so they are not
+/// his). Columns go in whole while they fit `GRAYBEARD_PAPER_BUDGET_CHARS`;
+/// `None` when he printed nothing.
+fn graybeard_paper_notes(edition: &PaperEdition, room_id: uuid::Uuid) -> Option<String> {
+    let printed_rooms = edition
+        .rooms
+        .iter()
+        .filter(|page| page.status == PaperStatus::Ready)
+        .filter_map(|page| page.text.as_deref().map(|text| (page, text)));
+    let (asked_in, others): (Vec<_>, Vec<_>) =
+        printed_rooms.partition(|(page, _)| page.room_id == room_id);
+    let room_columns = asked_in
+        .into_iter()
+        .chain(others)
+        .map(|(page, text)| format!("#{}:\n{text}", page.label));
+    let section_columns = [PaperSectionKind::Reading, PaperSectionKind::Outside]
+        .into_iter()
+        .filter_map(|kind| {
+            edition
+                .ready_text(kind)
+                .map(|text| format!("{}:\n{text}", kind.title()))
+        });
+
+    let mut notes = format!(
+        "You wrote The Late Edition dated {}, the clubhouse's daily paper, which covers the \
+         UTC day before that date. These are your own columns. When someone asks about the \
+         paper, answer from them, and say plainly that you did not cover anything that is \
+         not here.",
+        edition.edition
+    );
+    let mut wrote_any = false;
+    for column in room_columns.chain(section_columns) {
+        if notes.len() + 2 + column.len() > GRAYBEARD_PAPER_BUDGET_CHARS {
+            continue;
+        }
+        notes.push_str("\n\n");
+        notes.push_str(&column);
+        wrote_any = true;
+    }
+    wrote_any.then_some(notes)
 }
 
 #[cfg(test)]

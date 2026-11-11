@@ -5,7 +5,7 @@ fn a_week() -> Week {
     Week::today(
         chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
         &std::collections::HashSet::new(),
-        crate::app::hub::dailies::return_push::RungStanding::Open,
+        crate::app::hub::dailies::state::RungStanding::Open,
         uuid::Uuid::from_u128(1),
     )
 }
@@ -67,6 +67,11 @@ fn bubble_text_drops_reply_quotes_and_flattens_lines() {
         "thanks a lot"
     );
     assert_eq!(bubble_text("two\nlines  here"), "two lines here");
+}
+
+#[test]
+fn bubble_text_keeps_spoilers_hidden() {
+    assert_eq!(bubble_text("today is ||CRANE||"), "today is ▒▒▒▒▒");
 }
 
 #[test]

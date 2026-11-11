@@ -569,9 +569,15 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         // `G` always jumps to a reply's referenced message. Enter is overloaded
         // (a News card, an image, then a YouTube link, take precedence), so a
         // reply that contains any of them can't be followed with Enter alone;
+        // a spoiler only costs it one press, the reveal.
         // `G` reaches the parent regardless. Lowercase `g` is the gild key
         // above.
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+            return true;
+        }
+        // Enter reveals a message's `||spoilers||` before anything else, so
+        // a spoiled link is read before it is opened.
+        b'\r' | b'\n' if app.chat.reveal_selected_spoilers_in_room(room_id) => {
             return true;
         }
         // A News share's #lounge card opens the reader on its story, ahead

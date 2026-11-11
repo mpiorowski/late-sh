@@ -220,10 +220,28 @@ fn saved_words_restore_without_reaching_their_rank_again() {
             state.has_unfinished_daily(),
             state.message()
         ),
-        (4, 26, Rank::Bronze, true, "Keep going.")
+        (4, 26, Rank::Bronze, false, "Keep going.")
     );
     play(&mut state, "rabbit");
     assert_eq!((state.score(), state.message()), (29, "RABBIT +3."));
+
+    // Short of Bronze the wheel is still unfinished, so backtick keeps it;
+    // Bronze is a win and the wheel leaves the cycle, like any solved daily.
+    let short_of_bronze = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(today),
+            saved: Some(saved(today, "rabcikt", &["rabbit"])),
+        }),
+    );
+    assert_eq!(
+        (
+            short_of_bronze.rank(),
+            short_of_bronze.has_unfinished_daily()
+        ),
+        (Rank::Start, true)
+    );
 
     for other in [
         saved(today - Duration::days(1), "rabcikt", &["brickbat"]),

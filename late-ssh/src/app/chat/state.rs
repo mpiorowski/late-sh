@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cell::Cell,
     cmp::Ordering,
     collections::{HashMap, HashSet, VecDeque},
@@ -962,6 +963,8 @@ pub struct ChatState {
     /// Messages whose shown translation was collapsed with `t`. Session-local
     /// override; wins over auto mode and the cache at render time.
     pub(crate) translation_hidden: HashSet<Uuid>,
+    /// Messages whose `||spoilers||` this session revealed with Enter.
+    pub(crate) spoilers_revealed: HashSet<Uuid>,
     /// Message ids this session requested via `t`, so a failure banners only
     /// for the requester, never for auto-mode bystanders.
     translation_manual: HashSet<Uuid>,
@@ -1372,6 +1375,7 @@ impl ChatState {
             summary_requests: HashSet::new(),
             translations: HashMap::new(),
             translation_hidden: HashSet::new(),
+            spoilers_revealed: HashSet::new(),
             translation_manual: HashSet::new(),
             translation_cache_checked: HashSet::new(),
             translate_to: TranslateLang::En,
@@ -1719,6 +1723,31 @@ impl ChatState {
             self.request_cached_translations_for_visible_room();
         }
         changed
+    }
+
+    /// A message's body as this session reads it (`spoiler::shown`).
+    fn shown_body<'a>(&self, message: &'a ChatMessage) -> Cow<'a, str> {
+        crate::app::common::spoiler::shown(
+            &message.body,
+            self.spoilers_revealed.contains(&message.id),
+        )
+    }
+
+    /// Enter on a selected message that still hides `||spoilers||` reveals
+    /// them for this session. Returns false when there is nothing to reveal,
+    /// so Enter falls through to its other actions.
+    pub fn reveal_selected_spoilers_in_room(&mut self, room_id: Uuid) -> bool {
+        let Some(message) = self.selected_message_in_room(room_id) else {
+            return false;
+        };
+        let (message_id, message_room_id) = (message.id, message.room_id);
+        if !crate::app::common::spoiler::has_spoiler(&message.body)
+            || !self.spoilers_revealed.insert(message_id)
+        {
+            return false;
+        }
+        self.bump_room_version(message_room_id);
+        true
     }
 
     /// `t` on the selected message: show a translation (cache or API), or
@@ -2720,7 +2749,7 @@ impl ChatState {
 
     pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
         self.selected_message_in_room(room_id)
-            .and_then(|m| inline_image_url_in_body(&m.body))
+            .and_then(|m| inline_image_url_in_body(&self.shown_body(m)))
             .is_some()
     }
 
@@ -3009,7 +3038,7 @@ impl ChatState {
     /// instead.
     pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<WatchRequest> {
         let message = self.selected_message_in_room(room_id)?;
-        let video_id = match inline_preview_source_in_body(&message.body) {
+        let video_id = match inline_preview_source_in_body(&self.shown_body(message)) {
             Some(InlinePreviewSource::Video { video_id }) => video_id,
             Some(InlinePreviewSource::Image(_)) | None => return None,
         };
@@ -3035,7 +3064,7 @@ impl ChatState {
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
-            inline_image_url_in_body(&message.body).map(|url| (message.id, url))
+            inline_image_url_in_body(&self.shown_body(message)).map(|url| (message.id, url))
         }) else {
             return false;
         };
@@ -3084,8 +3113,8 @@ impl ChatState {
             // One line, always: the picker prints the preview in a single
             // row, and a multi-line body would otherwise walk over the
             // tier rows below it.
-            preview: message
-                .body
+            preview: self
+                .shown_body(message)
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" "),
@@ -5345,6 +5374,7 @@ impl ChatState {
 
         let requests = inline_image_request_candidates(
             messages,
+            &self.spoilers_revealed,
             &self.inline_image_requested,
             &self.inline_image_cache,
             &self.inline_image_failures,
@@ -6311,7 +6341,11 @@ impl ChatState {
                             .cloned()
                             .unwrap_or_else(|| "someone".to_string());
                         let preview: String =
-                            message.body.replace('\n', " ").chars().take(80).collect();
+                            crate::app::common::spoiler::mask_spoilers(&message.body)
+                                .replace('\n', " ")
+                                .chars()
+                                .take(80)
+                                .collect();
 
                         if is_targeted {
                             self.notifier.push(Notification::dm(&nickname, preview));
@@ -6662,8 +6696,13 @@ impl ChatState {
                         .into_iter()
                         .filter(|message| !self.message_is_ignored(message))
                         .map(|message| {
+                            // The result row shows bars too: a query that only
+                            // matches inside a spoiler highlights nothing.
                             let (snippet_prefix, snippet_match, snippet_suffix) =
-                                build_search_snippet(&message.body, &query);
+                                build_search_snippet(
+                                    &crate::app::common::spoiler::mask_spoilers(&message.body),
+                                    &query,
+                                );
                             MessageSearchHit {
                                 message,
                                 snippet_prefix,
@@ -7280,6 +7319,17 @@ impl ChatState {
             return;
         };
 
+        // A reveal was of the words then on screen: a body that comes back
+        // changed (an edit this session missed) is hidden again.
+        for message in &messages {
+            if stored
+                .iter()
+                .any(|known| known.id == message.id && known.body != message.body)
+            {
+                self.spoilers_revealed.remove(&message.id);
+            }
+        }
+
         let mut merged = Vec::with_capacity(stored.len() + messages.len());
         let mut seen = HashSet::new();
         for message in messages.into_iter().chain(stored.iter().cloned()) {
@@ -7320,6 +7370,10 @@ impl ChatState {
             .find(|(room, _)| room.id == message.room_id)
             && let Some(existing) = messages.iter_mut().find(|m| m.id == message.id)
         {
+            // A reveal was of the old words; an edit hides the message again.
+            if existing.body != message.body {
+                self.spoilers_revealed.remove(&message_id);
+            }
             *existing = message;
             replaced = true;
         }
@@ -7601,6 +7655,10 @@ impl InlinePreviewSource {
 /// A message's inline preview, if it gets one: an image link first, else
 /// a YouTube video link's thumbnail. A reply's quote line is its parent's
 /// text, so a link there previews nothing (Enter jumps to the parent).
+///
+/// Callers pass the body as the session is shown it (`spoiler::shown`), never
+/// the stored one: a link behind a spoiler bar is neither previewed nor
+/// opened until the session reveals it.
 pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewSource> {
     match inline_image_url_in_body(body) {
         Some(url) => Some(InlinePreviewSource::Image(url)),
@@ -7612,6 +7670,7 @@ pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewS
 
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
+    spoilers_revealed: &HashSet<Uuid>,
     requested: &HashSet<Uuid>,
     cached: &HashMap<Uuid, InlinePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
@@ -7627,7 +7686,17 @@ fn inline_image_request_candidates(
         {
             continue;
         }
-        if let Some(source) = inline_preview_source_in_body(&msg.body) {
+        // A message still hiding a spoiler previews nothing, not even a link
+        // outside its bars: the preview is kept by message id, so one
+        // fetched now would stay under the message once a reveal makes an
+        // earlier, hidden link the one Enter opens.
+        if crate::app::common::spoiler::has_spoiler(&msg.body)
+            && !spoilers_revealed.contains(&msg.id)
+        {
+            continue;
+        }
+        let shown = crate::app::common::spoiler::unwrap_spoilers(&msg.body);
+        if let Some(source) = inline_preview_source_in_body(&shown) {
             tracing::trace!(?source, "found inline preview in chat");
             requests.push((msg.id, source));
             if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
@@ -9126,6 +9195,7 @@ fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Opt
 }
 
 fn reply_preview_text(body: &str) -> String {
+    let body = &*crate::app::common::spoiler::mask_spoilers(body);
     if let Some((kind, text)) = parse_report_payload(body) {
         let first_line = text.lines().find_map(|line| {
             let trimmed = line.trim();

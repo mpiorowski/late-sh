@@ -10,7 +10,10 @@ mod host;
 mod identity;
 #[cfg(test)]
 mod identity_test;
+mod playname;
+mod scorelog;
 mod server;
+mod stats;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +25,10 @@ use russh::keys::signature::rand_core::UnwrapErr;
 
 use crate::config::Config;
 use crate::server::Server;
+
+/// How often the score table is folded into the run log while the host runs,
+/// on top of the sync at startup and after each session.
+const SCORE_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -57,14 +64,57 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     });
 
+    // The first sync on a volume records the table as already seen and logs
+    // nothing (`scorelog`); doing it here keeps it from swallowing the first
+    // real game. On any later start this catches up a run the host died
+    // before logging.
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Err(e) = scorelog::sync_from_sco(
+        std::path::Path::new(&config.score_file),
+        &scorelog::runs_log_path(&config.score_file),
+        &scorelog::seen_path(&config.score_file),
+        now_epoch,
+    ) {
+        tracing::warn!(error = ?e, "failed to sync dopewars run log at startup");
+    }
+
+    // A finished game is often followed by another in the same child ("Play
+    // again?"), so a session's end is not every game's end: the table is
+    // also synced on a timer, before a later run can push one off it.
+    let score_file = config.score_file.clone();
+    tokio::spawn(async move {
+        let start = tokio::time::Instant::now() + SCORE_SYNC_INTERVAL;
+        let mut tick = tokio::time::interval_at(start, SCORE_SYNC_INTERVAL);
+        loop {
+            tick.tick().await;
+            let now_epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            if let Err(e) = scorelog::sync_from_sco(
+                std::path::Path::new(&score_file),
+                &scorelog::runs_log_path(&score_file),
+                &scorelog::seen_path(&score_file),
+                now_epoch,
+            ) {
+                tracing::warn!(error = ?e, "failed to sync dopewars run log on the timer");
+            }
+        }
+    });
+
     let listen_addr = config.listen_addr.clone();
     let port = config.port;
-    let mut server = Server::new(&config);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut server = Server::new(&config, shutdown_rx);
 
     tracing::info!(%listen_addr, port, "ssh listener bound");
     // dopewars has no mid-game save, so a pod SIGTERM has nothing to drain: the
     // detached per-session bridges' children are `kill_on_drop` and die with the
-    // process. We just exit promptly on the signal.
+    // process. We just exit promptly on the signal, and tell the stats streams
+    // to close so the client reconnects to the new pod.
     tokio::select! {
         res = russh::server::Server::run_on_address(
             &mut server,
@@ -75,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ = wait_for_shutdown_signal() => {
             tracing::info!("shutdown signal received; exiting");
+            let _ = shutdown_tx.send(true);
         }
     }
     Ok(())

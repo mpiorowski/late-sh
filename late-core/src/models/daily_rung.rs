@@ -139,7 +139,7 @@ pub async fn count_stars(client: &impl GenericClient, user_id: Uuid) -> Result<i
 }
 
 /// The day of a user's newest star, `None` without one: today's star is
-/// this on today, for the week's badge and the return push.
+/// this on today, for the week's badge.
 pub async fn latest_star_day(
     client: &impl GenericClient,
     user_id: Uuid,

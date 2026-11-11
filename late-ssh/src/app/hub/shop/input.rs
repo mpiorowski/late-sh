@@ -133,6 +133,16 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             app.shop_state.move_selection(1);
             true
         }
+        ParsedInput::PageUp => {
+            let index = app.shop_state.selected_index().saturating_sub(8);
+            app.shop_state.select_item(index);
+            true
+        }
+        ParsedInput::PageDown => {
+            let index = app.shop_state.selected_index().saturating_add(8);
+            app.shop_state.select_item(index);
+            true
+        }
         ParsedInput::Byte(b'[' | b'h' | b'H') | ParsedInput::Char('[' | 'h' | 'H') => {
             app.shop_state.select_previous_category();
             true

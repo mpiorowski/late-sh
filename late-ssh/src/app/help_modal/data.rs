@@ -205,7 +205,7 @@ pub(crate) fn bot_app_context() -> String {
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
         - People page 5 has three sections, stepped with [ and ]: the Map (the Earth shaded by who is where, online now, this month or everyone; /map lands on it; a user with no country set is not on it, Ctrl+O sets one), Profiles (one row per user who shared a project or posted a work card; s searches names, cards and projects), and Jobs (the remote job feed; /jobs lands on it, s searches postings, / keeps the ones that carry the user's tags, n posts one). Artboard has detailed page-local editing keybinds.\n\
         - Calendars page 7 is the events board. Anyone can post an event to the board (five a day), everyone sees it, and i says I'm in or I'm out; the count of who is in shows on the event. Your own events live on the same grid, drawn green against the board's amber, and nobody else ever sees them; b hides the board to see only yours. n creates a private event (type a title like movie night tomorrow at 9pm and the time fills in; flip the where-it-goes control to put it on the board), e edits your own, d deletes your own; moderators can delete any post. v switches Month and List, [ and ] move a month, t is today; landing on a day marks its first event, j/k move along the day's events, click or Enter opens the marked event (an empty day starts a new one), right-click offers the actions you are allowed. A post shows up as a line in #lounge; an hour before a timed event starts it heads the now strip on Home and gets a Live panel row until it ends (o or click opens it on the board), and when it starts #lounge gets a headline; an all-day event is a banner across the top of Home for its day instead. Your own events show on page 7 only. Times use the account timezone or UTC.\n\
-        - Leaderboards page 6 holds every board. The Boards section leads: Top Chips, Arcade Wins, Late Time (monthly + all-time), and Top Drinkers (buzz points from every drink you take, whoever paid, monthly + yearly). Then the Games section: Lateania Adventurers (living characters by level, class shown on the row) and Lateania PvP (rivals slain in the Wildbound Waste), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. Then per-game daily win counts and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
+        - Leaderboards page 6 holds every board. The Boards section leads: Top Drinkers (buzz from drinks taken, monthly + yearly), Top Chips, Arcade Wins, Top Chat (public messages, messages outside the lounge, longest chat streak in days, and News posts, all monthly in UTC), and Late Time (monthly + all-time). Top Chat excludes bots, system lines, bartender mentions and generated News cards from chat totals and streaks; one News item adds exactly one to news posts only. Then the Games section: Lateania Adventurers (living characters by level, class shown on the row) and Lateania PvP (rivals slain in the Wildbound Waste), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. The Games section closes with dopewars Top Score: each player's best final cash on the street (monthly + all-time), fed the same way from the dopewars host's run log. Then per-game daily win counts and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -556,7 +556,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Badges, flags, titles, and name effects are rented for 24 hours or 30 days, one live at a time per slot.".to_string(),
         "  The one title on sale is Your Own Title (1,000 / 24h, 40,000 / 30d): you write it, up to 20 characters.".to_string(),
         "  It is screened before the chips move, so a refused title costs you nothing.".to_string(),
-        "  A rebuy replaces whatever is live in that slot and restarts its clock; when a rental lapses the slot simply empties.".to_string(),
+        "  Renting the same look again adds its time to the one running; a different one replaces it and starts fresh. When a rental lapses the slot simply empties.".to_string(),
         "  @bartender drinks in the Clubhouse, and the fixed menu at Nightcap, the bar out back (n from the Clubhouse; a round there is for the stools).".to_string(),
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
@@ -677,6 +677,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  f then w          wave hi (👋) on selected message",
         "  f then 0          choose any icon-picker reaction",
         "  f then f          list reaction owners",
+        "  Enter              reveal ||spoilers|| in the selected message",
         "  Enter              jump to loaded original for selected reply",
         "  Enter              open selected image when present",
         "  Enter              watch selected YouTube link when present",
@@ -737,6 +738,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  *italic*           italic",
         "  ***both***         bold + italic",
         "  ~~strike~~         strikethrough",
+        "  ||spoiler||        hidden until Enter on the message",
         "  `code`             inline code",
         "  [text](url)        link",
         "  > quote            blockquote",
@@ -1416,8 +1418,12 @@ fn overview_lines() -> Vec<String> {
         "Times use your account timezone (UTC fallback); all-day dates do not shift.",
         "",
         "Leaderboards: j/k or arrows select a board; click its row to switch.",
+        "Ctrl+J/K or wheel over standings scrolls; Top Chat's four panels scroll together.",
+        "Top Chat: public messages, outside #lounge, longest daily chat streak (days), News posts.",
+        "All four reset monthly in UTC. Bots, @bartender mentions and News cards don't count as chat.",
+        "Each News item counts once on news posts only, even when its lounge card fails.",
         "Ctrl+J/K scroll the content. The wheel over the rail selects boards;",
-        "over the content it scrolls both columns, keeping headings fixed.",
+        "over the content it scrolls all standings together, keeping headings fixed.",
         "",
         "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
         "over your head and land in #lounge), w waves, x dances, Enter interacts.",
@@ -1499,8 +1505,9 @@ fn overview_lines() -> Vec<String> {
         "Shop",
         "  Ctrl+S / /shop    open the Shop; /shop works from any composer",
         "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
+        "  PageUp/PageDown   jump 8 Shop items, stopping at either end of the list",
         "  name effects      Name Glow / Gradient / Shimmer sell by the day or by the month",
-        "  badges and flags  rented for 24h or 30 days; a rebuy replaces the live one",
+        "  badges and flags  rented for 24h or 30 days; the same one again adds time",
         "  title             your own words after your name in chat, 20 characters, rented the same way",
         "                    and screened before you are charged",
         "  burn milestones   Ultimates tab: permanent glyphs at 50,000 / 150,000 / 500,000,",
@@ -1962,6 +1969,7 @@ fn settings_help_lines() -> Vec<String> {
         "Burned-out senior who still shows up to heckle modern software.".to_string(),
         "Only replies when mentioned.".to_string(),
         format!("Replies on mention with a {graybeard_mention_cooldown_sec}s cooldown."),
+        "He writes the daily paper (/paper) and remembers his newest edition, so ask him about it.".to_string(),
     ]
 }
 

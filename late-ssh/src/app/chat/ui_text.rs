@@ -11,7 +11,6 @@ use crate::app::chat::state::TranslationDisplay;
 use crate::app::chat::svc::ReportKind;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
-use late_core::models::daily_rung::STAR_GLYPH;
 use late_core::models::{
     article::ArticleFeedItem,
     chat_message_gild::{ChatMessageGildSummary, GildTier},
@@ -34,8 +33,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
-    /// The ladder's marks glued to the name: the moon in the name's own
-    /// color, the star in amber.
+    /// The ladder's marks glued to the name (the moon and the star), painted
+    /// in the name's own color.
     pub marks_range: Option<(usize, usize)>,
     pub title_range: Option<(usize, usize)>,
     pub runner: Option<((usize, usize), Color)>,
@@ -109,14 +108,7 @@ fn push_author_prefix_spans(
         && to <= prefix.len()
         && prefix.is_char_boundary(to)
     {
-        spans.extend(prefix[from..to].chars().map(|ch| {
-            let style = if ch == STAR_GLYPH {
-                author_style.fg(theme::AMBER())
-            } else {
-                author_style
-            };
-            Span::styled(ch.to_string(), style)
-        }));
+        spans.push(Span::styled(prefix[from..to].to_string(), author_style));
         cursor = to;
     }
     let (runner_range, runner_style) = match tint.runner {

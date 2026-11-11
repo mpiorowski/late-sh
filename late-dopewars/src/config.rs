@@ -2,8 +2,9 @@ use anyhow::Context;
 
 /// Runtime configuration for the standalone dopewars host, read from the
 /// environment. Mirrors the nethack host's config minus the per-player save
-/// knobs dopewars doesn't have: there is no `-u` playname and no per-player
-/// `HOME`, just the one shared high-score file.
+/// knobs dopewars doesn't have: no per-player `HOME` or save slot, just the one
+/// shared high-score file. The playname arrives per connection (the SSH
+/// username), not from config.
 pub(crate) struct Config {
     /// Path to the dopewars binary.
     pub(crate) bin: String,

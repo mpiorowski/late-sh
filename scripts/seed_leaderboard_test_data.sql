@@ -131,6 +131,49 @@ DELETE FROM door_runs r USING seed_players p WHERE r.user_id = p.user_id;
 DELETE FROM door_milestones m USING seed_players p WHERE m.user_id = p.user_id;
 DELETE FROM user_online_time_monthly t USING seed_players p WHERE t.user_id = p.user_id;
 DELETE FROM user_online_time t USING seed_players p WHERE t.user_id = p.user_id;
+DELETE FROM chat_messages m USING seed_players p WHERE m.user_id = p.user_id;
+DELETE FROM articles a USING seed_players p WHERE a.user_id = p.user_id;
+
+-- Top Chat: current-month conversations with independent message, room,
+-- streak and News orderings. Every rerun replaces only our synthetic users.
+INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
+VALUES ('lounge', 'public', true, true, 'lounge')
+ON CONFLICT (slug) WHERE kind = 'lounge' DO NOTHING;
+INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
+VALUES ('topic', 'public', false, 'leaderboard-seed')
+ON CONFLICT (visibility, slug) WHERE kind = 'topic' DO NOTHING;
+
+INSERT INTO chat_messages (room_id, user_id, body, created)
+SELECT r.id, p.user_id, 'Leaderboard fixture conversation ' || message,
+       LEAST(current_timestamp,
+           date_trunc('month', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+               + (day - 1) * interval '1 day' + interval '12 hours')
+FROM seed_players p
+CROSS JOIN LATERAL generate_series(1,
+    LEAST(EXTRACT(day FROM current_timestamp AT TIME ZONE 'UTC')::int, 1 + p.idx % 30)) day
+CROSS JOIN LATERAL generate_series(1, 2 + (p.idx * 13) % 17) message
+JOIN chat_rooms r ON
+    (r.kind = 'lounge' AND message % 3 = 0)
+    OR (r.kind = 'topic' AND r.visibility = 'public' AND r.slug = 'leaderboard-seed' AND message % 3 <> 0);
+
+INSERT INTO articles (user_id, url, title, summary, ascii_art, created)
+SELECT p.user_id,
+       'https://leaderboard-seed.invalid/' || p.idx || '/' || post,
+       'Leaderboard fixture story ' || post, 'Synthetic leaderboard News post', '',
+       LEAST(current_timestamp,
+           date_trunc('month', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+               + ((post - 1) % EXTRACT(day FROM current_timestamp AT TIME ZONE 'UTC')::int) * interval '1 day')
+FROM seed_players p CROSS JOIN LATERAL generate_series(1, 45 - (p.idx * 17) % 43) post;
+
+WITH cards AS (
+    INSERT INTO chat_messages (room_id, user_id, body, is_news_card, created)
+    SELECT r.id, a.user_id, '📰 ' || a.title || ' ' || a.url, true, a.created
+    FROM articles a JOIN seed_players p ON p.user_id = a.user_id
+    CROSS JOIN chat_rooms r WHERE r.kind = 'lounge'
+    RETURNING id, body
+)
+UPDATE articles a SET lounge_message_id = c.id FROM cards c
+WHERE c.body = '📰 ' || a.title || ' ' || a.url;
 
 -- All-time connected durations, spread from roughly 49 days down to two days.
 -- The non-round minute/second offsets exercise the compact duration formatter.
@@ -568,6 +611,24 @@ SELECT
 FROM seed_players p
 WHERE p.idx <= 28;
 
+-- dopewars board, fed by the host's append-only run log: every player's
+-- best final net worth, ordering deliberately its own. A dopewars run never
+-- wins and carries no depth, so only the score family ranks.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'dopewars',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 4 = 0 THEN (p.idx % 12) ELSE 25 + p.idx END * interval '1 day',
+    'leaving',
+    18500000 - p.idx * 520000,
+    NULL,
+    NULL,
+    '{}'::jsonb,
+    'seed:dopewars',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 26;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -606,6 +667,23 @@ WHERE NOT EXISTS (
     WHERE l.user_id = c.user_id
       AND l.source_ref = 'leaderboard-v2-current-player'
 );
+
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'dopewars',
+    user_id,
+    current_timestamp - interval '2 days',
+    'leaving',
+    4250000,
+    NULL,
+    NULL,
+    '{}'::jsonb,
+    'seed:dopewars',
+    999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO UPDATE SET
+    ended_at = EXCLUDED.ended_at,
+    score = EXCLUDED.score;
 
 INSERT INTO tetris_high_scores (user_id, score, created, updated)
 SELECT user_id, 17190, current_timestamp - interval '180 days', current_timestamp - interval '60 days'

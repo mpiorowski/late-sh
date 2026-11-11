@@ -139,7 +139,7 @@ Room favorites:
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home presence:
-- The empty composer's placeholder is the row's hint (`ComposerIdleHint`), or the keypress-return push while one holds (`ComposerBlockView::return_push`, owned by the hub: `hub/CONTEXT.md`).
+- The empty composer's placeholder is the row's hint (`ComposerIdleHint`), replaced by the reaction picker's keys or the selected message's actions while either holds.
 - There is no top activity strip; presence (online count + connected friends) lives in Home's presence tile, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`) surfaced in the TUI as the one-row activity ticker above the composer, never as chat rows. The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse, the Games hub while it has a door-game watch open, a player's own running DCSS, NetHack or Brogue game), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
@@ -172,7 +172,7 @@ Keys:
 - `c` copies the selected message body.
 - `t` toggles the message's translation (see Translation below).
 - `g` opens the gild tier picker (see Gilds below). Consumed whenever a message is selected: on your own message, or one in a DM, a private room, or a game/stream chat, it banners the refusal instead of opening (`ChatState::gild_target_in_room` answers those room rules locally; the rest stay with the service).
-- Enter jumps from a reply to its loaded target.
+- Enter reveals the message's `||spoilers||` first (`RENDERING.md`); with nothing left to reveal it opens a News card, an image, a YouTube link, or jumps from a reply to its loaded target, in that order.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
 - Digits `1..9` and `w` (👋, wave hi) while reaction leader is active toggle quick reactions, exit reaction leader mode, and keep the message selected.
@@ -307,7 +307,7 @@ In `COMMANDS.md`, Keybindings: Home chat center, the dashboard lounge, and the s
 A patron deep enough into the tavern's drinks types like it. `ChatService::slurred_body` runs `chat/slur.rs` over the body as the last step of `send_message`, immediately before the row is written.
 
 - **Stored, not rendered.** The slurred text *is* the message body, so IRC, search, replies, and every viewer agree on one version. This is deliberate: the drunk level is decay-based, so a render-time transform would re-evaluate against the reader's *current* level and quietly sober up an old message hours later. The level at the moment of typing is the only one that ever made sense. The cost is that the original is unrecoverable, including for moderation.
-- **The patron's own words only.** A line sent as `Wording::Quoted` (a News card, whose title is the page's, not the sharer's) is stored as built and creates no mention notifications; everything a patron types is `Wording::Typed`.
+- **The patron's own words only.** A line sent as `Wording::NewsCard` (a News card, whose title is the page's, not the sharer's) is stored as built and creates no mention notifications; everything a patron types is `Wording::Typed`.
 - **Public rooms only** (`room.visibility == "public"`). DMs and private rooms can carry something that genuinely needs reading. The `UserDrinks::find` level lookup only runs where it can matter, and sober users and the ghost bots (who never drink) short-circuit to an unchanged body.
 - **Runs last**, so report markers, `contains_link` cooldown, and slow mode all judged the sober text. `create_mentions_task` gets the slurred body so the notification preview matches the room.
 - **Readability rests on one rule:** a word's first and last character never move. Only interior letters are reordered (never added or dropped), which is the typoglycemia effect and is why level 4 stays legible at all. Two dials climb per level: what share of words get scrambled (6/32/60/85%) and how far each goes (one swap, one swap, one-or-two swaps, full interior shuffle). Tipsy and buzzed deliberately share a depth: the same fumble, just far more often. The change in *kind* lands at sloshed. Measured over ordinary prose that is roughly 3/21/34/54% of *all* words visibly changed, since short words are ineligible; `each_drink_reads_harder_than_the_last` pins those bands.

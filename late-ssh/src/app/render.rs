@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Context;
 use late_core::api_types::NowPlaying;
@@ -691,14 +690,6 @@ impl App {
         };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
-        let today = chrono::Utc::now().date_naive();
-        let return_push = self.return_push.line(
-            Instant::now(),
-            self.quest_state.snapshot(),
-            late_core::models::daily_rung::rung_for(today),
-            self.quest_state.rung_standing(today),
-        );
-        let return_push = return_push.as_deref();
         let ladder_marks = self.chat.ladder_marks();
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
@@ -904,7 +895,6 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
-            return_push,
             bonsai_glyphs,
             ladder_marks,
             chat_badges,
@@ -916,6 +906,7 @@ impl App {
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
+            spoilers_revealed: &self.chat.spoilers_revealed,
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
@@ -1062,7 +1053,6 @@ impl App {
             mention_active: self.chat.mention_ac.active,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
-            return_push,
             bonsai_glyphs,
             ladder_marks,
             chat_badges,
@@ -1074,6 +1064,7 @@ impl App {
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
+            spoilers_revealed: &self.chat.spoilers_revealed,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -1150,7 +1141,6 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
-                    return_push,
                     bonsai_glyphs,
                     ladder_marks,
                     chat_badges,
@@ -1161,6 +1151,7 @@ impl App {
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
+                    spoilers_revealed: &self.chat.spoilers_revealed,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1218,7 +1209,6 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
-                    return_push,
                     bonsai_glyphs,
                     ladder_marks,
                     chat_badges,
@@ -1229,6 +1219,7 @@ impl App {
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
+                    spoilers_revealed: &self.chat.spoilers_revealed,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1289,7 +1280,6 @@ impl App {
                     mention_active: self.chat.mention_ac.active,
                     reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                     is_editing: self.chat.edited_message_id.is_some(),
-                    return_push,
                     bonsai_glyphs,
                     ladder_marks,
                     chat_badges,
@@ -1300,6 +1290,7 @@ impl App {
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
+                    spoilers_revealed: &self.chat.spoilers_revealed,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1359,7 +1350,6 @@ impl App {
                 mention_active: self.chat.mention_ac.active,
                 reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
                 is_editing: self.chat.edited_message_id.is_some(),
-                return_push,
                 bonsai_glyphs,
                 ladder_marks,
                 chat_badges,
@@ -1370,6 +1360,7 @@ impl App {
                 name_flicker,
                 translations: &self.chat.translations,
                 translation_hidden: &self.chat.translation_hidden,
+                spoilers_revealed: &self.chat.spoilers_revealed,
                 keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                 composer_rect_slot: Some(&self.chat.last_composer_rect),
                 composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1469,7 +1460,6 @@ impl App {
                                 None
                             },
                             is_editing: active && self.chat.edited_message_id.is_some(),
-                            return_push,
                             bonsai_glyphs,
                             ladder_marks,
                             chat_badges,
@@ -1480,6 +1470,7 @@ impl App {
                             name_flicker,
                             translations: &self.chat.translations,
                             translation_hidden: &self.chat.translation_hidden,
+                            spoilers_revealed: &self.chat.spoilers_revealed,
                             keep_composer_focused: self
                                 .profile_state
                                 .profile()
@@ -1548,7 +1539,6 @@ impl App {
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
-            return_push,
             mention_active: self.chat.mention_ac.active,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,

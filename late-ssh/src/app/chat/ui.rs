@@ -51,6 +51,7 @@ use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
     without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
+use crate::app::common::spoiler::{self, has_spoiler};
 
 /// The picker's choices in paint order: the key to press and the reaction
 /// kind it toggles.
@@ -148,9 +149,6 @@ pub struct DashboardChatView<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -172,6 +170,7 @@ pub struct DashboardChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub active_poll: Option<&'a ActiveChatPoll>,
     /// The #lounge live strip (`app/live/`): one thing that just happened
     /// in the house, drawn above the poll strip. `None` when nothing is
@@ -219,9 +218,6 @@ pub(crate) struct ComposerBlockView<'a> {
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub mention_active: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -520,10 +516,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
             )));
         }
         ComposerInert::No => {}
-    }
-
-    if let Some(push) = view.return_push {
-        return Paragraph::new(Line::from(Span::styled(push.to_string(), dim)));
     }
 
     if view.composing {
@@ -1117,7 +1109,6 @@ pub fn draw_dashboard_chat_card(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
@@ -1236,6 +1227,7 @@ pub fn draw_dashboard_chat_card(
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
+                spoilers_revealed: view.spoilers_revealed,
                 runner_looks: view
                     .room
                     .filter(|room| super::state::room_shows_portraits(room))
@@ -1290,7 +1282,6 @@ pub fn draw_dashboard_chat_card(
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
-            return_push: view.return_push,
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
@@ -1337,6 +1328,7 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
+    spoilers_revealed: &'a HashSet<Uuid>,
     /// `Some` only while `state::room_shows_portraits` says so for the
     /// rendered room: the list keeps a portrait gutter on the right of
     /// every entry and paints each author's face beside their block
@@ -1868,10 +1860,16 @@ fn ensure_chat_rows_cache(
         } else {
             reactions
         };
+        // Spoilers are read off the stored body, before the plain-glyphs
+        // pass: dropping an icon at a spoiler's edge would leave whitespace
+        // there, and the markers would stop reading as a spoiler.
+        let spoilers_revealed = ctx.spoilers_revealed.contains(&msg.id);
+        let spoilers_hidden = has_spoiler(&msg.body) && !spoilers_revealed;
+        let body = spoiler::shown(&msg.body, spoilers_revealed);
         let body = if ctx.show_flag_fallback {
-            without_nerd_font_glyphs(&msg.body)
+            Cow::Owned(without_nerd_font_glyphs(&body).into_owned())
         } else {
-            Cow::Borrowed(msg.body.as_str())
+            body
         };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
@@ -1951,11 +1949,16 @@ fn ensure_chat_rows_cache(
             (Some(lines), _) => Some(lines.as_slice()),
             (None, Some(preview)) => Some(preview.picture().as_slice()),
             (None, None) => None,
-        };
+        }
+        // A preview fetched before an edit wrapped its link in a spoiler
+        // would show the secret as a picture.
+        .filter(|_| !spoilers_hidden);
         let translation = ctx
             .translations
             .get(&msg.id)
-            .filter(|_| !ctx.translation_hidden.contains(&msg.id));
+            .filter(|_| !ctx.translation_hidden.contains(&msg.id))
+            // The translation would carry the hidden words in clear.
+            .filter(|_| !spoilers_hidden);
         // The #deadchannel portrait gutter (`app/deadchannel/runner`): in
         // the wire every author is a runner, and the message list keeps
         // `PORTRAIT_GUTTER` cells on the right where the author's face sits
@@ -2746,8 +2749,8 @@ struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
-    /// The ladder's marks right after the name, for the painter to give
-    /// the star its amber.
+    /// The ladder's marks right after the name (the moon and the star), for
+    /// the painter to give them the name's own color.
     marks_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.
@@ -3126,9 +3129,6 @@ pub struct ChatRenderInput<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -3150,6 +3150,7 @@ pub struct ChatRenderInput<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -3307,9 +3308,6 @@ pub struct EmbeddedRoomChatView<'a> {
     pub mention_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
-    /// The keypress-return push (`hub/dailies/return_push.rs`) while it
-    /// holds: the empty composer shows it in place of its hint.
-    pub return_push: Option<&'a str>,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
     pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
@@ -3327,6 +3325,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3403,7 +3402,6 @@ pub fn draw_embedded_room_chat(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
@@ -3428,7 +3426,6 @@ pub fn draw_embedded_room_chat(
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
-            return_push: view.return_push,
             mention_active: view.mention_active,
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
@@ -3524,6 +3521,7 @@ fn draw_embedded_messages(
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
+            spoilers_revealed: view.spoilers_revealed,
             // Embedded game chats are house tables and daily boards, never
             // the wire.
             runner_looks: None,
@@ -3644,7 +3642,6 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
-                        return_push: view.return_push,
                         mention_active: view.mention_active,
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
@@ -5041,6 +5038,7 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
+                    spoilers_revealed: view.spoilers_revealed,
                     runner_looks: super::state::room_shows_portraits(room)
                         .then_some(view.runner_looks),
                 },
@@ -5289,7 +5287,6 @@ fn draw_selected_content(
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
-                return_push: view.return_push,
                 mention_active: view.mention_active,
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
