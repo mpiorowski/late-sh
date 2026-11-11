@@ -95,6 +95,9 @@ pub(crate) struct FightSession {
     username: String,
     svc: FightService,
     action_in_flight: bool,
+    /// Action answers landed so far. Every reload carries the count it was
+    /// asked at, so `tick` can drop one an answer has overtaken.
+    answers: u64,
     /// The process is shutting down for a deploy (`State::is_draining`):
     /// a newer one owns the rows, and this one stops changing them.
     is_draining: Arc<AtomicBool>,
@@ -123,6 +126,7 @@ impl FightSession {
             username,
             svc,
             action_in_flight: false,
+            answers: 0,
             is_draining,
             outcome_tx,
             outcome_rx,
@@ -132,7 +136,8 @@ impl FightSession {
     /// Re-read the sheet: at connect and on every directory edge for a
     /// standing runner, and on the descent into the city.
     pub(crate) fn reload(&mut self) {
-        self.svc.reload_task(self.user_id, self.outcome_tx.clone());
+        self.svc
+            .reload_task(self.user_id, self.answers, self.outcome_tx.clone());
     }
 
     /// The runner left the row: nothing to mirror until they are back.
@@ -532,16 +537,30 @@ impl FightSession {
                     lookout,
                 } => {
                     self.action_in_flight = false;
+                    self.answers += 1;
                     self.sheet = Some(sheet);
                     self.adopt(lookout);
                     self.show(outcome.applied, outcome.lines);
                     self.read_odds();
                 }
-                FightOutcome::Reloaded { sheet, lookout } => {
-                    self.sheet = Some(sheet);
-                    self.adopt(lookout);
-                    self.read_odds();
-                }
+                // A reload and an action answer race each other and can
+                // arrive out of order. A reload asked for before the
+                // latest answer may have read the row before that action
+                // wrote it: its sheet would take the mirror back (a fight
+                // just started, gone from the scene), so it is dropped and
+                // asked for again.
+                FightOutcome::Reloaded {
+                    sheet,
+                    lookout,
+                    answers_seen,
+                } => match answers_seen == self.answers {
+                    true => {
+                        self.sheet = Some(sheet);
+                        self.adopt(lookout);
+                        self.read_odds();
+                    }
+                    false => self.reload(),
+                },
                 FightOutcome::NoRunner => {
                     self.action_in_flight = false;
                     self.sheet = None;
