@@ -4752,6 +4752,72 @@ fn visual_order_moves_favorited_synthetic_entries_out_of_core() {
     );
 }
 
+/// A game room (a door's watch room, a stream room) never sits on the rail
+/// on its own; favoriting puts it in Favorites, and a favorited live stream
+/// keeps that row instead of a second one under the stream header.
+#[test]
+fn visual_order_lists_a_game_room_only_while_favorited() {
+    let me = Uuid::from_u128(1);
+    let lounge = Uuid::from_u128(10);
+    let nethack = Uuid::from_u128(20);
+    let fav_stream = Uuid::from_u128(30);
+    let other_stream = Uuid::from_u128(31);
+    let rooms = vec![
+        make_room(lounge, "lounge", "public", true, Some("lounge")),
+        make_room(nethack, "game", "public", false, Some("nethack-mat")),
+        make_room(fav_stream, "game", "public", false, Some("mat-live")),
+    ];
+    let live = |room_id: Uuid, username: &str| crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::now_v7(),
+        username: username.to_string(),
+        title: "show".to_string(),
+        room_id,
+        voice_channel_id: Uuid::now_v7(),
+        stream_id: "s".to_string(),
+        live: true,
+        went_live_at: Some(chrono::Utc::now()),
+        watching: 0,
+        watch_url: String::new(),
+    };
+    let streams = [live(fav_stream, "mat"), live(other_stream, "spoon")];
+    let order_for = |favorites: &[Uuid], live_streams: &[crate::app::stream::registry::LiveStreamView]| {
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &HashMap::new(),
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            cyberspace_linked: false,
+            cyberspace_rooms: &[],
+            cyberspace_mail: &[],
+            favorite_room_ids: favorites,
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
+            live_streams,
+        })
+    };
+    let core = [
+        RoomSlot::Room(lounge),
+        RoomSlot::News,
+        RoomSlot::Notifications,
+        RoomSlot::Discover,
+    ];
+
+    assert_eq!(order_for(&[], &[]), core.to_vec());
+
+    let mut favorited = vec![RoomSlot::Room(nethack), RoomSlot::Room(fav_stream)];
+    favorited.extend(core);
+    assert_eq!(order_for(&[nethack, fav_stream], &[]), favorited);
+
+    favorited.push(RoomSlot::Room(other_stream));
+    assert_eq!(order_for(&[nethack, fav_stream], &streams), favorited);
+
+    assert!(is_rail_room(&rooms[1].0, &[nethack]));
+    assert!(!is_rail_room(&rooms[1].0, &[fav_stream]));
+}
+
 /// Enter on a YouTube link hands the player the title oEmbed gave its
 /// thumbnail; before it lands, or without one, the player says
 /// `YouTube video`. A reply that only quotes the link watches nothing.

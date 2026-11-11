@@ -283,6 +283,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_room_picker() {
         crate::app::input::open_room_search_modal_globally(app);
     }
+    if let Some(room_id) = app.chat.take_requested_favorite_toggle() {
+        toggle_room_favorite(app, room_id);
+    }
     if let Some(query) = app.chat.take_requested_message_search() {
         crate::app::input::open_message_search_modal_globally(app, &query);
     }
@@ -383,6 +386,11 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     let Some(room_id) = app.chat.selected_favorite_room_id() else {
         return false;
     };
+    toggle_room_favorite(app, room_id);
+    true
+}
+
+fn toggle_room_favorite(app: &mut App, room_id: Uuid) {
     let added = app.profile_state.toggle_favorite_room(room_id);
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
@@ -391,7 +399,6 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     } else {
         Banner::success("Removed from favorites")
     });
-    true
 }
 
 /// The favorite keys for the selected entry: `[` / `]` reorder, `f` toggles.
