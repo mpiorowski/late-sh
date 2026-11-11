@@ -43,7 +43,7 @@ use late_core::{
     models::{
         bartender_memory::{BartenderMemory, Recorded, is_forget_request, remember_request},
         chat_message::ChatMessage,
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind, RoomVisibility},
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
         drink_round::{Bar, BarOrder, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, bar_order},
@@ -514,12 +514,20 @@ impl GhostService {
             .await?
             .context("bot mention room not found")?;
 
-        if is_dm_room(&room.kind, &room.visibility) {
-            tracing::info!(
-                room_id = %trigger_message.room_id,
-                "skipping @bot mention in dm room"
-            );
-            return Ok(());
+        match room.kind {
+            RoomKind::Dm => {
+                tracing::info!(
+                    room_id = %trigger_message.room_id,
+                    "skipping @bot mention in dm room"
+                );
+                return Ok(());
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
         }
 
         // Ladder check sits after the DM skip so rooms he never answers in
@@ -891,7 +899,17 @@ impl GhostService {
             }
             ChatRoom::get(&client, trigger_message.room_id)
                 .await?
-                .is_some_and(|room| room.visibility == "public")
+                .is_some_and(|room| match room.kind {
+                    RoomKind::Lounge
+                    | RoomKind::Language
+                    | RoomKind::Topic(RoomVisibility::Public)
+                    | RoomKind::Game(RoomVisibility::Public)
+                    | RoomKind::Deadchannel
+                    | RoomKind::Nightcap => true,
+                    RoomKind::Topic(RoomVisibility::Private)
+                    | RoomKind::Dm
+                    | RoomKind::Game(RoomVisibility::Private) => false,
+                })
         };
 
         let request = text_for_mention_detection(&trigger_message.body);
@@ -2120,10 +2138,6 @@ fn valid_mention_start(text: &str, at: usize) -> bool {
 
 fn is_mention_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
-}
-
-fn is_dm_room(kind: &str, visibility: &str) -> bool {
-    kind == "dm" || visibility == "dm"
 }
 
 struct TinyRng {

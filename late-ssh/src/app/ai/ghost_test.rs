@@ -83,15 +83,6 @@ hey @bot what do you think",
 }
 
 #[test]
-fn is_dm_room_matches_kind_or_visibility() {
-    assert!(is_dm_room("dm", "dm"));
-    assert!(is_dm_room("topic", "dm"));
-    assert!(is_dm_room("dm", "private"));
-    assert!(!is_dm_room("topic", "private"));
-    assert!(!is_dm_room("topic", "public"));
-}
-
-#[test]
 fn bot_address_answers_a_mention_anywhere_in_the_text() {
     assert_eq!(
         bot_address("hey @Bot can you help", None, "bot"),
@@ -512,7 +503,7 @@ fn paper_page(
         room_id,
         label: label.to_string(),
         member_count: 10,
-        kind: "topic".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         permanent: false,
         status,
         message_count: 20,

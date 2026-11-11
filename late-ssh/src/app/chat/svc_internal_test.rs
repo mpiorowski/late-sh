@@ -118,12 +118,11 @@ fn report_kind_maps_room_slugs() {
 /// the slug and stays free text.
 #[test]
 fn report_kind_enforces_public_topic_rooms_only() {
-    let room = |kind: &str, visibility: &str, slug: &str| ChatRoom {
+    let room = |kind: RoomKind, slug: &str| ChatRoom {
         id: Uuid::from_u128(1),
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        kind: kind.to_string(),
-        visibility: visibility.to_string(),
+        kind,
         auto_join: false,
         permanent: false,
         slug: Some(slug.to_string()),
@@ -135,20 +134,26 @@ fn report_kind_enforces_public_topic_rooms_only() {
         created_by: None,
     };
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "bugs")),
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Public), "bugs")),
         Some(ReportKind::Bug)
     );
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "suggestions")),
+        ReportKind::for_room(&room(
+            RoomKind::Topic(RoomVisibility::Public),
+            "suggestions"
+        )),
         Some(ReportKind::Suggestion)
     );
     assert_eq!(
-        ReportKind::for_room(&room("topic", "private", "bugs")),
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Private), "bugs")),
         None
     );
-    assert_eq!(ReportKind::for_room(&room("game", "public", "bugs")), None);
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "lounge")),
+        ReportKind::for_room(&room(RoomKind::Game(RoomVisibility::Public), "bugs")),
+        None
+    );
+    assert_eq!(
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Public), "lounge")),
         None
     );
 }

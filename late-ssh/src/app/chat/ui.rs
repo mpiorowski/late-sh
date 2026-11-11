@@ -4,7 +4,9 @@ use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::ChatMessage,
+    chat_room::{ChatRoom, RoomKind, RoomVisibility},
+    chat_room_member::ChatRoomMember,
 };
 use ratatui::{
     Frame,
@@ -4335,9 +4337,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind == "dm"
-                && !favorite_ids.contains(&r.id)
+            let dm = match r.kind {
+                RoomKind::Dm => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
+            dm && !favorite_ids.contains(&r.id)
                 && !dm_peer_is_ignored(r, view.current_user_id, view.ignored_user_ids)
         })
         .partition(|(r, _)| dm_is_promoted_unread(r.id, view.unread_counts, view.sticky_unread_dm));
@@ -4368,11 +4377,15 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind != "dm"
+            let channel = match r.kind {
+                RoomKind::Lounge | RoomKind::Language | RoomKind::Topic(_) => true,
+                RoomKind::Dm | RoomKind::Game(_) | RoomKind::Deadchannel | RoomKind::Nightcap => {
+                    false
+                }
+            };
+            channel
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && r.slug.as_deref() != Some("voice")
-                && !is_deadchannel_room(r)
                 && !favorite_ids.contains(&r.id)
         })
         .collect();
@@ -4559,9 +4572,18 @@ pub(crate) fn bumped_join_room_slugs(
         .values()
         .filter_map(|effects| {
             let first = effects.first()?;
+            let public_topic = match first.room_kind {
+                RoomKind::Topic(RoomVisibility::Public) => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Private)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
             (has_room_effect(effects, "room_bump")
-                && first.room_kind == "topic"
-                && first.room_visibility == "public"
+                && public_topic
                 && !first.room_permanent
                 && first
                     .room_slug
@@ -4586,18 +4608,23 @@ fn room_display_label(
     current_user_id: Uuid,
     away_user_ids: &HashSet<Uuid>,
 ) -> String {
-    if room.kind == "dm" {
-        return dm_display_label(room, usernames, current_user_id, away_user_ids);
-    }
-    let base_label = room
-        .slug
-        .as_deref()
-        .map(str::to_string)
-        .unwrap_or_else(|| room.kind.clone());
-    if room.visibility == "private" {
-        format!("🔒 {}", base_label)
-    } else {
-        base_label
+    let base_label = || {
+        room.slug
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| room.kind.as_str().to_string())
+    };
+    match room.kind {
+        RoomKind::Dm => dm_display_label(room, usernames, current_user_id, away_user_ids),
+        RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+            format!("🔒 {}", base_label())
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Game(RoomVisibility::Public)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => base_label(),
     }
 }
 
