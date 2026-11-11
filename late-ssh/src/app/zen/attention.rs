@@ -13,7 +13,9 @@
 use std::collections::{HashMap, HashSet};
 
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, notification::NotificationView,
+    chat_message::ChatMessage,
+    chat_room::{ChatRoom, RoomKind},
+    notification::NotificationView,
 };
 use uuid::Uuid;
 
@@ -31,7 +33,16 @@ pub fn unread_rows(
 ) -> Vec<Item> {
     let mut dms: Vec<(i64, String, Uuid)> = Vec::new();
     for (room, _) in rooms {
-        if room.kind != "dm" || dm_peer_is_ignored(room, user_id, ignored) {
+        match room.kind {
+            RoomKind::Dm => {}
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => continue,
+        }
+        if dm_peer_is_ignored(room, user_id, ignored) {
             continue;
         }
         let unread = unread_counts.get(&room.id).copied().unwrap_or(0);

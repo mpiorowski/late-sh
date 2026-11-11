@@ -30,7 +30,7 @@ use late_core::{
             ChatMessageReactionSummary,
         },
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
-        chat_room::{ChatRoom, UserRoomState},
+        chat_room::{ChatRoom, RoomKind, RoomVisibility, UserRoomState},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         chips::UserChips,
@@ -171,10 +171,16 @@ impl ReportKind {
     /// unique per visibility, so a private room may carry the same name and
     /// stays free text for its members.
     pub(crate) fn for_room(room: &ChatRoom) -> Option<Self> {
-        if room.kind != "topic" || room.visibility != "public" {
-            return None;
+        match room.kind {
+            RoomKind::Topic(RoomVisibility::Public) => Self::for_room_slug(room.slug.as_deref()?),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => None,
         }
-        Self::for_room_slug(room.slug.as_deref()?)
     }
 }
 
@@ -640,7 +646,16 @@ async fn slow_mode_remaining(
         return Ok(Some((remaining, SlowModeScope::Room)));
     }
 
-    if room.kind != "dm"
+    let server_slow_mode_applies = match room.kind {
+        RoomKind::Dm => false,
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => true,
+    };
+    if server_slow_mode_applies
         && let Some(slow_mode) = ChatSlowMode::find_active_server_for_user(client, user_id).await?
         && let Some(remaining) =
             server_slow_mode_remaining_for_mode(client, user_id, slow_mode).await?
@@ -1615,18 +1630,34 @@ impl ChatService {
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
         let lounge_room_id = rooms
             .iter()
-            .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
+            .find(|room| match room.kind {
+                RoomKind::Lounge => room.slug.as_deref() == Some("lounge"),
+                RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            })
             .map(|room| room.id);
 
         let mut visible_user_ids = vec![user_id];
         for room in &rooms {
-            if room.kind == "dm" {
-                if let Some(id) = room.dm_user_a {
-                    visible_user_ids.push(id);
+            match room.kind {
+                RoomKind::Dm => {
+                    if let Some(id) = room.dm_user_a {
+                        visible_user_ids.push(id);
+                    }
+                    if let Some(id) = room.dm_user_b {
+                        visible_user_ids.push(id);
+                    }
                 }
-                if let Some(id) = room.dm_user_b {
-                    visible_user_ids.push(id);
-                }
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {}
             }
         }
         visible_user_ids.extend(friend_user_ids.iter().copied());
@@ -1634,7 +1665,16 @@ impl ChatService {
         visible_user_ids.dedup();
         let private_room_ids: Vec<Uuid> = rooms
             .iter()
-            .filter(|room| room.kind == "topic" && room.visibility == "private")
+            .filter(|room| match room.kind {
+                RoomKind::Topic(RoomVisibility::Private) => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Public)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            })
             .map(|room| room.id)
             .collect();
 
@@ -2961,7 +3001,7 @@ impl ChatService {
         // (a private topic room or a game room may share one), so a loose
         // slug lookup could leak the report into, and join the reporter to,
         // whichever same-slug row happened to come back first.
-        let room = ChatRoom::find_topic_room(&client, "public", kind.slug())
+        let room = ChatRoom::find_topic_room(&client, RoomVisibility::Public, kind.slug())
             .await?
             .ok_or_else(|| anyhow::anyhow!("room #{} not found", kind.slug()))?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
@@ -3545,15 +3585,23 @@ impl ChatService {
                 )));
             }
         }
-        if room.kind == "dm" {
-            let user_a = room
-                .dm_user_a
-                .ok_or_else(|| anyhow::anyhow!("dm room is missing first participant"))?;
-            let user_b = room
-                .dm_user_b
-                .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
-            ChatRoomMember::join(&client, room_id, user_a).await?;
-            ChatRoomMember::join(&client, room_id, user_b).await?;
+        match room.kind {
+            RoomKind::Dm => {
+                let user_a = room
+                    .dm_user_a
+                    .ok_or_else(|| anyhow::anyhow!("dm room is missing first participant"))?;
+                let user_b = room
+                    .dm_user_b
+                    .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
+                ChatRoomMember::join(&client, room_id, user_a).await?;
+                ChatRoomMember::join(&client, room_id, user_b).await?;
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
         }
 
         // Last thing before the row is written, so every check above (report
@@ -3655,8 +3703,16 @@ impl ChatService {
         room: &ChatRoom,
         body: &str,
     ) -> Result<String> {
-        if room.visibility != "public" {
-            return Ok(body.to_string());
+        match room.kind {
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Game(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
+            RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Private) => return Ok(body.to_string()),
         }
 
         let level = match UserDrinks::find(client, user_id).await? {
@@ -4195,13 +4251,18 @@ impl ChatService {
                 }
             })
             .collect();
-        let title = if room.kind == "dm" {
-            "DM Members".to_string()
-        } else {
-            room.slug
+        let title = match room.kind {
+            RoomKind::Dm => "DM Members".to_string(),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => room
+                .slug
                 .as_deref()
                 .map(|slug| format!("#{slug} Members"))
-                .unwrap_or_else(|| "Room Members".to_string())
+                .unwrap_or_else(|| "Room Members".to_string()),
         };
 
         Ok((title, members))
@@ -4575,11 +4636,20 @@ impl ChatService {
         let Some(room) = ChatRoom::get(&client, message.room_id).await? else {
             return Err(GildError::Refused(GildRefusal::MessageNotFound));
         };
-        if room.visibility != "public" {
-            return Err(GildError::Refused(GildRefusal::NotPublic));
-        }
-        if room.kind == "game" {
-            return Err(GildError::Refused(GildRefusal::GameRoom));
+        match room.kind {
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
+            RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Private) => {
+                return Err(GildError::Refused(GildRefusal::NotPublic));
+            }
+            RoomKind::Game(RoomVisibility::Public) => {
+                return Err(GildError::Refused(GildRefusal::GameRoom));
+            }
         }
         if message.user_id == user_id {
             return Err(GildError::Refused(GildRefusal::SelfGild));
@@ -5049,8 +5119,17 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        if room.kind != "topic" || room.visibility != "public" {
-            anyhow::bail!("Only public rooms can be joined from discover");
+        match room.kind {
+            RoomKind::Topic(RoomVisibility::Public) => {}
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {
+                anyhow::bail!("Only public rooms can be joined from discover")
+            }
         }
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
@@ -5065,18 +5144,25 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        if room.kind != "game" {
-            anyhow::bail!("Only game rooms can be joined here");
-        }
-        // House tables, stream chats and match chats are public: anyone who
-        // opens the surface joins and talks. The one private flavor left is
-        // a match claimed while match chat was players-only, where the two
-        // memberships written at claim time are the whole room; a spectator
-        // walking into one stays out, which is an outcome and not an error.
-        if room.visibility != "public"
-            && !ChatRoomMember::is_member(&client, room.id, user_id).await?
-        {
-            return Ok(GameRoomJoin::PlayersOnly);
+        match room.kind {
+            // House tables, stream chats and match chats are public: anyone
+            // who opens the surface joins and talks.
+            RoomKind::Game(RoomVisibility::Public) => {}
+            // The one private flavor left is a match claimed while match
+            // chat was players-only, where the two memberships written at
+            // claim time are the whole room; a spectator walking into one
+            // stays out, which is an outcome and not an error.
+            RoomKind::Game(RoomVisibility::Private) => {
+                if !ChatRoomMember::is_member(&client, room.id, user_id).await? {
+                    return Ok(GameRoomJoin::PlayersOnly);
+                }
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Dm
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => anyhow::bail!("Only game rooms can be joined here"),
         }
         // A ban is what keeps someone out of a public game room, and
         // `ChatRoomMember::join` is where that is enforced for every join path.
@@ -5098,7 +5184,7 @@ impl ChatService {
         // Public rooms are hosted, not owned: only mods edit their topic and
         // rules. Whether this call opens a brand-new room decides whether the
         // house gets told about it, so look before creating.
-        let existed = ChatRoom::find_topic_room(&client, "public", slug)
+        let existed = ChatRoom::find_topic_room(&client, RoomVisibility::Public, slug)
             .await?
             .is_some();
         // A new room is created without auto-join. An existing one keeps
@@ -5201,7 +5287,8 @@ impl ChatService {
             .await?
             .map(|user| user.username)
             .unwrap_or_else(|| "someone".to_string());
-        let moderators = ChatRoom::find_topic_room(&client, "private", MODERATORS_SLUG).await?;
+        let moderators =
+            ChatRoom::find_topic_room(&client, RoomVisibility::Private, MODERATORS_SLUG).await?;
         drop(client);
 
         self.send_system_message(
@@ -5426,8 +5513,17 @@ impl ChatService {
             .await?
             .ok_or_else(|| anyhow::anyhow!("room not found"))?;
         if !is_mod {
-            if room.kind != "topic" || room.visibility != "private" {
-                anyhow::bail!("only a moderator can set this room's info");
+            match room.kind {
+                RoomKind::Topic(RoomVisibility::Private) => {}
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Public)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {
+                    anyhow::bail!("only a moderator can set this room's info")
+                }
             }
             match ChatRoom::owner_id(&client, room_id).await? {
                 Some(owner) if owner == user_id => {}
@@ -5435,7 +5531,7 @@ impl ChatService {
             }
         }
         let room = ChatRoom::set_topic_and_rules(&client, room_id, topic, rules).await?;
-        Ok(room.slug.unwrap_or_else(|| room.kind.clone()))
+        Ok(room.slug.unwrap_or_else(|| room.kind.as_str().to_string()))
     }
 
     pub fn leave_room_task(&self, user_id: Uuid, room_id: Uuid, slug: String) {
@@ -5471,13 +5567,17 @@ impl ChatService {
         // The name for the wire's "went dark" line, read before anything
         // is written: a lookup that fails here fails the leave whole, never
         // after the membership and the stamp have already landed.
-        let deadchannel_username = match room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
-        {
-            true => match User::get(&client, user_id).await? {
+        let deadchannel_username = match room.kind {
+            RoomKind::Deadchannel => match User::get(&client, user_id).await? {
                 Some(user) => Some(user.username),
                 None => anyhow::bail!("user not found"),
             },
-            false => None,
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Nightcap => None,
         };
         ChatRoomMember::leave(&client, room_id, user_id).await?;
         // Leaving #deadchannel closes the undercity gate, on this replica
@@ -5593,13 +5693,14 @@ impl ChatService {
 
     async fn fill_room(&self, slug: &str) -> Result<u64> {
         let client = self.db.get().await?;
-        if let Some(room) = ChatRoom::find_topic_room(&client, "public", slug).await? {
+        if let Some(room) = ChatRoom::find_topic_room(&client, RoomVisibility::Public, slug).await?
+        {
             ChatRoom::set_auto_join(&client, room.id, true).await?;
             let users_added = ChatRoom::add_all_users(&client, room.id).await?;
             tracing::info!(slug = %slug, room_id = %room.id, users_added, "room filled and auto-join enabled");
             return Ok(users_added);
         }
-        if ChatRoom::find_topic_room(&client, "private", slug)
+        if ChatRoom::find_topic_room(&client, RoomVisibility::Private, slug)
             .await?
             .is_some()
         {
@@ -5690,8 +5791,14 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        if room.kind == "dm" {
-            anyhow::bail!("Cannot invite users to a DM");
+        match room.kind {
+            RoomKind::Dm => anyhow::bail!("Cannot invite users to a DM"),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
         }
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
@@ -5706,7 +5813,10 @@ impl ChatService {
         }
 
         ChatRoomMember::join(&client, room_id, target.id).await?;
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let room_slug = room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string());
         Ok((room_slug, target.username))
     }
 

@@ -531,7 +531,7 @@ impl PaperService {
             room_id: candidate.room_id,
             label: candidate.label.clone(),
             member_count: candidate.member_count,
-            kind: candidate.kind.clone(),
+            kind: candidate.kind,
             permanent: candidate.permanent,
             status,
             message_count: candidate.message_count,

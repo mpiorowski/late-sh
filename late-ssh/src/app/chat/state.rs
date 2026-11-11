@@ -16,7 +16,7 @@ use late_core::{
         chat_message_gild::{ChatMessageGild, ChatMessageGildSummary, GildTier},
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind, RoomVisibility},
         message_translation::{TRANSLATE_MAX_BODY_CHARS, TranslateLang, needs_translation},
         voice_channel::VoiceChannel,
     },
@@ -712,13 +712,17 @@ fn room_membership_command_target(
 }
 
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
-    // The small bar out back is only ever seen from its own screen: never
-    // on the rail, in the picker, or as a Home selection.
-    if room.kind == "game" || is_nightcap_room(room) {
-        return false;
+    match room.kind {
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Dm
+        | RoomKind::Deadchannel => true,
+        // A game's chat is reached from its game. The small bar out back is
+        // only ever seen from its own screen: never on the rail, in the
+        // picker, or as a Home selection.
+        RoomKind::Game(_) | RoomKind::Nightcap => false,
     }
-
-    room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
 /// Whether `room` can sit on the Home rail for this user: every chat-list
@@ -726,20 +730,29 @@ pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
 /// table, a match chat, a stream room) only while it is favorited. Unfavoriting
 /// drops it off the rail again, and the way back is the game's own chat.
 pub(crate) fn is_rail_room(room: &ChatRoom, favorite_room_ids: &[Uuid]) -> bool {
-    is_chat_list_room(room) || (room.kind == "game" && favorite_room_ids.contains(&room.id))
+    is_chat_list_room(room)
+        || match room.kind {
+            RoomKind::Game(_) => favorite_room_ids.contains(&room.id),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Dm
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => false,
+        }
 }
 
-/// The kind of room for the Home attention metric, read off `kind` and
-/// `visibility`. A kind this match does not name is `OtherRoom`.
+/// The kind of room for the Home attention metric. A favorited game chat
+/// is `OtherRoom`, and so is the bar out back, which Home never shows.
 pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
-    match (room.kind.as_str(), room.visibility.as_str()) {
-        ("lounge", _) => HomeRoom::Lounge,
-        ("language", _) => HomeRoom::Language,
-        ("topic", "public") => HomeRoom::PublicTopic,
-        ("topic", "private") => HomeRoom::PrivateTopic,
-        ("dm", _) => HomeRoom::Dm,
-        (late_core::models::chat_room::DEADCHANNEL_KIND, _) => HomeRoom::Deadchannel,
-        _ => HomeRoom::OtherRoom,
+    match room.kind {
+        RoomKind::Lounge => HomeRoom::Lounge,
+        RoomKind::Language => HomeRoom::Language,
+        RoomKind::Topic(RoomVisibility::Public) => HomeRoom::PublicTopic,
+        RoomKind::Topic(RoomVisibility::Private) => HomeRoom::PrivateTopic,
+        RoomKind::Dm => HomeRoom::Dm,
+        RoomKind::Deadchannel => HomeRoom::Deadchannel,
+        RoomKind::Game(_) | RoomKind::Nightcap => HomeRoom::OtherRoom,
     }
 }
 
@@ -748,14 +761,30 @@ pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
 /// never in Channels. The rail builder in `ui.rs` and
 /// `visual_order_for_rooms` both key off this.
 pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
-    room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
+    match room.kind {
+        RoomKind::Deadchannel => true,
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Dm
+        | RoomKind::Game(_)
+        | RoomKind::Nightcap => false,
+    }
 }
 
 /// The small bar out back of the Clubhouse (`app/clubhouse/nightcap`):
 /// auto-joined like #lounge, but hidden from every Home surface by
 /// `is_chat_list_room`. Its screen composes into it and draws its tail.
 pub(crate) fn is_nightcap_room(room: &ChatRoom) -> bool {
-    room.kind == late_core::models::chat_room::NIGHTCAP_KIND
+    match room.kind {
+        RoomKind::Nightcap => true,
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Dm
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel => false,
+    }
 }
 
 /// Whether a room's message list keeps the portrait gutter and paints
@@ -1618,7 +1647,15 @@ impl ChatState {
     pub fn unread_dm_count(&self) -> i64 {
         self.rooms
             .iter()
-            .filter(|(room, _)| room.kind == "dm")
+            .filter(|(room, _)| match room.kind {
+                RoomKind::Dm => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            })
             .filter_map(|(room, _)| self.unread_counts.get(&room.id))
             .sum()
     }
@@ -1673,10 +1710,18 @@ impl ChatState {
     /// the count is cleared.
     fn note_sticky_unread_dm(&mut self, room_id: Uuid) {
         let unread = self.unread_counts.get(&room_id).copied().unwrap_or(0) > 0;
-        let is_dm = self
-            .rooms
-            .iter()
-            .any(|(room, _)| room.id == room_id && room.kind == "dm");
+        let is_dm = self.rooms.iter().any(|(room, _)| {
+            room.id == room_id
+                && match room.kind {
+                    RoomKind::Dm => true,
+                    RoomKind::Lounge
+                    | RoomKind::Language
+                    | RoomKind::Topic(_)
+                    | RoomKind::Game(_)
+                    | RoomKind::Deadchannel
+                    | RoomKind::Nightcap => false,
+                }
+        });
         self.sticky_unread_dm = next_sticky_unread_dm(NextStickyUnreadDm {
             current: self.sticky_unread_dm,
             room_id,
@@ -3114,11 +3159,16 @@ impl ChatState {
         let Some(room) = self.room_by_id(room_id) else {
             return Err(GildRefusal::MessageNotFound);
         };
-        if room.visibility != "public" {
-            return Err(GildRefusal::NotPublic);
-        }
-        if room.kind == "game" {
-            return Err(GildRefusal::GameRoom);
+        match room.kind {
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
+            RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Private) => return Err(GildRefusal::NotPublic),
+            RoomKind::Game(RoomVisibility::Public) => return Err(GildRefusal::GameRoom),
         }
         if message.user_id == self.user_id {
             return Err(GildRefusal::SelfGild);
@@ -3159,25 +3209,35 @@ impl ChatState {
     /// their derived owner, every other room with info answers to the house,
     /// and DMs and game rooms have no info at all.
     pub(crate) fn room_info_authority(&self, room: &ChatRoom) -> RoomInfoAuthority {
-        if room.kind == "dm" || room.kind == "game" {
-            return RoomInfoAuthority::NotEditable;
+        let owned = self.room_owner_ids.get(&room.id) == Some(&self.user_id);
+        match room.kind {
+            RoomKind::Dm | RoomKind::Game(_) => RoomInfoAuthority::NotEditable,
+            RoomKind::Topic(RoomVisibility::Private) if owned => RoomInfoAuthority::Owner,
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public | RoomVisibility::Private)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {
+                if self.permissions.can_moderate() {
+                    RoomInfoAuthority::Moderator
+                } else {
+                    RoomInfoAuthority::None
+                }
+            }
         }
-        if room.kind == "topic"
-            && room.visibility == "private"
-            && self.room_owner_ids.get(&room.id) == Some(&self.user_id)
-        {
-            return RoomInfoAuthority::Owner;
-        }
-        if self.permissions.can_moderate() {
-            return RoomInfoAuthority::Moderator;
-        }
-        RoomInfoAuthority::None
     }
 
     /// The owner line the room-info form shows.
     fn room_owner_label(&self, room: &ChatRoom) -> String {
-        if room.kind != "topic" || room.visibility != "private" {
-            return "moderators".to_string();
+        match room.kind {
+            RoomKind::Topic(RoomVisibility::Private) => {}
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => return "moderators".to_string(),
         }
         match self.room_owner_ids.get(&room.id) {
             Some(owner) if *owner == self.user_id => "you".to_string(),
@@ -3368,7 +3428,15 @@ impl ChatState {
         self.lounge_room_id.or_else(|| {
             self.rooms
                 .iter()
-                .find(|(room, _)| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
+                .find(|(room, _)| match room.kind {
+                    RoomKind::Lounge => room.slug.as_deref() == Some("lounge"),
+                    RoomKind::Language
+                    | RoomKind::Topic(_)
+                    | RoomKind::Dm
+                    | RoomKind::Game(_)
+                    | RoomKind::Deadchannel
+                    | RoomKind::Nightcap => false,
+                })
                 .map(|(room, _)| room.id)
         })
     }
@@ -3510,7 +3578,15 @@ impl ChatState {
                 let in_list = self.rooms.iter().any(|(room, _)| {
                     room.id == next_id
                         && (is_rail_room(room, &self.favorite_room_ids)
-                            || (is_stream_room && room.kind == "game"))
+                            || match room.kind {
+                                RoomKind::Game(_) => is_stream_room,
+                                RoomKind::Lounge
+                                | RoomKind::Language
+                                | RoomKind::Topic(_)
+                                | RoomKind::Dm
+                                | RoomKind::Deadchannel
+                                | RoomKind::Nightcap => false,
+                            })
                 });
                 if !in_list {
                     // A stream room the user has never joined: select it
@@ -4045,8 +4121,18 @@ impl ChatState {
             };
             // Public rooms only, checked again in the SQL; this one is for
             // an immediate, honest banner.
-            if room.visibility != "public" {
-                return Some(Banner::error("Summaries cover public rooms only"));
+            match room.kind {
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Public)
+                | RoomKind::Game(RoomVisibility::Public)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {}
+                RoomKind::Topic(RoomVisibility::Private)
+                | RoomKind::Dm
+                | RoomKind::Game(RoomVisibility::Private) => {
+                    return Some(Banner::error("Summaries cover public rooms only"));
+                }
             }
             let window = match parse_summary_arg(rest) {
                 // Always the device mark, never the room's AFK line: the
@@ -4507,7 +4593,7 @@ impl ChatState {
             let room = self
                 .composer_room_id
                 .and_then(|room_id| self.room_by_id(room_id))
-                .map(|room| (room.id, room.visibility == "public" && room.auto_join));
+                .map(|room| (room.id, room.auto_join));
             self.clear_composer_after_submit();
             let order = match parsed {
                 BuyParse::Invalid => {
@@ -4656,13 +4742,20 @@ impl ChatState {
                 RoomInfoAuthority::Owner | RoomInfoAuthority::Moderator => {}
                 RoomInfoAuthority::None => {
                     // Private rooms have an owner who can; public ones do not.
-                    return Some(Banner::error(
-                        if room.kind == "topic" && room.visibility == "private" {
+                    return Some(Banner::error(match room.kind {
+                        RoomKind::Topic(RoomVisibility::Private) => {
                             "Only this room's owner can set its topic and rules"
-                        } else {
+                        }
+                        RoomKind::Lounge
+                        | RoomKind::Language
+                        | RoomKind::Topic(RoomVisibility::Public)
+                        | RoomKind::Dm
+                        | RoomKind::Game(_)
+                        | RoomKind::Deadchannel
+                        | RoomKind::Nightcap => {
                             "Only a moderator can set this room's topic and rules"
-                        },
-                    ));
+                        }
+                    }));
                 }
                 RoomInfoAuthority::NotEditable => {
                     return Some(Banner::error("This room has no topic or rules"));
@@ -7963,7 +8056,15 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // without losing the ones asking for an answer.
     let mut unread_dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
+        .filter(|(r, _)| match r.kind {
+            RoomKind::Dm => true,
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => false,
+        })
         .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .filter(|(r, _)| !pushed_rooms.contains(&r.id))
         .filter(|(r, _)| dm_is_promoted_unread(r.id, unread_counts, sticky_unread_dm))
@@ -7987,10 +8088,12 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // Channels: all non-DM rooms outside Core, public + private merged.
     let channels_collapsed = collapsed_sections.contains(&RoomSection::Channels);
     for (room, _) in rooms {
-        if is_chat_list_room(room)
-            && room.kind != "dm"
+        let channel = match room.kind {
+            RoomKind::Lounge | RoomKind::Language | RoomKind::Topic(_) => true,
+            RoomKind::Dm | RoomKind::Game(_) | RoomKind::Deadchannel | RoomKind::Nightcap => false,
+        };
+        if channel
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
-            && !is_deadchannel_room(room)
             && room.slug.as_deref() != Some("voice")
             && pushed_rooms.insert(room.id)
             && !channels_collapsed
@@ -8005,7 +8108,15 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
     let mut dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
+        .filter(|(r, _)| match r.kind {
+            RoomKind::Dm => true,
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => false,
+        })
         .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
@@ -8110,7 +8221,15 @@ pub(crate) fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
 /// hidden from every room-list section (favorites included) so an ignored peer
 /// can't resurface the DM or its unread state by sending again.
 pub(crate) fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
-    room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
+    match room.kind {
+        RoomKind::Dm => dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer)),
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => false,
+    }
 }
 
 /// Sort key for DMs: resolves the other participant's username.
@@ -8755,8 +8874,14 @@ pub(crate) fn rank_room_name_matches<'a>(
     let mut rooms: Vec<(String, String)> = rooms
         .into_iter()
         .filter_map(|room| {
-            if room.kind == "dm" {
-                return None;
+            match room.kind {
+                RoomKind::Dm => return None,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {}
             }
             let name = room.slug.as_deref()?.trim();
             if name.is_empty() {

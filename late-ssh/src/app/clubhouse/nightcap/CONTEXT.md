@@ -38,7 +38,7 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   the room after its first room load; a visit never writes a membership
   row. `i` before that load says "the bar is still opening up."
 - Hidden by kind, not by slug: `chat/state.rs::is_chat_list_room` returns
-  false for `is_nightcap_room`, which keeps it off the rail, the picker,
+  false for `RoomKind::Nightcap`, which keeps it off the rail, the picker,
   Home's selection fallbacks, and the visual order. Browse lists only
   `topic` rooms and IRC projects only lounge/language/topic, so those skip
   it by construction. The slug is reserved from user creation.

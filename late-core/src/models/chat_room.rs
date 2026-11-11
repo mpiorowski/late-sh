@@ -32,26 +32,120 @@ impl WatchDoor {
     }
 }
 
-crate::model! {
-    table = "chat_rooms";
-    params = ChatRoomParams;
-    struct ChatRoom {
-        @data
-        pub kind: String,
-        pub visibility: String,
-        pub auto_join: bool,
-        pub permanent: bool,
-        pub slug: Option<String>,
-        pub language_code: Option<String>,
-        pub dm_user_a: Option<Uuid>,
-        pub dm_user_b: Option<Uuid>,
-        // What this room is about, one line. Projected as the IRC topic.
-        pub topic: Option<String>,
-        // The room's general rules, shown on request.
-        pub rules: Option<String>,
-        // Who opened this room. Written by the create paths only, never
-        // back-filled; see `owner_id` for the ownership actually in force.
-        pub created_by: Option<Uuid>,
+/// Who may walk into a topic or game room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomVisibility {
+    /// Anyone may join.
+    Public,
+    /// Members only: a private topic room is joined by invitation, and a
+    /// private game room is a match chat from when those were players-only.
+    Private,
+}
+
+impl RoomVisibility {
+    /// The `chat_rooms.visibility` column of a topic or game room.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+        }
+    }
+}
+
+/// What a room is: the `chat_rooms.kind` and `visibility` columns read as
+/// one value, so a pair the code never writes cannot be held. Only topic and
+/// game rooms come in both visibilities; a DM is its two members', and every
+/// other kind is public.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RoomKind {
+    Lounge,
+    Language,
+    Topic(RoomVisibility),
+    Dm,
+    /// A game's own chat: a table, a match, a watch room, a stream room, a
+    /// Realm world.
+    Game(RoomVisibility),
+    /// The haunted channel (migration 170): its own kind so every listing
+    /// excludes or places it by construction rather than by slug.
+    Deadchannel,
+    /// The small bar out back of the Clubhouse (migration 189): its own
+    /// kind so every listing skips it by construction; see
+    /// `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`.
+    Nightcap,
+}
+
+impl RoomKind {
+    /// The `chat_rooms.kind` column.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lounge => "lounge",
+            Self::Language => "language",
+            Self::Topic(RoomVisibility::Public | RoomVisibility::Private) => "topic",
+            Self::Dm => "dm",
+            Self::Game(RoomVisibility::Public | RoomVisibility::Private) => "game",
+            Self::Deadchannel => "deadchannel",
+            Self::Nightcap => "nightcap",
+        }
+    }
+
+    /// Reads the two columns. A pair outside the ones `ChatRoom`'s writers
+    /// produce is a corrupt row, not a room.
+    pub(crate) fn from_columns(kind: &str, visibility: &str) -> Self {
+        match (kind, visibility) {
+            ("lounge", "public") => Self::Lounge,
+            ("language", "public") => Self::Language,
+            ("topic", "public") => Self::Topic(RoomVisibility::Public),
+            ("topic", "private") => Self::Topic(RoomVisibility::Private),
+            ("dm", "dm") => Self::Dm,
+            ("game", "public") => Self::Game(RoomVisibility::Public),
+            ("game", "private") => Self::Game(RoomVisibility::Private),
+            ("deadchannel", "public") => Self::Deadchannel,
+            ("nightcap", "public") => Self::Nightcap,
+            (kind, visibility) => {
+                panic!("unknown room kind in the database: {kind} ({visibility})")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatRoom {
+    pub id: Uuid,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+    pub kind: RoomKind,
+    pub auto_join: bool,
+    pub permanent: bool,
+    pub slug: Option<String>,
+    pub language_code: Option<String>,
+    pub dm_user_a: Option<Uuid>,
+    pub dm_user_b: Option<Uuid>,
+    // What this room is about, one line. Projected as the IRC topic.
+    pub topic: Option<String>,
+    // The room's general rules, shown on request.
+    pub rules: Option<String>,
+    // Who opened this room. Written by the create paths only, never
+    // back-filled; see `owner_id` for the ownership actually in force.
+    pub created_by: Option<Uuid>,
+}
+
+impl From<tokio_postgres::Row> for ChatRoom {
+    fn from(row: tokio_postgres::Row) -> Self {
+        Self {
+            id: row.get("id"),
+            created: row.get("created"),
+            updated: row.get("updated"),
+            kind: RoomKind::from_columns(row.get("kind"), row.get("visibility")),
+            auto_join: row.get("auto_join"),
+            permanent: row.get("permanent"),
+            slug: row.get("slug"),
+            language_code: row.get("language_code"),
+            dm_user_a: row.get("dm_user_a"),
+            dm_user_b: row.get("dm_user_b"),
+            topic: row.get("topic"),
+            rules: row.get("rules"),
+            created_by: row.get("created_by"),
+        }
     }
 }
 
@@ -119,6 +213,13 @@ pub struct IrcHistoryTarget {
 }
 
 impl ChatRoom {
+    pub async fn get(client: &Client, id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt("SELECT * FROM chat_rooms WHERE id = $1", &[&id])
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     pub async fn ensure_lounge(client: &Client) -> Result<Self> {
         let row = client
             .query_one(
@@ -218,7 +319,7 @@ impl ChatRoom {
     /// between public (`#slug`) and private (`##slug`) IRC channels.
     pub async fn find_irc_channel_by_slug_for_user(
         client: &Client,
-        visibility: &str,
+        visibility: RoomVisibility,
         slug: &str,
         user_id: Uuid,
     ) -> Result<Option<Self>> {
@@ -232,7 +333,7 @@ impl ChatRoom {
              LIMIT 1"
         );
         let row = client
-            .query_opt(&sql, &[&user_id, &slug, &visibility])
+            .query_opt(&sql, &[&user_id, &slug, &visibility.as_str()])
             .await?;
         Ok(row.map(Self::from))
     }
@@ -263,7 +364,7 @@ impl ChatRoom {
 
     pub async fn find_topic_room(
         client: &Client,
-        visibility: &str,
+        visibility: RoomVisibility,
         slug: &str,
     ) -> Result<Option<Self>> {
         let slug = normalize_topic_slug(slug)?;
@@ -272,7 +373,7 @@ impl ChatRoom {
                 "SELECT *
                  FROM chat_rooms
                  WHERE kind = 'topic' AND visibility = $1 AND slug = $2",
-                &[&visibility, &slug],
+                &[&visibility.as_str(), &slug],
             )
             .await?;
         Ok(row.map(Self::from))
@@ -781,21 +882,26 @@ impl ChatRoom {
     }
 
     pub async fn get_target_user_ids(client: &Client, room_id: Uuid) -> Result<Option<Vec<Uuid>>> {
-        let visibility: String = client
+        let row = client
             .query_one(
-                "SELECT visibility FROM chat_rooms WHERE id = $1",
+                "SELECT kind, visibility FROM chat_rooms WHERE id = $1",
                 &[&room_id],
             )
-            .await?
-            .get(0);
+            .await?;
 
-        if visibility == "dm" || visibility == "private" {
-            Ok(Some(
+        match RoomKind::from_columns(row.get("kind"), row.get("visibility")) {
+            RoomKind::Dm
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Game(RoomVisibility::Private) => Ok(Some(
                 crate::models::chat_room_member::ChatRoomMember::list_user_ids(client, room_id)
                     .await?,
-            ))
-        } else {
-            Ok(None)
+            )),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Game(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => Ok(None),
         }
     }
 
@@ -807,15 +913,6 @@ impl ChatRoom {
             .query("SELECT * FROM chat_rooms WHERE id = ANY($1)", &[&room_ids])
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
-    }
-
-    pub async fn is_kind(client: &Client, room_id: Uuid, kind: &str) -> Result<bool> {
-        let row = client
-            .query_opt("SELECT kind FROM chat_rooms WHERE id = $1", &[&room_id])
-            .await?;
-        Ok(row
-            .map(|row| row.get::<_, String>(0) == kind)
-            .unwrap_or(false))
     }
 
     /// Rooms visible to the user as IRC channels: the lounge, language rooms,
@@ -1243,21 +1340,14 @@ pub struct PublicTopicRoomSummary {
 /// The haunted channel's slug: reserved from user creation in
 /// `normalize_topic_slug`, owned by `get_or_create_deadchannel_room`.
 pub const DEADCHANNEL_SLUG: &str = "deadchannel";
-/// The haunted channel's `chat_rooms.kind` (migration 170): its own kind
-/// so every kind whitelist (browse, IRC, the rail's sections) excludes or
-/// places it by construction rather than by slug.
-pub const DEADCHANNEL_KIND: &str = "deadchannel";
-/// The small bar's slug and `chat_rooms.kind` (migration 189), owned by
-/// `ensure_nightcap`. Its own kind so every listing skips it by
-/// construction; see `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`.
+/// The small bar's slug, owned by `ensure_nightcap`.
 pub const NIGHTCAP_SLUG: &str = "nightcap";
-pub const NIGHTCAP_KIND: &str = "nightcap";
 /// Kinds no cross-room reader may surface, whatever membership or
 /// visibility would allow: message search, history paging, and mention
 /// resolution all bind this as `kind <> ALL($n::text[])`. A hidden room is
 /// only ever seen from its own screen; membership alone is no gate, since
 /// the nightcap room seats every account.
-pub const HIDDEN_ROOM_KINDS: &[&str] = &[NIGHTCAP_KIND];
+pub const HIDDEN_ROOM_KINDS: &[&str] = &[RoomKind::Nightcap.as_str()];
 
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     if user_a.as_u128() < user_b.as_u128() {

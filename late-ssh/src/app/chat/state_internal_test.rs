@@ -316,15 +316,19 @@ fn rank_mention_matches_skips_online_set_when_prefix_excludes_all() {
 
 #[test]
 fn rank_room_name_matches_filters_and_prefixes_non_dm_rooms() {
-    let rust = make_room(Uuid::from_u128(1), "topic", "public", false, Some("rust"));
+    let rust = make_room(
+        Uuid::from_u128(1),
+        RoomKind::Topic(RoomVisibility::Public),
+        false,
+        Some("rust"),
+    );
     let recipes = make_room(
         Uuid::from_u128(2),
-        "topic",
-        "public",
+        RoomKind::Topic(RoomVisibility::Public),
         false,
         Some("recipes"),
     );
-    let dm = make_room(Uuid::from_u128(3), "dm", "dm", false, None);
+    let dm = make_room(Uuid::from_u128(3), RoomKind::Dm, false, None);
 
     let rooms = [&rust.0, &recipes.0, &dm.0];
     let ranked = rank_room_name_matches(rooms, "r");
@@ -813,8 +817,7 @@ fn wrapped_index_wraps_backward() {
 
 fn make_room(
     id: Uuid,
-    kind: &str,
-    visibility: &str,
+    kind: RoomKind,
     permanent: bool,
     slug: Option<&str>,
 ) -> (ChatRoom, Vec<ChatMessage>) {
@@ -823,8 +826,7 @@ fn make_room(
             id,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
-            kind: kind.to_string(),
-            visibility: visibility.to_string(),
+            kind,
             auto_join: permanent,
             permanent,
             slug: slug.map(str::to_string),
@@ -839,27 +841,34 @@ fn make_room(
     )
 }
 
-/// Home's attention label is read off the room's kind and visibility; a
-/// kind it does not name lands on `OtherRoom` rather than a room label.
+/// Home's attention label is read off the room's kind; a game chat and the
+/// bar out back are `OtherRoom` rather than a room label.
 #[test]
 fn home_room_kind_names_every_listed_kind() {
     let kinds = [
-        ("lounge", "public", HomeRoom::Lounge),
-        ("language", "public", HomeRoom::Language),
-        ("topic", "public", HomeRoom::PublicTopic),
-        ("topic", "private", HomeRoom::PrivateTopic),
-        ("dm", "dm", HomeRoom::Dm),
-        ("deadchannel", "private", HomeRoom::Deadchannel),
-        ("game", "public", HomeRoom::OtherRoom),
+        (RoomKind::Lounge, HomeRoom::Lounge),
+        (RoomKind::Language, HomeRoom::Language),
+        (
+            RoomKind::Topic(RoomVisibility::Public),
+            HomeRoom::PublicTopic,
+        ),
+        (
+            RoomKind::Topic(RoomVisibility::Private),
+            HomeRoom::PrivateTopic,
+        ),
+        (RoomKind::Dm, HomeRoom::Dm),
+        (RoomKind::Deadchannel, HomeRoom::Deadchannel),
+        (RoomKind::Game(RoomVisibility::Public), HomeRoom::OtherRoom),
+        (RoomKind::Nightcap, HomeRoom::OtherRoom),
     ];
     let named: Vec<_> = kinds
         .iter()
-        .map(|(kind, visibility, _)| {
-            let (room, _) = make_room(Uuid::from_u128(40), kind, visibility, false, None);
+        .map(|(kind, _)| {
+            let (room, _) = make_room(Uuid::from_u128(40), *kind, false, None);
             home_room_kind(&room)
         })
         .collect();
-    let expected: Vec<_> = kinds.iter().map(|(_, _, home)| *home).collect();
+    let expected: Vec<_> = kinds.iter().map(|(_, home)| *home).collect();
     assert_eq!(named, expected);
 }
 
@@ -869,18 +878,11 @@ fn the_nightcap_room_is_never_a_list_room() {
     // The kind alone keeps the bar out back off the rail and the picker.
     let (nightcap, _) = make_room(
         Uuid::from_u128(30),
-        late_core::models::chat_room::NIGHTCAP_KIND,
-        "public",
+        RoomKind::Nightcap,
         true,
         Some("nightcap"),
     );
-    let (lounge, _) = make_room(
-        Uuid::from_u128(10),
-        "lounge",
-        "public",
-        true,
-        Some("lounge"),
-    );
+    let (lounge, _) = make_room(Uuid::from_u128(10), RoomKind::Lounge, true, Some("lounge"));
 
     assert!(is_nightcap_room(&nightcap));
     assert!(!is_chat_list_room(&nightcap));
@@ -907,26 +909,44 @@ fn visual_order_matches_cozy_rail_grouping() {
     usernames.insert(bob, "bob".to_string());
 
     let rooms = vec![
-        make_room(public_zeta, "topic", "public", false, Some("zeta")),
-        make_room(game_table, "game", "public", false, Some("bj-abc123")),
-        make_room(lounge, "lounge", "public", true, Some("lounge")),
+        make_room(
+            public_zeta,
+            RoomKind::Topic(RoomVisibility::Public),
+            false,
+            Some("zeta"),
+        ),
+        make_room(
+            game_table,
+            RoomKind::Game(RoomVisibility::Public),
+            false,
+            Some("bj-abc123"),
+        ),
+        make_room(lounge, RoomKind::Lounge, true, Some("lounge")),
         (dm_bob.clone(), Vec::new()),
-        make_room(private_beta, "topic", "private", false, Some("beta")),
+        make_room(
+            private_beta,
+            RoomKind::Topic(RoomVisibility::Private),
+            false,
+            Some("beta"),
+        ),
         make_room(
             announcements,
-            "topic",
-            "public",
+            RoomKind::Topic(RoomVisibility::Public),
             true,
             Some("announcements"),
         ),
         (dm_alice.clone(), Vec::new()),
-        make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        make_room(
+            public_alpha,
+            RoomKind::Topic(RoomVisibility::Public),
+            false,
+            Some("alpha"),
+        ),
         // Public and non-permanent like alpha, but its own kind: the
         // haunted channel closes Core instead of sorting into Channels.
         make_room(
             deadchannel,
-            "deadchannel",
-            "public",
+            RoomKind::Deadchannel,
             false,
             Some("deadchannel"),
         ),
@@ -995,15 +1015,19 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
     let usernames = HashMap::new();
 
     let rooms = vec![
-        make_room(lounge, "lounge", "public", true, Some("lounge")),
+        make_room(lounge, RoomKind::Lounge, true, Some("lounge")),
         make_room(
             announcements,
-            "topic",
-            "public",
+            RoomKind::Topic(RoomVisibility::Public),
             true,
             Some("announcements"),
         ),
-        make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        make_room(
+            public_alpha,
+            RoomKind::Topic(RoomVisibility::Public),
+            false,
+            Some("alpha"),
+        ),
         (dm_bob.clone(), Vec::new()),
     ];
     let order = |collapsed: &HashSet<RoomSection>| {
@@ -1190,8 +1214,13 @@ fn visual_order_promotes_unread_dms_above_channels() {
     usernames.insert(carol, "carol".to_string());
 
     let rooms = vec![
-        make_room(lounge, "lounge", "public", true, Some("lounge")),
-        make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        make_room(lounge, RoomKind::Lounge, true, Some("lounge")),
+        make_room(
+            public_alpha,
+            RoomKind::Topic(RoomVisibility::Public),
+            false,
+            Some("alpha"),
+        ),
         (dm_alice.clone(), Vec::new()),
         (dm_bob.clone(), Vec::new()),
         (dm_carol.clone(), Vec::new()),
@@ -1242,7 +1271,12 @@ fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
     usernames.insert(bob, "bob".to_string());
 
     let rooms = vec![
-        make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        make_room(
+            public_alpha,
+            RoomKind::Topic(RoomVisibility::Public),
+            false,
+            Some("alpha"),
+        ),
         (dm_bob.clone(), Vec::new()),
     ];
     let order = |sticky: Option<Uuid>| {
@@ -1532,8 +1566,7 @@ fn room_slug_for_uses_explicit_room_id() {
                 id: lounge_id,
                 created: chrono::Utc::now(),
                 updated: chrono::Utc::now(),
-                kind: "lounge".to_string(),
-                visibility: "public".to_string(),
+                kind: RoomKind::Lounge,
                 auto_join: true,
                 permanent: true,
                 slug: Some("lounge".to_string()),
@@ -1551,8 +1584,7 @@ fn room_slug_for_uses_explicit_room_id() {
                 id: announcements_id,
                 created: chrono::Utc::now(),
                 updated: chrono::Utc::now(),
-                kind: "topic".to_string(),
-                visibility: "public".to_string(),
+                kind: RoomKind::Topic(RoomVisibility::Public),
                 auto_join: true,
                 permanent: true,
                 slug: Some("announcements".to_string()),
@@ -2417,8 +2449,7 @@ fn make_dm(user_a: Uuid, user_b: Uuid) -> ChatRoom {
         id: Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)),
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        kind: "dm".to_string(),
-        visibility: "dm".to_string(),
+        kind: RoomKind::Dm,
         auto_join: false,
         permanent: false,
         slug: None,
@@ -4032,7 +4063,7 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
     let me = Uuid::from_u128(1);
     let lounge = Uuid::from_u128(10);
     let usernames: HashMap<Uuid, String> = HashMap::new();
-    let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
+    let rooms = vec![make_room(lounge, RoomKind::Lounge, true, Some("lounge"))];
     let pinned = vec!["general".to_string(), "tech".to_string()];
     let mail = vec![CmailThread {
         id: "conv-1".to_string(),
@@ -4203,13 +4234,12 @@ fn parse_summary_arg_names_every_outcome() {
 
 /// Minimal room for the `/summary` command gate; the branch reads only
 /// `visibility` (and `id` for the request).
-fn summary_room(visibility: &str) -> ChatRoom {
+fn summary_room(visibility: RoomVisibility) -> ChatRoom {
     ChatRoom {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: "topic".to_string(),
-        visibility: visibility.to_string(),
+        kind: RoomKind::Topic(visibility),
         auto_join: false,
         permanent: false,
         slug: None,
@@ -4229,7 +4259,7 @@ async fn the_afk_line_lands_where_the_silence_started_and_stays_there() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "afk_place").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let room = summary_room("public");
+    let room = summary_room(RoomVisibility::Public);
     let room_id = room.id;
     state.visible_room_id = Some(room_id);
     state.rooms.push((room, Vec::new()));
@@ -4263,7 +4293,7 @@ async fn speaking_in_the_room_clears_its_line_but_being_spoken_to_does_not() {
     let user = late_core::test_utils::create_test_user(&test_db.db, "afk_speak").await;
     let other = late_core::test_utils::create_test_user(&test_db.db, "afk_other").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let room = summary_room("public");
+    let room = summary_room(RoomVisibility::Public);
     let room_id = room.id;
     state.visible_room_id = Some(room_id);
     state.rooms.push((room, Vec::new()));
@@ -4296,9 +4326,9 @@ async fn only_the_room_on_screen_collects_a_line() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "afk_scope").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let watched = summary_room("public");
+    let watched = summary_room(RoomVisibility::Public);
     let watched_id = watched.id;
-    let background = summary_room("public");
+    let background = summary_room(RoomVisibility::Public);
     let background_id = background.id;
     state.visible_room_id = Some(watched_id);
     state.rooms.push((watched, Vec::new()));
@@ -4319,7 +4349,7 @@ async fn neither_a_summary_nor_history_spends_the_line() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "afk_catchup").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let room = summary_room("public");
+    let room = summary_room(RoomVisibility::Public);
     let room_id = room.id;
     state.visible_room_id = Some(room_id);
     state.selected_room_id = Some(room_id);
@@ -4358,7 +4388,7 @@ async fn summary_command_refuses_non_public_rooms() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "sum_cmd_priv").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let room = summary_room("private");
+    let room = summary_room(RoomVisibility::Private);
     state.visible_room_id = Some(room.id);
     state.rooms.push((room, Vec::new()));
 
@@ -4375,7 +4405,7 @@ async fn summary_command_requests_the_visible_public_room() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "sum_cmd_pub").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let room = summary_room("public");
+    let room = summary_room(RoomVisibility::Public);
     let room_id = room.id;
     state.visible_room_id = Some(room_id);
     state.rooms.push((room, Vec::new()));
@@ -4441,7 +4471,7 @@ async fn summary_command_refuses_a_malformed_window_without_requesting() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "sum_cmd_bad").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    let room = summary_room("public");
+    let room = summary_room(RoomVisibility::Public);
     state.visible_room_id = Some(room.id);
     state.rooms.push((room, Vec::new()));
     let mut events = state.summary_service.subscribe();
@@ -4711,7 +4741,7 @@ fn synthetic_favorite_ids_round_trip_and_cannot_be_room_ids() {
 fn visual_order_moves_favorited_synthetic_entries_out_of_core() {
     let me = Uuid::from_u128(1);
     let lounge = Uuid::from_u128(10);
-    let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
+    let rooms = vec![make_room(lounge, RoomKind::Lounge, true, Some("lounge"))];
     let favorites = [FAVORITE_ID_NEWS, FAVORITE_ID_FEEDS, FAVORITE_ID_DISCOVER];
     let order_for = |collapsed: HashSet<RoomSection>| {
         visual_order_for_rooms(RoomVisualOrderInput {
@@ -4763,9 +4793,19 @@ fn visual_order_lists_a_game_room_only_while_favorited() {
     let fav_stream = Uuid::from_u128(30);
     let other_stream = Uuid::from_u128(31);
     let rooms = vec![
-        make_room(lounge, "lounge", "public", true, Some("lounge")),
-        make_room(nethack, "game", "public", false, Some("nethack-mat")),
-        make_room(fav_stream, "game", "public", false, Some("mat-live")),
+        make_room(lounge, RoomKind::Lounge, true, Some("lounge")),
+        make_room(
+            nethack,
+            RoomKind::Game(RoomVisibility::Public),
+            false,
+            Some("nethack-mat"),
+        ),
+        make_room(
+            fav_stream,
+            RoomKind::Game(RoomVisibility::Public),
+            false,
+            Some("mat-live"),
+        ),
     ];
     let live = |room_id: Uuid, username: &str| crate::app::stream::registry::LiveStreamView {
         user_id: Uuid::now_v7(),

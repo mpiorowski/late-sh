@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, TimeZone, Utc};
-use late_core::models::{chat_room::ChatRoom, notification::NotificationView};
+use late_core::models::{
+    chat_room::{ChatRoom, RoomKind},
+    notification::NotificationView,
+};
 use uuid::Uuid;
 
 use super::{Inputs, Item, Match, items, unread_rows};
@@ -17,8 +20,7 @@ fn dm(user_a: Uuid, user_b: Uuid) -> ChatRoom {
         id: Uuid::now_v7(),
         created: at(0),
         updated: at(0),
-        kind: "dm".to_string(),
-        visibility: "private".to_string(),
+        kind: RoomKind::Dm,
         auto_join: false,
         permanent: false,
         slug: None,
