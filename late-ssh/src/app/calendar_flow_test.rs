@@ -147,8 +147,8 @@ async fn posting_to_the_board_and_saying_youre_in() {
     let menu = app.calendar.context_menu.as_ref().expect("context menu");
     assert_eq!(
         menu.items.len(),
-        4,
-        "open, in, edit, delete: {:?}",
+        5,
+        "open, duplicate, in, edit, delete: {:?}",
         menu.items
     );
     app.handle_input(b"\x1b");
@@ -158,8 +158,164 @@ async fn posting_to_the_board_and_saying_youre_in() {
     .await;
 }
 
+#[tokio::test]
+async fn duplicating_a_visible_event_makes_an_independent_session_with_its_own_timing() {
+    let db = new_test_db().await;
+    let poster = create_test_user(&db.db, "calendar_source").await;
+    let viewer = create_test_user(&db.db, "calendar_copy").await;
+    let day = Utc::now().date_naive() + Duration::days(1);
+    let original_draft = EventDraft {
+        title: "Workshop tomorrow at 9pm".into(),
+        description: "Shared session details".into(),
+        timing: EventTiming::Timed {
+            start: day.and_hms_opt(9, 0, 0).unwrap().and_utc(),
+            end: Some(day.and_hms_opt(11, 0, 0).unwrap().and_utc()),
+        },
+    };
+    let store = CalendarStore::new(db.db.clone());
+    let original = store
+        .save(poster.id, CalendarSource::Board, None, &original_draft)
+        .await
+        .unwrap()
+        .event;
+    let mut app = make_app(db.db.clone(), viewer.id, "calendar-copy-flow");
+    app.show_splash = false;
+    app.handle_input(b"7");
+    app.calendar.select_date(day);
+    app.calendar.refresh();
+    wait_for_app(&mut app, "original loaded", |a| {
+        !a.calendar.loading && a.calendar.events.iter().any(|e| e.id == original.id)
+    })
+    .await;
+    act(&mut app.calendar, Action::Event(original.id));
+    wait_for_app(&mut app, "original details", |a| {
+        matches!(&a.calendar.modal,
+        Some(Modal::Details(e)) if e.id == original.id)
+    })
+    .await;
+    app.handle_input(b"c");
+    app.handle_input(b"\x1b");
+    wait_for_app(
+        &mut app,
+        "copy discard prompt",
+        |a| matches!(&a.calendar.modal, Some(Modal::Editor(e)) if e.discard_prompt),
+    )
+    .await;
+    app.handle_input(b"d");
+    assert!(
+        matches!(&app.calendar.modal, Some(Modal::Details(e)) if e.id == original.id),
+        "discarding the copy restores its source details"
+    );
+    app.handle_input(b"c");
+    let Some(Modal::Editor(e)) = &mut app.calendar.modal else {
+        panic!("copy editor");
+    };
+    assert!(e.existing.is_none());
+    assert_eq!(e.source, CalendarSource::Personal);
+    assert_eq!(e.text(0), original.title);
+    let next = (day + Duration::days(1)).to_string();
+    for (index, value) in [(2, next.as_str()), (3, "10"), (4, next.as_str()), (5, "12")] {
+        e.fields[index] = ratatui_textarea::TextArea::from(vec![value.to_string()]);
+    }
+    app.handle_input(b"\x13");
+    wait_for_app(&mut app, "copy saved", |a| !a.calendar.pending).await;
+    let Some(Modal::Details(copy)) = &app.calendar.modal else {
+        panic!("copy details");
+    };
+    let copy = copy.clone();
+    assert_ne!(copy.id, original.id);
+    assert_eq!(copy.owner_id, Some(viewer.id));
+    assert_eq!(copy.creator_id, viewer.id);
+    assert_eq!(copy.title, original.title);
+    assert_eq!(copy.description, original.description);
+    assert_ne!(copy.timing, original.timing);
+    assert_eq!(
+        copy.starts_at,
+        (day + Duration::days(1))
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+            .and_utc()
+    );
+    assert!(store.event(poster.id, copy.id).await.is_err());
+    assert_eq!(store.event(viewer.id, original.id).await.unwrap(), original);
+
+    // The same target control can publish a saved copy.
+    app.handle_input(b"e\t\t \x13");
+    wait_for_app(&mut app, "copy published", |a| !a.calendar.pending).await;
+    assert!(store.event(poster.id, copy.id).await.unwrap().is_board());
+}
+
 /// A moderator sees a stranger's post with Delete and without Edit, and the
 /// delete returns to the agenda with the selection moved on.
+/// A change notice only re-reads Details while they are on top. Details
+/// kept under a copy's editor come back when the draft is discarded, and by
+/// then the post may be out of the viewer's sight.
+#[tokio::test]
+async fn details_under_a_discarded_copy_close_when_the_post_was_withdrawn() {
+    let db = new_test_db().await;
+    let poster = create_test_user(&db.db, "calendar_withdraw").await;
+    let viewer = create_test_user(&db.db, "calendar_reader").await;
+    let day = Utc::now().date_naive() + Duration::days(1);
+    let draft = EventDraft {
+        title: "Workshop".into(),
+        description: "Shared session details".into(),
+        timing: EventTiming::Timed {
+            start: day.and_hms_opt(9, 0, 0).unwrap().and_utc(),
+            end: Some(day.and_hms_opt(11, 0, 0).unwrap().and_utc()),
+        },
+    };
+    let store = CalendarStore::new(db.db.clone());
+    let post = store
+        .save(poster.id, CalendarSource::Board, None, &draft)
+        .await
+        .unwrap()
+        .event;
+    let mut app = make_app(db.db.clone(), viewer.id, "calendar-withdraw-flow");
+    app.show_splash = false;
+    app.handle_input(b"7");
+    app.calendar.select_date(day);
+    app.calendar.refresh();
+    wait_for_app(&mut app, "post loaded", |a| {
+        !a.calendar.loading && a.calendar.events.iter().any(|e| e.id == post.id)
+    })
+    .await;
+    act(&mut app.calendar, Action::Event(post.id));
+    wait_for_app(&mut app, "post details", |a| {
+        matches!(&a.calendar.modal,
+        Some(Modal::Details(e)) if e.id == post.id)
+    })
+    .await;
+    app.handle_input(b"c");
+    assert!(matches!(&app.calendar.modal, Some(Modal::Editor(_))));
+
+    store
+        .save(
+            poster.id,
+            CalendarSource::Personal,
+            Some((post.id, post.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+
+    app.handle_input(b"\x1b");
+    wait_for_app(
+        &mut app,
+        "copy discard prompt",
+        |a| matches!(&a.calendar.modal, Some(Modal::Editor(e)) if e.discard_prompt),
+    )
+    .await;
+    app.handle_input(b"d");
+    wait_for_app(&mut app, "withdrawn details closed", |a| {
+        a.calendar.modal.is_none()
+    })
+    .await;
+    assert!(
+        app.calendar.events.iter().all(|e| e.id != post.id),
+        "a post made personal is out of the reader's month"
+    );
+}
+
 #[tokio::test]
 async fn staff_take_a_post_down_from_its_details() {
     let db = new_test_db().await;
