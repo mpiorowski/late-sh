@@ -202,7 +202,7 @@ async fn publishing_an_existing_personal_event_ships_the_post_line() {
 
 /// The minute tick re-reads the board alone, without invalidating every
 /// session; a notify invalidates them and re-reads the board without
-/// blanking it first, so the strip and the panel keep what they show.
+/// blanking it first, so Home's banner keeps what it shows.
 #[tokio::test]
 async fn the_board_stays_up_and_the_minute_tick_stays_quiet() {
     let db = new_test_db().await;
@@ -220,7 +220,7 @@ async fn the_board_stays_up_and_the_minute_tick_stays_quiet() {
         .unwrap()
         .event;
     let mut epoch = svc.subscribe();
-    let mut board = svc.board_live();
+    let mut board = svc.board_today();
     let (signals, worker_signals) = mpsc::unbounded_channel();
     // The worker's first minute tick fires at once.
     let worker = svc.start_notify_worker(worker_signals);
@@ -454,11 +454,11 @@ async fn the_listener_keeps_the_board_in_step_and_closes_a_deleted_post() {
         .await
         .unwrap()
         .event;
-    let mut board = svc.board_live();
+    let mut board = svc.board_today();
     contains(&mut board, post.id, true).await;
 
     // Kill only this isolated database's LISTEN connection, then move the
-    // event out of the live window while notifications are down. Resync
+    // event out of today's window while notifications are down. Resync
     // must reconstruct the snapshot.
     let client = db.db.get().await.unwrap();
     let pid: i32 = client.query_one("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LISTEN calendar_changed;%' AND pid<>pg_backend_pid()", &[]).await.unwrap().get(0);

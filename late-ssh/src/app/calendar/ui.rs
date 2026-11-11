@@ -41,7 +41,7 @@ pub(super) fn separator() -> Span<'static> {
 pub(super) fn accent() -> Style {
     base().fg(theme::AMBER()).add_modifier(Modifier::BOLD)
 }
-/// A board post's title: warm, the colour the Live panel gives events.
+/// A board post's title: warm, the board's colour.
 pub(super) fn board_title() -> Style {
     base().fg(theme::AMBER_DIM())
 }

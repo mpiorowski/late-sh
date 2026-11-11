@@ -3,10 +3,10 @@
 //! owns the tables and the rules underneath; `state.rs` only reads replies.
 //!
 //! Private data (a viewer's own events, who they said they are in for)
-//! returns on the requesting session's channel. The board's live posts are
+//! returns on the requesting session's channel. Today's board posts are
 //! one process-shared `watch` every session reads, re-read on
 //! `calendar_changed` and once a minute as the clock moves posts into and
-//! out of the live window. The start announcement is a sweeper on every
+//! out of today's window. The start announcement is a sweeper on every
 //! replica claiming rows (`CalendarStore::claim_started`), so one replica
 //! posts each.
 use crate::{
@@ -37,8 +37,8 @@ use uuid::Uuid;
 /// How often every replica looks for board events that just started.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 /// How often the shared board snapshot is re-read without a notify, so a
-/// post crossing into or out of the live window shows on the strip and the
-/// Live panel. The re-read invalidates no session.
+/// post crossing into or out of today's window shows on Home's banner. The
+/// re-read invalidates no session.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// A settled write, for the metric.
@@ -170,14 +170,15 @@ impl CalendarService {
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
-    /// The board's live posts, shared by every session on this replica.
-    pub fn board_live(&self) -> watch::Receiver<Vec<CalendarEvent>> {
+    /// Today's board posts (`CalendarStore::today_board`), shared by every
+    /// session on this replica.
+    pub fn board_today(&self) -> watch::Receiver<Vec<CalendarEvent>> {
         self.board.subscribe()
     }
     /// The replica's board worker. A notify, or the listener coming back
     /// after missing some, bumps the epoch so every session drops what it
     /// loaded and reads again. The minute tick only moves posts into and out
-    /// of the live window, so it re-reads the board alone. Either way the
+    /// of today's window, so it re-reads the board alone. Either way the
     /// board already published stays up until the fresh read replaces it.
     pub fn start_notify_worker(
         &self,
@@ -200,7 +201,7 @@ impl CalendarService {
                     _ = minute.tick() => {}
                 }
                 read_until_ok(Refresh::CalendarNotices, || async {
-                    let events = svc.store.live_board(Utc::now()).await?;
+                    let events = svc.store.today_board(Utc::now()).await?;
                     svc.publish_board(events);
                     Ok(())
                 })
@@ -208,7 +209,7 @@ impl CalendarService {
             }
         })
     }
-    /// Hand every session on this replica the board's live posts.
+    /// Hand every session on this replica today's board posts.
     pub fn publish_board(&self, events: Vec<CalendarEvent>) {
         self.board.send_replace(events);
     }

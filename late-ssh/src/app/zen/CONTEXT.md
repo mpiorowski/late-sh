@@ -267,9 +267,10 @@ reads as attention). The active chat
 tile hosting the strip is the exception: there it inserts above the
 messages as the #lounge card always did (the card draws it itself, gated
 to #lounge, `active_chat_hosts`); the board's day is never a guest: on a
-day the board has an all-day post it is a one-row banner across the top of
-the whole tree, over every tile (`draw_board_day`, amber, `7 for the
-board` flush right), and `layout::rice_areas` takes that row off the
+day the board has a post, all-day or timed, it is a one-row banner across
+the top of the whole tree, over every tile (`draw_board_day`, the posts
+sharing the row as `calendar/banner.rs` fits them, `7 for the board` flush
+right), and `layout::rice_areas` takes that row off the
 tiles for the renderer, the clicks and the reef's bounds alike
 (`App::home_board_day`). On any other host the strip shows whatever room is
 selected (`App::home_strip_hosted`, which also gates the strip's animation

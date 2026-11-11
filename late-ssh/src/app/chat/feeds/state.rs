@@ -20,8 +20,13 @@ pub struct State {
     article_service: ArticleService,
     user_id: Uuid,
     feeds: Vec<RssFeed>,
+    /// Oldest first, the newest entry at the bottom like the newest line
+    /// of a room (the News list's order).
     entries: Vec<RssEntryView>,
     selected: usize,
+    /// Entries have reached the list at least once: until then nothing
+    /// counts as selected, so the first fill lands on the newest entry.
+    entries_drawn: bool,
     snapshot_rx: watch::Receiver<FeedSnapshot>,
     event_rx: broadcast::Receiver<FeedEvent>,
     article_event_rx: broadcast::Receiver<ArticleEvent>,
@@ -48,6 +53,7 @@ impl State {
             feeds: Vec::new(),
             entries: Vec::new(),
             selected: 0,
+            entries_drawn: false,
             snapshot_rx,
             event_rx,
             article_event_rx,
@@ -159,10 +165,32 @@ impl State {
             let snapshot = self.snapshot_rx.borrow_and_update().clone();
             if snapshot.user_id == Some(self.user_id) {
                 self.feeds = snapshot.feeds;
-                self.entries = snapshot.entries;
-                self.selected = clamp_index(self.selected, self.entries.len());
+                self.set_entries(snapshot.entries);
             }
         }
+    }
+
+    /// Take a newest-first snapshot list in display order, oldest first.
+    /// The cursor stays on the entry it was on; one that left (dismissed,
+    /// pruned) keeps the index, and the first fill lands on the newest.
+    fn set_entries(&mut self, mut entries: Vec<RssEntryView>) {
+        let prev_id = match self.entries_drawn {
+            true => self
+                .entries
+                .get(self.selected_index())
+                .map(|item| item.entry.id),
+            false => None,
+        };
+        entries.reverse();
+        self.entries = entries;
+        self.entries_drawn = self.entries_drawn || !self.entries.is_empty();
+        self.selected = match prev_id {
+            Some(id) => match self.entries.iter().position(|item| item.entry.id == id) {
+                Some(index) => index,
+                None => clamp_index(self.selected, self.entries.len()),
+            },
+            None => self.entries.len().saturating_sub(1),
+        };
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -310,3 +338,7 @@ fn move_index(current: usize, delta: isize, len: usize) -> usize {
     }
     (current as isize + delta).clamp(0, len as isize - 1) as usize
 }
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

@@ -127,7 +127,7 @@ async fn visibility_conversion_keeps_identity_and_clears_board_state() {
         refusal(store.event(guest.id, published.id).await.unwrap_err()),
         CalendarRefusal::Gone
     );
-    assert!(store.live_board(Utc::now()).await.unwrap().is_empty());
+    assert!(store.today_board(Utc::now()).await.unwrap().is_empty());
     let announced: Option<chrono::DateTime<Utc>> = c
         .query_one(
             "SELECT announced_at FROM calendar_events WHERE id=$1",
@@ -574,18 +574,19 @@ async fn the_daily_cap_resets_at_utc_midnight_in_any_session_zone() {
 
 #[tokio::test]
 async fn rsvps_count_and_the_start_is_claimed_once() {
-    // Five minutes ago is yesterday just after UTC midnight: a timed event
-    // can sort before today's all-day event. Cover both orders independently
-    // of the wall clock, including the boundary that failed in CI.
-    for (timestamp, all_day_first) in [
+    // Just after UTC midnight the timed events that began earlier are
+    // yesterday's and sort before today's all-day event; at midday they are
+    // all today's and sort after it. Cover both independently of the wall
+    // clock, including the boundary that failed in CI.
+    for (timestamp, midday) in [
         ("2026-10-13T00:01:00Z", false),
         ("2026-10-13T12:00:00Z", true),
     ] {
-        rsvps_and_start_claim_at(timestamp.parse().unwrap(), all_day_first).await;
+        rsvps_and_start_claim_at(timestamp.parse().unwrap(), midday).await;
     }
 }
 
-async fn rsvps_and_start_claim_at(now: DateTime<Utc>, all_day_first: bool) {
+async fn rsvps_and_start_claim_at(now: DateTime<Utc>, midday: bool) {
     let db = test_db().await;
     let poster = create_test_user(&db.db, "cal_host").await;
     let guest = create_test_user(&db.db, "cal_guest").await;
@@ -661,25 +662,31 @@ async fn rsvps_and_start_claim_at(now: DateTime<Utc>, all_day_first: bool) {
     assert!(store.rsvps(guest.id).await.unwrap().is_empty());
     store.set_rsvp(poster.id, soon.id, true).await.unwrap();
 
-    // Live is the window: the one three days out is not in it, the one
-    // five hours over is not either, the one on now and the one an hour
-    // out are, and the all-day one is for its whole day.
-    let live: Vec<_> = store
-        .live_board(now)
+    // Today's board is the window around now: the one three days out is
+    // not in it; the one five hours over, the one on now, the one half an
+    // hour out and the all-day one are, soonest first.
+    let board: Vec<_> = store
+        .today_board(now)
         .await
         .unwrap()
         .into_iter()
         .map(|e| e.id)
         .collect();
-    let expected = if all_day_first {
-        vec![day.id, on.id, soon.id]
+    let expected = if midday {
+        vec![day.id, over.id, on.id, soon.id]
     } else {
-        vec![on.id, day.id, soon.id]
+        vec![over.id, on.id, day.id, soon.id]
     };
-    assert_eq!(live, expected);
-    assert!(soon.live(now) && on.live(now) && day.live(now));
-    assert!(!far.live(now) && !over.live(now));
-    assert!(on.started(now) && !soon.started(now));
+    assert_eq!(board, expected);
+    // A viewer's today is every date a post covers in their zone. The one
+    // that ended is still today's at midday, and was yesterday's alone
+    // just after midnight; the one on now began yesterday then and runs
+    // into today.
+    let utc = chrono_tz::UTC;
+    assert!(soon.on_day(now, utc) && on.on_day(now, utc) && day.on_day(now, utc));
+    assert!(!far.on_day(now, utc));
+    assert_eq!(over.on_day(now, utc), midday);
+    assert!(over.over(now) && !on.over(now) && !soon.over(now));
 
     // The sweeper claims what started and is not over, once. The all-day
     // post is on and is never claimed.

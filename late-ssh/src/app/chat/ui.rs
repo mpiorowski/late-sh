@@ -44,8 +44,8 @@ use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
     compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
-    is_deadchannel_room, is_rail_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    is_deadchannel_room, is_rail_room, is_selected_slot, synthetic_favorite_id,
+    synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,

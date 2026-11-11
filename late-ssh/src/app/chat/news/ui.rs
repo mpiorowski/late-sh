@@ -31,9 +31,9 @@ use late_core::models::article_read::WatchPosition;
 use late_core::models::article_save::NEWS_SAVED_LIMIT;
 
 pub struct ArticleListView<'a> {
-    /// The shelf first, then the feed (`news::state::display_order`).
+    /// The feed, then the shelf (`news::state::display_order`).
     pub articles: &'a [ArticleFeedItem],
-    /// How many leading `articles` are the shelf.
+    /// How many trailing `articles` are the shelf.
     pub saved_len: usize,
     /// How many stories the shelf holds, filter or no filter.
     pub saved_count: usize,
@@ -163,8 +163,8 @@ pub(crate) fn scroll_offset(
     offset.min(max_offset)
 }
 
-/// Every row of the list for `width` columns: a rule over the shelf and
-/// one over the feed when there is a shelf, and every story whole (its
+/// Every row of the list for `width` columns: a rule over the feed and
+/// one over the shelf under it when there is a shelf, and every story whole (its
 /// title, then who shared it, when, where, and what reading it takes, then
 /// its link and up to three bullets of its summary, its art beside them
 /// when the list is wide enough) with a plain rule between stories.
@@ -175,6 +175,7 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
         .selected_index
         .min(view.articles.len().saturating_sub(1));
     let sectioned = view.saved_len > 0;
+    let shelf_start = view.articles.len() - view.saved_len;
     let full_width = usize::from(width);
     let with_art = width >= ART_MIN_LIST_WIDTH;
     let art_columns = if with_art {
@@ -187,17 +188,17 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     for (index, item) in view.articles.iter().enumerate() {
         // A section's rule heads its first story; any other story is
         // parted from the one above by a plain rule.
-        if sectioned && index == 0 {
+        if sectioned && index == shelf_start {
             rows.push(section_rule(
                 &format!("saved · {} of {NEWS_SAVED_LIMIT}", view.saved_count),
                 full_width,
             ));
-        } else if sectioned && index == view.saved_len {
+        } else if sectioned && index == 0 {
             rows.push(section_rule("latest", full_width));
         } else if index > 0 {
             rows.push(story_rule(full_width));
         }
-        let mut lines = story_rows(item, view, index < view.saved_len, text_width);
+        let mut lines = story_rows(item, view, index >= shelf_start, text_width);
         lines.extend(detail_rows(&item.article, text_width));
         let art = if with_art {
             ascii_preview_if_fit(&item.article.ascii_art, usize::from(ART_WIDTH), lines.len())
@@ -219,7 +220,7 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
         .checked_sub(1)
         .and_then(|above| stories.get(above))
         // The first story reaches row 0, so walking back to it brings back
-        // the shelf's rule above it.
+        // the section rule above it.
         .map_or(0, |above| above.start);
     let context_end = stories
         .get(selected_index + 1)
@@ -232,7 +233,7 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
 }
 
 /// The compact list: one row a story in the same order as the full list,
-/// the shelf first with no rules, each row the title behind its unread
+/// the shelf last with no rules, each row the title behind its unread
 /// dot, then `· example.com · 4m` dim, the title giving way first.
 pub(crate) fn lay_out_compact(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     let mut rows: Vec<ListRow> = Vec::new();
@@ -241,8 +242,9 @@ pub(crate) fn lay_out_compact(view: &ArticleListView<'_>, width: u16) -> ListLay
         .selected_index
         .min(view.articles.len().saturating_sub(1));
     let full_width = usize::from(width);
+    let shelf_start = view.articles.len() - view.saved_len;
     for (index, item) in view.articles.iter().enumerate() {
-        let on_shelf = index < view.saved_len;
+        let on_shelf = index >= shelf_start;
         rows.push(ListRow {
             line: compact_row(item, view, on_shelf, full_width),
             art: None,

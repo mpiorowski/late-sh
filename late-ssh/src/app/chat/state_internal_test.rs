@@ -4780,24 +4780,25 @@ fn visual_order_lists_a_game_room_only_while_favorited() {
         watch_url: String::new(),
     };
     let streams = [live(fav_stream, "mat"), live(other_stream, "spoon")];
-    let order_for = |favorites: &[Uuid], live_streams: &[crate::app::stream::registry::LiveStreamView]| {
-        visual_order_for_rooms(RoomVisualOrderInput {
-            rooms: &rooms,
-            user_id: me,
-            usernames: &HashMap::new(),
-            unread_counts: &HashMap::new(),
-            room_last_message_at: &HashMap::new(),
-            feeds_available: false,
-            cyberspace_linked: false,
-            cyberspace_rooms: &[],
-            cyberspace_mail: &[],
-            favorite_room_ids: favorites,
-            collapsed_sections: &HashSet::new(),
-            ignored_user_ids: &HashSet::new(),
-            sticky_unread_dm: None,
-            live_streams,
-        })
-    };
+    let order_for =
+        |favorites: &[Uuid], live_streams: &[crate::app::stream::registry::LiveStreamView]| {
+            visual_order_for_rooms(RoomVisualOrderInput {
+                rooms: &rooms,
+                user_id: me,
+                usernames: &HashMap::new(),
+                unread_counts: &HashMap::new(),
+                room_last_message_at: &HashMap::new(),
+                feeds_available: false,
+                cyberspace_linked: false,
+                cyberspace_rooms: &[],
+                cyberspace_mail: &[],
+                favorite_room_ids: favorites,
+                collapsed_sections: &HashSet::new(),
+                ignored_user_ids: &HashSet::new(),
+                sticky_unread_dm: None,
+                live_streams,
+            })
+        };
     let core = [
         RoomSlot::Room(lounge),
         RoomSlot::News,
