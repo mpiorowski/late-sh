@@ -7686,8 +7686,16 @@ fn inline_image_request_candidates(
         {
             continue;
         }
-        let shown =
-            crate::app::common::spoiler::shown(&msg.body, spoilers_revealed.contains(&msg.id));
+        // A message still hiding a spoiler previews nothing, not even a link
+        // outside its bars: the preview is kept by message id, so one
+        // fetched now would stay under the message once a reveal makes an
+        // earlier, hidden link the one Enter opens.
+        if crate::app::common::spoiler::has_spoiler(&msg.body)
+            && !spoilers_revealed.contains(&msg.id)
+        {
+            continue;
+        }
+        let shown = crate::app::common::spoiler::unwrap_spoilers(&msg.body);
         if let Some(source) = inline_preview_source_in_body(&shown) {
             tracing::trace!(?source, "found inline preview in chat");
             requests.push((msg.id, source));

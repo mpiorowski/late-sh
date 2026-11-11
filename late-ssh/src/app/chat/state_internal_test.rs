@@ -421,6 +421,36 @@ fn a_spoiled_link_is_fetched_for_a_preview_only_once_revealed() {
     );
 }
 
+/// The preview is kept by message id, so it must be the link Enter opens
+/// after the reveal. A visible link behind a hidden one waits for it: fetched
+/// while hidden, it would stay under the message as the wrong picture.
+#[test]
+fn a_visible_link_after_a_hidden_one_waits_for_the_reveal() {
+    let now = Instant::now();
+    let mut spoiled = make_msg(Uuid::from_u128(1));
+    spoiled.body = "||https://h.uguu.se/a.png|| https://h.uguu.se/b.png".to_string();
+    let messages = vec![spoiled.clone()];
+    let candidates = |revealed: &HashSet<Uuid>| {
+        inline_image_request_candidates(
+            &messages,
+            revealed,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        )
+    };
+
+    assert_eq!(candidates(&HashSet::new()), vec![]);
+    assert_eq!(
+        candidates(&HashSet::from([spoiled.id])),
+        vec![(
+            spoiled.id,
+            InlinePreviewSource::Image("https://h.uguu.se/a.png".to_string())
+        )]
+    );
+}
+
 #[test]
 fn reply_preview_text_strips_markdown_markers() {
     let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");

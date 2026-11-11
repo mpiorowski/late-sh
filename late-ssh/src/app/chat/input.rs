@@ -567,9 +567,9 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         // `G` always jumps to a reply's referenced message. Enter is overloaded
-        // (unrevealed spoilers, a News card, an image, then a YouTube link,
-        // take precedence), so a reply that contains any of them can't be
-        // followed with Enter alone;
+        // (a News card, an image, then a YouTube link, take precedence), so a
+        // reply that contains any of them can't be followed with Enter alone;
+        // a spoiler only costs it one press, the reveal.
         // `G` reaches the parent regardless. Lowercase `g` is the gild key
         // above.
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {

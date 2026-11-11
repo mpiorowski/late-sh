@@ -41,7 +41,8 @@ fn a_mention_preview_masks_spoilers_before_it_cuts() {
     assert_eq!(mention_preview("hi ||CRANE||"), "hi ▒▒▒▒▒");
 
     let long = format!("{} ||the butler did it||", "x".repeat(110));
-    let preview = mention_preview(&long);
-    assert_eq!(preview.chars().count(), 120);
-    assert!(!preview.contains("butler"), "{preview}");
+    assert_eq!(
+        mention_preview(&long),
+        format!("{} {}", "x".repeat(110), "▒".repeat(9))
+    );
 }

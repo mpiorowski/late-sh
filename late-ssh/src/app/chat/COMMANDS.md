@@ -49,7 +49,7 @@ Reply mode:
 - Enters compose mode and clears edit.
 - On submit, stores `reply_to_message_id` and prefixes the stored body with a visible quote line for backward-compatible rendering.
 - Enter on a selected reply jumps only if the target is already loaded in the current room tail.
-- `G` on a selected reply also jumps to the loaded target. Enter is overloaded (unrevealed spoilers reveal first, then an inline image opens, then a YouTube link plays), so a reply whose own text carries any of them can only be followed with `G`, not Enter. A link inside the quote line does not count: it is the parent's, so Enter jumps there and a second Enter opens it. Lowercase `g` is the gild key.
+- `G` on a selected reply also jumps to the loaded target. Enter is overloaded: it first reveals the reply's own `||spoilers||`, once, and a second Enter then moves on. After that an inline image opens, else a YouTube link plays, so a reply whose own text carries either of those can only be followed with `G`, not Enter; a reply with nothing but a spoiler is followed by the second Enter. A link inside the quote line does not count: it is the parent's, so Enter jumps there and a second Enter opens it. Lowercase `g` is the gild key.
 
 Edit mode:
 - Allowed for the message author or admins.
