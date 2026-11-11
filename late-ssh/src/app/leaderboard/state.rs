@@ -34,6 +34,7 @@ pub(crate) enum Board {
     TopChat,
     Daily(DailyPuzzle),
     Score(ScoreGame),
+    DopewarsScore,
     BadgeGuide,
 }
 
@@ -84,6 +85,9 @@ impl Board {
             boards.push(Self::DoorDepth(game));
             boards.push(Self::DoorScore(game));
         }
+        // dopewars is not on the roguelike roster: one score board, last in
+        // the Games group.
+        boards.push(Self::DopewarsScore);
         boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
         boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
         boards.push(Self::BadgeGuide);
@@ -110,6 +114,7 @@ impl Board {
             Self::TopChat => "Top Chat",
             Self::Daily(puzzle) => puzzle.title(),
             Self::Score(game) => game.title(),
+            Self::DopewarsScore => "dopewars Top Score",
             Self::BadgeGuide => "Badge Guide",
         }
     }
@@ -145,6 +150,7 @@ impl Board {
             Self::TopChat => "monthly messages".to_string(),
             Self::Daily(_) => "daily wins".to_string(),
             Self::Score(_) => "best score".to_string(),
+            Self::DopewarsScore => "best final cash on the street".to_string(),
             Self::BadgeGuide => "what each three-letter award code means".to_string(),
         }
     }
@@ -168,6 +174,10 @@ impl Board {
             Self::TopChat => thousands(value),
             Self::Daily(_) => format!("{} wins", thousands(value)),
             Self::Score(_) => thousands(value),
+            Self::DopewarsScore => match value < 0 {
+                true => format!("-${}", thousands(value.saturating_abs())),
+                false => format!("${}", thousands(value)),
+            },
             // Unreachable: BadgeGuide has no ranked entries, so nothing ever
             // calls format_value with it. draw_detail renders the guide
             // directly and returns before reaching entry formatting.
@@ -240,6 +250,10 @@ impl Board {
                     all_time: windows.map_or(EMPTY, |board| &board.all_time),
                 }
             }
+            Self::DopewarsScore => Standings::Paired {
+                monthly: &data.dopewars_scores.monthly,
+                all_time: &data.dopewars_scores.all_time,
+            },
             // Unreachable: draw_detail special-cases BadgeGuide before
             // calling standings.
             Self::BadgeGuide => Standings::Snapshot(EMPTY),

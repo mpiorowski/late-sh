@@ -901,6 +901,7 @@ async fn lateania_boards_rank_living_characters() {
 async fn door_boards_rank_wins_depth_and_score() {
     use crate::models::door_milestone::{DoorMilestone, DoorMilestoneKind, NewDoorMilestone};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    use crate::models::leaderboard::DOPEWARS_GAME_KEY;
 
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -1020,9 +1021,45 @@ async fn door_boards_rank_wins_depth_and_score() {
         );
     }
 
+    // dopewars: an old high score and a recent smaller one. The board keeps
+    // the player's best single run, so all-time reads the old 5M while the
+    // monthly window reads the recent 1.25M — and neither leaks into the
+    // roguelike roster (dopewars is not in DoorGame).
+    let dealer = create_test_user(&test_db.db, "lb_dopewars_dealer").await;
+    for (score, offset, days_ago) in [(5_000_000, 900, 45), (1_250_000, 901, 0)] {
+        let mut dope = run(dealer.id, DoorRunResult::Leaving, score, 1, offset);
+        dope.game = DOPEWARS_GAME_KEY;
+        dope.depth = None;
+        dope.turns = Some(31);
+        dope.ended_at = now - Duration::days(days_ago);
+        dope.source_file = "runs".to_string();
+        assert!(
+            DoorRun::insert_ignore(&client, &dope)
+                .await
+                .expect("insert dopewars run")
+        );
+    }
+
     let data = fetch_leaderboard_data(&client)
         .await
         .expect("fetch leaderboard");
+
+    assert_eq!(
+        entry_for(&data.dopewars_scores.all_time, dealer.id).value,
+        5_000_000
+    );
+    assert_eq!(
+        entry_for(&data.dopewars_scores.monthly, dealer.id).value,
+        1_250_000
+    );
+    assert!(
+        !data.door_boards.values().any(|boards| boards
+            .score
+            .all_time
+            .iter()
+            .any(|entry| entry.user_id == dealer.id)),
+        "dopewars stays off the roguelike board triples"
+    );
 
     let nethack = data
         .door_board(DoorGame::Nethack)

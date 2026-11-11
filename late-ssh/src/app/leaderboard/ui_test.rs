@@ -605,9 +605,9 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[games_header])
     );
 
-    // The Games group: the two Lateania boards plus each door's board
-    // triple, blank, then the Daily Wins group.
-    let games_rows = 2 + 3 * DoorGame::ALL.len();
+    // The Games group: the two Lateania boards, each door's board triple,
+    // and dopewars' one score board, blank, then the Daily Wins group.
+    let games_rows = 2 + 3 * DoorGame::ALL.len() + 1;
     let daily_header = games_header + games_rows + 1 + 1;
     assert_eq!(text(&lines[daily_header - 1]), "");
     assert!(

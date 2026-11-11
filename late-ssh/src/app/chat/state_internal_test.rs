@@ -384,6 +384,74 @@ fn reply_preview_text_uses_message_body_for_nested_replies() {
 }
 
 #[test]
+fn reply_preview_text_keeps_spoilers_hidden() {
+    assert_eq!(
+        reply_preview_text("it is ||CRANE|| today"),
+        "it is ▒▒▒▒▒ today"
+    );
+}
+
+/// A link behind a spoiler bar would give the secret away as a picture, so
+/// nothing fetches it until this session reveals the message; then it
+/// previews like any other link, by the author's URL exactly.
+#[test]
+fn a_spoiled_link_is_fetched_for_a_preview_only_once_revealed() {
+    let now = Instant::now();
+    let mut spoiled = make_msg(Uuid::from_u128(1));
+    spoiled.body = "||https://h.uguu.se/cat.png||".to_string();
+    let messages = vec![spoiled.clone()];
+    let candidates = |revealed: &HashSet<Uuid>| {
+        inline_image_request_candidates(
+            &messages,
+            revealed,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        )
+    };
+
+    assert_eq!(candidates(&HashSet::new()), vec![]);
+    assert_eq!(
+        candidates(&HashSet::from([spoiled.id])),
+        vec![(
+            spoiled.id,
+            InlinePreviewSource::Image("https://h.uguu.se/cat.png".to_string())
+        )]
+    );
+}
+
+/// The preview is kept by message id, so it must be the link Enter opens
+/// after the reveal. A visible link behind a hidden one waits for it: fetched
+/// while hidden, it would stay under the message as the wrong picture.
+#[test]
+fn a_visible_link_after_a_hidden_one_waits_for_the_reveal() {
+    let now = Instant::now();
+    let mut spoiled = make_msg(Uuid::from_u128(1));
+    spoiled.body = "||https://h.uguu.se/a.png|| https://h.uguu.se/b.png".to_string();
+    let messages = vec![spoiled.clone()];
+    let candidates = |revealed: &HashSet<Uuid>| {
+        inline_image_request_candidates(
+            &messages,
+            revealed,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            now,
+        )
+    };
+
+    assert_eq!(candidates(&HashSet::new()), vec![]);
+    assert_eq!(
+        candidates(&HashSet::from([spoiled.id])),
+        vec![(
+            spoiled.id,
+            InlinePreviewSource::Image("https://h.uguu.se/a.png".to_string())
+        )]
+    );
+}
+
+#[test]
 fn reply_preview_text_strips_markdown_markers() {
     let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
     assert_eq!(preview, "bold @graybeard docs");
@@ -2152,6 +2220,7 @@ fn inline_image_request_candidates_scan_newest_messages_first() {
     let requests = inline_image_request_candidates(
         &messages,
         &HashSet::new(),
+        &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
         now,
@@ -2179,6 +2248,7 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
 
     let requests = inline_image_request_candidates(
         &messages,
+        &HashSet::new(),
         &HashSet::new(),
         &HashMap::new(),
         &HashMap::new(),
@@ -2224,6 +2294,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
         inline_image_request_candidates(
             &messages,
             &HashSet::new(),
+            &HashSet::new(),
             &HashMap::new(),
             &failures,
             now,
@@ -2241,6 +2312,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert_eq!(
         inline_image_request_candidates(
             &messages,
+            &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,
@@ -2262,6 +2334,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert!(
         inline_image_request_candidates(
             &messages,
+            &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
             &failures,
@@ -4879,4 +4952,185 @@ fn buy_posts_the_order_the_bar_rings_up() {
         BarOrder::Gift("mossy"),
         "{gift}"
     );
+}
+
+#[tokio::test]
+async fn enter_reveals_a_messages_spoilers_once() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "spoiler_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "spoiler_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    for user in [&viewer, &author] {
+        ChatRoomMember::join(&client, lounge.id, user.id)
+            .await
+            .expect("join");
+    }
+    let plain = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "no secrets here".to_string(),
+        },
+    )
+    .await
+    .expect("plain message");
+    let spoiled = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "today is ||CRANE||".to_string(),
+        },
+    )
+    .await
+    .expect("spoiled message");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, spoiled.id).await;
+
+    // Nothing to reveal: Enter falls through to its other actions.
+    state.selected_message_id = Some(plain.id);
+    assert!(!state.reveal_selected_spoilers_in_room(lounge.id));
+
+    state.selected_message_id = Some(spoiled.id);
+    let version_before = state.room_version(lounge.id);
+    assert!(state.reveal_selected_spoilers_in_room(lounge.id));
+    assert!(state.spoilers_revealed.contains(&spoiled.id));
+    assert!(
+        state.room_version(lounge.id) > version_before,
+        "revealing changes the painted rows, so the cache must rebuild"
+    );
+
+    // Already revealed: a second Enter goes on to the message's other actions.
+    assert!(!state.reveal_selected_spoilers_in_room(lounge.id));
+}
+
+/// One spoiled message in #lounge, a viewer's state with it loaded.
+async fn lounge_with_spoiled_message(
+    test_db: &late_core::test_utils::TestDb,
+    body: &str,
+) -> (ChatState, Uuid, Uuid) {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "spoiler_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "spoiler_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    for user in [&viewer, &author] {
+        ChatRoomMember::join(&client, lounge.id, user.id)
+            .await
+            .expect("join");
+    }
+    let spoiled = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: body.to_string(),
+        },
+    )
+    .await
+    .expect("spoiled message");
+
+    let mut state = counter_test_state(test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, spoiled.id).await;
+    state.selected_message_id = Some(spoiled.id);
+    (state, lounge.id, spoiled.id)
+}
+
+/// Enter's second press opens the link the first one revealed: before the
+/// reveal nothing can reach it, after it the URL is the author's, whole.
+#[tokio::test]
+async fn a_spoiled_image_link_opens_only_once_revealed() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, _) =
+        lounge_with_spoiled_message(&test_db, "||https://h.uguu.se/cat.png||").await;
+
+    assert!(!state.selected_message_has_inline_image_in_room(lounge_id));
+    assert!(!state.open_selected_image_modal_in_room(lounge_id));
+    let gild = state.gild_target_in_room(lounge_id).expect("gild target");
+    assert!(!gild.preview.contains("cat.png"), "{}", gild.preview);
+
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+    assert!(state.open_selected_image_modal_in_room(lounge_id));
+    assert_eq!(
+        state.image_modal.as_ref().map(|modal| modal.url.as_str()),
+        Some("https://h.uguu.se/cat.png")
+    );
+}
+
+#[tokio::test]
+async fn a_spoiled_youtube_link_plays_only_once_revealed() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, _) =
+        lounge_with_spoiled_message(&test_db, "||https://youtu.be/dQw4w9WgXcQ||").await;
+
+    assert!(state.selected_video_in_room(lounge_id).is_none());
+
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+    assert_eq!(
+        state
+            .selected_video_in_room(lounge_id)
+            .map(|request| request.url),
+        Some(crate::app::audio::youtube::watch_url("dQw4w9WgXcQ"))
+    );
+}
+
+/// The search result row is one more place the body is read: a hit on the
+/// words around a spoiler lists the bars, never the hidden word.
+#[tokio::test]
+async fn a_search_result_row_keeps_spoilers_hidden() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, _) =
+        lounge_with_spoiled_message(&test_db, "today is ||CRANE||").await;
+
+    state.start_message_search(Some(lounge_id), "today".to_string());
+    drain_events_until(&mut state, "the search lands its hit", |state| {
+        !state.message_search.hits.is_empty()
+    })
+    .await;
+
+    let hit = &state.message_search.hits[0];
+    assert_eq!(
+        format!(
+            "{}{}{}",
+            hit.snippet_prefix, hit.snippet_match, hit.snippet_suffix
+        ),
+        "today is ▒▒▒▒▒"
+    );
+}
+
+/// A reveal is of the words then on screen. When the author edits the
+/// message, the new words are hidden again and need their own Enter.
+#[tokio::test]
+async fn an_edit_hides_a_revealed_message_again() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let (mut state, lounge_id, spoiled_id) =
+        lounge_with_spoiled_message(&test_db, "today is ||CRANE||").await;
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+
+    let mut edited = state
+        .find_message_in_room(lounge_id, spoiled_id)
+        .expect("loaded message")
+        .clone();
+    edited.body = "today is ||HERON||".to_string();
+    state.replace_message(edited.clone());
+
+    assert!(!state.spoilers_revealed.contains(&spoiled_id));
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
+
+    // The same edit arriving with a tail reload instead of the live event.
+    edited.body = "today is ||EGRET||".to_string();
+    state.merge_room_tail(lounge_id, vec![edited]);
+
+    assert!(!state.spoilers_revealed.contains(&spoiled_id));
+    assert!(state.reveal_selected_spoilers_in_room(lounge_id));
 }

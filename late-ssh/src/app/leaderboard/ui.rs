@@ -129,6 +129,7 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize, Vec<u
             Board::DoorWins(_)
                 | Board::DoorDepth(_)
                 | Board::DoorScore(_)
+                | Board::DopewarsScore
                 | Board::LateaniaAdventurers
                 | Board::LateaniaPvp
         )
@@ -707,6 +708,8 @@ fn empty_copy(board: Board) -> &'static str {
         Board::DoorWins(DoorGame::Brogue) => "no escapes yet, depth 26 awaits",
         Board::DoorDepth(_) => "no dives recorded yet",
         Board::DoorScore(_) => "no scored runs yet",
+
+        Board::DopewarsScore => "no street fortunes recorded yet",
         Board::TopChips => "no chip earnings yet this month",
         Board::ArcadeWins => "no daily puzzle wins yet this month",
         Board::TimeOnline => "no connected time recorded yet",

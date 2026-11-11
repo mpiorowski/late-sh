@@ -120,6 +120,7 @@ rosters).
 - `DailyPuzzle` (declared in the Arcade lobby's order, so the per-game boards on this page, the week card's Arcade section and the paper's tie-breaks follow the lobby): iterating `ALL` generates the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, per-user daily completion statuses, and the month-end `arcade_wins` profile award snapshot (`profile_award.rs::snapshot_previous_month_profile_awards` builds its union from the roster with `points_sql`, so the persisted award scores the same games as the page). The one thing the roster cannot enforce: a new game's win-insert statement must compose `bump_daily_win_total_sql`, or its all-time board stays empty. Monthly boards count win rows in the month window; all-time reads the `daily_win_totals` rollup (migration 131; the bump rides the win insert's own statement, gated to fresh inserts, so same-day replays never double-count and the refresh stays O(players)).
 - `ScoreGame` (TwentyFortyEight, Lateris, Snake, Traffic, the lobby's order too): monthly boards union `game_score_events` with legacy best-score rows whose best was set this month (`updated`); all-time boards read only the legacy tables of record. `updated` is when the best was set, not when the player last played: `HighScore::update_score_if_higher` (Lateris, 2048, Snake) moves it only when the submitted score beats the stored one, otherwise anyone who played this month would carry their all-time best onto the monthly board and into the month's awards. A best that no score event reached (one set before score events existed) has nothing to date it by, so its `updated` can be later than when it was set. Traffic is the exception: every track finish rewrites `traffic_high_scores` and records the aggregate total as the score event, so its monthly board lists the all-time total of whoever finished a track this month.
 - `DoorGame` (Dcss, Nethack, Brogue): the uniform board triple over the log-pipe fact tables — Wins (all-time count of `DoorRunResult::WINS` results, single window by design, `Standings::AllTimeOnly`), Deepest Dive, and Top Score (monthly + all-time). `WINS` is win + mastery, so a Brogue escape and a Brogue mastery both count once each on its wins board. The dive board unions end-of-run depth with the depth snapshot on every tracked milestone line, because crawl stamps the *final* place on the logfile line and a winner ends at the surface; NetHack's `maxlvl` and Brogue's `deepestLevel` are already run maximums, so their milestone rows contribute nothing to the union (Brogue writes no milestone rows at all: it logs only at end of game).
+- `dopewars` (`DOPEWARS_GAME_KEY`) is the one door off the roguelike roster, with a single board instead of the triple: Top Score only, monthly + all-time, each player's best single run (`MAX(score)`) of final net worth (Cash + Bank - Debt), rendered as cash (`$1,250,000`, `-$500`). Its runs never win and carry no depth, so the wins/depth families produce no rows for it, and `fetch_door_boards` splits the key out of the same one query (the refresh stays at sixteen queries). Its rows come from the host's append-only run log, not from the game's own top-18 table — see the pipe section.
 - `LobbyGame` (the Lobby's thirteen correspondence games, by `daily_matches.game_kind`): no board of its own; it names the Lobby's games for the week. It mirrors late-ssh's `DailyGame`, and `lobby/daily/games_test.rs` fails until the two agree on kind and name.
 - The week (`week_tallies`, `WEEK_DAYS`): outside the page, everyone's plays per game over the seven UTC days ending on a day, added up: the same query as `day_tallies` over a wider span (every daily solve by finish time, every finished score run, every finished Lobby match, every hub card opening), a game without plays in the week left off. Totals, never anyone's best and never who, since the card is public and nobody opted into being posted; `DayTally::shown_plays` prints them (`1 play`, `1,234 plays`). Read by late-web's `/games/week/{last}/image.png` card, the herald's Sunday post (`late-ssh/src/app/herald/CONTEXT.md`).
 - The day (`day_tallies`, `DayGame`, `DayTally`): one tally per game anyone played on a UTC day, plays and wins, from the same rosters counted instead of ranked: the daily puzzles' finishes, the score games' runs, the Lobby's finished matches, and the hub's doors by openings (`door_openings`, every `DoorCard`, with the roguelikes' won runs beside them; `DoorGame::card` ties the three to their cards). Beside it, `day_lobby_starts` (`LobbyStarts`): the Lobby's matches started on the day, per game, by `daily_matches.started_at` (stamped by the claim, migration 272). Both read by the paper's YESTERDAY column (`late-ssh/src/app/paper/CONTEXT.md`).
@@ -141,11 +142,23 @@ the terminal. Its contract (transport, cursors and idempotency, handle
 identity, grant gates, feed gating, deploy order) and the settled badge
 decisions are in `late-ssh/src/app/door/ingest/CONTEXT.md`.
 
+The dopewars door joins the same pipe with a host-written file of its own:
+`late-dopewars` diffs the game's binary top-18 score file into an append-only
+`dopewars.sco.runs.log` (`late-dopewars/src/scorelog.rs`) at startup, after
+each session and every 30 seconds in between, and streams it as the single
+`runs` file. The table a volume
+already held before its first sync is never logged, so the board starts with
+the first game played after the deploy. Its playname is the
+account's `late.sh` username, not an arcade handle, so the pipe resolves it
+through `users` (`User::find_by_username`). dopewars runs carry no badges and
+post nothing to #lounge.
+
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
 (Top Drinkers, Top Chat, Top Chips, Arcade Wins, Late Time), then the Games group (the Lateania boards,
-then each door's board triple), Daily Wins, and High Scores, in roster order.
+then each roguelike door's board triple, then dopewars Top Score), Daily Wins,
+and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Drinkers. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
 replaces the last two rows below the fold). Ctrl+J/K and the wheel scroll the
@@ -174,9 +187,9 @@ An empty local database renders every panel as "no scores yet".
 the Compose database with 48 synthetic players spread across every board,
 including distinct monthly chat/streak/News rankings and marked lounge cards,
 online-time totals, `mud_characters` blobs for the Lateania boards,
-and per-door `door_runs`/`door_milestones` rows for all three doors (winners, quits,
-spread depths, DCSS Orb milestones carrying the dive depth, Brogue escapes
-and masteries; each door's block is offset from the others so no two boards
+and per-door `door_runs`/`door_milestones` rows for the three roguelike doors
+(winners, quits, spread depths, DCSS Orb milestones carrying the dive depth,
+Brogue escapes and masteries) plus dopewars score runs under `seed:dopewars`; each door's block is offset from the others so no two boards
 mirror each other, and `seed:`-prefixed source files keep the idempotency key
 from ever colliding with real ingested lines). Local
 development only: it owns the `seed:leaderboard:` fingerprints, prefixes

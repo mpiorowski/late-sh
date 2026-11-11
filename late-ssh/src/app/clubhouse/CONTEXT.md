@@ -117,7 +117,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   neither run nor posted. A bare `/` or a `//` aside is speech and posts.
 - Messages younger than ~10s render as bordered bubbles above their author's
   avatar (latest per author, up to 3 lines, width widens 28 -> 36 -> 44
-  before truncating, reply-quote line stripped). Room tails are newest-first
+  before truncating, reply-quote line stripped, `||spoilers||` drawn as
+  bars through `common::spoiler::mask_spoilers`; the bartender's banner reads
+  the same text). Room tails are newest-first
   (`ChatState::push_message`); `fresh_bubble_messages` depends on that.
 - The bartender does not bubble over his sprite: his lines pin as a
   camera-independent banner in the top-left corner (`draw_bartender_banner`),
