@@ -92,9 +92,12 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
   livelog lines carry no flag), crawl never logs wizard games, Brogue writes no
   run-history line for Easy or Wizard.
 - **Deploy order matters.** The host half ships in that door's image-only
-  release (`-dcss` / `-nethack` / `-brogue`), the client half with service-ssh:
-  deploy the host first or together, or ingestion just retries against a host
-  with no stats session. Manifest changes (a new initContainer file, a port, an
+  release (`-dcss` / `-nethack` / `-brogue` / `-dopewars`), the client half
+  with service-ssh: deploy the host first or together, or ingestion just
+  retries against a host with no stats session. dopewars is the door where the
+  order is not optional: a host from before its stats session takes any SSH
+  username and starts a game, so `late_stats` is served curses output where
+  the pipe expects frames. Manifest changes (a new initContainer file, a port, an
   ingress) ride `deploy_infra.yml` instead.
 - **The DCSS files are also published outward.** The same `logfile`/`milestones`
   the pipe tails are served read-only over HTTP at `late.sh/crawl/...` for the

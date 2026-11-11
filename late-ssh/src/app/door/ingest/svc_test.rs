@@ -877,7 +877,7 @@ async fn dopewars_runs_land_once_for_the_named_account() {
     assert_eq!(row.get::<_, &str>("result"), "death");
     assert_eq!(row.get::<_, i64>("score"), 1_234_567);
     assert_eq!(row.get::<_, Option<i32>>("depth"), None);
-    assert_eq!(row.get::<_, i64>("turns"), 31);
+    assert_eq!(row.get::<_, Option<i64>>("turns"), None);
 
     // A playname no account holds lands nothing, but still advances the
     // cursor past its line. `late_stats` is the stats session's own name,

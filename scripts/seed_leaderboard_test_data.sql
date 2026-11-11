@@ -579,7 +579,7 @@ SELECT
     'leaving',
     18500000 - p.idx * 520000,
     NULL,
-    31,
+    NULL,
     '{}'::jsonb,
     'seed:dopewars',
     p.idx
@@ -633,7 +633,7 @@ SELECT
     'leaving',
     4250000,
     NULL,
-    31,
+    NULL,
     '{}'::jsonb,
     'seed:dopewars',
     999999

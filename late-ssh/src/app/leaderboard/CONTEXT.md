@@ -178,9 +178,9 @@ An empty local database renders every panel as "no scores yet".
 `make seed-leaderboard` (`scripts/seed_leaderboard_test_data.{sh,sql}`) fills
 the Compose database with 48 synthetic players spread across every board,
 including online-time totals, `mud_characters` blobs for the Lateania boards,
-and per-door `door_runs`/`door_milestones` rows for all three doors (winners, quits,
-spread depths, DCSS Orb milestones carrying the dive depth, Brogue escapes
-and masteries; each door's block is offset from the others so no two boards
+and per-door `door_runs`/`door_milestones` rows for the three roguelike doors
+(winners, quits, spread depths, DCSS Orb milestones carrying the dive depth,
+Brogue escapes and masteries) plus dopewars score runs under `seed:dopewars`; each door's block is offset from the others so no two boards
 mirror each other, and `seed:`-prefixed source files keep the idempotency key
 from ever colliding with real ingested lines). Local
 development only: it owns the `seed:leaderboard:` fingerprints, prefixes

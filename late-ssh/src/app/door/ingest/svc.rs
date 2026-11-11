@@ -607,8 +607,9 @@ impl DoorIngestService {
             result: run.result,
             score: Some(run.score),
             depth: None,
-            // dopewars runs a fixed 31-day career.
-            turns: Some(31),
+            // The score table carries no day count, and a death or a quit
+            // ends the career before day 31.
+            turns: None,
             raw: run.raw.clone(),
             source_file: frame.file.clone(),
             source_offset: frame.next_offset,
