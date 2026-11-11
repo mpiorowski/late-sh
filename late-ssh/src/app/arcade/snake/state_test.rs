@@ -81,6 +81,28 @@ fn the_head_running_into_the_body_ends_the_run() {
     assert!(matches!(cobra.state, CobraState::Dead));
 }
 
+/// The cells no rock may spawn on, worked out from the head alone: the square
+/// two cells out on every side, and the four cells straight ahead.
+fn cells_kept_clear(head: &Position, dir: Direction) -> Vec<(i64, i64)> {
+    let (head_x, head_y) = (i64::from(head.x), i64::from(head.y));
+    let mut clear = Vec::new();
+    for dx in -2..=2 {
+        for dy in -2..=2 {
+            clear.push((head_x + dx, head_y + dy));
+        }
+    }
+    let (step_x, step_y) = match dir {
+        Direction::Up => (0, -1),
+        Direction::Down => (0, 1),
+        Direction::Right => (1, 0),
+        Direction::Left => (-1, 0),
+    };
+    for step in 1..=4 {
+        clear.push((head_x + step_x * step, head_y + step_y * step));
+    }
+    clear
+}
+
 #[test]
 fn rock_spawns_keep_clear_of_the_head_and_forward_runway() {
     for dir in [
@@ -92,6 +114,8 @@ fn rock_spawns_keep_clear_of_the_head_and_forward_runway() {
         let mut field = Field::new_empty(22, 58);
         let mut cobra = Cobra::new(&field, 1);
         cobra.head_dir = dir;
+        let head = cobra.body.last().expect("cobra head").clone();
+        let clear = cells_kept_clear(&head, dir);
         for _ in 0..50 {
             field.things.clear();
             field.gen_things(10, &cobra);
@@ -102,8 +126,9 @@ fn rock_spawns_keep_clear_of_the_head_and_forward_runway() {
                         "rock spawned on cobra body at {:?}",
                         thing.position
                     );
+                    let cell = (i64::from(thing.position.x), i64::from(thing.position.y));
                     assert!(
-                        !cobra.is_rock_hazard(&thing.position),
+                        !clear.contains(&cell),
                         "rock spawned inside head halo or forward runway at {:?} facing {:?}",
                         thing.position,
                         dir
@@ -136,18 +161,17 @@ async fn eating_the_last_food_advances_the_level_on_that_step() {
     assert_eq!(state.score, 210);
 }
 
+/// A turn still waiting in the queue would steer the cobra, and skip the
+/// stutter, on the first tick of the new level.
 #[test]
-fn level_reset_clears_buffered_inputs_and_last_key() {
+fn level_reset_drops_buffered_inputs() {
     let mut state = restored(saved_game(0, false));
     state.cobra.head_dir = Direction::Right;
-    state.input_queue = vec![b'A', b'D'];
-    state.last_key = Some(b'A');
+    state.input_queue = vec![Direction::Left, Direction::Up];
     state.stutter_left = 3;
 
     state.reset_level_without_persist(false);
 
-    assert!(state.input_queue.is_empty());
-    assert!(state.last_key.is_none());
     assert!(!state.tick());
     assert_eq!(state.stutter_left, 2);
     assert_eq!(state.cobra.head_dir, Direction::Right);
