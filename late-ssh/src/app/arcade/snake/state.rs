@@ -9,17 +9,17 @@ const ROCK_HEAD_HALO: u32 = 2;
 const ROCK_RUNWAY_STEPS: u32 = 4;
 
 pub struct State {
-    pub user_id: Uuid,
+    user_id: Uuid,
     pub score: i32,
     pub best_score: i32,
     pub is_game_over: bool,
     pub is_paused: bool,
-    pub svc: SnakeService,
+    svc: SnakeService,
     pub level: Level,
     pub field: Field,
     pub cobra: Cobra,
     pub(super) input_queue: Vec<Direction>,
-    pub stutter_left: u8,
+    stutter_left: u8,
     score_event_recorded: bool,
     last_key: Option<Direction>,
 }
@@ -118,7 +118,7 @@ impl State {
         }
     }
 
-    pub fn handle_key(&mut self) -> bool {
+    fn handle_key(&mut self) -> bool {
         let key = self.input_queue.pop();
         let mut accel = false;
         if let Some(dir) = key {
@@ -158,7 +158,7 @@ impl State {
         self.reset_level(true);
     }
 
-    pub fn reset_level(&mut self, reset_cobra: bool) {
+    fn reset_level(&mut self, reset_cobra: bool) {
         self.reset_level_inner(reset_cobra, true);
     }
 
@@ -378,7 +378,7 @@ impl ThingOnScreen {
         }
     }
 
-    pub fn get_cobra_pixel(value: String, position: Position) -> Self {
+    fn get_cobra_pixel(value: String, position: Position) -> Self {
         Self {
             position,
             kind: ThingKind::Cobra,

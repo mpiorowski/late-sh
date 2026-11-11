@@ -20,7 +20,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("score", state.score.to_string(), theme::AMBER_GLOW()),
             ("best", state.best_score.to_string(), theme::SUCCESS()),
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
-            // ("stutter_left", state.stutter_left.to_string(), theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("hjkl/wsad", "direction"),
