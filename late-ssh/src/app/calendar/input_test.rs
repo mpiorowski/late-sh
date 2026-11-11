@@ -188,3 +188,20 @@ async fn modal_and_menu_letters_accept_terminal_character_events() {
     handle_menu(&mut s, &ParsedInput::Char('j'));
     assert_eq!(s.context_menu.as_ref().unwrap().selected, 1);
 }
+
+/// Home's link opens Details for an event without marking it on the page.
+/// Duplicate copies the event on screen, never the one marked underneath.
+#[tokio::test]
+async fn duplicate_copies_the_open_details_event_not_the_marked_one() {
+    let mut s = state();
+    let mut marked = event(false);
+    marked.id = Uuid::from_u128(2);
+    marked.title = "Marked appointment".into();
+    s.events.push(marked.clone());
+    s.select_event(marked.id, None);
+    s.push_modal(Modal::Details(event(true)));
+
+    act(&mut s, Action::Duplicate);
+
+    assert!(matches!(&s.modal, Some(Modal::Editor(e)) if e.text(0) == "Selected appointment"));
+}

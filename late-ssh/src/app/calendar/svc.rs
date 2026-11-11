@@ -292,10 +292,10 @@ impl CalendarService {
                 );
                 let reply = match settle(CalendarOp::Save, result) {
                     Ok(saved) => {
-                        let write = match (saved.created, source) {
-                            (true, CalendarSource::Board) => CalendarWrite::BoardPosted,
-                            (true, CalendarSource::Personal) => CalendarWrite::PersonalPosted,
-                            (false, _) => CalendarWrite::Edited,
+                        let write = match (saved.board_posted, saved.created) {
+                            (true, _) => CalendarWrite::BoardPosted,
+                            (false, true) => CalendarWrite::PersonalPosted,
+                            (false, false) => CalendarWrite::Edited,
                         };
                         metrics::record_calendar_write(write);
                         if write == CalendarWrite::BoardPosted {

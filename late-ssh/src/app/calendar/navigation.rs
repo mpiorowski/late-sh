@@ -42,6 +42,7 @@ pub enum MenuAction {
     Open,
     New,
     Edit,
+    Duplicate,
     Delete,
     /// Say you are in (`true`) or take it back.
     Rsvp(bool),
@@ -53,6 +54,7 @@ impl MenuAction {
             Self::Open => "Open",
             Self::New => "New event",
             Self::Edit => "Edit",
+            Self::Duplicate => "Duplicate",
             Self::Delete => "Delete",
             Self::Rsvp(true) => "I'm in",
             Self::Rsvp(false) => "I'm out",
@@ -153,6 +155,15 @@ impl CalendarState {
             return Some(e.clone());
         }
         self.events.iter().find(|e| e.id == id).cloned()
+    }
+
+    /// The event an action lands on: the open Details event, which a link
+    /// from Home opens without marking it, otherwise the marked one.
+    pub fn action_event(&self) -> Option<CalendarEvent> {
+        if let Some(Modal::Details(e)) = &self.modal {
+            return Some(e.clone());
+        }
+        self.selected_target_event()
     }
 
     pub fn select_event(&mut self, id: Uuid, date: Option<NaiveDate>) -> bool {
@@ -366,24 +377,17 @@ impl CalendarState {
             self.refresh();
         }
         self.reconcile_selection();
+        // A change notice only re-reads Details while they are on top. The
+        // copy kept under an editor or a confirmation is as old as that
+        // modal, so read it again before its actions are offered.
+        self.reread_details();
     }
 
     /// Save from Details returns to that same Details surface. Direct New/Edit
     /// becomes Details with the original browser still underneath.
     pub fn replace_saved(&mut self, event: CalendarEvent) {
         let id = event.id;
-        for loaded in &mut self.events {
-            if loaded.id == id {
-                *loaded = event.clone();
-            }
-        }
-        for frame in &mut self.modal_parents {
-            if let Some(Modal::Details(previous)) = &mut frame.modal
-                && previous.id == id
-            {
-                *previous = event.clone();
-            }
-        }
+        self.replace_event(event.clone());
         let details_parent = self
             .modal_parents
             .last()
@@ -462,6 +466,7 @@ impl CalendarState {
                 self.select_event(id, date);
                 let access = event_access(&event, self.viewer, self.staff);
                 let mut items = vec![MenuAction::Open];
+                items.push(MenuAction::Duplicate);
                 if access.rsvp {
                     items.push(MenuAction::Rsvp(!self.going(id)));
                 }
