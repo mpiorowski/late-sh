@@ -120,11 +120,19 @@ pub(super) struct Geometry {
     max_scroll: usize,
 }
 
+/// The saved event an editor is changing: the revision a save must still
+/// match, and where the event lives now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Existing {
+    pub id: Uuid,
+    pub revision: i64,
+    pub source: CalendarSource,
+}
+
 #[derive(Clone)]
 pub struct Editor {
-    pub existing: Option<(Uuid, i64)>,
+    pub existing: Option<Existing>,
     pub source: CalendarSource,
-    pub(super) original_source: Option<CalendarSource>,
     /// The zone the clock fields are shown and read in, fixed when the
     /// editor opens: an account timezone change mid-edit must not move the
     /// event on save.
@@ -199,7 +207,6 @@ impl Editor {
         let mut e = Self {
             existing: None,
             source,
-            original_source: None,
             tz,
             fields: vec![
                 field(""),
@@ -239,8 +246,11 @@ impl Editor {
         let access = event_access(event, viewer, staff);
         let mut e = Self::new(event.source(), event.timing.dates(tz).0, tz);
         e.access = access;
-        e.existing = Some((event.id, event.revision));
-        e.original_source = Some(event.source());
+        e.existing = Some(Existing {
+            id: event.id,
+            revision: event.revision,
+            source: event.source(),
+        });
         e.fields[0] = field(&event.title);
         e.fields[1] = field(&event.description);
         e.set_timing(&event.timing);
@@ -699,7 +709,10 @@ fn value_text(e: &Editor, control: EditorControl) -> String {
         EditorControl::AllDay => if e.all_day { "[x]" } else { "[ ]" }.into(),
         EditorControl::Target => match e.source {
             CalendarSource::Board => "the board · everyone sees it, anyone can say I'm in".into(),
-            CalendarSource::Personal if e.original_source == Some(CalendarSource::Board) => {
+            CalendarSource::Personal
+                if e.existing
+                    .is_some_and(|saved| saved.source == CalendarSource::Board) =>
+            {
                 "just me · clears RSVPs on save".into()
             }
             CalendarSource::Personal => "just me · private, nobody else ever sees it".into(),

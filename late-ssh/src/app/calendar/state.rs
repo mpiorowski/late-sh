@@ -3,6 +3,7 @@
 //! action goes to `svc.rs` and comes back as a `Reply` on the tick.
 pub use super::editor::Editor;
 use super::{
+    editor::Existing,
     navigation::{ClickRecord, ContextMenu, NavigationFrame, Selection},
     svc::{CalendarService, Query, Reply, SaveError},
 };
@@ -262,9 +263,6 @@ impl CalendarState {
         e.sort_by_key(|e| event_order(e, self.tz));
         e
     }
-    pub fn selected_event(&self) -> Option<CalendarEvent> {
-        self.selected_target_event()
-    }
     /// Whether the viewer said they are in.
     pub fn going(&self, id: Uuid) -> bool {
         self.rsvps.contains(&id)
@@ -301,8 +299,13 @@ impl CalendarState {
             match e.draft(today) {
                 Ok(d) => {
                     self.pending = true;
-                    self.service
-                        .save(self.viewer, e.source, e.existing, d, self.tx.clone());
+                    self.service.save(
+                        self.viewer,
+                        e.source,
+                        e.existing.map(|saved| (saved.id, saved.revision)),
+                        d,
+                        self.tx.clone(),
+                    );
                 }
                 Err(err) => e.error = Some(err.to_string()),
             }
@@ -324,11 +327,7 @@ impl CalendarState {
         if self.pending {
             return;
         }
-        let event = match &self.modal {
-            Some(Modal::Details(e)) => Some(e.clone()),
-            _ => self.selected_event(),
-        };
-        let Some(event) = event else {
+        let Some(event) = self.action_event() else {
             self.error = Some("Select an event first".into());
             return;
         };
@@ -451,8 +450,11 @@ impl CalendarState {
                     Ok(latest) => {
                         if self.reload_request {
                             if let Some(Modal::Editor(e)) = &mut self.modal {
-                                e.existing = Some((latest.id, latest.revision));
-                                e.original_source = Some(latest.source());
+                                e.existing = Some(Existing {
+                                    id: latest.id,
+                                    revision: latest.revision,
+                                    source: latest.source(),
+                                });
                                 e.conflict = false;
                                 e.error = Some(format!(
                                     "Reloaded revision {}: {}. Your draft is retained; review before saving.",
@@ -543,7 +545,7 @@ impl CalendarState {
         }
     }
     /// Swap a fresh copy of an event into every surface holding one.
-    fn replace_event(&mut self, event: CalendarEvent) {
+    pub(super) fn replace_event(&mut self, event: CalendarEvent) {
         for loaded in &mut self.events {
             if loaded.id == event.id {
                 *loaded = event.clone();

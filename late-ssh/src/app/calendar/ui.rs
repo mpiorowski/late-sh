@@ -394,7 +394,7 @@ fn footer_hints(s: &CalendarState) -> Vec<(&'static str, &'static str)> {
         CalendarView::Month => ("arrows", "days"),
         CalendarView::List => ("arrows", "events"),
     };
-    match s.selected_event() {
+    match s.selected_target_event() {
         None => vec![moving, ("Enter", "new event here")],
         Some(e) => {
             let access = event_access(&e, s.viewer, s.staff);
@@ -973,16 +973,20 @@ fn draw_modal_content(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 actions.push(("d Delete", Action::Delete));
             }
             actions.push(("Close", Action::Cancel));
-            let mut action_rows = 1;
-            let mut used = 0;
-            for (label, _) in &actions {
+            // Wrap once: each button gets its column and row here, and the
+            // rows it took are what the content gives up below.
+            let mut placed = Vec::new();
+            let (mut x, mut action_row) = (inner.x, 0);
+            for (label, action) in actions {
                 let width = button_line(label).width() as u16;
-                if used > 0 && used + width > inner.width {
-                    action_rows += 1;
-                    used = 0;
+                if x > inner.x && x + width > inner.right() {
+                    x = inner.x;
+                    action_row += 1;
                 }
-                used += width;
+                placed.push((x, action_row, label, action));
+                x += width;
             }
+            let action_rows = action_row + 1;
             let mut who = vec![source_span(e)];
             if e.is_board() {
                 who.push(separator());
@@ -1021,13 +1025,9 @@ fn draw_modal_content(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 p.scroll((s.scroll.min(s.max_scroll.get()) as u16, 0)),
                 content,
             );
-            let mut x = inner.x;
-            let mut y = inner.bottom() - action_rows.min(inner.height);
-            for (label, action) in actions {
-                if x > inner.x && x + button_line(label).width() as u16 > inner.right() {
-                    x = inner.x;
-                    y += 1;
-                }
+            let top = inner.bottom() - action_rows.min(inner.height);
+            for (mut x, action_row, label, action) in placed {
+                let y = top + action_row;
                 if y < inner.bottom() {
                     button(frame, s, &mut x, y, inner.right(), label, action, false);
                 }

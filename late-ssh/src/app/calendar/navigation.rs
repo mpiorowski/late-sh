@@ -157,6 +157,15 @@ impl CalendarState {
         self.events.iter().find(|e| e.id == id).cloned()
     }
 
+    /// The event an action lands on: the open Details event, which a link
+    /// from Home opens without marking it, otherwise the marked one.
+    pub fn action_event(&self) -> Option<CalendarEvent> {
+        if let Some(Modal::Details(e)) = &self.modal {
+            return Some(e.clone());
+        }
+        self.selected_target_event()
+    }
+
     pub fn select_event(&mut self, id: Uuid, date: Option<NaiveDate>) -> bool {
         let Some(event) = self.events.iter().find(|e| e.id == id).cloned() else {
             return false;
@@ -374,18 +383,7 @@ impl CalendarState {
     /// becomes Details with the original browser still underneath.
     pub fn replace_saved(&mut self, event: CalendarEvent) {
         let id = event.id;
-        for loaded in &mut self.events {
-            if loaded.id == id {
-                *loaded = event.clone();
-            }
-        }
-        for frame in &mut self.modal_parents {
-            if let Some(Modal::Details(previous)) = &mut frame.modal
-                && previous.id == id
-            {
-                *previous = event.clone();
-            }
-        }
+        self.replace_event(event.clone());
         let details_parent = self
             .modal_parents
             .last()

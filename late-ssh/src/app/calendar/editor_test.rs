@@ -1,6 +1,7 @@
 use super::{
     editor::{
-        Editor, EditorCommand, EditorControl, Target, TargetAction, click, draw, field, handle_key,
+        Editor, EditorCommand, EditorControl, Existing, Target, TargetAction, click, draw, field,
+        handle_key,
     },
     state::CalendarState,
     svc::CalendarService,
@@ -127,7 +128,14 @@ fn a_new_draft_picks_its_target_and_infers_its_timing_from_the_title() {
         opened.visible_controls(today()).contains(&Target),
         "an owned event can change where it lives"
     );
-    assert_eq!(opened.existing, Some((Uuid::from_u128(7), 2)));
+    assert_eq!(
+        opened.existing,
+        Some(Existing {
+            id: Uuid::from_u128(7),
+            revision: 2,
+            source: CalendarSource::Board,
+        })
+    );
     assert_eq!(opened.text(0), "Movie night");
     assert_eq!(opened.text(3), "21:00");
     assert!(!opened.dirty());

@@ -396,19 +396,14 @@ pub fn act(s: &mut CalendarState, action: Action) {
         }
         Action::Rsvp => s.toggle_rsvp(),
         Action::Duplicate => {
-            if let Some(event) = s.selected_target_event() {
+            if let Some(event) = s.action_event() {
                 s.push_modal(Modal::Editor(Box::new(Editor::duplicate(&event, s.tz))));
             } else {
                 s.error = Some("Select an event first".into());
             }
         }
         Action::Edit | Action::Delete => {
-            let event = if let Some(Modal::Details(e)) = &s.modal {
-                Some(e.clone())
-            } else {
-                s.selected_event()
-            };
-            if let Some(e) = event {
+            if let Some(e) = s.action_event() {
                 let access = event_access(&e, s.viewer, s.staff);
                 let allowed = match action {
                     Action::Edit => access.edit,
@@ -446,9 +441,9 @@ pub fn act(s: &mut CalendarState, action: Action) {
         }
         Action::Reload => {
             if let Some(Modal::Editor(e)) = &s.modal
-                && let Some((id, _)) = e.existing
+                && let Some(saved) = e.existing
             {
-                s.service_reload(id);
+                s.service_reload(saved.id);
             }
         }
         Action::MenuChoice(i) => {

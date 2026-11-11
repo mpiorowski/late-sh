@@ -8,6 +8,7 @@
 //! locks the actor and the event row, so a stale editor cannot overwrite a
 //! newer revision and two posts at once cannot beat the daily cap. The cap
 //! counts `calendar_posts`, a log deletes never touch.
+use super::calendar_ban::CalendarBan;
 use crate::db::Db;
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -557,7 +558,10 @@ impl CalendarStore {
         let board_posted =
             source == CalendarSource::Board && old.as_ref().is_none_or(|e| !e.is_board());
         if board_posted {
-            if Self::banned(&tx, viewer).await? {
+            if CalendarBan::find_active_for_user(&tx, viewer)
+                .await?
+                .is_some()
+            {
                 return refuse(CalendarRefusal::Banned);
             }
             // The post log, not the events: a deleted post still
@@ -642,14 +646,6 @@ impl CalendarStore {
             created: old.is_none(),
             board_posted,
         })
-    }
-    async fn banned<C: GenericClient + Sync>(c: &C, viewer: Uuid) -> Result<bool> {
-        Ok(c.query_opt(
-            "SELECT 1 FROM calendar_bans WHERE target_user_id=$1 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)",
-            &[&viewer],
-        )
-        .await?
-        .is_some())
     }
     pub async fn delete(
         &self,

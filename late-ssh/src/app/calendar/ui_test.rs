@@ -5,7 +5,7 @@ use super::{
     ui::*,
 };
 use crate::app::common::theme;
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Datelike, Duration, TimeZone, Utc};
 use late_core::{
     db::{Db, DbConfig},
     models::calendar::*,
@@ -306,8 +306,14 @@ async fn today_has_an_underlined_number_and_heavy_edges_while_tint_follows_selec
     let mut s = state();
     let today = s.today();
     let tint = theme::blend_toward(theme::BG_CANVAS(), theme::BORDER_ACTIVE(), 0.16);
+    // A neighbour in today's month: another month's grid may not hold today.
+    let neighbour = if (today + Duration::days(1)).month() == today.month() {
+        today + Duration::days(1)
+    } else {
+        today - Duration::days(1)
+    };
     for (width, height) in [(120, 40), (80, 16)] {
-        for selected in [today + Duration::days(1), today] {
+        for selected in [neighbour, today] {
             s.select_date(selected);
             let buffer = render(&s, width, height);
             let today_area = action_area(&s, Action::Date(today)).unwrap();
