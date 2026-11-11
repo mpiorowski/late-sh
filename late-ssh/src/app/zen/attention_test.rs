@@ -49,7 +49,7 @@ fn mention(
         room_id,
         actor_username: actor.1.to_string(),
         room_slug: room_slug.map(str::to_string),
-        message_preview: preview.to_string(),
+        message_body: preview.to_string(),
         read_at,
     }
 }

@@ -8,6 +8,7 @@ use russh::{Channel, ChannelId, MethodKind, MethodSet};
 use crate::config::Config;
 use crate::host::{HostConfig, PtyHost};
 use crate::identity::derive_client_key;
+use crate::stats::{self, StatsHost};
 
 /// Shared, connection-independent server state.
 struct Shared {
@@ -16,6 +17,9 @@ struct Shared {
     score_file: String,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
+    /// Flips to `true` on host SIGTERM/SIGINT; each live stats stream watches
+    /// it and closes so the client reconnects to the new pod.
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 #[derive(Clone)]
@@ -24,13 +28,14 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub(crate) fn new(config: &Config) -> Self {
+    pub(crate) fn new(config: &Config, shutdown_rx: tokio::sync::watch::Receiver<bool>) -> Self {
         let authorized_key = derive_client_key(&config.secret).public_key().clone();
         Self {
             shared: Arc::new(Shared {
                 bin: config.bin.clone(),
                 score_file: config.score_file.clone(),
                 authorized_key,
+                shutdown_rx,
             }),
         }
     }
@@ -42,27 +47,42 @@ impl russh::server::Server for Server {
     fn new_client(&mut self, _peer: Option<std::net::SocketAddr>) -> ClientHandler {
         ClientHandler {
             shared: self.shared.clone(),
-            authorized: false,
+            playname: None,
             channel: None,
             term: "xterm-256color".to_string(),
             cols: 80,
             rows: 24,
+            stats_cursors: None,
             host: None,
         }
     }
 }
 
+/// What this SSH session runs: a dopewars child on a PTY (a player), or the
+/// log-streaming stats session (late-ssh's ingestion client, authenticated as
+/// the reserved `late_stats` username).
+enum SessionHost {
+    Game(PtyHost),
+    /// Held only so its drop (client EOF/close) ends the stream task.
+    Stats {
+        _host: StatsHost,
+    },
+}
+
 pub(crate) struct ClientHandler {
     shared: Arc<Shared>,
-    /// Set once the shared-secret-derived key checks out.
-    authorized: bool,
+    /// Set once the shared-secret-derived key checks out: the sanitized playname
+    /// sent in the SSH username, passed to dopewars as `-P`.
+    playname: Option<String>,
     /// Session channel, set on open and consumed when the shell starts.
     channel: Option<Channel<Msg>>,
     term: String,
     cols: u16,
     rows: u16,
-    /// The running dopewars child, once the shell is requested.
-    host: Option<PtyHost>,
+    /// The stats client's per-file byte offsets, raw from its env request.
+    stats_cursors: Option<String>,
+    /// The running dopewars child or stats stream, once the shell is requested.
+    host: Option<SessionHost>,
 }
 
 fn reject() -> Auth {
@@ -119,8 +139,9 @@ impl Handler for ClientHandler {
             tracing::warn!(user, "rejected: client key does not match shared secret");
             return Ok(reject());
         }
-        tracing::info!(user, "client authorized");
-        self.authorized = true;
+        let name = crate::playname::sanitize(user);
+        tracing::info!(playname = %name, "client authorized");
+        self.playname = Some(name);
         Ok(Auth::Accept)
     }
 
@@ -168,6 +189,23 @@ impl Handler for ClientHandler {
         Ok(())
     }
 
+    async fn env_request(
+        &mut self,
+        _channel: ChannelId,
+        variable_name: &str,
+        variable_value: &str,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // A large cursor set arrives split across several requests.
+        if variable_name == stats::CURSORS_ENV_VAR {
+            self.stats_cursors = Some(stats::append_cursors(
+                self.stats_cursors.take(),
+                variable_value,
+            ));
+        }
+        Ok(())
+    }
+
     async fn shell_request(
         &mut self,
         channel: ChannelId,
@@ -175,13 +213,29 @@ impl Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let _ = session.channel_success(channel);
 
-        if !self.authorized {
+        let Some(playname) = self.playname.clone() else {
             tracing::error!("shell requested before authentication");
             return Err(anyhow::anyhow!("unauthenticated shell request"));
-        }
+        };
         // Drop the stored Channel handle; we drive the channel by id via the
         // session handle from here on.
         let _ = self.channel.take();
+
+        // The reserved stats username gets the run-log stream, never a game.
+        if playname == stats::STATS_USERNAME {
+            self.host = Some(SessionHost::Stats {
+                _host: StatsHost::spawn(
+                    crate::scorelog::runs_log_path(&self.shared.score_file)
+                        .to_string_lossy()
+                        .into_owned(),
+                    self.stats_cursors.take(),
+                    session.handle(),
+                    channel,
+                    self.shared.shutdown_rx.clone(),
+                ),
+            });
+            return Ok(());
+        }
 
         // dopewars' ncursesw aborts on a TERM it has no terminfo for; fall back to
         // a universal one so clients on exotic terminals still play.
@@ -194,17 +248,18 @@ impl Handler for ClientHandler {
             );
         }
 
-        self.host = Some(PtyHost::spawn(
+        self.host = Some(SessionHost::Game(PtyHost::spawn(
             HostConfig {
                 bin: self.shared.bin.clone(),
                 score_file: self.shared.score_file.clone(),
+                playname,
                 cols: self.cols,
                 rows: self.rows,
                 term,
             },
             session.handle(),
             channel,
-        ));
+        )));
         Ok(())
     }
 
@@ -214,7 +269,8 @@ impl Handler for ClientHandler {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if let Some(host) = &self.host {
+        // The stats stream is one-way; client bytes carry nothing.
+        if let Some(SessionHost::Game(host)) = &self.host {
             host.send_input(data.to_vec());
         }
         Ok(())
@@ -229,7 +285,7 @@ impl Handler for ClientHandler {
         _pix_height: u32,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if let Some(host) = &self.host {
+        if let Some(SessionHost::Game(host)) = &self.host {
             host.resize(col_width.max(1) as u16, row_height.max(1) as u16);
         }
         Ok(())

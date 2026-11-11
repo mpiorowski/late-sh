@@ -22,6 +22,9 @@ pub(crate) struct HostConfig {
     /// survives restarts. dopewars locks it during updates, so concurrent
     /// sessions writing it is safe.
     pub(crate) score_file: String,
+    /// The sanitized player handle, passed as `-P` so dopewars skips its startup
+    /// name prompt and records the right player in the shared high-score file.
+    pub(crate) playname: String,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
     pub(crate) term: String,
@@ -129,11 +132,15 @@ async fn run_bridge(
 
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Single-player (`-n`), curses text client (`-t`), black-and-white (`-b`),
-    // pointed at the shared high-score file (`-f`). `-b` is deliberate: dopewars'
-    // own color scheme hard-codes a blue-on-blue window palette that assumes a
-    // black terminal and renders nearly unreadable when embedded. Monochrome lets
-    // its default colors map to `Color::Reset`, so the game inherits the late.sh
-    // theme (same approach as the nethack/rebels doors) and stays legible.
+    // pointed at the shared high-score file (`-f`), with the player's handle as
+    // the playname (`-P`) so dopewars skips its "Hey dude, what's your name?"
+    // prompt.
+    //
+    // `-b` is deliberate: dopewars' own color scheme hard-codes a blue-on-blue
+    // window palette that assumes a black terminal and renders nearly unreadable
+    // when embedded. Monochrome lets its default colors map to `Color::Reset`, so
+    // the game inherits the late.sh theme (same approach as the nethack/rebels
+    // doors) and stays legible.
     //
     // Spawn with a cleared environment plus an explicit allowlist so the child
     // sees only what curses needs: a TERM, a writable HOME, a UTF-8 locale for
@@ -144,6 +151,8 @@ async fn run_bridge(
         .arg("-b")
         .arg("-f")
         .arg(&cfg.score_file)
+        .arg("-P")
+        .arg(&cfg.playname)
         .env("TERM", &cfg.term)
         .env("HOME", &home)
         .env("LANG", "C.UTF-8")
@@ -230,6 +239,21 @@ async fn run_bridge(
     drop(reader);
     // Best-effort cleanup of the per-session scratch HOME.
     let _ = fs::remove_dir_all(&home);
+
+    // The child may have just written the shared score file; fold any new
+    // entries into the append-only run log the leaderboard streams.
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if let Err(e) = crate::scorelog::sync_from_sco(
+        std::path::Path::new(&cfg.score_file),
+        &crate::scorelog::runs_log_path(&cfg.score_file),
+        &crate::scorelog::seen_path(&cfg.score_file),
+        now_epoch,
+    ) {
+        tracing::warn!(error = ?e, "failed to sync dopewars run log");
+    }
     Ok(())
 }
 

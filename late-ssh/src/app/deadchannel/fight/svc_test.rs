@@ -228,7 +228,7 @@ async fn a_runner_who_left_has_no_sheet_to_act_on() {
     svc.act_task(user_id, "mira".to_string(), STEP_IN, tx.clone());
     assert!(matches!(answer(&mut rx).await, FightOutcome::NoRunner));
 
-    svc.reload_task(user_id, tx);
+    svc.reload_task(user_id, 0, tx);
     assert!(matches!(answer(&mut rx).await, FightOutcome::NoRunner));
 }
 
@@ -249,7 +249,7 @@ async fn the_descent_rolls_a_stale_day() {
         .expect("store a spent yesterday");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.reload_task(user_id, tx);
+    svc.reload_task(user_id, 0, tx);
     let FightOutcome::Reloaded { sheet, .. } = answer(&mut rx).await else {
         panic!("a reload answers with the sheet");
     };
@@ -630,7 +630,7 @@ async fn a_glass_and_the_crystals_are_stored_on_the_row() {
         (row.crystals, row.drink.as_deref()),
         (2, Some("dead_air_neat"))
     );
-    svc.reload_task(user_id, tx);
+    svc.reload_task(user_id, 0, tx);
     let FightOutcome::Reloaded { sheet, .. } = answer(&mut rx).await else {
         panic!("a reload answers with the sheet");
     };
@@ -764,7 +764,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
 
     // The road shows tom at the crossing before the step.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.reload_task(mira, tx);
+    svc.reload_task(mira, 0, tx);
     let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
         panic!("a reload answers with the sheet");
     };
@@ -874,7 +874,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
 
     // Tom's row reads the news and is owed an answer, with mira on the wire.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.reload_task(tom, tx);
+    svc.reload_task(tom, 0, tx);
     let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
         panic!("a reload answers");
     };
@@ -1009,7 +1009,7 @@ async fn going_down_at_a_crossing_pays_the_sleeper_and_owes_no_answer() {
 
     // Tom's row reads the news; nothing to answer.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.reload_task(tom, tx);
+    svc.reload_task(tom, 0, tx);
     let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
         panic!("a reload answers");
     };
@@ -1102,7 +1102,7 @@ async fn a_sleeper_who_could_not_answer_back_is_not_crossed() {
     // In the band, on the wire, and no answer in them: the road shows
     // nobody and the step meets nobody.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.reload_task(mira, tx);
+    svc.reload_task(mira, 0, tx);
     let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
         panic!("a reload answers");
     };

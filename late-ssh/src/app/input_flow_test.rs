@@ -571,8 +571,13 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
             .collect(),
         ..LeaderboardData::default()
     });
-    // Top Drinkers leads the rail; step down to the board the fixture fills.
-    app.leaderboard_page.select_next();
+    let chips_index = app
+        .leaderboard_page
+        .boards()
+        .iter()
+        .position(|b| *b == Board::TopChips)
+        .unwrap();
+    app.leaderboard_page.select(chips_index);
     app.render().unwrap();
     app.handle_input(b"\n\n\x0b");
     assert_eq!(app.leaderboard_page.scroll(), 1);
@@ -599,7 +604,7 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
 
     let board = (0..24)
         .flat_map(|y| (0..100).map(move |x| Position::new(x, y)))
-        .find(|point| app.leaderboard_page.board_at(*point) == Some(2))
+        .find(|point| app.leaderboard_page.board_at(*point) == Some(chips_index + 1))
         .unwrap();
     let click = format!("\x1b[<0;{};{}M", board.x + 1, board.y + 1);
     app.handle_input(click.as_bytes());
@@ -608,7 +613,7 @@ async fn leaderboard_mouse_and_control_keys_target_rail_and_content_separately()
     app.render().unwrap();
     let rail_wheel = format!("\x1b[<65;{};{}M", board.x + 1, board.y + 1);
     app.handle_input(rail_wheel.as_bytes());
-    assert_eq!(app.leaderboard_page.selected_board(), Board::TimeOnline);
+    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChat);
     app.handle_input(b"k\x1b[A");
     assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
     app.resize(40, 10).unwrap();

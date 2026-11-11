@@ -5350,7 +5350,7 @@ async fn deadchannel_join_requires_the_invitation() {
                 .await
                 .expect("list mentions")
                 .iter()
-                .any(|mention| mention.message_preview.contains("welcome to the wire"))
+                .any(|mention| mention.message_body.contains("welcome to the wire"))
         },
         "the welcome's mention",
     )

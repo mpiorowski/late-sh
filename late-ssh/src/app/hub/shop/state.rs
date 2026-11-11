@@ -162,14 +162,15 @@ impl ShopState {
 
         let mut banner = None;
         while let Ok(event) = self.event_rx.try_recv() {
-            match event {
-                ShopEvent::ActionCompleted { user_id, message } if user_id == self.user_id => {
-                    banner = Some(Banner::success(&message));
+            // The channel carries every buyer's events; only ours banner.
+            let (user_id, outcome) = match event {
+                ShopEvent::ActionCompleted { user_id, message } => {
+                    (user_id, Banner::success(&message))
                 }
-                ShopEvent::ActionFailed { user_id, message } if user_id == self.user_id => {
-                    banner = Some(Banner::error(&message));
-                }
-                _ => {}
+                ShopEvent::ActionFailed { user_id, message } => (user_id, Banner::error(&message)),
+            };
+            if user_id == self.user_id {
+                banner = Some(outcome);
             }
         }
         ShopTick {

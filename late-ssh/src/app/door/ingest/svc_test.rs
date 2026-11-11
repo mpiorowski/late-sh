@@ -841,3 +841,98 @@ async fn unparseable_and_untracked_lines_only_advance_the_cursor() {
         .get("n");
     assert_eq!(milestones, 0);
 }
+
+#[tokio::test]
+async fn dopewars_runs_land_once_for_the_named_account() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "dopewars-dealer").await;
+    let svc = ingest_service(&test_db.db);
+
+    let frame = StatsFrame {
+        file: "runs".to_string(),
+        next_offset: 64,
+        line: format!("{}\t1234567\t1\t1769947200\t01-02-2026", user.username),
+    };
+    svc.handle_dopewars_frame(&frame)
+        .await
+        .expect("first ingest");
+    svc.handle_dopewars_frame(&frame)
+        .await
+        .expect("replay ingest");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "dopewars", "runs").await,
+        Some(64)
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT result, score, depth, turns FROM door_runs WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("run row");
+    assert_eq!(row.get::<_, &str>("result"), "death");
+    assert_eq!(row.get::<_, i64>("score"), 1_234_567);
+    assert_eq!(row.get::<_, Option<i32>>("depth"), None);
+    assert_eq!(row.get::<_, Option<i64>>("turns"), None);
+
+    // A playname no account holds lands nothing, but still advances the
+    // cursor past its line. `late_stats` is the stats session's own name,
+    // which the door never sends for a player.
+    for (offset, name) in [(128, "nobody-here"), (192, "late_stats")] {
+        svc.handle_dopewars_frame(&StatsFrame {
+            file: "runs".to_string(),
+            next_offset: offset,
+            line: format!("{name}\t100\t0\t1769947200\t01-02-2026"),
+        })
+        .await
+        .expect("unattributable line");
+    }
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "dopewars", "runs").await,
+        Some(192)
+    );
+}
+
+/// The `late_*` reservation belongs to arcade handles. A dopewars playname is
+/// an account's username, and an account may be named like this one.
+#[tokio::test]
+async fn a_dopewars_run_lands_for_an_account_named_late_something() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "late_dealer").await;
+    let svc = ingest_service(&test_db.db);
+
+    svc.handle_dopewars_frame(&StatsFrame {
+        file: "runs".to_string(),
+        next_offset: 64,
+        line: format!("{}\t5000\t0\t1769947200\t01-02-2026", user.username),
+    })
+    .await
+    .expect("ingest");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+}
+
+/// The account named like the stats session plays as `late_stats_`
+/// (`dopewars_playname`); its runs still find it.
+#[tokio::test]
+async fn a_dopewars_run_lands_for_the_account_named_like_the_stats_session() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "late_stats").await;
+    assert_eq!(user.username, "late_stats");
+    let svc = ingest_service(&test_db.db);
+
+    svc.handle_dopewars_frame(&StatsFrame {
+        file: "runs".to_string(),
+        next_offset: 64,
+        line: "late_stats_\t5000\t0\t1769947200\t01-02-2026".to_string(),
+    })
+    .await
+    .expect("ingest");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+}
