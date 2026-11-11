@@ -6,14 +6,13 @@ use crate::{
             state::{Action, Modal},
         },
         common::primitives::Screen,
-        live::pick::LiveSource,
         profile::state::profile_params_from_profile,
         state::App,
     },
     pg_listener::Signal,
     test_helpers::{make_app, new_test_db, render_plain, wait_for_app},
 };
-use chrono::{Duration, Utc};
+use chrono::{Duration, Timelike, Utc};
 use late_core::models::calendar::{CalendarSource, CalendarStore, EventDraft, EventTiming};
 use late_core::test_utils::create_test_user;
 use ratatui::layout::Rect;
@@ -390,18 +389,20 @@ async fn staff_take_a_post_down_from_its_details() {
     assert_eq!(app.calendar.selected, date);
 }
 
-/// An event an hour out reaches the live strip and the Live panel, and
-/// opening it from there lands on the board with its details up.
+/// A timed board post on today is on Home's banner with its start for the
+/// whole day, and the board's key is beside it.
 #[tokio::test]
-async fn an_event_about_to_start_opens_from_the_live_strip() {
+async fn a_timed_post_today_is_on_homes_banner() {
     let db = new_test_db().await;
     let user = create_test_user(&db.db, "calendar_live").await;
     let mut app = make_app(db.db.clone(), user.id, "calendar-live-flow");
     app.show_splash = false;
-    // Fifty-eight minutes out: the strip stamp (an hour before) is two
-    // minutes old, inside the five the strip keeps something up.
-    let start = Utc::now() + Duration::minutes(58);
-    let event = CalendarStore::new(db.db.clone())
+    // A viewer whose clock reads noon, whatever the wall clock, so the
+    // hour that began five minutes ago began on their today.
+    let noon_here = format!("Etc/GMT{:+}", Utc::now().hour() as i32 - 12);
+    set_timezone(&mut app, user.id, &noon_here).await;
+    let start = Utc::now() - Duration::minutes(5);
+    CalendarStore::new(db.db.clone())
         .save(
             user.id,
             CalendarSource::Board,
@@ -416,31 +417,26 @@ async fn an_event_about_to_start_opens_from_the_live_strip() {
             },
         )
         .await
-        .unwrap()
-        .event;
+        .unwrap();
     // The replica's board worker, nudged once as a write's notify would.
     let (signals, worker) = mpsc::unbounded_channel();
     let _worker = app.calendar.service().start_notify_worker(worker);
     signals.send(Signal::Resync).unwrap();
     app.handle_input(b"1");
     assert_eq!(app.screen, Screen::Dashboard);
-    wait_for_app(&mut app, "strip shows the event", |a| {
-        a.live.showing() == Some(LiveSource::BoardEvent(event.id))
+    wait_for_app(&mut app, "banner lists the post", |a| {
+        !a.home_board_day().is_empty()
     })
     .await;
-    // The test database has no #lounge, so no card carries the strip; the
-    // stock Live tile lists it with its start.
     let rendered = render_plain(&mut app);
-    let time = start.format("%H:%M").to_string();
+    let post = format!(
+        "Standup ({})",
+        start.with_timezone(&app.calendar.tz).format("%H:%M")
+    );
     assert!(
-        rendered.contains("event") && rendered.contains(&time),
+        rendered.contains(&post) && rendered.contains("7 for the board"),
         "{rendered}"
     );
-    assert!(crate::app::live::input::open_from_key(&mut app));
-    assert_eq!(app.screen, Screen::Calendars);
-    assert!(matches!(&app.calendar.modal, Some(Modal::Details(e)) if e.id == event.id));
-    let rendered = render_plain(&mut app);
-    assert!(rendered.contains("On the board"), "{rendered}");
 }
 
 /// The editor reads its clock fields in the zone it opened in. Changing the

@@ -3547,17 +3547,16 @@ impl App {
     pub(crate) fn home_tiles_area(&self) -> Rect {
         crate::app::zen::layout::rice_areas(
             self.content_area(),
-            self.home_board_day().is_some(),
+            !self.home_board_day().is_empty(),
             self.home.arrange,
         )
         .tiles
     }
 
-    /// The board's day for Home's banner (`calendar::live::day_text`):
-    /// today's all-day posts, `None` on any other day.
-    pub(crate) fn home_board_day(&self) -> Option<String> {
-        let now = chrono::Utc::now();
-        crate::app::calendar::live::day_text(&self.calendar.live_at(now), now)
+    /// The board's day for Home's banner (`calendar::banner`): today's
+    /// board posts, empty on a day it has none.
+    pub(crate) fn home_board_day(&self) -> Vec<crate::app::calendar::banner::DayPost> {
+        self.calendar.day_posts(chrono::Utc::now())
     }
 
     /// Every tile's rect on Home, in layout order, with the chrome's inner

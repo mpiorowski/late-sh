@@ -4,9 +4,9 @@ Screen 7, in the Tab cycle. The house events board with a private calendar
 behind it: anyone posts to the board, everyone sees it, anyone says they are
 in. A viewer's own events sit on the same grid, drawn green, and nobody else
 ever sees them. The board's job is to ship a story into the room: a post is a
-line in #lounge, a timed event heads the Home `now` strip and the Live panel
-from the hour before, an all-day event is a banner across the top of Home
-for its day, and a start is a headline. There is no Home panel of its own.
+line in #lounge, every post on today is on the one-row banner across the top
+of Home for the whole day, and a start is a headline. There is no Home panel
+of its own, and the `now` strip and the Live panel never show an event.
 
 `late-core/src/models/calendar.rs` owns the tables, the three rules
 (`event_access`), the post guards and every write under a row lock, with the
@@ -84,24 +84,28 @@ The session keeps the view, the date and whether the board is shown.
 
 - **A post** ships a `#lounge` ticker line (`ActivityKind::EventPosted`):
   `mat posted Movie night to the board, in 2d 3h`, the title mention-safe.
-- **The hour before** a timed event it joins the Home `now` strip
-  (`LiveSource::BoardEvent`, `app/live`): a drawn calendar page, the title,
-  `in 58m · 6 in`, the poster, `o` or a click for the board. It joins again at
-  the start, lit, reading `on now`.
-- **The Live panel** holds a row for each timed board event from `STRIP_LEAD`
-  before its start until it ends, soonest first, the start as a clock time in
-  the viewer's zone (`event   21:00 Movie night ·6`).
-- **An all-day event** is a one-row banner across the top of Home for its
-  day, over every tile, in amber (`📅 Hackathon · Community call`, `7 for
-  the board` flush right; `zen/ui.rs::draw_board_day`). The strip and the
-  panel never show an all-day event, and it gets no start headline.
+- **The day's posts** are one row across the top of Home, over every tile,
+  for the whole day (`banner.rs`, drawn by `zen/ui.rs::draw_board_day`):
+  `📅 Hackathon · Standup (14:00) · Movie night (21:00)`, `7 for the board`
+  flush right. All-day posts come first, then the timed ones soonest first,
+  each with its start in the viewer's zone. A post is on the row on every
+  date it covers in the viewer's zone, the same days the page shows it on:
+  an all-day post on its civil dates wherever it was posted from, a timed
+  one before, during and after it, dim once it is over. A timed post that
+  began on an earlier day says its end instead (`(until 02:00)`), and one
+  that also runs past today says its title alone, up front with the
+  all-day posts.
+  It is always one row: the titles share the width equally, a short title
+  hands its spare columns to the long ones, a long one is cut with an
+  ellipsis and the time never is. When the titles cannot all keep five
+  columns, the last posts fold into `+N`. Nothing else on Home shows a post:
+  the `now` strip and the Live panel never do.
 - **The start** of a timed event is a headline that stays in #lounge history
   (`EventStarting`): `📅 Movie night is on now, 6 in. Press 7 for the board.`
   Every replica sweeps once a minute; the row's `announced_at` stamp is the
-  claim, so one replica posts.
+  claim, so one replica posts. An all-day post gets no start headline.
 
-Personal events reach none of this. Opening from the strip or the panel lands
-on the event's day with its details up.
+Personal events reach none of this.
 
 ## 4. Timing
 
@@ -112,8 +116,8 @@ exclusive end, read in the zone captured at posting, so a later account change
 does not move them. Timed starts and optional ends are UTC instants; a
 start-only event lasts an hour. Nonexistent local times are errors; repeated
 local times need Earlier or Later for the start and the end separately. Every
-event also carries derived `starts_at`/`ends_at`: a timed post is live for
-`starts_at - 1h <= now < ends_at`, an all-day post for its day.
+event also carries derived `starts_at`/`ends_at`: a post is over once
+`ends_at` has passed.
 
 ## 5. Data and distribution
 
@@ -129,15 +133,18 @@ event also carries derived `starts_at`/`ends_at`: a timed post is live for
   details modal re-reads and closes with `Gone` if staff took the post down or
   its owner made it personal. Details kept under an editor or a delete
   confirmation re-read the same way when that modal closes.
-- The board's live events (`CalendarStore::live_board`) are one process-shared
+- Today's board posts (`CalendarStore::today_board`) are one process-shared
   `watch` per replica, re-read on every notify and once a minute; the minute's
   re-read invalidates no session, and the published board stays up until a
-  fresh read replaces it. The strip, the panel and the banner all read it,
-  so Home never loads the session's own month. A viewer's "I'm in" list
-  travels on their session channel only.
+  fresh read replaces it. It holds every timed post within `DAY_REACH` (25
+  hours) of now and every all-day post on a date that is today in some zone
+  (UTC-12 to UTC+14), enough for any viewer's zone; each session narrows it
+  to its own today (`CalendarEvent::on_day`).
+  Home's banner reads it, so Home never loads the session's own month. A
+  viewer's "I'm in" list travels on their session channel only.
 - Rendering and the tick do no database I/O. Hit geometry is recorded at draw
   and cleared on resize.
-- The lines, the live window and the cap are constants (`STRIP_LEAD`,
+- The lines, the snapshot's reach and the cap are constants (`DAY_REACH`,
   `BOARD_POSTS_PER_DAY` in `late-core`), not settings.
 
 ## 6. Files
@@ -151,17 +158,16 @@ event also carries derived `starts_at`/`ends_at`: a timed post is live for
   `start_notify_worker` handles `CalendarChanged` and the listener's resync.
 - `state.rs`: the session's mirror (events for the visible range, own "I'm in"
   ids, the modal stack, the cursor). `tick` drains the epoch, the board watch
-  and the private reply channel; `live_at` is the board minus what ended;
-  `show_event` is how the strip and the panel land on the page. Never writes,
-  never queries.
+  and the private reply channel; `day_posts` is the board narrowed to the
+  viewer's today. Never writes, never queries.
 - `navigation.rs`: selection, double-click identity, the context menu's items
   from `event_access`, modal frames that restore the cursor on pop.
 - `editor.rs`: the form; the `Target` control on new drafts and owned events; DST
   occurrence controls only for a repeated local hour; `conflict` on a lost save.
 - `date_entry.rs`, `parser.rs`, `toolbar.rs`, `ui.rs`, `input.rs` (page keys
   and clicks on screen 7 and while a calendar modal is up, nothing elsewhere).
-- `live.rs`: the strip source, `panel_events` (the Live panel rows),
-  `day_text` (Home's banner).
+- `banner.rs`: Home's banner. `day_posts` picks and orders today's posts,
+  `day_spans` fits them into the one row.
 
 ## 7. Telemetry
 
@@ -169,9 +175,8 @@ Page visits and attention ride the screen metrics (`screen="calendars"`). The
 service records every write (`late_ssh_calendar_writes_total{write}`: board or
 personal post, edit, delete, staff delete, in, out), every refusal by rule
 (`..._refusals_total{reason}`), every database failure by operation
-(`..._failures_total{op}`), every line handed to #lounge
-(`..._announcements_total{line}`), and every open from the strip or the panel
-(`..._opens_total{from}`). Nothing below `settle` logs.
+(`..._failures_total{op}`), and every line handed to #lounge
+(`..._announcements_total{line}`). Nothing below `settle` logs.
 
 ## 8. Fixture and tests
 
@@ -180,20 +185,18 @@ personal post, edit, delete, staff delete, in, out), every refusal by rule
 each (one on now, one in half an hour, one tomorrow evening, an all-day one
 today, a crowded day), a few "I'm in"s and a private event for `cal_user`.
 Connect with `ssh -o IdentitiesOnly=yes -i tmp/calendar-seed-keys/cal_user -p
-2222 localhost`; `1` shows the strip, the panel and the banner, `7` the
-board. Rerun to reset the fixture's deterministic events.
+2222 localhost`; `1` shows the banner, `7` the board. Rerun to reset the fixture's deterministic events.
 
 `make test-llm ARGS="-p late-core -p late-ssh --lib -E 'test(calendar)'"`. Model
 rules and the claim in `late-core/src/models/calendar_test.rs`; the lines,
 refusals and the listener in `svc_test.rs`; the mirror in `state_test.rs`;
 selection and menus in `navigation_test.rs`; keys in `input_test.rs`; the form
-in `editor_test.rs`; the page in `ui_test.rs`; the strip source in
-`live_test.rs`; the Live panel row in `app/live/panel_test.rs`; the whole app
-in `late-ssh/src/app/calendar_flow_test.rs`.
+in `editor_test.rs`; the page in `ui_test.rs`; Home's banner in
+`banner_test.rs`; the whole app in `late-ssh/src/app/calendar_flow_test.rs`.
 
 ## 9. Not built, on purpose
 
-Recurrence, invitations, reminders beyond the strip and the panel, per-event
+Recurrence, invitations, reminders beyond Home's banner, per-event
 notification leads, sharing a personal calendar, week and day views,
 iCalendar import or export, calendar settings. The board is a clubhouse
 mechanic, not a calendar application; the usage metrics above answer first

@@ -36,7 +36,6 @@ use crate::app::door::realm::svc::{
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
-use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::presence::svc::PulseSampleOutcome;
@@ -848,7 +847,7 @@ mod inner {
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite};
     use super::{
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
@@ -1590,13 +1589,6 @@ mod inner {
         }
     }
 
-    fn live_origin_label(origin: LiveOrigin) -> &'static str {
-        match origin {
-            LiveOrigin::Strip => "strip",
-            LiveOrigin::Panel => "panel",
-        }
-    }
-
     fn calendar_writes_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1636,18 +1628,6 @@ mod inner {
                 .u64_counter("late_ssh_calendar_announcements_total")
                 .with_description(
                     "Board lines handed to #lounge: a post, or a start claimed by this replica",
-                )
-                .build()
-        })
-    }
-
-    fn calendar_opens_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_calendar_opens_total")
-                .with_description(
-                    "Board events opened from the live strip or the Live panel, by which surface brought the viewer",
                 )
                 .build()
         })
@@ -3795,10 +3775,6 @@ mod inner {
         );
     }
 
-    pub fn record_calendar_open(origin: LiveOrigin) {
-        calendar_opens_total().add(1, &[KeyValue::new("from", live_origin_label(origin))]);
-    }
-
     pub fn record_referral_attach(source: ReferralSource, outcome: ReferralAttachOutcome) {
         referral_attaches_total().add(
             1,
@@ -4665,7 +4641,7 @@ mod inner {
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite};
     use super::{
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
@@ -4818,7 +4794,6 @@ mod inner {
     pub fn record_calendar_refusal(_kind: CalendarRefusalKind) {}
     pub fn record_calendar_failure(_op: CalendarOp) {}
     pub fn record_calendar_announcement(_announcement: CalendarAnnouncement) {}
-    pub fn record_calendar_open(_origin: LiveOrigin) {}
     pub fn record_referral_attach(_source: ReferralSource, _outcome: ReferralAttachOutcome) {}
     pub fn record_referral_settlement(_settlement: ReferralSettlement) {}
     pub fn record_newcomer_minute(_result: NewcomerMinuteResult) {}

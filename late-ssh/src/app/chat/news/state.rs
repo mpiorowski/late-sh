@@ -126,13 +126,13 @@ pub(crate) fn save_banner(outcome: NewsSaveOutcome) -> Banner {
     }
 }
 
-/// The News list in display order: the reader's shelf first, newest save
-/// first, then the feed's stories that are not on it, oldest first, so the
-/// newest share is at the bottom of the page like the newest line of a
-/// room. A saved story appears once, on the shelf, whatever the feed
-/// holds; the feed's copy of it is the one shown, since the snapshot
-/// carries the freshest body status. The mine-only filter applies to both
-/// parts.
+/// The News list in display order, oldest at the top and newest at the
+/// bottom like the lines of a room: the feed's stories that are not on the
+/// shelf, oldest share first, then the reader's shelf under them, oldest
+/// save first. Returns the rows and how many trailing rows are the shelf.
+/// A saved story appears once, on the shelf, whatever the feed holds; the
+/// feed's copy of it is the one shown, since the snapshot carries the
+/// freshest body status. The mine-only filter applies to both parts.
 pub(crate) fn display_order(
     saved: &[ArticleFeedItem],
     feed: &[ArticleFeedItem],
@@ -143,23 +143,26 @@ pub(crate) fn display_order(
         None => true,
     };
     let saved_ids: HashSet<Uuid> = saved.iter().map(|item| item.article.id).collect();
-    let mut rows: Vec<ArticleFeedItem> = saved
+    let mut rows: Vec<ArticleFeedItem> = feed
         .iter()
-        .map(|item| {
-            feed.iter()
-                .find(|fresh| fresh.article.id == item.article.id)
-                .unwrap_or(item)
-        })
-        .filter(|item| shown(item))
+        .rev()
+        .filter(|item| !saved_ids.contains(&item.article.id) && shown(item))
         .cloned()
         .collect();
-    let saved_len = rows.len();
+    let feed_len = rows.len();
     rows.extend(
-        feed.iter()
+        saved
+            .iter()
             .rev()
-            .filter(|item| !saved_ids.contains(&item.article.id) && shown(item))
+            .map(|item| {
+                feed.iter()
+                    .find(|fresh| fresh.article.id == item.article.id)
+                    .unwrap_or(item)
+            })
+            .filter(|item| shown(item))
             .cloned(),
     );
+    let saved_len = rows.len() - feed_len;
     (rows, saved_len)
 }
 
@@ -181,7 +184,7 @@ pub struct State {
     /// land in the order they were asked for.
     shelf_step: Option<JoinHandle<()>>,
     articles: Vec<ArticleFeedItem>,
-    /// How many leading rows of `articles` are the shelf.
+    /// How many trailing rows of `articles` are the shelf.
     saved_len: usize,
     mine_only: bool,
     selected: usize,
@@ -259,15 +262,15 @@ impl State {
         &self.source_articles
     }
 
-    /// Articles in current display order (`display_order`): the shelf, then
-    /// the feed, with the mine-only filter applied when active. This is
+    /// Articles in current display order (`display_order`): the feed, then
+    /// the shelf, with the mine-only filter applied when active. This is
     /// what the chat news view renders and what the j/k/s/d/Enter
     /// selection operates on.
     pub fn displayed_articles(&self) -> &[ArticleFeedItem] {
         &self.articles
     }
 
-    /// How many leading rows of `displayed_articles` are the shelf.
+    /// How many trailing rows of `displayed_articles` are the shelf.
     pub fn saved_len(&self) -> usize {
         self.saved_len
     }
@@ -335,7 +338,7 @@ impl State {
 
     fn rebuild_display(&mut self) {
         // The shelf can load ahead of the feed. Until the feed has drawn nothing
-        // counts as selected, so the first fill still lands on the newest story.
+        // counts as selected, so the first fill still lands on the newest share.
         let prev_id = match self.feed_drawn {
             true => self
                 .articles
@@ -357,8 +360,14 @@ impl State {
                 None => self.selected = clamp_index(self.selected, self.articles.len()),
             },
             // Nothing was selected (the first fill): land on the newest
-            // story, the last row.
-            None => self.selected = self.articles.len().saturating_sub(1),
+            // share, the feed's last row just over the shelf, or the last
+            // row when the feed shows nothing.
+            None => {
+                self.selected = match self.articles.len() - saved_len {
+                    0 => self.articles.len().saturating_sub(1),
+                    feed_len => feed_len - 1,
+                }
+            }
         }
     }
 
@@ -586,13 +595,18 @@ impl State {
 
     /// `s` on the selected story: onto the shelf, or off it. The cursor
     /// stays where it is in the list rather than following the story to
-    /// its new section: the story that came next is what is under it now,
-    /// so saving reads as "keep this, move on". With nothing after it, the
-    /// cursor follows the story; a refused save moves nothing.
+    /// its new section: the story that came next in its section is what is
+    /// under it now, so saving reads as "keep this, move on". With nothing
+    /// after it in its section, the cursor follows the story; a refused
+    /// save moves nothing.
     pub(crate) fn toggle_save_selected(&mut self) -> Option<NewsSaveOutcome> {
         let index = self.selected_index();
         let article_id = self.articles.get(index)?.article.id;
-        let follower = self.articles.get(index + 1).map(|item| item.article.id);
+        let shelf_start = self.articles.len() - self.saved_len;
+        let follower = match (index + 1 < shelf_start) == (index < shelf_start) {
+            true => self.articles.get(index + 1).map(|item| item.article.id),
+            false => None,
+        };
         let outcome = self.toggle_save(article_id)?;
         match outcome {
             NewsSaveOutcome::Saved | NewsSaveOutcome::Unsaved => {

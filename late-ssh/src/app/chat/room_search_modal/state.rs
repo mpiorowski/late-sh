@@ -5,7 +5,7 @@ use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
 use crate::app::chat::state::{
-    ChatState, RoomSlot, is_chat_list_room, room_activity_at, synthetic_favorite_id,
+    ChatState, RoomSlot, is_chat_list_room, is_rail_room, room_activity_at, synthetic_favorite_id,
 };
 use crate::app::chat::svc::SEARCH_MIN_CHARS;
 
@@ -176,14 +176,14 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
                     meta: format!("live stream: {}", stream.title),
                     unread_count: chat.unread_counts.get(&room_id).copied().unwrap_or(0),
                     last_message_at: room_activity_at(room_id, &chat.room_last_message_at),
-                    favorite: false,
+                    favorite: chat.favorite_room_ids().contains(&room_id),
                 }),
                 None => {
                     let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id)
                     else {
                         continue;
                     };
-                    if !is_chat_list_room(room) {
+                    if !is_rail_room(room, chat.favorite_room_ids()) {
                         continue;
                     }
                     items.push(RoomSearchItem {

@@ -26,7 +26,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint, truncate_cells},
     theme,
     username_effect::ResolvedName,
 };
@@ -44,8 +44,8 @@ use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
     compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
-    is_deadchannel_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    is_deadchannel_room, is_rail_room, is_selected_slot, synthetic_favorite_id,
+    synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
@@ -1068,28 +1068,6 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     } else {
         format!("{}{text}", " ".repeat(width - used))
     }
-}
-
-pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    let ellipsis_width = UnicodeWidthStr::width("…");
-    for ch in text.chars() {
-        let width = UnicodeWidthStr::width(ch.to_string().as_str());
-        if used + width + ellipsis_width > max_width {
-            break;
-        }
-        out.push(ch);
-        used += width;
-    }
-    out.push('…');
-    out
 }
 
 pub fn draw_dashboard_chat_card(
@@ -4222,7 +4200,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             None => view
                 .chat_rooms
                 .iter()
-                .any(|(r, _)| r.id == *id && is_chat_list_room(r)),
+                .any(|(r, _)| r.id == *id && is_rail_room(r, view.favorite_room_ids)),
         })
         .collect();
     let favorited = |slot: RoomSlot| -> bool {
@@ -4312,13 +4290,20 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
 
     // Stream: live "watch me" streams, directly under Core, mirroring
     // `visual_order_for_rooms`. The section only exists while somebody is
-    // live; a pending stream gets no row.
-    if view.live_streams.iter().any(|stream| stream.live) {
+    // live; a pending stream gets no row. A favorited stream room keeps its
+    // Favorites row instead, live or not.
+    let section_streams: Vec<Uuid> = view
+        .live_streams
+        .iter()
+        .filter(|stream| stream.live && !favorite_ids.contains(&stream.room_id))
+        .map(|stream| stream.room_id)
+        .collect();
+    if !section_streams.is_empty() {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Stream), None, false);
         if !collapsed_set.contains(&RoomSection::Stream) {
-            for stream in view.live_streams.iter().filter(|stream| stream.live) {
-                push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
+            for room_id in section_streams {
+                push_slot(RoomSlot::Room(room_id), &mut push_row);
             }
         }
     }
@@ -4941,9 +4926,10 @@ fn draw_selected_content(
         let selected_room = selected_room_id
             .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
             // Stream rooms are `kind='game'` (not chat-list rooms) but are
-            // openable from the rail's stream section, so they render here.
+            // openable from the rail's stream section, and a favorited game
+            // room from Favorites, so they render here.
             .filter(|(room, _)| {
-                is_chat_list_room(room)
+                is_rail_room(room, view.favorite_room_ids)
                     || view
                         .live_streams
                         .iter()

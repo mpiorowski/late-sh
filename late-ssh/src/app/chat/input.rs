@@ -283,6 +283,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_room_picker() {
         crate::app::input::open_room_search_modal_globally(app);
     }
+    if let Some(room_id) = app.chat.take_requested_favorite_toggle() {
+        toggle_room_favorite(app, room_id);
+    }
     if let Some(query) = app.chat.take_requested_message_search() {
         crate::app::input::open_message_search_modal_globally(app, &query);
     }
@@ -383,15 +386,29 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     let Some(room_id) = app.chat.selected_favorite_room_id() else {
         return false;
     };
+    toggle_room_favorite(app, room_id);
+    true
+}
+
+fn toggle_room_favorite(app: &mut App, room_id: Uuid) {
     let added = app.profile_state.toggle_favorite_room(room_id);
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    // A game room is on the rail only while it is a favorite. When the one
+    // open on Home just left it, the selection moves now, as a room switch
+    // does: the next draft goes to the room on screen, not the one that left.
+    let selected = app.chat.selected_room_id;
+    app.chat.sync_selection();
+    if app.chat.selected_room_id != selected {
+        app.chat.reset_composer();
+        app.sync_visible_chat_room();
+        app.chat.request_list();
+    }
     app.banner = Some(if added {
         Banner::success("Added to favorites")
     } else {
         Banner::success("Removed from favorites")
     });
-    true
 }
 
 /// The favorite keys for the selected entry: `[` / `]` reorder, `f` toggles.

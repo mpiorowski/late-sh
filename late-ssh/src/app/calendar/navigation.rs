@@ -372,8 +372,8 @@ impl CalendarState {
         self.error = None;
         self.invalidate_geometry();
         if self.range() != previous_range {
-            // Details opened from the strip may have moved the temporary date
-            // into another month. Restoring the original date reloads it.
+            // The date under the modal may sit in another month than the one
+            // on top of it. Restoring it reloads that month.
             self.refresh();
         }
         self.reconcile_selection();

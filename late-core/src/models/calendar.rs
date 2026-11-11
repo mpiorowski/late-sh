@@ -20,9 +20,13 @@ use uuid::Uuid;
 pub const CALENDAR_CHANGED_CHANNEL: &str = "calendar_changed";
 /// Board posts one account may make per UTC day.
 pub const BOARD_POSTS_PER_DAY: i64 = 5;
-/// How long before its start a timed board post goes live: the strip's
-/// nudge, the Live panel's row. An all-day post goes live for its day.
-pub const STRIP_LEAD: Duration = Duration::hours(1);
+/// How far either side of now a timed board post can sit and still fall on
+/// some viewer's today: a civil day is at most 25 hours long, in any zone.
+pub const DAY_REACH: Duration = Duration::hours(25);
+/// The offsets of the zones furthest behind and ahead of UTC: between them
+/// are the dates that are today somewhere.
+const ZONES_BEHIND: Duration = Duration::hours(-12);
+const ZONES_AHEAD: Duration = Duration::hours(14);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CalendarView {
@@ -197,21 +201,17 @@ impl CalendarEvent {
     pub fn is_board(&self) -> bool {
         self.owner_id.is_none()
     }
-    pub fn timed(&self) -> bool {
-        matches!(self.timing, EventTiming::Timed { .. })
+    /// On a viewer's today, the day Home's banner lists: every date the
+    /// event covers in the viewer's zone (`EventTiming::dates`, the days the
+    /// Calendars page shows it on), before, during and after it. An all-day
+    /// post is its civil dates in every zone.
+    pub fn on_day(&self, now: DateTime<Utc>, tz: Tz) -> bool {
+        let today = now.with_timezone(&tz).date_naive();
+        let (first, end_exclusive) = self.timing.dates(tz);
+        first <= today && today < end_exclusive
     }
-    /// Live on the house's surfaces: a timed post inside [`STRIP_LEAD`] of
-    /// its start or on, an all-day post on its day. Over is never live.
-    pub fn live(&self, now: DateTime<Utc>) -> bool {
-        let lead = if self.timed() {
-            STRIP_LEAD
-        } else {
-            Duration::zero()
-        };
-        self.starts_at - lead <= now && now < self.ends_at
-    }
-    pub fn started(&self, now: DateTime<Utc>) -> bool {
-        self.starts_at <= now
+    pub fn over(&self, now: DateTime<Utc>) -> bool {
+        self.ends_at <= now
     }
     fn from_row(r: Row) -> Self {
         let timing = match r.get::<_, Option<NaiveDate>>("start_date") {
@@ -482,20 +482,27 @@ impl CalendarStore {
             None => refuse(CalendarRefusal::Gone),
         }
     }
-    /// The board posts live at `now` (see [`CalendarEvent::live`]), soonest
-    /// first. The replica service reads this into the snapshot every
-    /// session shares. Personal events are never live anywhere.
-    pub async fn live_board(&self, now: DateTime<Utc>) -> Result<Vec<CalendarEvent>> {
+    /// The board posts that are on some viewer's today at `now`, soonest
+    /// first: every timed post within [`DAY_REACH`] of now, and every
+    /// all-day post covering a date that is today in some zone. Each
+    /// session narrows it to its own zone ([`CalendarEvent::on_day`]). The
+    /// replica service reads this into the snapshot every session shares.
+    /// Personal events are never in it.
+    pub async fn today_board(&self, now: DateTime<Utc>) -> Result<Vec<CalendarEvent>> {
         let c = self.db.get().await?;
-        let lead = now + STRIP_LEAD;
+        let from = now - DAY_REACH;
+        let until = now + DAY_REACH;
+        let earliest_today = (now + ZONES_BEHIND).date_naive();
+        let latest_today = (now + ZONES_AHEAD).date_naive();
         Ok(c.query(
             &format!(
                 "SELECT {EVENT_COLUMNS} FROM calendar_events e LEFT JOIN users u ON u.id=e.creator_id \
-                 WHERE e.owner_id IS NULL AND e.ends_at > $1 \
-                   AND ((e.start_at IS NOT NULL AND e.starts_at <= $2) OR (e.start_date IS NOT NULL AND e.starts_at <= $1)) \
+                 WHERE e.owner_id IS NULL \
+                   AND ((e.start_at IS NOT NULL AND e.starts_at < $2 AND e.ends_at > $1) \
+                     OR (e.start_date IS NOT NULL AND e.start_date <= $4 AND e.end_date > $3)) \
                  ORDER BY e.starts_at, e.id"
             ),
-            &[&now, &lead],
+            &[&from, &until, &earliest_today, &latest_today],
         )
         .await?
         .into_iter()

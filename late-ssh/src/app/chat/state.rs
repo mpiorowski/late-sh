@@ -721,6 +721,14 @@ pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
+/// Whether `room` can sit on the Home rail for this user: every chat-list
+/// room, plus a game room (a door's watch room, a Realm world, a house
+/// table, a match chat, a stream room) only while it is favorited. Unfavoriting
+/// drops it off the rail again, and the way back is the game's own chat.
+pub(crate) fn is_rail_room(room: &ChatRoom, favorite_room_ids: &[Uuid]) -> bool {
+    is_chat_list_room(room) || (room.kind == "game" && favorite_room_ids.contains(&room.id))
+}
+
 /// The kind of room for the Home attention metric, read off `kind` and
 /// `visibility`. A kind this match does not name is `OtherRoom`.
 pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
@@ -1059,6 +1067,9 @@ pub struct ChatState {
     requested_icon_picker: bool,
     /// Set by `/picker`; `App` opens the Ctrl+/ room picker.
     requested_room_picker: bool,
+    /// `/fav`: the room whose favorite flips, drained by the input layer,
+    /// which owns the profile the favorites persist in.
+    requested_favorite_toggle: Option<Uuid>,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
@@ -1434,6 +1445,7 @@ impl ChatState {
             requested_brb: false,
             requested_icon_picker: false,
             requested_room_picker: false,
+            requested_favorite_toggle: None,
             requested_message_search: None,
             requested_petname: None,
             requested_open_profile: None,
@@ -2228,6 +2240,10 @@ impl ChatState {
 
     pub fn take_requested_room_picker(&mut self) -> bool {
         std::mem::take(&mut self.requested_room_picker)
+    }
+
+    pub fn take_requested_favorite_toggle(&mut self) -> Option<Uuid> {
+        self.requested_favorite_toggle.take()
     }
 
     pub(crate) fn take_requested_message_search(&mut self) -> Option<String> {
@@ -3382,14 +3398,16 @@ impl ChatState {
             return None;
         }
         let room_id = self.selected_room_id?;
-        self.lists_room(room_id).then_some(room_id)
+        // A live stream row favorites its room even before the lazy join
+        // lands; the favorite shows on the rail once the membership does.
+        (self.lists_room(room_id) || self.stream_for_room(room_id).is_some()).then_some(room_id)
     }
 
-    /// Whether `room_id` is one of this user's rooms on the chat list.
+    /// Whether `room_id` is one of this user's rooms on the Home rail.
     fn lists_room(&self, room_id: Uuid) -> bool {
         self.rooms
             .iter()
-            .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
+            .any(|(room, _)| room.id == room_id && is_rail_room(room, &self.favorite_room_ids))
     }
 
     /// Build the flat visual navigation order.
@@ -3491,7 +3509,8 @@ impl ChatState {
                 let is_stream_room = self.stream_for_room(next_id).is_some();
                 let in_list = self.rooms.iter().any(|(room, _)| {
                     room.id == next_id
-                        && (is_chat_list_room(room) || (is_stream_room && room.kind == "game"))
+                        && (is_rail_room(room, &self.favorite_room_ids)
+                            || (is_stream_room && room.kind == "game"))
                 });
                 if !in_list {
                     // A stream room the user has never joined: select it
@@ -3984,6 +4003,18 @@ impl ChatState {
         if body.trim() == "/icons" {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
+            return None;
+        }
+
+        if body.trim() == "/fav" {
+            // The room being typed in, so `/fav` inside a game's chat pins
+            // that game room to the Home rail, where no rail row exists yet.
+            let target = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = target else {
+                return Some(Banner::error("Use /fav from inside a room"));
+            };
+            self.requested_favorite_toggle = Some(room_id);
             return None;
         }
 
@@ -7828,7 +7859,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
         if rooms.iter().any(|(room, _)| {
             room.id == *favorite_id
-                && is_chat_list_room(room)
+                && is_rail_room(room, favorite_room_ids)
                 && !dm_peer_is_ignored(room, user_id, ignored_user_ids)
         }) && pushed_rooms.insert(*favorite_id)
             && !favorites_collapsed

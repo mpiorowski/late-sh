@@ -16,10 +16,6 @@ use crate::app::{
         state::AudioState,
         thumbnail::Thumbnail,
     },
-    calendar::{
-        live::{self as event_live, EventStripView},
-        state::CalendarState,
-    },
     door::{
         realm::{
             live::{self as realm_live, RealmStripView},
@@ -47,7 +43,6 @@ pub enum LiveStripView<'a> {
     Track(TrackStripView),
     Stream(StreamStripView),
     DoorGame(DoorGameStripView),
-    Event(EventStripView),
     Realm(Box<RealmStripView>),
 }
 
@@ -63,7 +58,6 @@ impl LiveStripView<'_> {
             Self::Track(track) => Some(LiveSource::BoothTrack(track.item.id)),
             Self::Stream(strip) => Some(LiveSource::Stream(strip.stream.user_id)),
             Self::DoorGame(strip) => Some(LiveSource::DoorGame(strip.key)),
-            Self::Event(strip) => Some(LiveSource::BoardEvent(strip.event.id)),
             Self::Realm(strip) => Some(LiveSource::Realm(strip.item.id)),
         }
     }
@@ -107,11 +101,10 @@ impl LiveState {
     }
 
     /// Read the sources and decide what the strip shows. `streams` is the
-    /// session's copy of the stream registry (`ChatState::live_streams`). `door_games` are the live games
-    /// on the watchable doors (`LiveGamesService::live_rows`), `calendar`
-    /// the session's board mirror (its upcoming events, the viewer's own
-    /// included). `reading` is whether the viewer has a message selected in
-    /// the card: the strip then holds its height. `picture_settings` is how
+    /// session's copy of the stream registry (`ChatState::live_streams`).
+    /// `door_games` are the live games on the watchable doors
+    /// (`LiveGamesService::live_rows`). `reading` is whether the viewer has
+    /// a message selected in the card: the strip then holds its height. `picture_settings` is how
     /// this session's terminal paints an image. True when what the strip
     /// draws changed.
     #[allow(clippy::too_many_arguments)]
@@ -121,7 +114,6 @@ impl LiveState {
         audio: &AudioState,
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
-        calendar: &CalendarState,
         realm: &RealmState,
         reading: bool,
         picture_settings: InlineImageRenderSettings,
@@ -132,7 +124,6 @@ impl LiveState {
         candidates.extend(audio.live_candidates());
         candidates.extend(stream_live::candidates(streams));
         candidates.extend(door_live::candidates(door_games));
-        candidates.extend(event_live::candidates(&calendar.live_at(now_utc), now_utc));
         let changed = self.refresh(&candidates, Instant::now(), now_utc, reading);
         let thumbnail = match self.showing() {
             Some(LiveSource::BoothTrack(item_id)) => audio
@@ -142,7 +133,6 @@ impl LiveState {
             | Some(LiveSource::DailyResult(_))
             | Some(LiveSource::Stream(_))
             | Some(LiveSource::DoorGame(_))
-            | Some(LiveSource::BoardEvent(_))
             | Some(LiveSource::Realm(_))
             | None => None,
         };
@@ -240,8 +230,8 @@ impl LiveState {
 
     /// What the strip paints, if it is up. `listening_on` is the viewer's
     /// audio source, which decides what opening a booth track does;
-    /// `streams` is the session's copy of the stream registry, `door_games` the live games on the watchable
-    /// doors, and `calendar` the session's board mirror.
+    /// `streams` is the session's copy of the stream registry and
+    /// `door_games` the live games on the watchable doors.
     #[allow(clippy::too_many_arguments)]
     pub fn view<'a>(
         &self,
@@ -251,7 +241,6 @@ impl LiveState {
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
         live_games: &LiveGamesService,
-        calendar: &CalendarState,
         realm: &RealmState,
     ) -> Option<LiveStripView<'a>> {
         match self.showing()? {
@@ -277,11 +266,6 @@ impl LiveState {
                 door_live::view(door_games, key, live_games.watchers_of(key))
                     .map(LiveStripView::DoorGame)
             }
-            LiveSource::BoardEvent(id) => {
-                let now = Utc::now();
-                event_live::view(&calendar.live_at(now), id, calendar.tz, now)
-                    .map(LiveStripView::Event)
-            }
             LiveSource::Realm(game_id) => realm_live::view(&realm.snapshot, game_id, Utc::now())
                 .map(|view| LiveStripView::Realm(Box::new(view))),
         }
@@ -296,7 +280,6 @@ impl LiveState {
             | LiveSource::BoothTrack(_)
             | LiveSource::Stream(_)
             | LiveSource::DoorGame(_)
-            | LiveSource::BoardEvent(_)
             | LiveSource::Realm(_)) => Some(source),
         }
     }

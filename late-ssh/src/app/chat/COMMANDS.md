@@ -107,6 +107,7 @@ User commands:
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
 - `/ignore [@user]` mutes a user or lists muted users.
 - `/invite @user` adds a user to the selected non-DM room.
+- `/fav` favorites or unfavorites the composer's room (else the selected real room), the same toggle as `f` on the rail. It is how a game room's chat (a door watch room, a Realm world, a house table, a stream room) gets onto the Home rail: `f` is the game's key on those screens and they have no rail row to press it on. Parsed in `submit_composer` into `requested_favorite_toggle`, drained in `handle_post_submit_requests` (the favorites live on the profile).
 - `/leave` leaves the selected non-permanent room.
 - `/list` lists public rooms.
 - `/members` lists selected-room members.
@@ -249,7 +250,7 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `c` | Copy selected message body |
 | `t` | Translate selected message; press again to collapse, again to reopen. A message already in your target language banners instead of spending a call. |
 | `g` | Open the gild tier picker on the selected message (your own message, a DM, a private room, or a game/stream chat banners the refusal instead of opening). In the picker: `j`/`k` or `1`-`3` pick a tier, `Enter` buys, `Esc` cancels. |
-| `f` | Favorite/unfavorite the selected real room |
+| `f` | Favorite/unfavorite the selected real room or live stream row (`/fav` does the same from inside a game's chat) |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
 | `f` then `1..9` | Quick-react to selected message |
 | `f` then `w` | Wave hi (👋) on selected message |

@@ -78,29 +78,43 @@ fn a_stream_chat_tile_title_keeps_the_watcher_count_on_a_narrow_tile() {
     assert_eq!(UnicodeWidthStr::width(title.as_str()), 16);
 }
 
-/// The board's day reads in amber at the left of its row with the board's
-/// key flush right, one column in from each edge, the text giving way to
-/// the key when the row is short.
+/// The board's day reads at the left of its row with the board's key
+/// flush right, one column in from each edge, the posts giving way to the
+/// key when the row is short.
 #[test]
-fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
-    let mut terminal = Terminal::new(TestBackend::new(40, 1)).expect("terminal");
-    terminal
-        .draw(|frame| draw_board_day(frame, Rect::new(0, 0, 40, 1), "Hackathon"))
-        .expect("draw");
-    let row: String = (0..40)
-        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
-        .collect();
-    assert_eq!(row, format!(" Hackathon{}7 for the board ", " ".repeat(14)));
+fn the_boards_day_banner_is_the_posts_left_and_the_key_right() {
+    use crate::app::calendar::banner::{DayPost, DayWhen};
+    let posts = [
+        DayPost {
+            title: "Hackathon".into(),
+            when: DayWhen::AllDay,
+        },
+        DayPost {
+            title: "Movie night".into(),
+            when: DayWhen::At {
+                time: "21:00".into(),
+                over: false,
+            },
+        },
+    ];
+    let drawn = |width: u16| -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("terminal");
+        terminal
+            .draw(|frame| draw_board_day(frame, Rect::new(0, 0, width, 1), &posts))
+            .expect("draw");
+        (0..width)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+            .collect()
+    };
 
-    let mut terminal = Terminal::new(TestBackend::new(24, 1)).expect("terminal");
-    terminal
-        .draw(|frame| draw_board_day(frame, Rect::new(0, 0, 24, 1), "Hackathon and more"))
-        .expect("draw");
-    let row: String = (0..24)
-        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
-        .collect();
+    let row = drawn(60);
+    assert!(row.contains("Hackathon · Movie night (21:00)"), "{row:?}");
     assert!(row.ends_with("7 for the board "), "{row:?}");
-    assert!(row.starts_with(" Hack"), "{row:?}");
+
+    // Short of room the titles are cut, never the time or the key.
+    let row = drawn(42);
+    assert!(row.contains("… (21:00)"), "{row:?}");
+    assert!(row.ends_with("7 for the board "), "{row:?}");
 }
 
 /// The top row of a narrow lobby tile wearing `title`, as text.

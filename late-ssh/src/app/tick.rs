@@ -550,7 +550,6 @@ impl App {
             &self.audio,
             &self.chat.live_streams,
             &self.live_games.live_rows(),
-            &self.calendar,
             &self.realm,
             reading,
             picture_settings,
