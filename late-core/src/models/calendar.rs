@@ -23,6 +23,10 @@ pub const BOARD_POSTS_PER_DAY: i64 = 5;
 /// How far either side of now a timed board post can sit and still fall on
 /// some viewer's today: a civil day is at most 25 hours long, in any zone.
 pub const DAY_REACH: Duration = Duration::hours(25);
+/// The offsets of the zones furthest behind and ahead of UTC: between them
+/// are the dates that are today somewhere.
+const ZONES_BEHIND: Duration = Duration::hours(-12);
+const ZONES_AHEAD: Duration = Duration::hours(14);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CalendarView {
@@ -197,18 +201,14 @@ impl CalendarEvent {
     pub fn is_board(&self) -> bool {
         self.owner_id.is_none()
     }
-    /// On a viewer's today, the day Home's banner lists: an all-day post
-    /// for its day, a timed post on every date it covers in the viewer's
-    /// zone, before, during and after it.
+    /// On a viewer's today, the day Home's banner lists: every date the
+    /// event covers in the viewer's zone (`EventTiming::dates`, the days the
+    /// Calendars page shows it on), before, during and after it. An all-day
+    /// post is its civil dates in every zone.
     pub fn on_day(&self, now: DateTime<Utc>, tz: Tz) -> bool {
-        match self.timing {
-            EventTiming::AllDay { .. } => self.starts_at <= now && now < self.ends_at,
-            EventTiming::Timed { .. } => {
-                let today = now.with_timezone(&tz).date_naive();
-                let (first, end_exclusive) = self.timing.dates(tz);
-                first <= today && today < end_exclusive
-            }
-        }
+        let today = now.with_timezone(&tz).date_naive();
+        let (first, end_exclusive) = self.timing.dates(tz);
+        first <= today && today < end_exclusive
     }
     pub fn over(&self, now: DateTime<Utc>) -> bool {
         self.ends_at <= now
@@ -483,23 +483,26 @@ impl CalendarStore {
         }
     }
     /// The board posts that are on some viewer's today at `now`, soonest
-    /// first: the all-day posts on their day and every timed post within
-    /// [`DAY_REACH`] of now. Each session narrows it to its own zone
-    /// ([`CalendarEvent::on_day`]). The replica service reads this into the
-    /// snapshot every session shares. Personal events are never in it.
+    /// first: every timed post within [`DAY_REACH`] of now, and every
+    /// all-day post covering a date that is today in some zone. Each
+    /// session narrows it to its own zone ([`CalendarEvent::on_day`]). The
+    /// replica service reads this into the snapshot every session shares.
+    /// Personal events are never in it.
     pub async fn today_board(&self, now: DateTime<Utc>) -> Result<Vec<CalendarEvent>> {
         let c = self.db.get().await?;
         let from = now - DAY_REACH;
         let until = now + DAY_REACH;
+        let earliest_today = (now + ZONES_BEHIND).date_naive();
+        let latest_today = (now + ZONES_AHEAD).date_naive();
         Ok(c.query(
             &format!(
                 "SELECT {EVENT_COLUMNS} FROM calendar_events e LEFT JOIN users u ON u.id=e.creator_id \
                  WHERE e.owner_id IS NULL \
-                   AND ((e.start_at IS NOT NULL AND e.starts_at < $3 AND e.ends_at > $2) \
-                     OR (e.start_date IS NOT NULL AND e.starts_at <= $1 AND e.ends_at > $1)) \
+                   AND ((e.start_at IS NOT NULL AND e.starts_at < $2 AND e.ends_at > $1) \
+                     OR (e.start_date IS NOT NULL AND e.start_date <= $4 AND e.end_date > $3)) \
                  ORDER BY e.starts_at, e.id"
             ),
-            &[&now, &from, &until],
+            &[&from, &until, &earliest_today, &latest_today],
         )
         .await?
         .into_iter()

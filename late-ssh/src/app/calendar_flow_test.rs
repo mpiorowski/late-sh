@@ -12,7 +12,7 @@ use crate::{
     pg_listener::Signal,
     test_helpers::{make_app, new_test_db, render_plain, wait_for_app},
 };
-use chrono::{Duration, Utc};
+use chrono::{Duration, Timelike, Utc};
 use late_core::models::calendar::{CalendarSource, CalendarStore, EventDraft, EventTiming};
 use late_core::test_utils::create_test_user;
 use ratatui::layout::Rect;
@@ -397,8 +397,10 @@ async fn a_timed_post_today_is_on_homes_banner() {
     let user = create_test_user(&db.db, "calendar_live").await;
     let mut app = make_app(db.db.clone(), user.id, "calendar-live-flow");
     app.show_splash = false;
-    // On now: whatever the clock, an hour that began five minutes ago
-    // covers today's date.
+    // A viewer whose clock reads noon, whatever the wall clock, so the
+    // hour that began five minutes ago began on their today.
+    let noon_here = format!("Etc/GMT{:+}", Utc::now().hour() as i32 - 12);
+    set_timezone(&mut app, user.id, &noon_here).await;
     let start = Utc::now() - Duration::minutes(5);
     CalendarStore::new(db.db.clone())
         .save(
@@ -427,7 +429,10 @@ async fn a_timed_post_today_is_on_homes_banner() {
     })
     .await;
     let rendered = render_plain(&mut app);
-    let post = format!("Standup ({})", start.format("%H:%M"));
+    let post = format!(
+        "Standup ({})",
+        start.with_timezone(&app.calendar.tz).format("%H:%M")
+    );
     assert!(
         rendered.contains(&post) && rendered.contains("7 for the board"),
         "{rendered}"

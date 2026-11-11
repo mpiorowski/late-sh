@@ -135,7 +135,7 @@ Room favorites:
 - Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in the rail builder through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.
 - Press `[` / `]` on a selected favorite to move it up/down via `ProfileState::move_favorite_room`. No-op when the selection isn't a favorite or is already at the edge.
 - Favorites are stored in `users.settings.favorite_room_ids` and the vec order drives both the Home room rail and the global picker.
-- The rail is the only editor for favorites (`f`, `[`, `]`); there is no Settings tab for them.
+- Favorites are edited on the rail (`f`, `[`, `]`) and with `/fav` in a room's composer, which is how a game room gets on the rail (`ROOMS.md`); there is no Settings tab for them.
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home presence:
@@ -417,4 +417,4 @@ Test gaps:
 - Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
 - Showcase and Work posts do not create chat messages. A News share posts one #lounge line as the sharer, which chat draws as the story's card (§11 News).
 - Game rooms must remain opt-in and `auto_join=false`.
-- Private `kind='game'` rooms (daily match chat) are membership-fixed at creation; no join path may admit a third user, and they stay hidden from the rail/Mentions/IRC like all game rooms. The daily sweeper hard-deletes them 30 days after the match ends.
+- Private `kind='game'` rooms (daily match chat) are membership-fixed at creation; no join path may admit a third user, and they stay hidden from Mentions/IRC like all game rooms, and from the rail unless a member favorites them (`is_rail_room`). The daily sweeper hard-deletes them 30 days after the match ends.

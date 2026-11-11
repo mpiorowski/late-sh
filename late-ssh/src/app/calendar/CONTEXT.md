@@ -88,9 +88,13 @@ The session keeps the view, the date and whether the board is shown.
   for the whole day (`banner.rs`, drawn by `zen/ui.rs::draw_board_day`):
   `📅 Hackathon · Standup (14:00) · Movie night (21:00)`, `7 for the board`
   flush right. All-day posts come first, then the timed ones soonest first,
-  each with its start in the viewer's zone. A timed post is on the row on
-  every date it covers in the viewer's zone, the same days the page shows it
-  on, and reads dim once it is over; an all-day post is on it for its day.
+  each with its start in the viewer's zone. A post is on the row on every
+  date it covers in the viewer's zone, the same days the page shows it on:
+  an all-day post on its civil dates wherever it was posted from, a timed
+  one before, during and after it, dim once it is over. A timed post that
+  began on an earlier day says its end instead (`(until 02:00)`), and one
+  that also runs past today says its title alone, up front with the
+  all-day posts.
   It is always one row: the titles share the width equally, a short title
   hands its spare columns to the long ones, a long one is cut with an
   ellipsis and the time never is. When the titles cannot all keep five
@@ -113,8 +117,7 @@ does not move them. Timed starts and optional ends are UTC instants; a
 start-only event lasts an hour. Nonexistent local times are errors; repeated
 local times need Earlier or Later for the start and the end separately. Every
 event also carries derived `starts_at`/`ends_at`: a post is over once
-`ends_at` has passed, and an all-day post is on Home's banner while now sits
-between them.
+`ends_at` has passed.
 
 ## 5. Data and distribution
 
@@ -133,9 +136,10 @@ between them.
 - Today's board posts (`CalendarStore::today_board`) are one process-shared
   `watch` per replica, re-read on every notify and once a minute; the minute's
   re-read invalidates no session, and the published board stays up until a
-  fresh read replaces it. It holds the all-day posts on their day and every
-  timed post within `DAY_REACH` (25 hours) of now, enough for any viewer's
-  zone; each session narrows it to its own today (`CalendarEvent::on_day`).
+  fresh read replaces it. It holds every timed post within `DAY_REACH` (25
+  hours) of now and every all-day post on a date that is today in some zone
+  (UTC-12 to UTC+14), enough for any viewer's zone; each session narrows it
+  to its own today (`CalendarEvent::on_day`).
   Home's banner reads it, so Home never loads the session's own month. A
   viewer's "I'm in" list travels on their session channel only.
 - Rendering and the tick do no database I/O. Hit geometry is recorded at draw

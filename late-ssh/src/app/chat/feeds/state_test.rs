@@ -41,7 +41,10 @@ fn ids(state: &State) -> Vec<u128> {
 }
 
 fn selected(state: &State) -> u128 {
-    state.all_entries()[state.selected_index()].entry.id.as_u128()
+    state.all_entries()[state.selected_index()]
+        .entry
+        .id
+        .as_u128()
 }
 
 /// The newest-first snapshot shows oldest first, the newest entry at the
@@ -66,5 +69,9 @@ async fn entries_run_oldest_to_newest_and_the_cursor_holds_its_entry() {
     assert_eq!(selected(&state), 2, "the cursor stays on its entry");
 
     state.set_entries(vec![entry(4), entry(3)]);
-    assert_eq!(selected(&state), 3, "a dismissed entry's row goes to the next");
+    assert_eq!(
+        selected(&state),
+        3,
+        "a dismissed entry's row goes to the next"
+    );
 }

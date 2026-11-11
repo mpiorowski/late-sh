@@ -7387,6 +7387,52 @@ async fn f_favorites_the_mentions_entry() {
     assert!(!app.chat.favorite_room_ids().contains(&mentions_id));
 }
 
+/// A game room is on the rail only while it is a favorite. Unfavoriting the
+/// one open on Home moves the selection to a room the rail still lists
+/// right away, so the next draft goes to the room on screen and not to the
+/// game chat that just left it.
+#[tokio::test]
+async fn unfavoriting_the_open_game_room_moves_the_draft_with_the_screen() {
+    use late_core::models::game_room::GameKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-unfav-game").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let game = ChatRoom::get_or_create_game_room(&client, GameKind::Poker, "unfav-open")
+        .await
+        .expect("game room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    ChatRoomMember::join(&client, game.id, viewer.id)
+        .await
+        .expect("join game room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-unfav-game-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "\u{258C}lounge").await;
+
+    // `/fav` typed in the game's own chat is what puts it on the rail.
+    app.chat.start_composing_in_room(game.id);
+    app.handle_input(b"/fav\r");
+    wait_for_render_contains(&mut app, "Added to favorites").await;
+    wait_for_render_contains(&mut app, "favorites").await;
+
+    // Favorites sit above Core: one step left of lounge is the game room.
+    app.handle_input(b"h");
+    assert_eq!(app.chat.selected_room_id, Some(game.id));
+
+    // No tick between the two keys: no snapshot gets to repair anything.
+    app.handle_input(b"f");
+    app.handle_input(b"i");
+    assert!(!app.chat.favorite_room_ids().contains(&game.id));
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    assert_eq!(app.chat.composer_room_id(), Some(lounge.id));
+}
+
 /// The Chat badges picker lists every badge; a game's ladder is one row, and
 /// hiding it stores every rung so no lower one takes its place.
 #[tokio::test]

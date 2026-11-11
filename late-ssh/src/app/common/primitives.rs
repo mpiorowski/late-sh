@@ -375,6 +375,30 @@ pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// `text` in at most `max_width` terminal cells: whole when it fits, else
+/// cut with an ellipsis as its last cell.
+pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    let ellipsis_width = UnicodeWidthStr::width("…");
+    for ch in text.chars() {
+        let width = UnicodeWidthStr::width(ch.to_string().as_str());
+        if used + width + ellipsis_width > max_width {
+            break;
+        }
+        out.push(ch);
+        used += width;
+    }
+    out.push('…');
+    out
+}
+
 /// Group digits with commas: `10000` → `"10,000"`. The shared formatter for
 /// every chip, score, and progress figure, so numbers read the same on all
 /// surfaces.

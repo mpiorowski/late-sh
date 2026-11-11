@@ -50,6 +50,16 @@ fn post(title: &str, time: Option<(&str, bool)>) -> DayPost {
     }
 }
 
+fn until(title: &str, time: &str, over: bool) -> DayPost {
+    DayPost {
+        title: title.into(),
+        when: DayWhen::Until {
+            time: time.into(),
+            over,
+        },
+    }
+}
+
 fn row(posts: &[DayPost], width: usize) -> String {
     let text: String = day_spans(posts, width)
         .iter()
@@ -98,6 +108,60 @@ fn today_is_the_viewers_zone() {
     assert_eq!(
         day_posts(&board, chrono_tz::Europe::Warsaw, now + Duration::hours(3)),
         vec![post("After midnight", Some(("03:00", false)))]
+    );
+}
+
+/// An all-day post is on its date in the viewer's zone, as the Calendars
+/// page shows it, whatever zone it was posted from. At 02:00 UTC on the
+/// 11th it is still the 10th in Los Angeles: the 10th's post is on the row
+/// and the 11th's is tomorrow's.
+#[test]
+fn an_all_day_post_is_on_its_date_in_the_viewers_zone() {
+    let now = Utc.with_ymd_and_hms(2026, 10, 11, 2, 0, 0).unwrap();
+    let eleventh = now.date_naive();
+    let board = [
+        all_day(1, eleventh.pred_opt().unwrap(), "Hackathon"),
+        all_day(2, eleventh, "Tomorrow"),
+    ];
+    assert_eq!(
+        day_posts(&board, chrono_tz::America::Los_Angeles, now),
+        vec![post("Hackathon", None)]
+    );
+}
+
+/// A timed post that began on an earlier day says when it ends, so last
+/// night's start never reads as tonight's: `(until 02:00)`, still there and
+/// dim once it is over. One that also runs past today covers the whole day
+/// and says its title alone, up front with the all-day posts.
+#[test]
+fn a_post_that_began_before_today_says_when_it_ends() {
+    let midnight = Utc.with_ymd_and_hms(2026, 10, 10, 0, 0, 0).unwrap();
+    let mut festival = timed(1, midnight - Duration::days(1), "Festival");
+    festival.ends_at = midnight + Duration::days(2);
+    festival.timing = EventTiming::Timed {
+        start: festival.starts_at,
+        end: Some(festival.ends_at),
+    };
+    let board = [
+        festival,
+        // 23:00 to 01:00.
+        timed(2, midnight - Duration::hours(1), "Movie night"),
+        timed(3, midnight + Duration::hours(21), "Late show"),
+    ];
+    let utc = chrono_tz::UTC;
+    assert_eq!(
+        day_posts(&board, utc, midnight + Duration::minutes(30)),
+        vec![
+            post("Festival", None),
+            until("Movie night", "01:00", false),
+            post("Late show", Some(("21:00", false))),
+        ]
+    );
+    let posts = day_posts(&board, utc, midnight + Duration::hours(9));
+    assert_eq!(posts[1], until("Movie night", "01:00", true));
+    assert_eq!(
+        row(&posts, 80),
+        "\u{1F4C5} Festival · Movie night (until 01:00) · Late show (21:00)"
     );
 }
 

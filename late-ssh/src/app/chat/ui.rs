@@ -26,7 +26,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint, truncate_cells},
     theme,
     username_effect::ResolvedName,
 };
@@ -1068,28 +1068,6 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     } else {
         format!("{}{text}", " ".repeat(width - used))
     }
-}
-
-pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    let ellipsis_width = UnicodeWidthStr::width("…");
-    for ch in text.chars() {
-        let width = UnicodeWidthStr::width(ch.to_string().as_str());
-        if used + width + ellipsis_width > max_width {
-            break;
-        }
-        out.push(ch);
-        used += width;
-    }
-    out.push('…');
-    out
 }
 
 pub fn draw_dashboard_chat_card(

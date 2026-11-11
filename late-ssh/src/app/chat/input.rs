@@ -394,6 +394,16 @@ fn toggle_room_favorite(app: &mut App, room_id: Uuid) {
     let added = app.profile_state.toggle_favorite_room(room_id);
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    // A game room is on the rail only while it is a favorite. When the one
+    // open on Home just left it, the selection moves now, as a room switch
+    // does: the next draft goes to the room on screen, not the one that left.
+    let selected = app.chat.selected_room_id;
+    app.chat.sync_selection();
+    if app.chat.selected_room_id != selected {
+        app.chat.reset_composer();
+        app.sync_visible_chat_room();
+        app.chat.request_list();
+    }
     app.banner = Some(if added {
         Banner::success("Added to favorites")
     } else {

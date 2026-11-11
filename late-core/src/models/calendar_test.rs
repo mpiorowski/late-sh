@@ -572,6 +572,48 @@ async fn the_daily_cap_resets_at_utc_midnight_in_any_session_zone() {
     }
 }
 
+/// An all-day post is a civil date, so it is on the shared board for every
+/// zone whose today that date is, and on a viewer's today by their own
+/// date, whatever zone it was posted from.
+#[tokio::test]
+async fn an_all_day_post_is_on_the_board_wherever_its_date_is_today() {
+    let db = test_db().await;
+    let poster = create_test_user(&db.db, "cal_zones").await;
+    let store = CalendarStore::new(db.db.clone());
+    // Midday UTC on the 13th: still the 13th at UTC-12 (00:00), already
+    // the 14th at UTC+14 (02:00). Nobody's today is the 12th or the 15th.
+    let now: DateTime<Utc> = "2026-10-13T12:00:00Z".parse().unwrap();
+    let mut posts = Vec::new();
+    for day in ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"] {
+        posts.push(
+            store
+                .save(
+                    poster.id,
+                    CalendarSource::Board,
+                    None,
+                    &all_day_on(day.parse().unwrap()),
+                )
+                .await
+                .unwrap()
+                .event,
+        );
+    }
+    let (thirteenth, fourteenth) = (&posts[1], &posts[2]);
+
+    let board: Vec<_> = store
+        .today_board(now)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(board, vec![thirteenth.id, fourteenth.id]);
+
+    let (utc, ahead) = (chrono_tz::UTC, chrono_tz::Pacific::Kiritimati);
+    assert!(thirteenth.on_day(now, utc) && !thirteenth.on_day(now, ahead));
+    assert!(fourteenth.on_day(now, ahead) && !fourteenth.on_day(now, utc));
+}
+
 #[tokio::test]
 async fn rsvps_count_and_the_start_is_claimed_once() {
     // Just after UTC midnight the timed events that began earlier are

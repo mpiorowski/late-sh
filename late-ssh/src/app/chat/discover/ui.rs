@@ -236,7 +236,7 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool, width: u16) -> Vec<Line<'
                 Style::default().fg(theme::TEXT_FAINT()),
             ));
             name_spans.push(Span::styled(
-                crate::app::chat::ui::truncate_cells(topic, room),
+                crate::app::common::primitives::truncate_cells(topic, room),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

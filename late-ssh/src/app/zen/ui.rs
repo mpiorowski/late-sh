@@ -77,7 +77,7 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
         Some(badge) => {
             let fixed = UnicodeWidthStr::width(kind) + " · ".width() + 1 + badge.width();
             let budget = (width as usize).saturating_sub(4 + fixed);
-            let label = crate::app::chat::ui::truncate_cells(label, budget);
+            let label = crate::app::common::primitives::truncate_cells(label, budget);
             format!("{kind} · {label} {badge}")
         }
     }
@@ -992,7 +992,7 @@ fn draw_attention_tile(
             let act = item.act();
             let head = format!("{} ", item.glyph());
             let budget = width.saturating_sub(head.width() + act.width() + 1);
-            let words = crate::app::chat::ui::truncate_cells(&item.label(), budget);
+            let words = crate::app::common::primitives::truncate_cells(&item.label(), budget);
             let pad = width.saturating_sub(head.width() + words.width() + act.width());
             Line::from(vec![
                 Span::styled(head, head_style),
