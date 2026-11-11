@@ -338,6 +338,13 @@ impl State {
         if self.is_archive_view_active() && matches!(action, EditorAction::CutSelection) {
             return EditorKeyDispatch::default();
         }
+        if let EditorAction::ActivateSwatch(idx) = action {
+            self.activate_swatch(idx);
+            return EditorKeyDispatch {
+                handled: true,
+                effects: Vec::new(),
+            };
+        }
         let copied_to_slot = (self.editor.floating.is_none()
             && matches!(
                 action,
@@ -404,13 +411,6 @@ impl State {
             }
             _ => editor_handle_action(editor, canvas, action, color),
         });
-        if let EditorAction::ActivateSwatch(idx) = action {
-            if self.active_swatch_index() == Some(idx) {
-                self.floating_colors = self.swatch_colors.get(idx).and_then(Clone::clone);
-            } else if self.editor.floating.is_none() {
-                self.floating_colors = None;
-            }
-        }
         self.sync_floating_source_selection();
 
         if dispatch.handled
@@ -807,7 +807,12 @@ impl State {
     }
 
     pub fn select_palette_color(&mut self, index: usize) {
-        self.paint_color = Some(PAINT_PALETTE[index]);
+        self.set_paint_color(PAINT_PALETTE[index]);
+    }
+
+    fn set_paint_color(&mut self, color: RgbColor) {
+        self.paint_color = Some(color);
+        self.floating_colors = None;
         self.suppress_swatch_preview = false;
     }
 
@@ -839,8 +844,7 @@ impl State {
         let Some(picker) = self.color_picker.take() else {
             return;
         };
-        self.paint_color = Some(picker.color);
-        self.suppress_swatch_preview = false;
+        self.set_paint_color(picker.color);
     }
 
     pub fn swatches(&self) -> &[Option<Swatch>; SWATCH_CAPACITY] {
@@ -872,8 +876,10 @@ impl State {
 
     pub fn activate_swatch(&mut self, idx: usize) {
         let activation = self.editor.activate_swatch(idx);
-        self.active_brush = None;
         if activation == SwatchActivation::ActivatedFloating {
+            // Only a swatch that took over the brush retires the sampled one:
+            // an ignored chord (an empty slot) leaves it floating.
+            self.active_brush = None;
             if let Some(floating) = self.editor.floating.as_mut() {
                 floating.transparent = true;
             }
@@ -1359,7 +1365,7 @@ impl State {
         // The sampler is the eyedropper too: the glyph's colour becomes the
         // paint colour, so Esc and typing carry it on.
         if let Some(fg) = self.snapshot.canvas.fg(glyph.pos) {
-            self.paint_color = Some(fg);
+            self.set_paint_color(fg);
         }
         true
     }
@@ -1369,8 +1375,7 @@ impl State {
     pub fn sample_color_at_cursor(&mut self) -> bool {
         match self.snapshot.canvas.fg(self.editor.cursor) {
             Some(fg) => {
-                self.paint_color = Some(fg);
-                self.suppress_swatch_preview = false;
+                self.set_paint_color(fg);
                 true
             }
             None => {

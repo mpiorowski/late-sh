@@ -878,16 +878,15 @@ fn copy_and_paste_preserves_cell_colors_across_stamp_paths() {
         .canvas
         .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
 
+    // Set active paint color to green before copying so any fallback to active_user_color is detected.
+    state.select_palette_color(3);
+
     state.editor.cursor = Pos { x: 0, y: 0 };
     state.begin_selection_from_cursor();
     state.editor.cursor = Pos { x: 1, y: 0 };
     let dispatch = state.handle_editor_action(EditorAction::CopySelection);
     assert!(dispatch.handled);
     assert!(state.has_floating());
-
-    // Change active paint color to green so any fallback to active_user_color is detected.
-    state.paint_color = Some(PAINT_PALETTE[3]);
-
     // 1. Stamp floating (Enter) at (0, 1).
     state.editor.cursor = Pos { x: 0, y: 1 };
     assert!(state.stamp_floating());
@@ -962,11 +961,11 @@ fn cut_and_lift_preserve_cell_colors() {
         .put_glyph_colored(Pos { x: 2, y: 1 }, 'B', blue);
 
     // 1. Lift selection and commit at (0, 0).
+    state.select_palette_color(3);
     state.editor.cursor = Pos { x: 1, y: 1 };
     state.begin_selection_from_cursor();
     state.editor.cursor = Pos { x: 2, y: 1 };
     assert!(state.lift_selection_to_floating());
-    state.paint_color = Some(PAINT_PALETTE[3]);
     state.editor.cursor = Pos { x: 0, y: 0 };
     assert!(state.commit_floating());
 
@@ -1010,12 +1009,12 @@ fn an_empty_swatch_chord_leaves_the_brush_colors_alone() {
         .snapshot
         .canvas
         .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
+    state.select_palette_color(3);
     state.editor.cursor = Pos { x: 0, y: 0 };
     state.begin_selection_from_cursor();
     state.editor.cursor = Pos { x: 1, y: 0 };
     let _ = state.handle_editor_action(EditorAction::CopySelection);
     assert_eq!(state.active_swatch_index(), Some(PRIMARY_SWATCH_IDX));
-    state.paint_color = Some(PAINT_PALETTE[3]);
 
     let _ = state.handle_editor_action(EditorAction::ActivateSwatch(2));
     state.editor.cursor = Pos { x: 0, y: 1 };
@@ -1027,6 +1026,132 @@ fn an_empty_swatch_chord_leaves_the_brush_colors_alone() {
         let _ = expected.put_glyph_colored(Pos { x: 1, y }, 'B', blue);
     }
     assert_eq!(state.snapshot.canvas, expected);
+}
+
+/// The same chord leaves a sampled glyph brush as it was: the glyph still
+/// floats and stamps, so the brush mode must still name it.
+#[test]
+fn an_empty_swatch_chord_keeps_a_sampled_glyph_brush() {
+    let mut state = test_state();
+    state.type_char('A', (80, 24));
+    assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
+    assert_eq!(state.brush_mode(), BrushMode::Glyph('A'));
+
+    let _ = state.handle_editor_action(EditorAction::ActivateSwatch(2));
+
+    assert!(state.has_floating());
+    assert_eq!(state.brush_mode(), BrushMode::Glyph('A'));
+}
+
+#[test]
+fn selecting_a_paint_color_overrides_floating_cell_colors_to_uniform_color() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(40, 20);
+    state.editor.set_viewport(
+        Viewport {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        },
+        &state.snapshot.canvas,
+    );
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 0, y: 0 }, 'A', red);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
+
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    state.begin_selection_from_cursor();
+    state.editor.cursor = Pos { x: 1, y: 0 };
+    let dispatch = state.handle_editor_action(EditorAction::CopySelection);
+    assert!(dispatch.handled);
+    assert_eq!(state.floating_colors(), Some(&[Some(red), Some(blue)][..]));
+
+    // Default copy stamps per-cell colors.
+    state.editor.cursor = Pos { x: 0, y: 1 };
+    assert!(state.stamp_floating());
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 1 }), Some(red));
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 1 }), Some(blue));
+
+    // Picking a palette color clears floating_colors while keeping swatch_colors intact.
+    let green = PAINT_PALETTE[3];
+    state.select_palette_color(3);
+    assert_eq!(state.floating_colors(), None);
+    assert_eq!(
+        state.swatch_colors(PRIMARY_SWATCH_IDX),
+        Some(&[Some(red), Some(blue)][..])
+    );
+
+    // Stamp floating (Enter), StrokeFloating, and mouse drag now paint uniformly in green.
+    state.editor.cursor = Pos { x: 0, y: 2 };
+    assert!(state.stamp_floating());
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 2 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 2 }), Some(green));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 2 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 2 }), Some(green));
+
+    state.editor.cursor = Pos { x: 0, y: 3 };
+    let _ = state.handle_editor_action(EditorAction::StrokeFloating {
+        dir: MoveDir::Right,
+    });
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 3 }), Some(green));
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 3 }), Some(green));
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 2, y: 3 }), Some(green));
+
+    let pointer = |column, row, kind| AppPointerEvent {
+        column,
+        row,
+        kind,
+        modifiers: AppModifiers::default(),
+    };
+    let _ = state.handle_pointer_event(pointer(0, 4, AppPointerKind::Down(AppPointerButton::Left)));
+    let _ = state.handle_pointer_event(pointer(3, 4, AppPointerKind::Drag(AppPointerButton::Left)));
+    let _ = state.handle_pointer_event(pointer(3, 4, AppPointerKind::Up(AppPointerButton::Left)));
+    // A two-wide brush dragged along a row stamps in brush-width steps
+    // from where it went down: at column 0, then at column 2.
+    for x in 0..=3 {
+        assert_eq!(
+            state.snapshot.canvas.fg(Pos { x, y: 4 }),
+            Some(green),
+            "column {x}"
+        );
+    }
+
+    // Toggling transparency on the already-active swatch via keyboard preserves the uniform override.
+    assert!(state.floating_is_transparent());
+    let _ = state.handle_editor_action(EditorAction::ActivateSwatch(PRIMARY_SWATCH_IDX));
+    assert!(!state.floating_is_transparent());
+    assert_eq!(state.floating_colors(), None);
+
+    // Dismissing and re-activating slot 0 restores the stored per-cell swatch colors.
+    assert!(state.dismiss_floating());
+    state.activate_swatch(PRIMARY_SWATCH_IDX);
+    assert_eq!(state.floating_colors(), Some(&[Some(red), Some(blue)][..]));
+
+    // cycle_paint_color, apply_color_picker, and sample_color_at_cursor also override floating_colors.
+    state.cycle_paint_color(1);
+    assert_eq!(state.floating_colors(), None);
+
+    assert!(state.dismiss_floating());
+    state.activate_swatch(PRIMARY_SWATCH_IDX);
+    assert!(state.floating_colors().is_some());
+    state.open_color_picker();
+    state.apply_color_picker();
+    assert_eq!(state.floating_colors(), None);
+
+    assert!(state.dismiss_floating());
+    state.activate_swatch(PRIMARY_SWATCH_IDX);
+    assert!(state.floating_colors().is_some());
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    assert!(state.sample_color_at_cursor());
+    assert_eq!(state.floating_colors(), None);
 }
 
 /// Colours rotate with their glyphs, and a pinned slot keeps both while the
