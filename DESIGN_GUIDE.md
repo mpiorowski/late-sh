@@ -212,10 +212,12 @@ use brighter text. This avoids a separate key badge competing with the label.
 Toolbar controls use the calendar canvas background.
 See [calendar toolbar](late-ssh/src/app/calendar/toolbar.rs).
 
-Calendar uses a subtle today background where the day has a paintable canvas,
-with stronger emphasis reserved for the selected event. Terminal-owned
-backgrounds are preserved. Today-date emphasis does not use underlining, which
-can render poorly in terminals.
+Calendar uses a subtle background on the selected date where the day has a
+paintable canvas, with stronger emphasis reserved for the selected event.
+Terminal-owned backgrounds are preserved. Today is marked by a heavy outline
+around its cell (heavy side borders in the compact grid) and an underlined day
+number. The outline carries the emphasis on its own, so today still reads in a
+terminal that draws underlining poorly.
 See [calendar rendering](late-ssh/src/app/calendar/ui.rs).
 
 **Suggested:** consider these treatments for similar controls elsewhere, and

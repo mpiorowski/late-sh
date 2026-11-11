@@ -126,7 +126,9 @@ event also carries derived `starts_at`/`ends_at`: a timed post is live for
 - The central listener's `CalendarChanged` channel bumps an epoch every session
   reads on its tick: it drops what it loaded, re-reads at once when the page or
   a calendar modal is open, otherwise when it next opens the page. An open
-  details modal re-reads and closes with `Gone` if staff took the post down.
+  details modal re-reads and closes with `Gone` if staff took the post down or
+  its owner made it personal. Details kept under an editor or a delete
+  confirmation re-read the same way when that modal closes.
 - The board's live events (`CalendarStore::live_board`) are one process-shared
   `watch` per replica, re-read on every notify and once a minute; the minute's
   re-read invalidates no session, and the published board stays up until a

@@ -290,6 +290,19 @@ impl CalendarState {
         self.open_generation += 1;
         self.refreshing = None;
     }
+    /// Read the open Details event again and swap the answer in. It may have
+    /// changed under the viewer, or left their sight (staff took it down, its
+    /// owner made it personal), and then `Gone` closes it.
+    pub(super) fn reread_details(&mut self) {
+        if let Some(Modal::Details(e)) = &self.modal {
+            let id = e.id;
+            self.open_generation += 1;
+            self.reload_request = false;
+            self.refreshing = Some(id);
+            self.service
+                .open(self.viewer, id, self.open_generation, self.tx.clone());
+        }
+    }
     pub fn save_editor(&mut self) {
         if self.pending {
             return;
@@ -378,16 +391,7 @@ impl CalendarState {
             if visible {
                 self.refresh();
             }
-            // Details the viewer has open may have changed under them, or
-            // been deleted by staff: read it again and swap it in.
-            if let Some(Modal::Details(e)) = &self.modal {
-                let id = e.id;
-                self.open_generation += 1;
-                self.reload_request = false;
-                self.refreshing = Some(id);
-                self.service
-                    .open(self.viewer, id, self.open_generation, self.tx.clone());
-            }
+            self.reread_details();
             changed = true;
         } else if visible
             && (self.needs_refresh || self.last_refresh.elapsed() >= StdDuration::from_secs(60))

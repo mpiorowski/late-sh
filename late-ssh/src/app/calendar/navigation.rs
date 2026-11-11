@@ -377,6 +377,10 @@ impl CalendarState {
             self.refresh();
         }
         self.reconcile_selection();
+        // A change notice only re-reads Details while they are on top. The
+        // copy kept under an editor or a confirmation is as old as that
+        // modal, so read it again before its actions are offered.
+        self.reread_details();
     }
 
     /// Save from Details returns to that same Details surface. Direct New/Edit
