@@ -260,6 +260,8 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -360,6 +362,8 @@ fn the_ladder_marks_glue_to_the_name_ahead_of_the_title() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -467,6 +471,8 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
             message_gilds: &message_gilds,
             inline_images: &inline_images,
             news_cards: &HashMap::new(),
+            gallery_cards: &HashMap::new(),
+            artboard_gated: false,
             dividers: ChatDividers::default(),
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
@@ -551,6 +557,8 @@ fn spoilers_render_masked_until_revealed() {
             message_gilds: &HashMap::new(),
             inline_images: &HashMap::new(),
             news_cards: &HashMap::new(),
+            gallery_cards: &HashMap::new(),
+            artboard_gated: false,
             dividers: ChatDividers::default(),
             drunk_levels: &HashMap::new(),
             name_flair: &HashMap::new(),
@@ -630,6 +638,8 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -673,6 +683,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let translation_hidden = HashSet::new();
     let spoilers_revealed = HashSet::new();
     let news_cards = HashMap::new();
+    let gallery_cards = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let base_versions = ChatRowsVersions {
@@ -697,6 +708,8 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &news_cards,
+        gallery_cards: &gallery_cards,
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -795,6 +808,8 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -1011,6 +1026,8 @@ fn mentions_and_replies_paint_a_background_wash() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -1099,6 +1116,8 @@ fn background_wash_fills_the_whole_row_width() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -1170,6 +1189,9 @@ fn chat_view<'a>(
     static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlinePreview>> = OnceLock::new();
     static NEWS_CARDS: OnceLock<HashMap<Uuid, late_core::models::article::ArticleFeedItem>> =
         OnceLock::new();
+    static GALLERY_CARDS: OnceLock<
+        HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
+    > = OnceLock::new();
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static LIVE_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1258,6 +1280,8 @@ fn chat_view<'a>(
         message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
         news_cards: NEWS_CARDS.get_or_init(HashMap::new),
+        gallery_cards: GALLERY_CARDS.get_or_init(HashMap::new),
+        artboard_gated: false,
         afk_lines: AFK_LINES.get_or_init(HashMap::new),
         device_left_at: None,
         unread_counts,
@@ -3473,6 +3497,8 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             message_gilds: &message_gilds,
             inline_images: &inline_images,
             news_cards: &HashMap::new(),
+            gallery_cards: &HashMap::new(),
+            artboard_gated: false,
             dividers,
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
@@ -3681,6 +3707,8 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         message_gilds: &message_gilds,
         inline_images: &inline_images,
         news_cards: &HashMap::new(),
+        gallery_cards: &HashMap::new(),
+        artboard_gated: false,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,

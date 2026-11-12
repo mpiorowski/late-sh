@@ -69,12 +69,19 @@ impl App {
     }
 
     pub(crate) fn artboard_disclaimer_visible(&self) -> bool {
+        self.screen == Screen::Artboard && self.artboard_content_gated()
+    }
+
+    /// Whether this session has yet to answer the content disclaimer,
+    /// whatever page it is on: a piece's #lounge card names its piece
+    /// without showing it, and Enter on it goes to the Artboard to ask.
+    pub(crate) fn artboard_content_gated(&self) -> bool {
         let enabled = if self.show_settings {
             self.settings_modal_state.device_artboard_disclaimer()
         } else {
             self.artboard_disclaimer_enabled()
         };
-        self.screen == Screen::Artboard && enabled && !self.artboard_content_accepted
+        enabled && !self.artboard_content_accepted
     }
 
     /// The board seat follows consent: connect only once the page may show,
@@ -84,6 +91,16 @@ impl App {
     pub(crate) fn sync_dartboard_connection(&mut self) {
         if self.screen == Screen::Artboard && !self.artboard_disclaimer_visible() {
             self.enter_dartboard();
+            // A piece opened from its #lounge card (`open_gallery_piece`).
+            // It may have waited for the disclaimer's answer, so it opens
+            // only while it still has a card: one taken down since stays
+            // down, and the page shows without it.
+            if let Some(piece) = self.pending_gallery_piece.take()
+                && self.gallery_cards.has_card_for(piece.id)
+                && let Some(state) = self.dartboard_state.as_mut()
+            {
+                state.gallery_mut().open_piece(piece);
+            }
         }
     }
 }

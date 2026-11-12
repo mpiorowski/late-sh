@@ -505,7 +505,7 @@ impl ArticleService {
                         if let Some(message_id) = card
                             && let Err(e) = service
                                 .chat_service
-                                .delete_news_card(user_id, message_id)
+                                .delete_house_card(user_id, message_id)
                                 .await
                         {
                             late_core::error_span!(
@@ -702,7 +702,7 @@ impl ArticleService {
         let body = format!("📰 {title} {}", article.url);
         let posted = self
             .chat_service
-            .send_lounge_message_returning(article.user_id, body, true, Wording::NewsCard)
+            .send_lounge_message_returning(article.user_id, body, true, Wording::HouseCard)
             .await;
         let message = match posted {
             Ok(Some(message)) => message,
@@ -734,7 +734,7 @@ impl ArticleService {
                 metrics::record_news_card(NewsCardOutcome::ShareGone);
                 match self
                     .chat_service
-                    .delete_news_card(article.user_id, message.id)
+                    .delete_house_card(article.user_id, message.id)
                     .await
                 {
                     Ok(()) => {

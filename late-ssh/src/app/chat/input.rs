@@ -1,3 +1,4 @@
+use crate::app::artboard::gallery;
 use crate::app::chat::state::ComposerCommands;
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -535,7 +536,10 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         b'e' | b'E' => {
-            if let Some(b) = app.chat.begin_edit_selected_in_room(room_id) {
+            if let Some(b) = app
+                .chat
+                .begin_edit_selected_in_room(room_id, &app.gallery_cards)
+            {
                 app.banner = Some(b);
             } else {
                 app.chat.clear_message_selection();
@@ -600,6 +604,10 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         // A News share's #lounge card opens the reader on its story, ahead
         // of the preview its link would otherwise get.
         b'\r' | b'\n' if app.chat.open_selected_card_in_room(room_id) => {
+            return true;
+        }
+        // A hung piece's card opens the piece over the chat.
+        b'\r' | b'\n' if gallery::card::input::open_selected_card(app, room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {

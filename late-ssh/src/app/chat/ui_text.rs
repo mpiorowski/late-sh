@@ -5,6 +5,8 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use crate::app::artboard::gallery::card::ui::lounge_card_lines as piece_card_lines;
+use crate::app::artboard::gallery::svc::GalleryPiece;
 use crate::app::chat::action::parse_action_body;
 use crate::app::chat::news::ui::lounge_card_lines;
 use crate::app::chat::state::TranslationDisplay;
@@ -218,6 +220,20 @@ pub(super) fn wrap_message_to_lines(
     lines
 }
 
+/// The #lounge card a message draws as, in place of its line.
+#[derive(Clone, Copy)]
+pub(super) enum LoungeCard<'a> {
+    /// A News share, drawn from its story.
+    News(&'a ArticleFeedItem),
+    /// A hung Artboard piece, drawn from the piece. `gated`: the viewer
+    /// still has the Artboard content disclaimer on, so the card names the
+    /// piece without showing it.
+    Piece {
+        piece: &'a GalleryPiece,
+        gated: bool,
+    },
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_chat_entry_to_lines(
     body: &str,
@@ -231,18 +247,18 @@ pub(super) fn wrap_chat_entry_to_lines(
     continuation: bool,
     system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
-    news_card: Option<&ArticleFeedItem>,
+    card: Option<LoungeCard<'_>>,
     reactions: &[ChatMessageReactionSummary],
     gild: Option<ChatMessageGildSummary>,
     translation: Option<&TranslationDisplay>,
 ) -> WrappedChatEntry {
     let gutter = Gutter::of(mentions_us, gild);
     let pad = gutter.span();
-    // A News share's #lounge card is drawn from its story in place of its
+    // A #lounge card is drawn from its story or its piece in place of its
     // line (`📰 Title url`), so the line itself shows nothing under the
     // header, gets no link preview, and is never translated.
-    let body = match news_card {
-        Some(_) => "",
+    let body = match card {
+        Some(LoungeCard::News(_) | LoungeCard::Piece { .. }) => "",
         None => body,
     };
     let report_payload = system_text
@@ -264,10 +280,9 @@ pub(super) fn wrap_chat_entry_to_lines(
     // The translation block rides under the body of plain messages (and /me
     // actions) only: report cards and system lines have their own layouts
     // and are never translated.
-    let translation_slot =
-        (system_text.is_none() && report_payload.is_none() && news_card.is_none())
-            .then_some(translation)
-            .flatten();
+    let translation_slot = (system_text.is_none() && report_payload.is_none() && card.is_none())
+        .then_some(translation)
+        .flatten();
     let mut lines = if let Some(system) = system_text {
         wrap_system_to_lines(system, width)
     } else if let Some((kind, text)) = report_payload {
@@ -288,10 +303,17 @@ pub(super) fn wrap_chat_entry_to_lines(
         )
     };
 
-    let image_line_range = match (news_card, inline_image_lines.filter(|l| !l.is_empty())) {
-        (Some(item), _) => {
+    let card_lines = match card {
+        Some(LoungeCard::News(item)) => Some(lounge_card_lines(item, width.saturating_sub(1))),
+        Some(LoungeCard::Piece { piece, gated }) => {
+            Some(piece_card_lines(piece, width.saturating_sub(1), gated))
+        }
+        None => None,
+    };
+    let image_line_range = match (card_lines, inline_image_lines.filter(|l| !l.is_empty())) {
+        (Some(card_lines), _) => {
             let start = lines.len();
-            for card_line in lounge_card_lines(item, width.saturating_sub(1)) {
+            for card_line in card_lines {
                 let mut spans = vec![pad.clone()];
                 spans.extend(card_line.spans);
                 lines.push(Line::from(spans));

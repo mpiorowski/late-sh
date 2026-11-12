@@ -35,6 +35,7 @@ use crate::app::ai::summary::{
     SummaryBasis, SummaryEvent, SummaryOutcome, SummaryService, SummaryWindow,
 };
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
+use crate::app::artboard::gallery::card::state::LoungeCardState;
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::{
@@ -2729,7 +2730,11 @@ impl ChatState {
         true
     }
 
-    pub fn begin_edit_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+    pub(crate) fn begin_edit_selected_in_room(
+        &mut self,
+        room_id: Uuid,
+        gallery_cards: &LoungeCardState,
+    ) -> Option<Banner> {
         self.reaction_leader_active = false;
         let selected_id = self.selected_message_id?;
         let Some(message) = self.find_message_in_room(room_id, selected_id) else {
@@ -2738,6 +2743,11 @@ impl ChatState {
         let message_user_id = message.user_id;
         let room_id = message.room_id;
         let body = message.body.clone();
+        // A hung piece's card is drawn from the piece, as a story's is
+        // from its story (`begin_edit_message`).
+        if gallery_cards.card(selected_id).is_some() {
+            return Some(Banner::error("A piece's card can't be edited."));
+        }
         self.begin_edit_message(selected_id, message_user_id, room_id, &body)
     }
 
@@ -3110,6 +3120,13 @@ impl ChatState {
             return false;
         };
         self.open_reader_for_article(article_id)
+    }
+
+    /// The #lounge cards of hung Artboard pieces changed (`App::tick`
+    /// hears it from `artboard/gallery/card/`). A card is drawn from its
+    /// piece in place of the message's line, so the rows are stale.
+    pub(crate) fn gallery_cards_changed(&mut self) {
+        self.context_epoch += 1;
     }
 
     /// The selected message in `room_id` when its preview is a YouTube

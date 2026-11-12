@@ -372,8 +372,10 @@ impl ChatMessage {
     /// daily paper (`paper_room_editions`). No viewer: the page is printed
     /// once for everyone, so there is no membership check and no ignore
     /// list, only the public-room line (`room.visibility = 'public'`), the
-    /// system-feed exclusion, and News shares' #lounge cards left out (the
-    /// paper prints shares on its own reading page). Newest-first under
+    /// system-feed exclusion, and the house's #lounge cards left out: a News
+    /// share's (the paper prints shares on its own reading page) and a hung
+    /// Artboard piece's (a card is drawn from its piece; its line is only a
+    /// title and a link). Newest-first under
     /// `limit`, returned oldest-first, same as
     /// [`Self::list_public_room_since`].
     pub async fn list_public_room_between(
@@ -396,6 +398,10 @@ impl ChatMessage {
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
                    AND NOT EXISTS (
                         SELECT 1 FROM articles card WHERE card.lounge_message_id = msg.id
+                   )
+                   AND NOT EXISTS (
+                        SELECT 1 FROM artboard_pieces piece
+                        WHERE piece.lounge_message_id = msg.id
                    )
                  ORDER BY msg.created DESC, msg.id DESC
                  LIMIT $4",
@@ -602,9 +608,12 @@ impl ChatMessage {
         Ok(Self::from(row))
     }
 
-    /// The generated lounge line of a News share. Its origin is recorded in
-    /// the insert, before the separate article-link step can race a refresh.
-    pub async fn create_news_card(
+    /// A #lounge card the house writes in its author's name: a News share's
+    /// line or a hung Artboard piece's. Its origin is recorded in the insert,
+    /// before the separate step that links it to its story or piece can race
+    /// a refresh, so it never counts in chat standings. The column is named
+    /// for the News card, the first of the two.
+    pub async fn create_house_card(
         client: &impl GenericClient,
         params: ChatMessageParams,
     ) -> Result<Self> {

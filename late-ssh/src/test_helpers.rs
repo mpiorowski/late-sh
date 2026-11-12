@@ -359,7 +359,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ),
         voice_service,
         stream_service,
-        chat_service,
+        chat_service: chat_service.clone(),
         notification_service,
         ai_service,
         translation_service,
@@ -430,7 +430,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         house_registry: test_house_registry(db.clone()),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
-        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            chat_service.clone(),
+            "http://localhost:3000".to_string(),
+        ),
         leaderboard_service,
         quest_service,
         shop_service,
@@ -515,6 +519,7 @@ pub struct SessionWorld {
     /// the session its own. Mention notifications ride the app's own
     /// `NotificationService`, which this does not share.
     pub chat_service: Option<ChatService>,
+    pub gallery_service: Option<crate::app::artboard::gallery::svc::GalleryService>,
 }
 
 pub fn make_app_in_world(db: Db, user_id: Uuid, session_token: &str, world: SessionWorld) -> App {
@@ -676,7 +681,13 @@ fn make_app_with_chat_service_and_permissions(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
-        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        gallery_service: world.gallery_service.clone().unwrap_or_else(|| {
+            crate::app::artboard::gallery::svc::GalleryService::new(
+                db.clone(),
+                chat_service.clone(),
+                "http://localhost:3000".to_string(),
+            )
+        }),
         username: world.username.unwrap_or_else(|| "test-user".to_string()),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
@@ -982,7 +993,11 @@ pub fn make_app_with_paired_client(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
-        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            chat_service.clone(),
+            "http://localhost:3000".to_string(),
+        ),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(

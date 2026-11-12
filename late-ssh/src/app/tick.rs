@@ -227,6 +227,16 @@ impl App {
             self.directory_editor.feed_changed();
             self.jobs.feed_changed();
         }
+        let cards_tick = self.gallery_cards.tick();
+        changed |= cards_tick.cards_changed || cards_tick.modal_changed;
+        if cards_tick.cards_changed {
+            self.chat.gallery_cards_changed();
+        }
+        if cards_tick.taken_down {
+            self.banner = Some(crate::app::common::primitives::Banner::error(
+                "That piece was taken down.",
+            ));
+        }
         if let Some(b) = chat_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -651,6 +661,12 @@ impl App {
             // is up, and it reports its own changes (own edits are
             // input-driven).
             changed |= state.tick();
+            // A refused or failed hang: the board shows the notice only in
+            // its framing bar, so it gets a banner too, once.
+            if let Some(error) = state.gallery_mut().take_hang_error() {
+                self.banner = Some(crate::app::common::primitives::Banner::error(&error));
+                changed = true;
+            }
         }
         if let Some(state) = self.lateania_state.as_mut() {
             // Drain even off-screen so the snapshot stays current; only an

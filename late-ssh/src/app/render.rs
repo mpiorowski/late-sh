@@ -380,6 +380,7 @@ struct DrawContext<'a> {
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
+    piece_modal: Option<&'a crate::app::artboard::gallery::card::state::PieceModal>,
     video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -488,6 +489,7 @@ impl App {
 
         // Init theme and layout sync — preview settings-modal draft live while open.
         let artboard_disclaimer_visible = self.artboard_disclaimer_visible();
+        let artboard_gated = self.artboard_content_gated();
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
                 .draft()
@@ -907,6 +909,8 @@ impl App {
             live_strip_hit: &self.live.hit,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
+            gallery_cards: self.gallery_cards.cards(),
+            artboard_gated,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -971,6 +975,7 @@ impl App {
         };
         let work_unread_count = self.chat.work.unread_count();
         let news_reader = self.chat.reader();
+        let piece_modal = self.gallery_cards.modal();
         let video_modal = self.video.modal();
         let selected_image_message = self
             .chat
@@ -1022,6 +1027,8 @@ impl App {
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
+            gallery_cards: self.gallery_cards.cards(),
+            artboard_gated,
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
@@ -1109,6 +1116,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.gallery_cards.cards(),
+                    artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1177,6 +1186,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.gallery_cards.cards(),
+                    artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1248,6 +1259,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.gallery_cards.cards(),
+                    artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1318,6 +1331,8 @@ impl App {
                 message_gilds,
                 inline_images: &self.chat.inline_image_cache,
                 news_cards: self.chat.news.lounge_cards(),
+                gallery_cards: self.gallery_cards.cards(),
+                artboard_gated,
                 dividers: crate::app::chat::ui::ChatDividers {
                     afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                     left_app: self.chat.device_left_at(),
@@ -1408,6 +1423,8 @@ impl App {
                             message_gilds,
                             inline_images: &self.chat.inline_image_cache,
                             news_cards: self.chat.news.lounge_cards(),
+                            gallery_cards: self.gallery_cards.cards(),
+                            artboard_gated,
                             dividers: crate::app::chat::ui::ChatDividers {
                                 afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                                 left_app: self.chat.device_left_at(),
@@ -1577,6 +1594,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
+            || piece_modal.is_some()
             || video_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -1601,6 +1619,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
+            || piece_modal.is_some()
             || video_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -1873,6 +1892,7 @@ impl App {
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         news_reader,
+                        piece_modal,
                         video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -2917,6 +2937,10 @@ impl App {
 
         if let Some(reader) = ctx.news_reader {
             chat::news::reader::ui::draw(frame, inner, reader);
+        }
+
+        if let Some(modal) = ctx.piece_modal {
+            crate::app::artboard::gallery::card::ui::draw_modal(frame, inner, modal);
         }
 
         // Over the whole terminal, not the app frame: Full is every cell.

@@ -400,14 +400,16 @@ struct SendMessageParams {
 
 /// Whose words a line carries. The bar slurs a patron's own words and
 /// their `@name`s notify; a line the house builds for them out of text
-/// they never wrote (a News card's page title) gets neither.
+/// they never wrote (a News card's page title, a hung piece's title)
+/// gets neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Wording {
     /// Typed by the author.
     Typed,
-    /// The house-generated lounge card of a News share. Kept out of chat
-    /// standings from the instant it is inserted.
-    NewsCard,
+    /// A #lounge card the house writes in the author's name: a News
+    /// share's or a hung Artboard piece's. Kept out of chat standings from
+    /// the instant it is inserted.
+    HouseCard,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1515,6 +1517,7 @@ impl ChatService {
             self.moderation_session_effects(),
             self.moderation_event_tx.clone(),
             self.moderation_infra.clone(),
+            self.clone(),
         )
     }
 
@@ -3424,7 +3427,7 @@ impl ChatService {
 
     /// `send_lounge_message` handing back the row it wrote, `None` for an
     /// empty body: for a caller that keeps a pointer to its line (a News
-    /// share's card, whose title is `Wording::NewsCard`).
+    /// share's card or a hung piece's, `Wording::HouseCard`).
     pub(crate) async fn send_lounge_message_returning(
         &self,
         user_id: Uuid,
@@ -3454,11 +3457,12 @@ impl ChatService {
         .await
     }
 
-    /// Take a News share's card out of #lounge with its story. The News
-    /// delete already decided who may delete the story and audited it, so
-    /// the row goes as the house's, and every session drops it. A card
-    /// already gone (its author deleted it first) is nothing to do.
-    pub(crate) async fn delete_news_card(&self, deleted_by: Uuid, message_id: Uuid) -> Result<()> {
+    /// Take a house card out of #lounge with what it stood for: a News
+    /// share's story, a hung piece. The caller already decided who may
+    /// delete that and audited it, so the row goes as the house's, and
+    /// every session drops it. A card already gone (its author deleted it
+    /// first) is nothing to do.
+    pub(crate) async fn delete_house_card(&self, deleted_by: Uuid, message_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let room_id = match ChatMessage::get(&client, message_id).await? {
             Some(message) => message.room_id,
@@ -3609,7 +3613,7 @@ impl ChatService {
         // mention task below sees the same body the room will.
         let body = match wording {
             Wording::Typed => self.slurred_body(&client, user_id, &room, body).await?,
-            Wording::NewsCard => body.to_string(),
+            Wording::HouseCard => body.to_string(),
         };
 
         let message = ChatMessageParams {
@@ -3627,7 +3631,7 @@ impl ChatService {
                 )
                 .await?
             }
-            Wording::NewsCard => ChatMessage::create_news_card(&client, message).await?,
+            Wording::HouseCard => ChatMessage::create_house_card(&client, message).await?,
         };
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
@@ -3650,7 +3654,7 @@ impl ChatService {
             }
             // An `@name` the author never wrote notifies nobody in their
             // name.
-            Wording::NewsCard => {}
+            Wording::HouseCard => {}
         }
         self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
@@ -3749,6 +3753,8 @@ impl ChatService {
                             "Reports here must keep their marker; edit the text after it."
                         } else if e.to_string().starts_with("news-card:") {
                             "A story's card can't be edited."
+                        } else if e.to_string().starts_with("gallery-card:") {
+                            "A piece's card can't be edited."
                         } else {
                             "Could not edit message. Please try again."
                         };
@@ -3807,7 +3813,11 @@ impl ChatService {
         if Article::is_lounge_card(&client, message_id).await? {
             anyhow::bail!("news-card: a story's card is not edited");
         }
-
+        if late_core::models::artboard_piece::ArtboardPiece::is_lounge_card(&client, message_id)
+            .await?
+        {
+            anyhow::bail!("gallery-card: a piece's card is not edited");
+        }
         // Report-only rooms: a regular user's only messages there are their own
         // report cards, and an edit must not strip the marker — otherwise
         // editing would bypass the free-text send gate.

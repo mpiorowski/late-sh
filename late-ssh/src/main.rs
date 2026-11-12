@@ -383,8 +383,15 @@ async fn main() -> anyhow::Result<()> {
     let _jobs_press_task = jobs_service.start_press_task();
     // The Artboard gallery's splash wall: every replica re-reads the day's
     // piece hourly; the first replica awake on a day assigns it. See `app/artboard/gallery/svc.rs`.
-    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(db.clone());
+    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
+        db.clone(),
+        chat_service.clone(),
+        config.web_url.clone(),
+    );
     let _gallery_splash_task = gallery_service.start_splash_refresh_task();
+    let _gallery_notify_task = gallery_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::artboard::gallery::svc::GalleryService::CHANNELS),
+    );
     // Runner looks (the #deadchannel portraits) cross replicas the same
     // way; the listener seeds this replica on every (re)connect. See
     // `app/deadchannel/runner/svc.rs`.

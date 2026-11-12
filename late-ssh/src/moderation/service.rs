@@ -27,6 +27,7 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::chat::svc::ChatService;
 use crate::app::stream::registry::EndReason;
 use crate::app::stream::svc::StreamService;
 use crate::app::ultimates::UltimateKind;
@@ -48,6 +49,9 @@ pub(crate) struct ModerationService {
     effects: ModerationSessionEffects,
     event_tx: broadcast::Sender<ModerationEvent>,
     infra: ModerationInfra,
+    /// Chat builds this service and hands itself over: a take-down that
+    /// leaves a #lounge card behind asks chat to delete it.
+    chat: ChatService,
 }
 
 #[derive(Clone, Default)]
@@ -103,12 +107,14 @@ impl ModerationService {
         effects: ModerationSessionEffects,
         event_tx: broadcast::Sender<ModerationEvent>,
         infra: ModerationInfra,
+        chat: ChatService,
     ) -> Self {
         Self {
             db,
             effects,
             event_tx,
             infra,
+            chat,
         }
     }
 }
@@ -1749,6 +1755,21 @@ impl ModerationService {
         .await?;
         tx.commit().await?;
 
+        // The piece is down whatever happens to its card, so a card that
+        // would not go (the gallery logs it) is named in the reply for the
+        // mod to delete by hand.
+        let card_line = match crate::app::artboard::gallery::svc::withdraw_card(
+            &self.chat,
+            actor_user_id,
+            piece_id,
+            removed.lounge_message_id,
+        )
+        .await
+        {
+            true => None,
+            false => Some("its #lounge card could not be deleted; delete that message by hand"),
+        };
+
         let _ = self.event_tx.send(ModerationEvent::ArtboardPieceRemoved {
             actor_user_id,
             piece_id,
@@ -1757,10 +1778,12 @@ impl ModerationService {
             reason,
         });
 
-        Ok(vec![format!(
+        let mut lines = vec![format!(
             "took down gallery piece {piece_id} (\"{}\")",
             removed.title
-        )])
+        )];
+        lines.extend(card_line.map(str::to_string));
+        Ok(lines)
     }
 
     /// Take a runner's poster down: the lever for a picture its owner will

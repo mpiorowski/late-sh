@@ -899,6 +899,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.gallery_cards.modal().is_some() {
+        crate::app::artboard::gallery::card::input::handle_input(app, &event);
+        return;
+    }
+
     if app.chat.has_image_modal() {
         handle_image_modal_input(app, &event);
         return;
@@ -2008,6 +2013,10 @@ fn dispatch_escape(app: &mut App) {
         app.chat.close_reader();
         return;
     }
+    if app.gallery_cards.modal().is_some() {
+        app.gallery_cards.close();
+        return;
+    }
     if app.chat.has_image_modal() {
         close_image_modal(app);
         return;
@@ -3015,6 +3024,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
             if !app.chat.open_selected_card_in_room(room_id)
+                && !crate::app::artboard::gallery::card::input::open_selected_card(app, room_id)
                 && !app.chat.open_selected_image_modal_in_room(room_id)
             {
                 crate::app::chat::input::watch_selected_video(app, room_id);
@@ -4149,10 +4159,12 @@ pub(crate) fn close_icon_picker(app: &mut App) {
     app.icon_picker_target = IconPickerTarget::Composer;
 }
 
-/// The News reader and the watch player (`app/video/`), for a page change
-/// or another modal opening. A closing player keeps its position.
+/// The News reader, an open Artboard piece and the watch player
+/// (`app/video/`), for a page change or another modal opening. A closing
+/// player keeps its position.
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
+    app.gallery_cards.close();
     crate::app::video::svc::close(app);
 }
 

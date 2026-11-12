@@ -551,6 +551,9 @@ pub struct App {
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
+    /// Hung Artboard pieces' #lounge cards and the piece Enter on one opens
+    /// over the chat (`app/artboard/gallery/card/`).
+    pub(crate) gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState,
     /// The Jobs shelf: the replica's active postings, the selection, and
     /// the `/jobs` drain.
     pub(crate) jobs: crate::app::jobs::state::JobsState,
@@ -1026,6 +1029,9 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
+    /// A piece opened from its #lounge card, until the Artboard page may
+    /// show it (`open_gallery_piece`, `sync_dartboard_connection`).
+    pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1692,6 +1698,10 @@ impl App {
             ),
             comeback: crate::app::comeback::state::State::new(comeback_arrival),
             video: crate::app::video::state::State::default(),
+            gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState::new(
+                config.gallery_service.clone(),
+                config.user_id,
+            ),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -2014,6 +2024,7 @@ impl App {
             artboard_interacting: false,
             artboard_content_accepted: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
+            pending_gallery_piece: None,
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -2726,6 +2737,7 @@ impl App {
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
+            self.pending_gallery_piece = None;
         }
 
         if self.screen == Screen::Lateania {
@@ -3087,6 +3099,7 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.chat.reader().is_some()
+            || self.gallery_cards.modal().is_some()
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
