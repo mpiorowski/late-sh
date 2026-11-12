@@ -55,7 +55,7 @@ use crate::metrics;
 use crate::moderation::command::RoomModAction;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationInfra, ModerationService, RoomModRequest, ensure_message_permission,
+    ModerationInfra, ModerationService, RoomModRequest,
     target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -586,6 +586,8 @@ fn account_send_error(path: SendPath, error: &SendError) -> String {
 enum EditRefusal {
     /// Nothing left once trimmed.
     Empty,
+    /// The message was deleted while its edit was open.
+    Gone,
     /// Someone else's message, past the editor's rank.
     NotTheirs,
     /// A report in `#bugs` or `#suggestions` losing its marker, which would
@@ -601,6 +603,7 @@ impl EditRefusal {
     fn message(self) -> &'static str {
         match self {
             Self::Empty => "Edited message cannot be empty.",
+            Self::Gone => "That message is gone.",
             Self::NotTheirs => "You can't edit this message.",
             Self::ReportMarker => "Reports here must keep their marker; edit the text after it.",
             Self::HouseCard => "That card can't be edited.",
@@ -617,6 +620,40 @@ enum EditError {
 }
 
 impl From<anyhow::Error> for EditError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// Why a delete did not land: a rule the deleter can act on, each worded
+/// once, as `EditRefusal` is.
+#[derive(Clone, Copy, Debug)]
+enum DeleteRefusal {
+    /// Someone else deleted the message first.
+    Gone,
+    /// Someone else's message, past the deleter's rank.
+    NotTheirs,
+}
+
+impl DeleteRefusal {
+    /// Sentence-case banner copy, the one place a refusal is worded.
+    fn message(self) -> &'static str {
+        match self {
+            Self::Gone => "That message is gone.",
+            Self::NotTheirs => "You can't delete this message.",
+        }
+    }
+}
+
+/// A delete that did not land: a rule said no, or something broke. Kept
+/// apart like `EditError`: only the first is the deleter's to fix.
+#[derive(Debug)]
+enum DeleteError {
+    Refused(DeleteRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for DeleteError {
     fn from(error: anyhow::Error) -> Self {
         Self::Failed(error)
     }
@@ -3835,9 +3872,10 @@ impl ChatService {
         }
 
         let mut client = self.db.get().await?;
-        let existing = ChatMessage::get(&client, message_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+        let existing = match ChatMessage::get(&client, message_id).await? {
+            Some(existing) => existing,
+            None => return Err(EditError::Refused(EditRefusal::Gone)),
+        };
         let is_owner = existing.user_id == user_id;
         let target_tier = if is_owner {
             Tier::Regular
@@ -3874,7 +3912,12 @@ impl ChatService {
             .transaction()
             .await
             .context("opening the edit's transaction")?;
-        let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
+        // Deleted between the read above and here: the same lost race.
+        let updated =
+            match ChatMessage::edit_after_authorization(&tx, message_id, new_body).await? {
+                Some(updated) => updated,
+                None => return Err(EditError::Refused(EditRefusal::Gone)),
+            };
         // Cached translations describe the pre-edit body; they die with it.
         late_core::models::message_translation::MessageTranslation::delete_for_message(
             &tx, message_id,
@@ -5920,10 +5963,21 @@ impl ChatService {
                             message_id,
                         });
                     }
-                    Err(e) => {
+                    Err(error) => {
+                        let message = match error {
+                            DeleteError::Refused(refusal) => refusal.message(),
+                            DeleteError::Failed(error) => {
+                                late_core::error_span!(
+                                    "chat_delete_failed",
+                                    error = ?error,
+                                    "delete failed"
+                                );
+                                "Could not delete message. Please try again."
+                            }
+                        };
                         let _ = service.evt_tx.send(ChatEvent::DeleteFailed {
                             user_id,
-                            message: e.to_string(),
+                            message: message.to_string(),
                         });
                     }
                 }
@@ -5937,32 +5991,34 @@ impl ChatService {
         user_id: Uuid,
         message_id: Uuid,
         permissions: Permissions,
-    ) -> Result<Uuid> {
+    ) -> Result<Uuid, DeleteError> {
         let mut client = self.db.get().await?;
         // Look up the message to get room_id
-        let msg = ChatMessage::get(&client, message_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
+        let msg = match ChatMessage::get(&client, message_id).await? {
+            Some(msg) => msg,
+            None => return Err(DeleteError::Refused(DeleteRefusal::Gone)),
+        };
         let is_owner = msg.user_id == user_id;
         let target_tier = if is_owner {
             Tier::Regular
         } else {
             target_tier_for_user_id(&client, msg.user_id).await?
         };
-        ensure_message_permission(
-            permissions,
-            is_owner,
-            Caps::DELETE_OTHER_MESSAGE,
-            target_tier,
-        )?;
-        let tx = client.transaction().await?;
+        if !is_owner && !permissions.can(Caps::DELETE_OTHER_MESSAGE, target_tier) {
+            return Err(DeleteError::Refused(DeleteRefusal::NotTheirs));
+        }
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the delete's transaction")?;
         let count = if is_owner {
             ChatMessage::delete_by_author(&tx, message_id, user_id).await?
         } else {
             ChatMessage::delete_by_admin(&tx, message_id).await?
         };
+        // Deleted between the read above and here.
         if count == 0 {
-            anyhow::bail!("Cannot delete this message");
+            return Err(DeleteError::Refused(DeleteRefusal::Gone));
         }
         ModerationAuditLog::record_if(
             &tx,
@@ -5976,7 +6032,7 @@ impl ChatService {
             json!({ "room_id": msg.room_id, "body": msg.body }),
         )
         .await?;
-        tx.commit().await?;
+        tx.commit().await.context("committing the delete")?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
     }

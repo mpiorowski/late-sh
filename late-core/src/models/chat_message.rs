@@ -636,10 +636,11 @@ impl ChatMessage {
         Ok(row.get(0))
     }
 
-    pub async fn edit_by_author(
+    /// Rewrite a message's body for an editor the caller already cleared.
+    /// `None` when the message is gone.
+    pub async fn edit_after_authorization(
         client: &impl GenericClient,
         message_id: Uuid,
-        user_id: Uuid,
         body: &str,
     ) -> Result<Option<Self>> {
         let body = body.trim();
@@ -651,36 +652,13 @@ impl ChatMessage {
             .query_opt(
                 "UPDATE chat_messages
                  SET body = $1, updated = current_timestamp
-                 WHERE id = $2 AND user_id = $3
-                 RETURNING *",
-                &[&body, &message_id, &user_id],
-            )
-            .await?;
-
-        Ok(row.map(Self::from))
-    }
-
-    pub async fn edit_after_authorization(
-        client: &impl GenericClient,
-        message_id: Uuid,
-        body: &str,
-    ) -> Result<Self> {
-        let body = body.trim();
-        if body.is_empty() {
-            bail!("message body cannot be empty");
-        }
-
-        let row = client
-            .query_one(
-                "UPDATE chat_messages
-                 SET body = $1, updated = current_timestamp
                  WHERE id = $2
                  RETURNING *",
                 &[&body, &message_id],
             )
             .await?;
 
-        Ok(Self::from(row))
+        Ok(row.map(Self::from))
     }
 
     pub async fn delete_by_author(

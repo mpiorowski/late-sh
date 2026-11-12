@@ -56,7 +56,7 @@ async fn test_chat_message() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].id, msg1.id);
 
-    let edited = ChatMessage::edit_by_author(&client, msg1.id, user.id, "Hello modified")
+    let edited = ChatMessage::edit_after_authorization(&client, msg1.id, "Hello modified")
         .await
         .unwrap()
         .unwrap();

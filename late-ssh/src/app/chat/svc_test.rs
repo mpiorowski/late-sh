@@ -1405,6 +1405,124 @@ async fn a_moderator_editing_an_admins_message_is_told_they_cannot() {
     assert_eq!(stored.body, "the admin's words");
 }
 
+/// A message deleted while its edit was open is a race the editor lost, not
+/// a failure: the banner says it is gone instead of asking them to try again.
+#[tokio::test]
+async fn editing_a_message_that_is_gone_says_so() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let editor = create_test_user(&test_db.db, "edit-gone").await;
+    let mut events = service.subscribe_events();
+    let request_id = Uuid::now_v7();
+
+    service.edit_message_task(
+        editor.id,
+        Uuid::now_v7(),
+        "too late".to_string(),
+        request_id,
+        Permissions::default(),
+    );
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::EditFailed {
+                request_id: got_request,
+                message,
+                ..
+            } if got_request == request_id => break message,
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "That message is gone.");
+}
+
+/// A moderator's reach stops at their own rank for deletes too: the admin's
+/// message stays, and the banner is the rule, not an error's text.
+#[tokio::test]
+async fn a_moderator_deleting_an_admins_message_is_told_they_cannot() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let admin = create_test_user(&test_db.db, "delete-admin").await;
+    User::set_admin(&client, admin.id, true)
+        .await
+        .expect("promote admin");
+    let moderator = create_test_user(&test_db.db, "delete-moderator").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: admin.id,
+            body: "the admin's words".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    let mut events = service.subscribe_events();
+
+    service.delete_message_task(moderator.id, message.id, Permissions::new(false, true));
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::DeleteFailed { user_id, message } if user_id == moderator.id => {
+                break message;
+            }
+            ChatEvent::MessageDeleted { message_id, .. } if message_id == message.id => {
+                panic!("the moderator's delete went through")
+            }
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "You can't delete this message.");
+    assert!(
+        ChatMessage::get(&client, message.id)
+            .await
+            .expect("reload message")
+            .is_some()
+    );
+}
+
+/// A message someone else deleted first is gone, and the banner says that.
+#[tokio::test]
+async fn deleting_a_message_that_is_gone_says_so() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let deleter = create_test_user(&test_db.db, "delete-gone").await;
+    let mut events = service.subscribe_events();
+
+    service.delete_message_task(deleter.id, Uuid::now_v7(), Permissions::default());
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::DeleteFailed { user_id, message } if user_id == deleter.id => break message,
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "That message is gone.");
+}
+
 #[tokio::test]
 async fn message_deleted_event_carries_deleter_user_id() {
     let test_db = new_test_db().await;
