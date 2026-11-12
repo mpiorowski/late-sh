@@ -55,8 +55,7 @@ use crate::metrics;
 use crate::moderation::command::RoomModAction;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationInfra, ModerationService, RoomModRequest,
-    target_tier_for_user_id,
+    ModerationInfra, ModerationService, RoomModRequest, target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::pg_listener::{Channel, Signal};
@@ -3913,11 +3912,11 @@ impl ChatService {
             .await
             .context("opening the edit's transaction")?;
         // Deleted between the read above and here: the same lost race.
-        let updated =
-            match ChatMessage::edit_after_authorization(&tx, message_id, new_body).await? {
-                Some(updated) => updated,
-                None => return Err(EditError::Refused(EditRefusal::Gone)),
-            };
+        let updated = match ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?
+        {
+            Some(updated) => updated,
+            None => return Err(EditError::Refused(EditRefusal::Gone)),
+        };
         // Cached translations describe the pre-edit body; they die with it.
         late_core::models::message_translation::MessageTranslation::delete_for_message(
             &tx, message_id,
