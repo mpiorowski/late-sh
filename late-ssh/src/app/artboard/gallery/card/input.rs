@@ -15,16 +15,19 @@ use crate::app::state::App;
 /// and then shows the piece: the disclaimer has one door. False for any
 /// other message.
 pub(crate) fn open_selected_card(app: &mut App, room_id: Uuid) -> bool {
-    let Some(message_id) = app.chat.selected_gallery_card_in_room(room_id) else {
+    let Some(message_id) = app.chat.selected_message_id_in_room(room_id) else {
+        return false;
+    };
+    let Some(piece) = app.gallery_cards.card(message_id) else {
         return false;
     };
     match app.artboard_content_gated() {
-        true => match app.chat.gallery_cards.card(message_id).cloned() {
-            Some(piece) => app.open_gallery_piece(piece),
-            None => return false,
-        },
+        true => {
+            let piece = piece.clone();
+            app.open_gallery_piece(piece);
+        }
         false => {
-            app.chat.open_gallery_card(message_id);
+            app.gallery_cards.open(message_id);
         }
     }
     true
@@ -35,13 +38,13 @@ pub(crate) fn open_selected_card(app: &mut App, room_id: Uuid) -> bool {
 pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            app.chat.gallery_cards.close();
+            app.gallery_cards.close();
         }
         ParsedInput::Byte(b'v' | b'V') | ParsedInput::Char('v' | 'V') => {
-            app.chat.gallery_cards.applaud();
+            app.gallery_cards.applaud();
         }
         ParsedInput::Byte(b'o' | b'O') | ParsedInput::Char('o' | 'O') => {
-            if let Some(piece) = app.chat.gallery_cards.close() {
+            if let Some(piece) = app.gallery_cards.close() {
                 app.open_gallery_piece(piece);
             }
         }

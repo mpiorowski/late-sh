@@ -909,7 +909,7 @@ impl App {
             live_strip_hit: &self.live.hit,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
-            gallery_cards: self.chat.gallery_cards.cards(),
+            gallery_cards: self.gallery_cards.cards(),
             artboard_gated,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -975,7 +975,7 @@ impl App {
         };
         let work_unread_count = self.chat.work.unread_count();
         let news_reader = self.chat.reader();
-        let piece_modal = self.chat.gallery_cards.modal();
+        let piece_modal = self.gallery_cards.modal();
         let video_modal = self.video.modal();
         let selected_image_message = self
             .chat
@@ -1027,7 +1027,7 @@ impl App {
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
-            gallery_cards: self.chat.gallery_cards.cards(),
+            gallery_cards: self.gallery_cards.cards(),
             artboard_gated,
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
@@ -1116,7 +1116,7 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
-                    gallery_cards: self.chat.gallery_cards.cards(),
+                    gallery_cards: self.gallery_cards.cards(),
                     artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
@@ -1186,7 +1186,7 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
-                    gallery_cards: self.chat.gallery_cards.cards(),
+                    gallery_cards: self.gallery_cards.cards(),
                     artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
@@ -1259,7 +1259,7 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
-                    gallery_cards: self.chat.gallery_cards.cards(),
+                    gallery_cards: self.gallery_cards.cards(),
                     artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
@@ -1331,7 +1331,7 @@ impl App {
                 message_gilds,
                 inline_images: &self.chat.inline_image_cache,
                 news_cards: self.chat.news.lounge_cards(),
-                gallery_cards: self.chat.gallery_cards.cards(),
+                gallery_cards: self.gallery_cards.cards(),
                 artboard_gated,
                 dividers: crate::app::chat::ui::ChatDividers {
                     afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
@@ -1423,7 +1423,7 @@ impl App {
                             message_gilds,
                             inline_images: &self.chat.inline_image_cache,
                             news_cards: self.chat.news.lounge_cards(),
-                            gallery_cards: self.chat.gallery_cards.cards(),
+                            gallery_cards: self.gallery_cards.cards(),
                             artboard_gated,
                             dividers: crate::app::chat::ui::ChatDividers {
                                 afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),

@@ -227,6 +227,16 @@ impl App {
             self.directory_editor.feed_changed();
             self.jobs.feed_changed();
         }
+        let cards_tick = self.gallery_cards.tick();
+        changed |= cards_tick.cards_changed || cards_tick.modal_changed;
+        if cards_tick.cards_changed {
+            self.chat.gallery_cards_changed();
+        }
+        if cards_tick.taken_down {
+            self.banner = Some(crate::app::common::primitives::Banner::error(
+                "That piece was taken down.",
+            ));
+        }
         if let Some(b) = chat_tick.banner {
             self.banner = Some(b);
             changed = true;

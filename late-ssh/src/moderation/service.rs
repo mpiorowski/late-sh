@@ -1756,25 +1756,18 @@ impl ModerationService {
         tx.commit().await?;
 
         // The piece is down whatever happens to its card, so a card that
-        // would not go is logged here and named in the reply for the mod
-        // to delete by hand.
-        let card_line = match removed.lounge_message_id {
-            Some(message_id) => {
-                match self.chat.delete_house_card(actor_user_id, message_id).await {
-                    Ok(()) => None,
-                    Err(error) => {
-                        late_core::error_span!(
-                            "artboard_remove_piece_card",
-                            error = ?error,
-                            %piece_id,
-                            %message_id,
-                            "failed to delete the #lounge card of a removed gallery piece"
-                        );
-                        Some("its #lounge card could not be deleted; delete that message by hand")
-                    }
-                }
-            }
-            None => None,
+        // would not go (the gallery logs it) is named in the reply for the
+        // mod to delete by hand.
+        let card_line = match crate::app::artboard::gallery::svc::withdraw_card(
+            &self.chat,
+            actor_user_id,
+            piece_id,
+            removed.lounge_message_id,
+        )
+        .await
+        {
+            true => None,
+            false => Some("its #lounge card could not be deleted; delete that message by hand"),
         };
 
         let _ = self.event_tx.send(ModerationEvent::ArtboardPieceRemoved {

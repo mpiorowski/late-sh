@@ -728,7 +728,7 @@ async fn enter_on_a_gallery_lounge_card_opens_the_piece_over_the_chat() {
     app.handle_input(b"\r");
     assert_eq!(app.screen, Screen::Artboard);
     assert!(app.artboard_disclaimer_visible());
-    assert!(app.chat.gallery_cards.modal().is_none());
+    assert!(app.gallery_cards.modal().is_none());
 
     // Answered for this device: the piece that was waiting opens.
     app.handle_input(b"A");
@@ -766,13 +766,13 @@ async fn enter_on_a_gallery_lounge_card_opens_the_piece_over_the_chat() {
     wait_for_render_contains(&mut app, "Applause withdrawn. 0 applause.").await;
 
     app.handle_input(b"o");
-    assert!(app.chat.gallery_cards.modal().is_none());
+    assert!(app.gallery_cards.modal().is_none());
     assert_eq!(app.screen, Screen::Artboard);
     assert_eq!(gallery_view(&app), Some((Some(piece_id), Focus::Piece)));
 }
 
-/// A piece taken down while it is open over the chat: the next key that
-/// asks the row closes the modal and says why.
+/// A piece taken down while it is open over the chat closes the modal and
+/// says why, with no key pressed.
 #[tokio::test]
 async fn a_piece_taken_down_under_its_open_card_closes_the_modal() {
     use crate::app::artboard::gallery::svc::GalleryResult;
@@ -797,9 +797,55 @@ async fn a_piece_taken_down_under_its_open_card_closes_the_modal() {
         panic!("the piece did not come down");
     };
 
-    app.handle_input(b"v");
+    gallery
+        .refresh_lounge_cards()
+        .await
+        .expect("refresh lounge cards");
     wait_for_render_contains(&mut app, "That piece was taken down.").await;
-    assert!(app.chat.gallery_cards.modal().is_none());
+    assert!(app.gallery_cards.modal().is_none());
+}
+
+/// A piece taken down while the content disclaimer waits for its answer:
+/// consent lands on the Artboard without the piece.
+#[tokio::test]
+async fn a_piece_taken_down_behind_the_disclaimer_does_not_open() {
+    use crate::app::artboard::gallery::svc::GalleryResult;
+    use crate::app::common::primitives::Screen;
+    use late_core::models::artboard_piece::TakeDownOutcome;
+
+    let test_db = new_test_db().await;
+    let (mut app, gallery, artist, piece_id) =
+        app_with_a_gallery_card(&test_db, "gallery-card-gated-it", "Dusk Canvas").await;
+    wait_for_render_contains(&mut app, "Artboard content disclaimer is on").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    gallery.take_down_task(piece_id, artist.id, tx);
+    let Some(GalleryResult::TakeDown {
+        outcome: TakeDownOutcome::TakenDown { .. },
+        ..
+    }) = rx.recv().await
+    else {
+        panic!("the piece did not come down");
+    };
+    gallery
+        .refresh_lounge_cards()
+        .await
+        .expect("refresh lounge cards");
+    render_plain(&mut app);
+
+    app.handle_input(b"A");
+    assert!(!app.artboard_disclaimer_visible());
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .and_then(|state| state.gallery().selected_piece())
+            .map(|piece| piece.id),
+        None
+    );
 }
 
 /// `r` in the reader on a story with a #lounge card is `r` on the card: the

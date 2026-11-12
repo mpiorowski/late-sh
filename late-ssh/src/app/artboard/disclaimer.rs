@@ -92,10 +92,13 @@ impl App {
         if self.screen == Screen::Artboard && !self.artboard_disclaimer_visible() {
             self.enter_dartboard();
             // A piece opened from its #lounge card (`open_gallery_piece`).
-            if let (Some(piece), Some(state)) = (
-                self.pending_gallery_piece.take(),
-                self.dartboard_state.as_mut(),
-            ) {
+            // It may have waited for the disclaimer's answer, so it opens
+            // only while it still has a card: one taken down since stays
+            // down, and the page shows without it.
+            if let Some(piece) = self.pending_gallery_piece.take()
+                && self.gallery_cards.has_card_for(piece.id)
+                && let Some(state) = self.dartboard_state.as_mut()
+            {
                 state.gallery_mut().open_piece(piece);
             }
         }

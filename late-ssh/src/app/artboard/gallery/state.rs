@@ -841,8 +841,16 @@ impl GalleryState {
     /// A piece that is no longer on the wall leaves every listing; a full
     /// frame on it goes back to its list. A listing still in flight is
     /// asked for again, since its answer may have been read before the
-    /// piece came down and would put it back.
+    /// piece came down and would put it back. So would a copy still waiting
+    /// for Latest to load (`open_piece`), so that one is dropped too.
     fn drop_piece(&mut self, piece_id: Uuid) {
+        if self
+            .pending_open_piece
+            .as_ref()
+            .is_some_and(|pending| pending.id == piece_id)
+        {
+            self.pending_open_piece = None;
+        }
         for state in &mut self.sections {
             state.pieces.retain(|piece| piece.id != piece_id);
             state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
@@ -857,12 +865,17 @@ impl GalleryState {
         }
     }
 
+    /// Every copy of the piece this session holds: one per listing it is
+    /// in, and the one waiting for Latest to load (`open_piece`), which is
+    /// the copy on screen until then.
     fn update_piece(&mut self, piece_id: Uuid, mut apply: impl FnMut(&mut GalleryPiece)) {
-        for state in &mut self.sections {
-            for piece in &mut state.pieces {
-                if piece.id == piece_id {
-                    apply(piece);
-                }
+        let listed = self
+            .sections
+            .iter_mut()
+            .flat_map(|state| state.pieces.iter_mut());
+        for piece in listed.chain(self.pending_open_piece.as_mut()) {
+            if piece.id == piece_id {
+                apply(piece);
             }
         }
     }

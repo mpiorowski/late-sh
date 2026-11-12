@@ -2589,7 +2589,6 @@ fn chat_state_sharing_summary(
             showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
             work: crate::app::chat::work::svc::WorkService::new(db),
             cyberspace: cyberspace.clone(),
-            gallery: crate::app::artboard::gallery::svc::GalleryService::disabled(),
         },
         ChatSession {
             user_id,
@@ -3656,7 +3655,6 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
                 db,
                 "http://127.0.0.1:1".to_string(),
             ),
-            gallery: crate::app::artboard::gallery::svc::GalleryService::disabled(),
         },
         ChatSession {
             user_id: viewer.id,
@@ -3760,7 +3758,6 @@ async fn a_name_hit_waits_for_its_message_then_lands() {
                 db,
                 "http://127.0.0.1:1".to_string(),
             ),
-            gallery: crate::app::artboard::gallery::svc::GalleryService::disabled(),
         },
         ChatSession {
             user_id: viewer.id,
@@ -3912,7 +3909,6 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
                 db,
                 "http://127.0.0.1:1".to_string(),
             ),
-            gallery: crate::app::artboard::gallery::svc::GalleryService::disabled(),
         },
         ChatSession {
             user_id: viewer.id,

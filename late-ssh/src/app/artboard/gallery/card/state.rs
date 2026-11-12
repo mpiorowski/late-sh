@@ -1,7 +1,7 @@
 //! A hung piece's card in #lounge, on the session's side: which chat
 //! messages are cards (the service's set, mirrored here), and the piece
-//! Enter on one opens over the chat. `ChatState` holds this the way it
-//! holds `news`: it asks which message is a card and leaves the rest here.
+//! Enter on one opens over the chat. `App` holds this next to `video`,
+//! the other modal a chat message opens; chat is handed the cards to draw.
 
 use std::collections::HashMap;
 
@@ -91,6 +91,11 @@ impl LoungeCardState {
         self.cards.get(&message_id)
     }
 
+    /// Whether the piece `piece_id` has a card: it still hangs.
+    pub(crate) fn has_card_for(&self, piece_id: Uuid) -> bool {
+        self.cards.values().any(|card| card.id == piece_id)
+    }
+
     pub(crate) fn modal(&self) -> Option<&PieceModal> {
         self.modal.as_ref()
     }
@@ -148,13 +153,24 @@ impl LoungeCardState {
         if self.cards_rx.has_changed().unwrap_or(false) {
             self.cards = self.cards_rx.borrow_and_update().clone();
             tick.cards_changed = true;
-            // Applause from anyone else reaches the open piece too.
-            if let Some(modal) = self.modal.as_mut()
-                && let Some(card) = self.cards.values().find(|card| card.id == modal.piece.id)
-                && modal.piece.applause != card.applause
-            {
-                modal.piece.applause = card.applause;
-                tick.modal_changed = true;
+            if let Some(modal) = self.modal.as_mut() {
+                match self.cards.values().find(|card| card.id == modal.piece.id) {
+                    // Applause from anyone else reaches the open piece too.
+                    Some(card) => {
+                        if modal.piece.applause != card.applause {
+                            modal.piece.applause = card.applause;
+                            tick.modal_changed = true;
+                        }
+                    }
+                    // The open piece has no card any more: it was taken
+                    // down, or only its card was deleted. The row says
+                    // which, and a piece that is gone closes the modal.
+                    None => self.service.view_card_task(
+                        modal.piece.id,
+                        self.viewer_id,
+                        modal.results_tx.clone(),
+                    ),
+                }
             }
         }
         let Some(modal) = self.modal.as_mut() else {

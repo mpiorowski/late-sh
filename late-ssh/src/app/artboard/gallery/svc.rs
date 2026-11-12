@@ -327,7 +327,17 @@ impl GalleryService {
                 .expect("list_lounge_cards returns only pieces with a card");
             cards.insert(message_id, GalleryPiece::decode(row)?);
         }
-        let _ = self.lounge_cards_tx.send(Arc::new(cards));
+        let cards = Arc::new(cards);
+        // The signal also fires for changes no card shows, and a re-read
+        // that found the same cards must not make every session redraw.
+        self.lounge_cards_tx
+            .send_if_modified(|current| match *current == cards {
+                true => false,
+                false => {
+                    *current = cards;
+                    true
+                }
+            });
         Ok(())
     }
 
@@ -371,17 +381,7 @@ impl GalleryService {
         match linked {
             Ok(0) => {
                 metrics::record_gallery_card(GalleryCardOutcome::PieceGone);
-                match chat.delete_house_card(piece.user_id, message.id).await {
-                    Ok(()) => {}
-                    Err(error) => {
-                        late_core::error_span!(
-                            "gallery_card_withdraw_failed",
-                            error = ?error,
-                            message_id = %message.id,
-                            "failed to withdraw the card of a taken-down piece"
-                        );
-                    }
-                }
+                withdraw_card(chat, piece.user_id, piece.id, Some(message.id)).await;
             }
             Ok(_) => {
                 metrics::record_gallery_card(GalleryCardOutcome::Posted);
@@ -856,20 +856,22 @@ async fn applaud(db: &Db, piece_id: Uuid, user_id: Uuid) -> Result<ApplauseOutco
     }
 }
 
-/// Delete the #lounge card of a piece its hanger just took down. The
-/// piece is down either way; a card that would not go is logged and stays
-/// as its plain line for its author or a mod to delete.
-async fn withdraw_card(
+/// Delete the #lounge card of a piece that just came down, in the name of
+/// `user_id`, who took it down: its hanger or a moderator. The one place a
+/// card goes with its piece. The piece is down either way; a card that
+/// would not go is logged, stays as its plain line for its author or a mod
+/// to delete, and answers false.
+pub(crate) async fn withdraw_card(
     chat: &ChatService,
     user_id: Uuid,
     piece_id: Uuid,
     lounge_message_id: Option<Uuid>,
-) {
+) -> bool {
     let Some(message_id) = lounge_message_id else {
-        return;
+        return true;
     };
     match chat.delete_house_card(user_id, message_id).await {
-        Ok(()) => {}
+        Ok(()) => true,
         Err(error) => {
             late_core::error_span!(
                 "gallery_card_delete_failed",
@@ -879,6 +881,7 @@ async fn withdraw_card(
                 %message_id,
                 "failed to delete the card of a taken-down gallery piece"
             );
+            false
         }
     }
 }

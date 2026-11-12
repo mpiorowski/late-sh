@@ -551,6 +551,9 @@ pub struct App {
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
+    /// Hung Artboard pieces' #lounge cards and the piece Enter on one opens
+    /// over the chat (`app/artboard/gallery/card/`).
+    pub(crate) gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState,
     /// The Jobs shelf: the replica's active postings, the selection, and
     /// the `/jobs` drain.
     pub(crate) jobs: crate::app::jobs::state::JobsState,
@@ -1695,6 +1698,10 @@ impl App {
             ),
             comeback: crate::app::comeback::state::State::new(comeback_arrival),
             video: crate::app::video::state::State::default(),
+            gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState::new(
+                config.gallery_service.clone(),
+                config.user_id,
+            ),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -1824,7 +1831,6 @@ impl App {
                     showcases: config.showcase_service.clone(),
                     work: config.work_service.clone(),
                     cyberspace: config.cyberspace_service.clone(),
-                    gallery: config.gallery_service.clone(),
                 },
                 chat::state::ChatSession {
                     user_id: config.user_id,
@@ -3093,7 +3099,7 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.chat.reader().is_some()
-            || self.chat.gallery_cards.modal().is_some()
+            || self.gallery_cards.modal().is_some()
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()

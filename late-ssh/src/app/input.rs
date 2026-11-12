@@ -899,7 +899,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.chat.gallery_cards.modal().is_some() {
+    if app.gallery_cards.modal().is_some() {
         crate::app::artboard::gallery::card::input::handle_input(app, &event);
         return;
     }
@@ -2013,8 +2013,8 @@ fn dispatch_escape(app: &mut App) {
         app.chat.close_reader();
         return;
     }
-    if app.chat.gallery_cards.modal().is_some() {
-        app.chat.gallery_cards.close();
+    if app.gallery_cards.modal().is_some() {
+        app.gallery_cards.close();
         return;
     }
     if app.chat.has_image_modal() {
@@ -4164,7 +4164,7 @@ pub(crate) fn close_icon_picker(app: &mut App) {
 /// player keeps its position.
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
-    app.chat.gallery_cards.close();
+    app.gallery_cards.close();
     crate::app::video::svc::close(app);
 }
 

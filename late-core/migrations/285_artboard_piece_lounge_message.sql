@@ -12,7 +12,9 @@ CREATE UNIQUE INDEX artboard_pieces_lounge_message_id_key
 -- and re-reads them on this signal. It fires on what a card shows or
 -- whether it exists: a card linked or unlinked, a piece taken down, a hand
 -- of applause given or taken back. Splash and feature stamps change
--- nothing a card draws, so they stay quiet.
+-- nothing a card draws, so they stay quiet. So does an update that leaves
+-- both columns as they were, which is every chat message delete: the
+-- foreign key's SET NULL runs an update that seldom matches a row.
 CREATE FUNCTION notify_artboard_pieces_changed() RETURNS trigger AS $fn$
 BEGIN
     PERFORM pg_notify('artboard_pieces_changed', '');
@@ -22,7 +24,10 @@ $fn$ LANGUAGE plpgsql;
 
 CREATE TRIGGER artboard_pieces_changed
     AFTER UPDATE OF lounge_message_id, removed_at ON artboard_pieces
-    FOR EACH STATEMENT EXECUTE FUNCTION notify_artboard_pieces_changed();
+    FOR EACH ROW
+    WHEN (OLD.lounge_message_id IS DISTINCT FROM NEW.lounge_message_id
+        OR OLD.removed_at IS DISTINCT FROM NEW.removed_at)
+    EXECUTE FUNCTION notify_artboard_pieces_changed();
 
 CREATE TRIGGER artboard_piece_votes_changed
     AFTER INSERT OR DELETE ON artboard_piece_votes

@@ -231,3 +231,73 @@ fn a_listing_asked_for_before_a_take_down_cannot_put_the_piece_back() {
     assert_eq!(state.section_pieces(mine), &[]);
     assert_eq!(state.section_count(mine), Some(0));
 }
+
+/// A piece opened from its #lounge card is on screen before Latest has
+/// loaded, so applause given then has to show on it, and stay on it when
+/// the listing lands without the piece (an older one, past its reach).
+#[test]
+fn applause_shows_on_a_piece_opened_before_latest_loads() {
+    let mut state = GalleryState::new(GalleryService::disabled(), Uuid::from_u128(1));
+    let piece = listed_piece(2, current_period_month());
+    let latest = GallerySection::Newest;
+    state.open_piece(piece.clone());
+    drain(&mut state);
+
+    state
+        .results_tx
+        .send(GalleryResult::Applause {
+            piece_id: piece.id,
+            outcome: ApplauseOutcome::Applauded(3),
+        })
+        .unwrap();
+    assert!(state.tick());
+    state
+        .results_tx
+        .send(GalleryResult::Listed {
+            listing: PieceListing::Newest,
+            generation: state.sections[latest.index()].generation,
+            pieces: Vec::new(),
+        })
+        .unwrap();
+    assert!(state.tick());
+    assert_eq!(
+        state.section_pieces(latest),
+        &[GalleryPiece {
+            applause: 3,
+            applauded_by_viewer: true,
+            ..piece
+        }]
+    );
+}
+
+/// A piece opened from its card and then found gone stays gone: the
+/// Latest listing that lands after must not put the card's copy back.
+#[test]
+fn a_piece_found_gone_before_latest_loads_is_not_put_back() {
+    let mut state = GalleryState::new(GalleryService::disabled(), Uuid::from_u128(1));
+    let piece = listed_piece(2, current_period_month());
+    let latest = GallerySection::Newest;
+    state.open_piece(piece.clone());
+    drain(&mut state);
+
+    state
+        .results_tx
+        .send(GalleryResult::Applause {
+            piece_id: piece.id,
+            outcome: ApplauseOutcome::NotFound,
+        })
+        .unwrap();
+    assert!(state.tick());
+    drain(&mut state);
+
+    state
+        .results_tx
+        .send(GalleryResult::Listed {
+            listing: PieceListing::Newest,
+            generation: state.sections[latest.index()].generation,
+            pieces: Vec::new(),
+        })
+        .unwrap();
+    assert!(state.tick());
+    assert_eq!(state.section_pieces(latest), &[]);
+}

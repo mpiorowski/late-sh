@@ -536,7 +536,10 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         b'e' | b'E' => {
-            if let Some(b) = app.chat.begin_edit_selected_in_room(room_id) {
+            if let Some(b) = app
+                .chat
+                .begin_edit_selected_in_room(room_id, &app.gallery_cards)
+            {
                 app.banner = Some(b);
             } else {
                 app.chat.clear_message_selection();

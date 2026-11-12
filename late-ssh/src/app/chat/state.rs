@@ -36,7 +36,6 @@ use crate::app::ai::summary::{
 };
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::artboard::gallery::card::state::LoungeCardState;
-use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::{
@@ -882,9 +881,6 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
-    /// Hung Artboard pieces' #lounge cards and the piece Enter on one
-    /// opens (`artboard/gallery/card/`): those messages draw as the piece.
-    pub(crate) gallery_cards: LoungeCardState,
     /// The AFK line per room: the instant this session's human went quiet
     /// while that room was on screen. The `new messages` divider draws
     /// against it and `/history` opens there. It is one of two marks, and
@@ -1300,7 +1296,6 @@ pub(crate) struct ChatServices {
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
     pub cyberspace: cyberspace::svc::CyberspaceService,
-    pub gallery: GalleryService,
 }
 
 impl Drop for ChatState {
@@ -1334,7 +1329,6 @@ impl ChatState {
             showcases: showcase_service,
             work: work_service,
             cyberspace: cyberspace_service,
-            gallery: gallery_service,
         } = services;
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
@@ -1534,7 +1528,6 @@ impl ChatState {
             terminal_image_requested: HashSet::new(),
             terminal_image_failed: HashSet::new(),
             last_image_upload_at: None,
-            gallery_cards: LoungeCardState::new(gallery_service, user_id),
         }
     }
 
@@ -2737,7 +2730,11 @@ impl ChatState {
         true
     }
 
-    pub fn begin_edit_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+    pub(crate) fn begin_edit_selected_in_room(
+        &mut self,
+        room_id: Uuid,
+        gallery_cards: &LoungeCardState,
+    ) -> Option<Banner> {
         self.reaction_leader_active = false;
         let selected_id = self.selected_message_id?;
         let Some(message) = self.find_message_in_room(room_id, selected_id) else {
@@ -2746,6 +2743,11 @@ impl ChatState {
         let message_user_id = message.user_id;
         let room_id = message.room_id;
         let body = message.body.clone();
+        // A hung piece's card is drawn from the piece, as a story's is
+        // from its story (`begin_edit_message`).
+        if gallery_cards.card(selected_id).is_some() {
+            return Some(Banner::error("A piece's card can't be edited."));
+        }
         self.begin_edit_message(selected_id, message_user_id, room_id, &body)
     }
 
@@ -2764,10 +2766,6 @@ impl ChatState {
         // (`ChatService::edit_message` refuses it too).
         if self.news.lounge_card(selected_id).is_some() {
             return Some(Banner::error("A story's card can't be edited."));
-        }
-        // The same for a hung piece's card: it is drawn from the piece.
-        if self.gallery_cards.card(selected_id).is_some() {
-            return Some(Banner::error("A piece's card can't be edited."));
         }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
@@ -3124,20 +3122,11 @@ impl ChatState {
         self.open_reader_for_article(article_id)
     }
 
-    /// The selected message in `room_id` when it is a hung Artboard piece's
-    /// #lounge card: what Enter or a click on it opens
-    /// (`artboard/gallery/card/input.rs`).
-    pub(crate) fn selected_gallery_card_in_room(&self, room_id: Uuid) -> Option<Uuid> {
-        self.selected_message_in_room(room_id)
-            .map(|message| message.id)
-            .filter(|message_id| self.gallery_cards.card(*message_id).is_some())
-    }
-
-    /// Open the piece behind the #lounge card `message_id` over the chat.
-    /// False when the message is no card.
-    pub(crate) fn open_gallery_card(&mut self, message_id: Uuid) -> bool {
-        self.reaction_leader_active = false;
-        self.gallery_cards.open(message_id)
+    /// The #lounge cards of hung Artboard pieces changed (`App::tick`
+    /// hears it from `artboard/gallery/card/`). A card is drawn from its
+    /// piece in place of the message's line, so the rows are stale.
+    pub(crate) fn gallery_cards_changed(&mut self) {
+        self.context_epoch += 1;
     }
 
     /// The selected message in `room_id` when its preview is a YouTube
@@ -5726,15 +5715,6 @@ impl ChatState {
         if news_tick.cards_changed {
             self.context_epoch += 1;
         }
-        // The same for a hung piece's card, drawn from the piece.
-        let cards_tick = self.gallery_cards.tick();
-        if cards_tick.cards_changed {
-            self.context_epoch += 1;
-        }
-        let cards_banner = match cards_tick.taken_down {
-            true => Some(Banner::error("That piece was taken down.")),
-            false => None,
-        };
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();
@@ -5808,8 +5788,7 @@ impl ChatState {
             .or(notif_tick.banner)
             .or(showcase_tick.banner)
             .or(work_tick.banner)
-            .or(cyberspace_tick.banner)
-            .or(cards_banner);
+            .or(cyberspace_tick.banner);
         ChatTick {
             banner,
             changed: changed
@@ -5819,9 +5798,7 @@ impl ChatState {
                 || notif_tick.changed
                 || showcase_tick.changed
                 || work_tick.changed
-                || cyberspace_tick.changed
-                || cards_tick.cards_changed
-                || cards_tick.modal_changed,
+                || cyberspace_tick.changed,
         }
     }
 
