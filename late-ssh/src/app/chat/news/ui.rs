@@ -9,7 +9,7 @@ use crate::app::chat::news::state::is_unread;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::markdown::wrap_plain_line;
 use crate::app::common::primitives::format_relative_time_short;
-use crate::app::common::primitives::truncate_cells;
+use crate::app::common::primitives::{clip_spans, truncate_cells};
 use crate::app::common::theme;
 use crate::app::video::state::{is_watchable, position_label};
 use ratatui::{
@@ -22,7 +22,7 @@ use ratatui::{
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use late_core::models::article::{Article, ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
@@ -525,40 +525,6 @@ pub(crate) fn lounge_card_lines(item: &ArticleFeedItem, width: usize) -> Vec<Lin
             }
         })
         .collect()
-}
-
-/// `spans` cut to `width` columns: a card's meta row on a narrow chat. A
-/// row that runs over keeps `width - 1` columns and ends with an ellipsis in
-/// the style of the span it cuts into, even when the cut falls between two
-/// spans, so a cut row always reads as cut.
-fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
-    let total: usize = spans.iter().map(Span::width).sum();
-    if total <= width {
-        return spans;
-    }
-    let mut room = width.saturating_sub(1);
-    let mut clipped = Vec::new();
-    for span in spans {
-        let span_width = span.width();
-        if span_width <= room {
-            room -= span_width;
-            clipped.push(span);
-            continue;
-        }
-        let mut kept = String::new();
-        for ch in span.content.chars() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if ch_width > room {
-                break;
-            }
-            room -= ch_width;
-            kept.push(ch);
-        }
-        kept.push('…');
-        clipped.push(Span::styled(kept, span.style));
-        break;
-    }
-    clipped
 }
 
 /// The card meta's last segment.

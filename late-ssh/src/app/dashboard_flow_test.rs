@@ -617,18 +617,27 @@ async fn enter_on_a_lounge_card_opens_the_reader() {
     );
 }
 
-#[tokio::test]
-async fn enter_on_a_gallery_lounge_card_opens_the_piece_in_artboard_gallery() {
-    use crate::app::artboard::gallery::svc::{GalleryPiece, GalleryService};
-    use crate::app::common::primitives::Screen;
+/// A session in #lounge with one hung piece's card in it: the piece is
+/// hung through the gallery service, the way the Artboard page hangs it,
+/// and the cards are re-read as the notify worker would.
+async fn app_with_a_gallery_card(
+    test_db: &late_core::test_utils::TestDb,
+    name: &str,
+    title: &str,
+) -> (
+    crate::app::state::App,
+    crate::app::artboard::gallery::svc::GalleryService,
+    late_core::models::user::User,
+    uuid::Uuid,
+) {
+    use crate::app::artboard::gallery::frame::FramedPiece;
+    use crate::app::artboard::gallery::svc::{GalleryResult, GalleryService};
     use crate::app::chat::notifications::svc::NotificationService;
     use crate::app::chat::svc::ChatService;
-    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
-    use serde_json::json;
+    use late_core::models::artboard_piece::ArtboardPiece;
 
-    let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "gallery-card-me").await;
-    let artist = create_test_user(&test_db.db, "gallery-card-artist").await;
+    let me = create_test_user(&test_db.db, &format!("{name}-me")).await;
+    let artist = create_test_user(&test_db.db, &format!("{name}-artist")).await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -637,216 +646,160 @@ async fn enter_on_a_gallery_lounge_card_opens_the_piece_in_artboard_gallery() {
         .await
         .expect("join lounge room");
 
-    let hang_params = HangParams {
-        user_id: artist.id,
-        title: "Sunset Over Late".to_string(),
-        width: 12,
-        height: 4,
-        canvas: json!({
-            "width": 12,
-            "height": 4,
-            "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
-            "colors": [],
-        }),
-        provenance: json!({ "cells": [[{"x": 0, "y": 0}, "artist"]] }),
-        glyph_count: 40,
-        own_share_percent: 100,
-        content_hash: "hash-sunset-flow".to_string(),
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let gallery = GalleryService::new(
+        test_db.db.clone(),
+        chat.clone(),
+        "http://localhost:3000".to_string(),
+    );
+    let mut canvas = dartboard_core::Canvas::with_size(12, 4);
+    canvas.set(dartboard_core::Pos { x: 0, y: 0 }, '#');
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    gallery.hang_task(
+        artist.id,
+        title.to_string(),
+        FramedPiece {
+            width: 12,
+            height: 4,
+            canvas,
+            provenance: Default::default(),
+            glyph_count: 40,
+            own_share_percent: 100,
+            credits: Vec::new(),
+            content_hash: format!("hash-{name}"),
+        },
+        tx,
+    );
+    let Some(GalleryResult::Hung(piece)) = rx.recv().await else {
+        panic!("the piece did not hang");
     };
-    let HangOutcome::Hung(hung) = ArtboardPiece::hang(&client, hang_params)
+    crate::test_helpers::wait_until(
+        || async {
+            ArtboardPiece::find(&client, artist.id, piece.id)
+                .await
+                .expect("piece row")
+                .is_some_and(|row| row.lounge_message_id.is_some())
+        },
+        "the piece has its card",
+    )
+    .await;
+    gallery
+        .refresh_lounge_cards()
         .await
-        .expect("hang")
-    else {
-        panic!("hang outcome not Hung");
-    };
-    let piece = GalleryPiece::decode(*hung).expect("decode piece");
-
-    let notifications = NotificationService::new(test_db.db.clone());
-    let chat = ChatService::new(test_db.db.clone(), notifications);
-    let gallery = GalleryService::new(test_db.db.clone())
-        .with_lounge_cards(chat.clone(), "http://localhost:3000".to_string());
-
-    gallery.post_lounge_card(&piece).await;
-    gallery.refresh_lounge_cards().await.expect("refresh lounge cards");
+        .expect("refresh lounge cards");
 
     let world = crate::test_helpers::SessionWorld {
-        gallery_service: Some(gallery),
+        gallery_service: Some(gallery.clone()),
         chat_service: Some(chat),
         ..Default::default()
     };
-    let mut app = crate::test_helpers::make_app_in_world(test_db.db.clone(), me.id, "gallery-card-flow-it", world);
+    let mut app = crate::test_helpers::make_app_in_world(test_db.db.clone(), me.id, name, world);
     app.resize(160, 40).expect("resize test terminal");
-
-    // 1. With disclaimer on (default for newcomers):
-    wait_for_render_contains(&mut app, "Artboard content disclaimer is on").await;
-    let frame_gated = render_plain(&mut app);
-    assert!(frame_gated.contains("🎨 \"Sunset Over Late\""), "{frame_gated}");
-    assert!(
-        !frame_gated.contains("http://localhost:3000/gallery/pieces/"),
-        "raw link is suppressed: {frame_gated}"
-    );
-
-    // Select message and press Enter
-    app.handle_input(b"j");
-    app.handle_input(b"\r");
-    // It switches to Artboard screen where disclaimer prompt is shown
-    assert_eq!(app.screen, Screen::Artboard);
-    assert!(app.artboard_disclaimer_visible());
-
-    // Press A to always accept disclaimer on this device
-    app.handle_input(b"A");
-    assert!(!app.artboard_disclaimer_visible());
-    assert_eq!(
-        app.dartboard_state
-            .as_ref()
-            .and_then(|s| s.gallery().selected_piece().map(|p| p.id)),
-        Some(piece.id),
-        "piece is selected in gallery"
-    );
-    assert_eq!(
-        app.dartboard_state
-            .as_ref()
-            .map(|s| s.gallery().focus()),
-        Some(crate::app::artboard::gallery::state::Focus::Piece),
-        "gallery is focused on full piece view"
-    );
-
-    // 2. Switch back to Dashboard with disclaimer accepted:
-    app.set_screen(Screen::Dashboard);
-    assert_eq!(app.screen, Screen::Dashboard);
-    assert!(!app.artboard_disclaimer_visible_for_chat());
-
-    // Select the card again and press Enter -> opens Image Preview modal in chat
-    app.handle_input(b"j");
-    app.handle_input(b"\r");
-    assert!(app.chat.has_image_modal(), "image modal opens for gallery card");
-
-    // Press 'o' inside the image modal -> closes modal and navigates to Artboard in Focus::Piece
-    app.handle_input(b"o");
-    assert!(!app.chat.has_image_modal(), "image modal is closed");
-    assert_eq!(app.screen, Screen::Artboard);
-    assert_eq!(
-        app.dartboard_state
-            .as_ref()
-            .map(|s| s.gallery().focus()),
-        Some(crate::app::artboard::gallery::state::Focus::Piece),
-        "gallery is focused on full piece view after 'o' in modal"
-    );
-
-    // 3. Switch back to Dashboard and press 'o' directly on selected card:
-    app.set_screen(Screen::Dashboard);
-    app.handle_input(b"j");
-    app.handle_input(b"o");
-    assert_eq!(app.screen, Screen::Artboard);
-    assert_eq!(
-        app.dartboard_state
-            .as_ref()
-            .map(|s| s.gallery().focus()),
-        Some(crate::app::artboard::gallery::state::Focus::Piece),
-        "gallery is focused on full piece view after 'o' on card"
-    );
+    (app, gallery, artist, piece.id)
 }
 
+/// The card stands in for its line. While the content disclaimer is still
+/// to answer it shows no piece and Enter goes to the Artboard to ask;
+/// after that Enter opens the piece over the chat, where `v` applauds it
+/// and `o` opens it in the gallery.
 #[tokio::test]
-async fn f_or_v_on_a_gallery_lounge_card_applauds_the_piece() {
-    use crate::app::artboard::gallery::svc::{GalleryPiece, GalleryService};
-    use crate::app::chat::notifications::svc::NotificationService;
-    use crate::app::chat::svc::ChatService;
-    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
-    use serde_json::json;
+async fn enter_on_a_gallery_lounge_card_opens_the_piece_over_the_chat() {
+    use crate::app::artboard::gallery::state::Focus;
+    use crate::app::common::primitives::Screen;
+    use late_core::models::artboard_piece::ArtboardPiece;
 
     let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "applaud-card-me").await;
-    let artist = create_test_user(&test_db.db, "applaud-card-artist").await;
+    let (mut app, _gallery, _artist, piece_id) =
+        app_with_a_gallery_card(&test_db, "gallery-card-flow-it", "Sunset Over Late").await;
     let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, me.id)
-        .await
-        .expect("join lounge room");
 
-    let hang_params = HangParams {
-        user_id: artist.id,
-        title: "Dawn Canvas".to_string(),
-        width: 12,
-        height: 4,
-        canvas: json!({
-            "width": 12,
-            "height": 4,
-            "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
-            "colors": [],
-        }),
-        provenance: json!({ "cells": [[{"x": 0, "y": 0}, "artist"]] }),
-        glyph_count: 40,
-        own_share_percent: 100,
-        content_hash: "hash-dawn-applaud".to_string(),
-    };
-    let HangOutcome::Hung(hung) = ArtboardPiece::hang(&client, hang_params)
-        .await
-        .expect("hang")
-    else {
-        panic!("hang outcome not Hung");
-    };
-    let piece = GalleryPiece::decode(*hung).expect("decode piece");
+    wait_for_render_contains(&mut app, "Artboard content disclaimer is on").await;
+    let gated = render_plain(&mut app);
+    assert!(gated.contains("🎨 \"Sunset Over Late\""), "{gated}");
+    assert!(
+        !gated.contains("http://localhost:3000/gallery/pieces/"),
+        "the card stands in for the raw line: {gated}"
+    );
 
-    let notifications = NotificationService::new(test_db.db.clone());
-    let chat = ChatService::new(test_db.db.clone(), notifications);
-    let gallery = GalleryService::new(test_db.db.clone())
-        .with_lounge_cards(chat.clone(), "http://localhost:3000".to_string());
-
-    gallery.post_lounge_card(&piece).await;
-    gallery.refresh_lounge_cards().await.expect("refresh lounge cards");
-
-    let world = crate::test_helpers::SessionWorld {
-        gallery_service: Some(gallery),
-        chat_service: Some(chat),
-        ..Default::default()
-    };
-    let mut app = crate::test_helpers::make_app_in_world(test_db.db.clone(), me.id, "applaud-card-flow-it", world);
-    app.resize(160, 40).expect("resize test terminal");
-
-    wait_for_render_contains(&mut app, "Dawn Canvas").await;
-
-    // Select message
     app.handle_input(b"j");
-    let selected_frame = render_plain(&mut app);
-    assert!(selected_frame.contains("f applaud · r reply"), "composer placeholder offers applaud: {selected_frame}");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+    assert!(app.chat.gallery_cards.modal().is_none());
 
-    // Press 'f' to applaud
-    app.handle_input(b"f");
-    assert!(
-        app.banner.as_ref().map(|b| b.message.as_str()).unwrap_or("").contains("applause"),
-        "applaud banner was shown"
-    );
+    // Answered for this device: the piece that was waiting opens.
+    app.handle_input(b"A");
+    assert!(!app.artboard_disclaimer_visible());
+    let gallery_view = |app: &crate::app::state::App| {
+        app.dartboard_state.as_ref().map(|state| {
+            (
+                state.gallery().selected_piece().map(|piece| piece.id),
+                state.gallery().focus(),
+            )
+        })
+    };
+    assert_eq!(gallery_view(&app), Some((Some(piece_id), Focus::Piece)));
 
-    // Verify vote landed in database
-    crate::test_helpers::wait_until(
-        || async {
-            ArtboardPiece::applause_count(&client, piece.id)
-                .await
-                .unwrap_or(0)
-                == 1
-        },
-        "applause count becomes 1",
-    )
-    .await;
-    // Press 'f' to withdraw applause
-    app.handle_input(b"f");
-    assert!(
-        app.banner.as_ref().map(|b| b.message.as_str()).unwrap_or("").contains("applause"),
-        "withdrawal banner was shown"
+    app.set_screen(Screen::Dashboard);
+    wait_for_render_contains(&mut app, "Enter to view").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Dashboard);
+    wait_for_render_contains(&mut app, " Artboard piece ").await;
+    wait_for_render_contains(&mut app, "v applaud").await;
+
+    // `v` is the modal's, never the page's under it.
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "Applauded. 1 applause.").await;
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(
+        ArtboardPiece::applause_count(&client, piece_id)
+            .await
+            .expect("applause count"),
+        1
     );
-    crate::test_helpers::wait_until(
-        || async {
-            ArtboardPiece::applause_count(&client, piece.id)
-                .await
-                .unwrap_or(1)
-                == 0
-        },
-        "applause count becomes 0",
-    )
-    .await;
+    wait_for_render_contains(&mut app, "(yours too)").await;
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "Applause withdrawn. 0 applause.").await;
+
+    app.handle_input(b"o");
+    assert!(app.chat.gallery_cards.modal().is_none());
+    assert_eq!(app.screen, Screen::Artboard);
+    assert_eq!(gallery_view(&app), Some((Some(piece_id), Focus::Piece)));
+}
+
+/// A piece taken down while it is open over the chat: the next key that
+/// asks the row closes the modal and says why.
+#[tokio::test]
+async fn a_piece_taken_down_under_its_open_card_closes_the_modal() {
+    use crate::app::artboard::gallery::svc::GalleryResult;
+    use late_core::models::artboard_piece::TakeDownOutcome;
+
+    let test_db = new_test_db().await;
+    let (mut app, gallery, artist, piece_id) =
+        app_with_a_gallery_card(&test_db, "gallery-card-gone-it", "Dawn Canvas").await;
+    app.set_device_artboard_disclaimer(false);
+    wait_for_render_contains(&mut app, "Enter to view").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, " Artboard piece ").await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    gallery.take_down_task(piece_id, artist.id, tx);
+    let Some(GalleryResult::TakeDown {
+        outcome: TakeDownOutcome::TakenDown { .. },
+        ..
+    }) = rx.recv().await
+    else {
+        panic!("the piece did not come down");
+    };
+
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "That piece was taken down.").await;
+    assert!(app.chat.gallery_cards.modal().is_none());
 }
 
 /// `r` in the reader on a story with a #lounge card is `r` on the card: the

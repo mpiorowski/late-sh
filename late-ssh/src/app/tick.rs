@@ -263,7 +263,7 @@ impl App {
             }
         }
         let inline_image_render_settings = self.inline_image_render_settings();
-        changed |= self.chat.poll_inline_images(inline_image_render_settings);
+        self.chat.poll_inline_images(inline_image_render_settings);
         if self.screen == Screen::Arcade
             && self.is_playing_game
             && self.game_selection == ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle)
@@ -651,10 +651,10 @@ impl App {
             // is up, and it reports its own changes (own edits are
             // input-driven).
             changed |= state.tick();
-            if let Some(err) = state.private_notice.clone()
-                && self.banner.is_none()
-            {
-                self.banner = Some(crate::app::common::primitives::Banner::error(&err));
+            // A refused or failed hang: the board shows the notice only in
+            // its framing bar, so it gets a banner too, once.
+            if let Some(error) = state.gallery_mut().take_hang_error() {
+                self.banner = Some(crate::app::common::primitives::Banner::error(&error));
                 changed = true;
             }
         }

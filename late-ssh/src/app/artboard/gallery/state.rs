@@ -10,7 +10,7 @@ use late_core::models::artboard_piece::{
 };
 use late_core::models::profile_award::gallery_prize_chips;
 use ratatui::layout::Rect;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::app::artboard::svc::ArtboardSnapshotKind;
@@ -181,6 +181,24 @@ struct SectionState {
     scroll: usize,
 }
 
+impl SectionState {
+    /// Select `piece`: where it is in the list, or on top when the list
+    /// does not reach it.
+    fn select_or_insert(&mut self, piece: GalleryPiece) {
+        match self.pieces.iter().position(|listed| listed.id == piece.id) {
+            Some(index) => {
+                self.selected = index;
+                self.scroll = self.scroll.min(index);
+            }
+            None => {
+                self.pieces.insert(0, piece);
+                self.selected = 0;
+                self.scroll = 0;
+            }
+        }
+    }
+}
+
 pub struct GalleryState {
     service: GalleryService,
     viewer_id: Uuid,
@@ -204,9 +222,13 @@ pub struct GalleryState {
     take_down_asked: Option<Uuid>,
     /// The piece whose take-down is in flight.
     pending_take_down: Option<Uuid>,
+    /// A piece to open full-frame (`open_piece`) that arrived before the
+    /// Latest listing did; shown at once, placed in the list when it lands.
     pending_open_piece: Option<GalleryPiece>,
+    /// A hang that was refused or failed, until the page takes it for its
+    /// banner (`take_hang_error`): the notice alone is easy to miss on the
+    /// board, where only the framing bar shows it.
     pending_hang_error: Option<String>,
-    changed_rx: watch::Receiver<u64>,
     /// Published by the draw path so hit tests and the viewport math agree
     /// with what is on screen.
     rail_visible: Cell<bool>,
@@ -218,7 +240,6 @@ pub struct GalleryState {
 impl GalleryState {
     pub fn new(service: GalleryService, viewer_id: Uuid) -> Self {
         let (results_tx, results_rx) = mpsc::unbounded_channel();
-        let changed_rx = service.subscribe_changed();
         service.counts_task(viewer_id, results_tx.clone());
         Self {
             service,
@@ -236,7 +257,6 @@ impl GalleryState {
             pending_take_down: None,
             pending_open_piece: None,
             pending_hang_error: None,
-            changed_rx,
             rail_visible: Cell::new(false),
             rail_area: Cell::new(Rect::default()),
             list_area: Cell::new(Rect::default()),
@@ -269,6 +289,7 @@ impl GalleryState {
         self.notice.as_deref()
     }
 
+    /// The refused or failed hang this tick found, once.
     pub fn take_hang_error(&mut self) -> Option<String> {
         self.pending_hang_error.take()
     }
@@ -481,22 +502,19 @@ impl GalleryState {
             .or(self.pending_open_piece.as_ref())
     }
 
+    /// Open `piece` full-frame from outside the page (its #lounge card):
+    /// Latest is selected and the piece shown, in its place in the list
+    /// when it is there and on top when it is not (an older piece).
     pub fn open_piece(&mut self, piece: GalleryPiece) {
         self.rail_select(RailRow::Gallery(GallerySection::Newest));
         let state = &mut self.sections[GallerySection::Newest.index()];
-        if state.loaded {
-            if let Some(pos) = state.pieces.iter().position(|p| p.id == piece.id) {
-                state.selected = pos;
-                state.scroll = pos.min(state.scroll);
-            } else {
-                state.pieces.insert(0, piece);
-                state.selected = 0;
-                state.scroll = 0;
+        self.pending_open_piece = match state.loaded {
+            true => {
+                state.select_or_insert(piece);
+                None
             }
-            self.pending_open_piece = None;
-        } else {
-            self.pending_open_piece = Some(piece);
-        }
+            false => Some(piece),
+        };
         self.focus = Focus::Piece;
     }
 
@@ -690,18 +708,6 @@ impl GalleryState {
     /// screen changed.
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
-        if self.changed_rx.has_changed().unwrap_or(false) {
-            let _ = self.changed_rx.borrow_and_update();
-            self.service
-                .counts_task(self.viewer_id, self.results_tx.clone());
-            for section in GallerySection::ALL {
-                let state = &mut self.sections[section.index()];
-                if state.loaded {
-                    self.reload(section);
-                }
-            }
-            changed = true;
-        }
         while let Ok(result) = self.results_rx.try_recv() {
             changed = true;
             match result {
@@ -734,14 +740,7 @@ impl GalleryState {
                     if section == GallerySection::Newest
                         && let Some(pending) = self.pending_open_piece.take()
                     {
-                        if let Some(pos) = state.pieces.iter().position(|p| p.id == pending.id) {
-                            state.selected = pos;
-                            state.scroll = pos.min(state.scroll);
-                        } else {
-                            state.pieces.insert(0, pending);
-                            state.selected = 0;
-                            state.scroll = 0;
-                        }
+                        state.select_or_insert(pending);
                     }
                 }
                 GalleryResult::ListFailed {
@@ -795,33 +794,15 @@ impl GalleryState {
                 }
                 GalleryResult::Applause { piece_id, outcome } => {
                     self.pending_applause = None;
+                    self.update_piece(piece_id, |piece| take_applause(piece, outcome));
                     match outcome {
-                        ApplauseOutcome::Applauded(count) => {
-                            self.update_piece(piece_id, |piece| {
-                                piece.applause = count;
-                                piece.applauded_by_viewer = true;
-                            });
-                            self.notice = Some(format!("Applauded. {}.", applause_label(count)));
-                        }
-                        ApplauseOutcome::Withdrawn(count) => {
-                            self.update_piece(piece_id, |piece| {
-                                piece.applause = count;
-                                piece.applauded_by_viewer = false;
-                            });
-                            self.notice =
-                                Some(format!("Applause withdrawn. {}.", applause_label(count)));
-                        }
-                        ApplauseOutcome::OwnPiece => {
-                            self.notice = Some(OWN_PIECE_APPLAUSE.to_string());
-                        }
-                        ApplauseOutcome::Closed => {
-                            self.notice = Some(CLOSED_MONTH_APPLAUSE.to_string());
-                        }
-                        ApplauseOutcome::NotFound => {
-                            self.drop_piece(piece_id);
-                            self.notice = Some("That piece was taken down.".to_string());
-                        }
+                        ApplauseOutcome::NotFound => self.drop_piece(piece_id),
+                        ApplauseOutcome::Applauded(_)
+                        | ApplauseOutcome::Withdrawn(_)
+                        | ApplauseOutcome::OwnPiece
+                        | ApplauseOutcome::Closed => {}
                     }
+                    self.notice = Some(applause_notice(outcome));
                 }
                 GalleryResult::ApplauseFailed { piece_id: _, error } => {
                     self.pending_applause = None;
@@ -892,9 +873,38 @@ const CLOSED_MONTH_APPLAUSE: &str = "Applause closed with the month. The ranking
 const NOT_YOURS_TAKE_DOWN: &str = "Only the hanger takes a piece down.";
 const CLOSED_MONTH_TAKE_DOWN: &str = "Last month's wall is settled; that piece stays up.";
 
+/// The count and the viewer's own hand on `piece` after an applause
+/// answer. A refusal changes neither.
+pub(super) fn take_applause(piece: &mut GalleryPiece, outcome: ApplauseOutcome) {
+    match outcome {
+        ApplauseOutcome::Applauded(count) => {
+            piece.applause = count;
+            piece.applauded_by_viewer = true;
+        }
+        ApplauseOutcome::Withdrawn(count) => {
+            piece.applause = count;
+            piece.applauded_by_viewer = false;
+        }
+        ApplauseOutcome::OwnPiece | ApplauseOutcome::Closed | ApplauseOutcome::NotFound => {}
+    }
+}
+
+/// What an applause answer tells the one who pressed the key.
+pub(super) fn applause_notice(outcome: ApplauseOutcome) -> String {
+    match outcome {
+        ApplauseOutcome::Applauded(count) => format!("Applauded. {}.", applause_label(count)),
+        ApplauseOutcome::Withdrawn(count) => {
+            format!("Applause withdrawn. {}.", applause_label(count))
+        }
+        ApplauseOutcome::OwnPiece => OWN_PIECE_APPLAUSE.to_string(),
+        ApplauseOutcome::Closed => CLOSED_MONTH_APPLAUSE.to_string(),
+        ApplauseOutcome::NotFound => "That piece was taken down.".to_string(),
+    }
+}
+
 /// The first day of the current UTC month, the `period_month` a piece hung
 /// now would carry.
-pub(crate) fn current_period_month() -> NaiveDate {
+pub(super) fn current_period_month() -> NaiveDate {
     let today = Utc::now().date_naive();
     today.with_day(1).unwrap_or(today)
 }

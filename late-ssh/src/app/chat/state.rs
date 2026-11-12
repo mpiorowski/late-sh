@@ -35,6 +35,8 @@ use crate::app::ai::summary::{
     SummaryBasis, SummaryEvent, SummaryOutcome, SummaryService, SummaryWindow,
 };
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
+use crate::app::artboard::gallery::card::state::LoungeCardState;
+use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
 use crate::app::common::{
@@ -880,8 +882,9 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
-    gallery_cards_rx: watch::Receiver<Arc<HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>>>,
-    gallery_cards: Arc<HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>>,
+    /// Hung Artboard pieces' #lounge cards and the piece Enter on one
+    /// opens (`artboard/gallery/card/`): those messages draw as the piece.
+    pub(crate) gallery_cards: LoungeCardState,
     /// The AFK line per room: the instant this session's human went quiet
     /// while that room was on screen. The `new messages` divider draws
     /// against it and `/history` opens there. It is one of two marks, and
@@ -1297,7 +1300,7 @@ pub(crate) struct ChatServices {
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
     pub cyberspace: cyberspace::svc::CyberspaceService,
-    pub gallery: crate::app::artboard::gallery::svc::GalleryService,
+    pub gallery: GalleryService,
 }
 
 impl Drop for ChatState {
@@ -1333,8 +1336,6 @@ impl ChatState {
             cyberspace: cyberspace_service,
             gallery: gallery_service,
         } = services;
-        let gallery_cards_rx = gallery_service.subscribe_lounge_cards();
-        let gallery_cards = gallery_cards_rx.borrow().clone();
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
@@ -1533,8 +1534,7 @@ impl ChatState {
             terminal_image_requested: HashSet::new(),
             terminal_image_failed: HashSet::new(),
             last_image_upload_at: None,
-            gallery_cards_rx,
-            gallery_cards,
+            gallery_cards: LoungeCardState::new(gallery_service, user_id),
         }
     }
 
@@ -2629,9 +2629,6 @@ impl ChatState {
         let Some(message_id) = self.selected_message_in_room(room_id).map(|m| m.id) else {
             return false;
         };
-        if self.gallery_card(message_id).is_some() {
-            return false;
-        }
 
         self.overlay = Some(Overlay::dismissible(
             "Reactions",
@@ -2768,7 +2765,8 @@ impl ChatState {
         if self.news.lounge_card(selected_id).is_some() {
             return Some(Banner::error("A story's card can't be edited."));
         }
-        if self.gallery_card(selected_id).is_some() {
+        // The same for a hung piece's card: it is drawn from the piece.
+        if self.gallery_cards.card(selected_id).is_some() {
             return Some(Banner::error("A piece's card can't be edited."));
         }
         self.edited_message_id = Some(selected_id);
@@ -3126,13 +3124,20 @@ impl ChatState {
         self.open_reader_for_article(article_id)
     }
 
-    /// The piece a #lounge message is the card of, if it is one.
-    pub(crate) fn selected_gallery_card_in_room(
-        &self,
-        room_id: Uuid,
-    ) -> Option<crate::app::artboard::gallery::svc::GalleryPiece> {
+    /// The selected message in `room_id` when it is a hung Artboard piece's
+    /// #lounge card: what Enter or a click on it opens
+    /// (`artboard/gallery/card/input.rs`).
+    pub(crate) fn selected_gallery_card_in_room(&self, room_id: Uuid) -> Option<Uuid> {
         self.selected_message_in_room(room_id)
-            .and_then(|message| self.gallery_card(message.id).cloned())
+            .map(|message| message.id)
+            .filter(|message_id| self.gallery_cards.card(*message_id).is_some())
+    }
+
+    /// Open the piece behind the #lounge card `message_id` over the chat.
+    /// False when the message is no card.
+    pub(crate) fn open_gallery_card(&mut self, message_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        self.gallery_cards.open(message_id)
     }
 
     /// The selected message in `room_id` when its preview is a YouTube
@@ -3143,9 +3148,7 @@ impl ChatState {
         let message = self.selected_message_in_room(room_id)?;
         let video_id = match inline_preview_source_in_body(&self.shown_body(message)) {
             Some(InlinePreviewSource::Video { video_id }) => video_id,
-            Some(InlinePreviewSource::Image(_) | InlinePreviewSource::GalleryPiece(_)) | None => {
-                return None;
-            }
+            Some(InlinePreviewSource::Image(_)) | None => return None,
         };
         // The oEmbed title rides with the thumbnail; until it lands, or
         // when YouTube would not name the video, the player says so plainly.
@@ -3169,14 +3172,7 @@ impl ChatState {
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some((message_id, url)) = self.selected_message_in_room(room_id).and_then(|message| {
-            if self.gallery_cards.contains_key(&message.id) {
-                let url = inline_image_url_in_body(&message.body)
-                    .or_else(|| body_links(&message.body).next().map(str::to_string))
-                    .unwrap_or_default();
-                Some((message.id, url))
-            } else {
-                inline_image_url_in_body(&self.shown_body(message)).map(|url| (message.id, url))
-            }
+            inline_image_url_in_body(&self.shown_body(message)).map(|url| (message.id, url))
         }) else {
             return false;
         };
@@ -5477,23 +5473,22 @@ impl ChatState {
             }
         }
     }
-    /// Returns true when any inline image completed; chat renders from
-    /// this cache, so a completion must count as a render-visible change.
-    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) -> bool {
+
+    pub(crate) fn poll_inline_images(&mut self, settings: InlineImageRenderSettings) {
         if settings != self.inline_image_render_settings {
             self.clear_inline_image_previews();
             self.inline_image_render_settings = settings;
         }
 
         let Some(rx) = self.inline_image_rx.as_mut() else {
-            return false;
+            return;
         };
         let now = Instant::now();
         let mut completed = Vec::new();
         while let Ok(result) = rx.try_recv() {
             completed.push(result);
         }
-        let mut any_completed = false;
+
         let mut received_ids = Vec::new();
         for (msg_id, completed_settings, result) in completed {
             if completed_settings != settings {
@@ -5505,7 +5500,6 @@ impl ChatState {
                     self.inline_image_failures.remove(&msg_id);
                     self.inline_image_cache.insert(msg_id, lines);
                     self.context_epoch += 1;
-                    any_completed = true;
                 }
                 Err(error) => {
                     let attempts = self
@@ -5538,20 +5532,19 @@ impl ChatState {
 
         // Request missing images for currently visible room
         let Some(room_id) = self.visible_room_id else {
-            return any_completed;
+            return;
         };
         let Some(tx) = self.inline_image_tx.clone() else {
-            return any_completed;
+            return;
         };
 
         let messages = self.messages_for_room(room_id);
         if messages.is_empty() {
-            return any_completed;
+            return;
         }
 
         let requests = inline_image_request_candidates(
             messages,
-            &self.gallery_cards,
             &self.spoilers_revealed,
             &self.inline_image_requested,
             &self.inline_image_cache,
@@ -5570,7 +5563,6 @@ impl ChatState {
                 let _ = tx_clone.send((msg_id, settings, result));
             });
         }
-        any_completed
     }
 
     /// Returns true when any fetch completed; the image modal renders from
@@ -5652,26 +5644,14 @@ impl ChatState {
         };
 
         let url = modal.url.clone();
-        let gallery_canvas = self.gallery_cards.get(&msg_id).map(|p| Arc::new(p.canvas.clone()));
         self.terminal_image_requested.insert(msg_id);
         self.track_inline_image_id(msg_id);
         tokio::spawn(async move {
-            let result = if let Some(canvas) = gallery_canvas {
-                tokio::task::spawn_blocking(move || {
-                    crate::app::artboard::gallery::raster::render_canvas_terminal_image(
-                        &canvas, max_cols, max_rows, protocol,
-                    )
-                })
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()))
-            } else {
-                crate::app::files::terminal_image::fetch_terminal_image(
-                    url, max_cols, max_rows, protocol,
-                )
-                .await
-                .map_err(|e| e.to_string())
-            };
+            let result = crate::app::files::terminal_image::fetch_terminal_image(
+                url, max_cols, max_rows, protocol,
+            )
+            .await
+            .map_err(|e| e.to_string());
             let _ = tx.send((msg_id, result));
         });
     }
@@ -5735,7 +5715,7 @@ impl ChatState {
             || !self.translation_rx.is_empty()
             || !self.summary_rx.is_empty();
         self.drain_username_directory();
-        let mut changed = self.drain_snapshot() || changed;
+        let changed = self.drain_snapshot() || changed;
         let banner = self.drain_events();
         let translation_banner = self.drain_translation_events();
         let (summary_banner, summary_overlay_promoted) = self.drain_summary_events();
@@ -5746,11 +5726,15 @@ impl ChatState {
         if news_tick.cards_changed {
             self.context_epoch += 1;
         }
-        if self.gallery_cards_rx.has_changed().unwrap_or(false) {
-            self.gallery_cards = self.gallery_cards_rx.borrow_and_update().clone();
+        // The same for a hung piece's card, drawn from the piece.
+        let cards_tick = self.gallery_cards.tick();
+        if cards_tick.cards_changed {
             self.context_epoch += 1;
-            changed = true;
         }
+        let cards_banner = match cards_tick.taken_down {
+            true => Some(Banner::error("That piece was taken down.")),
+            false => None,
+        };
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();
@@ -5824,7 +5808,8 @@ impl ChatState {
             .or(notif_tick.banner)
             .or(showcase_tick.banner)
             .or(work_tick.banner)
-            .or(cyberspace_tick.banner);
+            .or(cyberspace_tick.banner)
+            .or(cards_banner);
         ChatTick {
             banner,
             changed: changed
@@ -5834,7 +5819,9 @@ impl ChatState {
                 || notif_tick.changed
                 || showcase_tick.changed
                 || work_tick.changed
-                || cyberspace_tick.changed,
+                || cyberspace_tick.changed
+                || cards_tick.cards_changed
+                || cards_tick.modal_changed,
         }
     }
 
@@ -6472,19 +6459,6 @@ impl ChatState {
         self.sync_selection();
         changed |= self.selected_room_id != selected_before;
         changed || context_changed
-    }
-
-    pub(crate) fn gallery_cards(
-        &self,
-    ) -> &HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece> {
-        &self.gallery_cards
-    }
-
-    pub(crate) fn gallery_card(
-        &self,
-        message_id: Uuid,
-    ) -> Option<&crate::app::artboard::gallery::svc::GalleryPiece> {
-        self.gallery_cards.get(&message_id)
     }
 
     fn drain_username_directory(&mut self) {
@@ -7814,36 +7788,15 @@ async fn fetch_inline_preview(
     source: InlinePreviewSource,
     settings: InlineImageRenderSettings,
 ) -> anyhow::Result<InlinePreview> {
+    let picture = crate::app::files::inline_image::fetch_and_render_image(
+        source.fetch_url(),
+        INLINE_IMAGE_MAX_WIDTH,
+        INLINE_IMAGE_MAX_ROWS,
+        settings,
+    );
     match source {
-        InlinePreviewSource::GalleryPiece(canvas) => {
-            let preview = tokio::task::spawn_blocking(move || {
-                crate::app::artboard::gallery::raster::render_canvas_inline_preview(
-                    &canvas,
-                    INLINE_IMAGE_MAX_WIDTH,
-                    INLINE_IMAGE_MAX_ROWS,
-                    settings,
-                )
-            })
-            .await??;
-            Ok(InlinePreview::Image(preview))
-        }
-        InlinePreviewSource::Image(url) => {
-            let picture = crate::app::files::inline_image::fetch_and_render_image(
-                url,
-                INLINE_IMAGE_MAX_WIDTH,
-                INLINE_IMAGE_MAX_ROWS,
-                settings,
-            )
-            .await?;
-            Ok(InlinePreview::Image(picture))
-        }
+        InlinePreviewSource::Image(_) => Ok(InlinePreview::Image(picture.await?)),
         InlinePreviewSource::Video { video_id } => {
-            let picture = crate::app::files::inline_image::fetch_and_render_image(
-                crate::app::audio::thumbnail::thumbnail_url(&video_id),
-                INLINE_IMAGE_MAX_WIDTH,
-                INLINE_IMAGE_MAX_ROWS,
-                settings,
-            );
             let (picture, title) = tokio::join!(
                 picture,
                 crate::app::audio::youtube::fetch_oembed_title(&video_id)
@@ -7864,29 +7817,23 @@ async fn fetch_inline_preview(
 }
 
 /// What an inline preview is drawn from.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InlinePreviewSource {
     /// An image link: the picture itself.
     Image(String),
     /// A YouTube video link: its thumbnail, with the watch hint under it.
     /// Enter or a click opens the watch player (`app/video/`).
     Video { video_id: String },
-    /// A hung Artboard gallery piece: rendered from its in-memory Canvas.
-    GalleryPiece(Arc<dartboard_core::Canvas>),
 }
 
-impl PartialEq for InlinePreviewSource {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Image(a), Self::Image(b)) => a == b,
-            (Self::Video { video_id: a }, Self::Video { video_id: b }) => a == b,
-            (Self::GalleryPiece(a), Self::GalleryPiece(b)) => Arc::ptr_eq(a, b) || **a == **b,
-            _ => false,
+impl InlinePreviewSource {
+    fn fetch_url(&self) -> String {
+        match self {
+            Self::Image(url) => url.clone(),
+            Self::Video { video_id } => crate::app::audio::thumbnail::thumbnail_url(video_id),
         }
     }
 }
-
-impl Eq for InlinePreviewSource {}
 
 /// A message's inline preview, if it gets one: an image link first, else
 /// a YouTube video link's thumbnail. A reply's quote line is its parent's
@@ -7906,7 +7853,6 @@ pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewS
 
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
-    gallery_cards: &HashMap<Uuid, crate::app::artboard::gallery::svc::GalleryPiece>,
     spoilers_revealed: &HashSet<Uuid>,
     requested: &HashSet<Uuid>,
     cached: &HashMap<Uuid, InlinePreview>,
@@ -7921,16 +7867,6 @@ fn inline_image_request_candidates(
         if let Some(failure) = failures.get(&msg.id)
             && (failure.attempts >= INLINE_IMAGE_MAX_FAILURES || now < failure.next_retry_at)
         {
-            continue;
-        }
-        if let Some(piece) = gallery_cards.get(&msg.id) {
-            requests.push((
-                msg.id,
-                InlinePreviewSource::GalleryPiece(Arc::new(piece.canvas.clone())),
-            ));
-            if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
-                break;
-            }
             continue;
         }
         // A message still hiding a spoiler previews nothing, not even a link

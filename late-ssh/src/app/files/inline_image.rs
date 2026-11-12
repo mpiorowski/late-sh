@@ -143,16 +143,6 @@ pub(crate) fn render_rgba_preview(
     cells_to_lines(canvas.cells(), cols as usize, rows as usize)
 }
 
-pub(crate) fn render_rgba_image_preview(
-    rgba_img: &RgbaImage,
-    max_width: u32,
-    max_height: u32,
-    settings: InlineImageRenderSettings,
-) -> Result<InlineImagePreview> {
-    let (cols, rows) = preview_geometry(rgba_img.width(), rgba_img.height(), max_width, max_height);
-    render_rgba_preview(rgba_img, cols, rows, settings)
-}
-
 fn preview_geometry(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
     let max_width = max_width.max(1);
     let max_height = max_height.max(1);

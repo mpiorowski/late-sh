@@ -18,9 +18,17 @@
 //! door shows it all day, or the coffee cup when there is none. Only users
 //! who chose Always View on the Artboard content disclaimer see the piece;
 //! everyone else, newcomers first, gets the cup.
+//!
+//! The #lounge cards (a hung piece's line in chat, drawn as the piece) are
+//! process-wide too: one `watch` of the newest pieces that hold a card, by
+//! chat message id, re-read on `artboard_pieces_changed` (migration 285)
+//! so every replica follows a card posted, a piece taken down and applause
+//! from anywhere. Hanging posts the card; a take-down deletes it. The piece
+//! modal over #lounge (`card/`) reads and applauds through its own
+//! channel (`CardResult`).
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -28,27 +36,17 @@ use chrono::{DateTime, NaiveDate, Utc};
 use dartboard_core::Canvas;
 use late_core::db::Db;
 use late_core::models::artboard_piece::{
-    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
-    TakeDownOutcome,
+    ApplauseOutcome, ArtboardPiece, GALLERY_LOUNGE_CARD_LIMIT, HangOutcome, HangParams,
+    ListingCounts, PieceListing, TakeDownOutcome,
 };
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
-use crate::app::chat::svc::{ChatService, SendError, Wording};
-use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 use crate::app::artboard::provenance::ArtboardProvenance;
+use crate::app::chat::svc::{ChatService, SendError, Wording};
 use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult};
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
-
-/// How a piece's card in #lounge went (`GalleryService::post_lounge_card`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GalleryCardOutcome {
-    Posted,
-    Refused,
-    PostFailed,
-    LinkFailed,
-    PieceGone,
-}
 use super::frame::{Credit, FramedPiece};
 
 /// How often the splash wall is re-read. It changes once a day, at UTC
@@ -210,78 +208,92 @@ pub enum GalleryResult {
     },
 }
 
+/// How a hung piece's card in #lounge went (`GalleryService::post_lounge_card`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GalleryCardOutcome {
+    Posted,
+    /// The room's rules turned the line away (a ban, slow mode).
+    Refused,
+    PostFailed,
+    /// Posted, but the piece could not be pointed at it: the line stays a
+    /// plain message.
+    LinkFailed,
+    /// The piece was taken down before its card could be linked; the card
+    /// is withdrawn.
+    PieceGone,
+}
+
+/// What the piece modal over #lounge hears back (`card/state.rs`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CardResult {
+    /// The piece as this viewer sees it, their own applause marked. `None`
+    /// when it was taken down after its card was drawn.
+    Viewed(Option<Box<GalleryPiece>>),
+    /// The read failed; the modal keeps the card's own copy of the piece.
+    ViewFailed,
+    Applause(ApplauseOutcome),
+    ApplauseFailed(&'static str),
+}
+
+/// The #lounge cards by chat message id, as every session draws them.
+pub type LoungeCards = Arc<HashMap<Uuid, GalleryPiece>>;
+
+const APPLAUSE_FAILED: &str = "Your applause did not land. Try again.";
+
 #[derive(Clone)]
 pub struct GalleryService {
     db: Option<Db>,
-    chat_service: Option<ChatService>,
+    /// Where a hung piece's card is posted and withdrawn. `Some` exactly
+    /// when `db` is.
+    chat: Option<ChatService>,
+    /// The site a card links its piece on (`/gallery/pieces/{id}`).
     web_url: String,
     splash_tx: Arc<watch::Sender<Option<SplashPiece>>>,
     splash_rx: watch::Receiver<Option<SplashPiece>>,
-    lounge_cards_tx: Arc<watch::Sender<Arc<HashMap<Uuid, GalleryPiece>>>>,
-    lounge_cards_rx: watch::Receiver<Arc<HashMap<Uuid, GalleryPiece>>>,
-    changed_tx: Arc<watch::Sender<u64>>,
-    changed_rx: watch::Receiver<u64>,
+    lounge_cards_tx: Arc<watch::Sender<LoungeCards>>,
+    lounge_cards_rx: watch::Receiver<LoungeCards>,
 }
 
 impl GalleryService {
     pub const CHANNELS: &'static [Channel] = &[Channel::ArtboardPiecesChanged];
 
-    pub fn new(db: Db) -> Self {
+    pub fn new(db: Db, chat: ChatService, web_url: String) -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
-        let (lounge_cards_tx, lounge_cards_rx) = watch::channel(Arc::new(HashMap::new()));
-        let (changed_tx, changed_rx) = watch::channel(0);
+        let (lounge_cards_tx, lounge_cards_rx) = watch::channel(LoungeCards::default());
         Self {
             db: Some(db),
-            chat_service: None,
-            web_url: String::new(),
+            chat: Some(chat),
+            web_url,
             splash_tx: Arc::new(splash_tx),
             splash_rx,
             lounge_cards_tx: Arc::new(lounge_cards_tx),
             lounge_cards_rx,
-            changed_tx: Arc::new(changed_tx),
-            changed_rx,
         }
     }
 
-
-    /// Attach chat service and web URL for posting and deleting #lounge cards.
-    pub fn with_lounge_cards(mut self, chat_service: ChatService, web_url: String) -> Self {
-        self.chat_service = Some(chat_service);
-        self.web_url = web_url;
-        self
-    }
-
-    /// No database: every listing is empty, nothing hangs.
+    /// No database: every listing is empty, nothing hangs, no card is
+    /// posted.
     pub fn disabled() -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
-        let (lounge_cards_tx, lounge_cards_rx) = watch::channel(Arc::new(HashMap::new()));
-        let (changed_tx, changed_rx) = watch::channel(0);
+        let (lounge_cards_tx, lounge_cards_rx) = watch::channel(LoungeCards::default());
         Self {
             db: None,
-            chat_service: None,
+            chat: None,
             web_url: String::new(),
             splash_tx: Arc::new(splash_tx),
             splash_rx,
             lounge_cards_tx: Arc::new(lounge_cards_tx),
             lounge_cards_rx,
-            changed_tx: Arc::new(changed_tx),
-            changed_rx,
         }
     }
 
-
-    pub fn subscribe_lounge_cards(&self) -> watch::Receiver<Arc<HashMap<Uuid, GalleryPiece>>> {
+    /// This replica's #lounge cards, replaced whole on every change.
+    pub fn subscribe_lounge_cards(&self) -> watch::Receiver<LoungeCards> {
         self.lounge_cards_rx.clone()
     }
 
-    pub fn subscribe_changed(&self) -> watch::Receiver<u64> {
-        self.changed_rx.clone()
-    }
-
-    pub(crate) fn notify_changed(&self) {
-        let _ = self.changed_tx.send_modify(|rev| *rev = rev.wrapping_add(1));
-    }
-
+    /// Keep this replica's cards current: re-read them on every
+    /// `artboard_pieces_changed` and whenever the listener (re)connects.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -291,7 +303,6 @@ impl GalleryService {
             while let Some(signal) = signals.recv().await {
                 match signal {
                     Signal::Resync | Signal::Notify { .. } => {
-                        service.notify_changed();
                         read_until_ok(Refresh::GalleryCards, || service.refresh_lounge_cards())
                             .await;
                     }
@@ -300,76 +311,59 @@ impl GalleryService {
         })
     }
 
+    /// Read the newest cards and publish them. A piece that will not
+    /// decode fails the whole read, so the worker logs it and retries
+    /// instead of publishing a set with a card missing.
     pub async fn refresh_lounge_cards(&self) -> Result<()> {
         let Some(db) = &self.db else {
             return Ok(());
         };
         let client = db.get().await?;
-        let rows = ArtboardPiece::list_lounge_cards(
-            &client,
-            late_core::models::artboard_piece::GALLERY_LOUNGE_CARD_LIMIT,
-        )
-        .await?;
-        let mut cards = HashMap::new();
+        let rows = ArtboardPiece::list_lounge_cards(&client, GALLERY_LOUNGE_CARD_LIMIT).await?;
+        let mut cards = HashMap::with_capacity(rows.len());
         for row in rows {
-            if let (Some(message_id), Ok(piece)) =
-                (row.lounge_message_id, GalleryPiece::decode(row))
-            {
-                cards.insert(message_id, piece);
-            }
+            let message_id = row
+                .lounge_message_id
+                .expect("list_lounge_cards returns only pieces with a card");
+            cards.insert(message_id, GalleryPiece::decode(row)?);
         }
         let _ = self.lounge_cards_tx.send(Arc::new(cards));
         Ok(())
     }
 
-    pub(crate) async fn post_lounge_card(&self, piece: &GalleryPiece) {
-        let Some(chat_service) = &self.chat_service else {
-            return;
-        };
-        let title = piece
-            .title
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let url = if self.web_url.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "{}/gallery/pieces/{}",
-                self.web_url.trim_end_matches('/'),
-                piece.id
-            )
-        };
-        let body = if url.is_empty() {
-            format!("🎨 \"{title}\"")
-        } else {
-            format!("🎨 \"{title}\" {url}")
-        };
-        let posted = chat_service
-            .send_lounge_message_returning(piece.user_id, body, true, Wording::NewsCard)
+    /// Post `piece`'s card in #lounge, in its hanger's name, and point the
+    /// piece at it. Every way this ends is counted
+    /// (`late_ssh_gallery_cards_total`); the piece hangs either way.
+    async fn post_lounge_card(&self, db: &Db, chat: &ChatService, piece: &GalleryPiece) {
+        let title = piece.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let body = format!(
+            "🎨 \"{title}\" {}/gallery/pieces/{}",
+            self.web_url.trim_end_matches('/'),
+            piece.id
+        );
+        let posted = chat
+            .send_lounge_message_returning(piece.user_id, body, true, Wording::HouseCard)
             .await;
         let message = match posted {
             Ok(Some(message)) => message,
-            Ok(None) => unreachable!("a card's line always has its link or title"),
+            Ok(None) => unreachable!("a card's line is never empty"),
             Err(SendError::Refused(refusal)) => {
                 metrics::record_gallery_card(GalleryCardOutcome::Refused);
-                tracing::info!(refusal = ?refusal, "gallery card refused by room rules");
+                tracing::info!(refusal = ?refusal, piece_id = %piece.id, "gallery card refused by room rules");
                 return;
             }
-            Err(SendError::Failed(e)) => {
+            Err(SendError::Failed(error)) => {
                 metrics::record_gallery_card(GalleryCardOutcome::PostFailed);
                 late_core::error_span!(
                     "gallery_card_post_failed",
-                    error = ?e,
+                    error = ?error,
+                    piece_id = %piece.id,
                     "failed to post the gallery card"
                 );
                 return;
             }
         };
         let linked = async {
-            let Some(db) = &self.db else {
-                anyhow::bail!("no db");
-            };
             let client = db.get().await?;
             ArtboardPiece::link_lounge_message(&client, piece.user_id, piece.id, message.id).await
         }
@@ -377,27 +371,27 @@ impl GalleryService {
         match linked {
             Ok(0) => {
                 metrics::record_gallery_card(GalleryCardOutcome::PieceGone);
-                if let Err(e) = chat_service
-                    .delete_news_card(piece.user_id, message.id)
-                    .await
-                {
-                    late_core::error_span!(
-                        "gallery_card_withdraw_failed",
-                        error = ?e,
-                        message_id = %message.id,
-                        "failed to withdraw the card of a taken-down piece"
-                    );
+                match chat.delete_house_card(piece.user_id, message.id).await {
+                    Ok(()) => {}
+                    Err(error) => {
+                        late_core::error_span!(
+                            "gallery_card_withdraw_failed",
+                            error = ?error,
+                            message_id = %message.id,
+                            "failed to withdraw the card of a taken-down piece"
+                        );
+                    }
                 }
             }
             Ok(_) => {
                 metrics::record_gallery_card(GalleryCardOutcome::Posted);
-                tracing::info!(message_id = %message.id, "gallery card posted");
+                tracing::info!(message_id = %message.id, piece_id = %piece.id, "gallery card posted");
             }
-            Err(e) => {
+            Err(error) => {
                 metrics::record_gallery_card(GalleryCardOutcome::LinkFailed);
                 late_core::error_span!(
                     "gallery_card_link_failed",
-                    error = ?e,
+                    error = ?error,
                     message_id = %message.id,
                     "failed to point the piece at its card"
                 );
@@ -617,7 +611,7 @@ impl GalleryService {
         framed: FramedPiece,
         tx: mpsc::UnboundedSender<GalleryResult>,
     ) {
-        let Some(db) = self.db.clone() else {
+        let (Some(db), Some(chat)) = (self.db.clone(), self.chat.clone()) else {
             let _ = tx.send(GalleryResult::HangRefused(HangRefusal::Disabled));
             return;
         };
@@ -652,10 +646,11 @@ impl GalleryService {
                             height = piece.height,
                             "artboard piece hung"
                         );
+                        // Its own task: the hanger hears `Hung` at once, the
+                        // card follows.
                         let card_piece = piece.clone();
-                        let card_service = service.clone();
                         tokio::spawn(async move {
-                            card_service.post_lounge_card(&card_piece).await;
+                            service.post_lounge_card(&db, &chat, &card_piece).await;
                         });
                         GalleryResult::Hung(Box::new(piece))
                     }
@@ -693,6 +688,7 @@ impl GalleryService {
         });
     }
 
+    /// Applause from the gallery page, answered on its results channel.
     pub fn applaud_task(
         &self,
         piece_id: Uuid,
@@ -703,55 +699,71 @@ impl GalleryService {
             return;
         };
         tokio::spawn(async move {
-            let result = async {
-                let client = db.get().await?;
-                ArtboardPiece::toggle_applause(&client, piece_id, user_id).await
-            }
-            .await;
-            let msg = match result {
-                Ok(outcome) => {
-                    metrics::record_gallery_applause(match outcome {
-                        ApplauseOutcome::Applauded(_) => GalleryApplauseResult::Applauded,
-                        ApplauseOutcome::Withdrawn(_) => GalleryApplauseResult::Withdrawn,
-                        ApplauseOutcome::OwnPiece => GalleryApplauseResult::OwnPiece,
-                        ApplauseOutcome::NotFound => GalleryApplauseResult::NotFound,
-                        ApplauseOutcome::Closed => GalleryApplauseResult::Closed,
-                    });
-                    GalleryResult::Applause { piece_id, outcome }
-                }
-                Err(error) => {
-                    metrics::record_gallery_applause(GalleryApplauseResult::Failed);
-                    late_core::error_span!(
-                        "artboard_gallery_applause",
-                        error = ?error,
-                        %user_id,
-                        %piece_id,
-                        "artboard applause could not be recorded"
-                    );
-                    GalleryResult::ApplauseFailed {
-                        piece_id,
-                        error: "Your applause did not land. Try again.".to_string(),
-                    }
-                }
+            let msg = match applaud(&db, piece_id, user_id).await {
+                Ok(outcome) => GalleryResult::Applause { piece_id, outcome },
+                Err(error) => GalleryResult::ApplauseFailed {
+                    piece_id,
+                    error: error.to_string(),
+                },
             };
             let _ = tx.send(msg);
         });
     }
 
-    pub async fn toggle_applause(&self, piece_id: Uuid, user_id: Uuid) -> Result<ApplauseOutcome> {
-        let Some(db) = &self.db else {
-            anyhow::bail!("gallery is disabled");
+    /// Applause from the piece modal over #lounge, answered on its own
+    /// channel. The same toggle, metric and failure log as the page's.
+    pub fn applaud_card_task(
+        &self,
+        piece_id: Uuid,
+        user_id: Uuid,
+        tx: mpsc::UnboundedSender<CardResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
         };
-        let client = db.get().await?;
-        let outcome = ArtboardPiece::toggle_applause(&client, piece_id, user_id).await?;
-        metrics::record_gallery_applause(match outcome {
-            ApplauseOutcome::Applauded(_) => GalleryApplauseResult::Applauded,
-            ApplauseOutcome::Withdrawn(_) => GalleryApplauseResult::Withdrawn,
-            ApplauseOutcome::OwnPiece => GalleryApplauseResult::OwnPiece,
-            ApplauseOutcome::NotFound => GalleryApplauseResult::NotFound,
-            ApplauseOutcome::Closed => GalleryApplauseResult::Closed,
+        tokio::spawn(async move {
+            let msg = match applaud(&db, piece_id, user_id).await {
+                Ok(outcome) => CardResult::Applause(outcome),
+                Err(error) => CardResult::ApplauseFailed(error),
+            };
+            let _ = tx.send(msg);
         });
-        Ok(outcome)
+    }
+
+    /// The piece behind a #lounge card as `viewer_id` sees it. The cards
+    /// are one set for everyone, so the modal asks once who is looking to
+    /// learn whether their own applause is on it.
+    pub fn view_card_task(
+        &self,
+        piece_id: Uuid,
+        viewer_id: Uuid,
+        tx: mpsc::UnboundedSender<CardResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                let row = ArtboardPiece::find(&client, viewer_id, piece_id).await?;
+                row.map(GalleryPiece::decode).transpose()
+            }
+            .await;
+            let msg = match result {
+                Ok(piece) => CardResult::Viewed(piece.map(Box::new)),
+                Err(error) => {
+                    late_core::error_span!(
+                        "artboard_gallery_card_view",
+                        error = ?error,
+                        %viewer_id,
+                        %piece_id,
+                        "artboard piece could not be read for its lounge card"
+                    );
+                    CardResult::ViewFailed
+                }
+            };
+            let _ = tx.send(msg);
+        });
     }
 
     /// The hanger takes their own piece down. Owner and month are checked
@@ -762,10 +774,9 @@ impl GalleryService {
         user_id: Uuid,
         tx: mpsc::UnboundedSender<GalleryResult>,
     ) {
-        let Some(db) = self.db.clone() else {
+        let (Some(db), Some(chat)) = (self.db.clone(), self.chat.clone()) else {
             return;
         };
-        let chat_service = self.chat_service.clone();
         tokio::spawn(async move {
             let result = async {
                 let client = db.get().await?;
@@ -780,21 +791,14 @@ impl GalleryService {
                         TakeDownOutcome::NotYours => GalleryTakeDownResult::NotYours,
                         TakeDownOutcome::Closed => GalleryTakeDownResult::Closed,
                     });
-                    if let TakeDownOutcome::TakenDown { lounge_message_id } = outcome {
-                        tracing::info!(%user_id, %piece_id, "artboard gallery piece taken down by its hanger");
-                        if let (Some(chat), Some(message_id)) = (chat_service, lounge_message_id) {
-                            tokio::spawn(async move {
-                                if let Err(e) = chat.delete_news_card(user_id, message_id).await {
-                                    late_core::error_span!(
-                                        "gallery_card_delete_failed",
-                                        error = ?e,
-                                        %user_id,
-                                        %message_id,
-                                        "failed to delete the gallery card"
-                                    );
-                                }
-                            });
+                    match outcome {
+                        TakeDownOutcome::TakenDown { lounge_message_id } => {
+                            tracing::info!(%user_id, %piece_id, "artboard gallery piece taken down by its hanger");
+                            withdraw_card(&chat, user_id, piece_id, lounge_message_id).await;
                         }
+                        TakeDownOutcome::NotFound
+                        | TakeDownOutcome::NotYours
+                        | TakeDownOutcome::Closed => {}
                     }
                     GalleryResult::TakeDown { piece_id, outcome }
                 }
@@ -815,6 +819,67 @@ impl GalleryService {
             };
             let _ = tx.send(msg);
         });
+    }
+}
+
+/// One hand of applause given or taken back, with its metric and, when
+/// the database would not have it, its log. Both doors applaud through
+/// here: the gallery page and the piece modal over #lounge.
+async fn applaud(db: &Db, piece_id: Uuid, user_id: Uuid) -> Result<ApplauseOutcome, &'static str> {
+    let result = async {
+        let client = db.get().await?;
+        ArtboardPiece::toggle_applause(&client, piece_id, user_id).await
+    }
+    .await;
+    match result {
+        Ok(outcome) => {
+            metrics::record_gallery_applause(match outcome {
+                ApplauseOutcome::Applauded(_) => GalleryApplauseResult::Applauded,
+                ApplauseOutcome::Withdrawn(_) => GalleryApplauseResult::Withdrawn,
+                ApplauseOutcome::OwnPiece => GalleryApplauseResult::OwnPiece,
+                ApplauseOutcome::NotFound => GalleryApplauseResult::NotFound,
+                ApplauseOutcome::Closed => GalleryApplauseResult::Closed,
+            });
+            Ok(outcome)
+        }
+        Err(error) => {
+            metrics::record_gallery_applause(GalleryApplauseResult::Failed);
+            late_core::error_span!(
+                "artboard_gallery_applause",
+                error = ?error,
+                %user_id,
+                %piece_id,
+                "artboard applause could not be recorded"
+            );
+            Err(APPLAUSE_FAILED)
+        }
+    }
+}
+
+/// Delete the #lounge card of a piece its hanger just took down. The
+/// piece is down either way; a card that would not go is logged and stays
+/// as its plain line for its author or a mod to delete.
+async fn withdraw_card(
+    chat: &ChatService,
+    user_id: Uuid,
+    piece_id: Uuid,
+    lounge_message_id: Option<Uuid>,
+) {
+    let Some(message_id) = lounge_message_id else {
+        return;
+    };
+    match chat.delete_house_card(user_id, message_id).await {
+        Ok(()) => {}
+        Err(error) => {
+            late_core::error_span!(
+                "gallery_card_delete_failed",
+                error = ?error,
+                %user_id,
+                %piece_id,
+                %message_id,
+                "failed to delete the card of a taken-down gallery piece"
+            );
+        }
     }
 }
 

@@ -18,7 +18,6 @@ irc-proto = { path = "../vendor/irc-proto" }
 
 # Core Utils
 anyhow = { workspace = true }
-ab_glyph.workspace = true
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 humantime = { workspace = true }

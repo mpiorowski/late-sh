@@ -711,17 +711,6 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
 
 fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     match event {
-        ParsedInput::Byte(b'o' | b'O') | ParsedInput::Char('o' | 'O') => {
-            if let Some(piece) = app
-                .chat
-                .image_modal()
-                .and_then(|m| app.chat.gallery_card(m.message_id).cloned())
-            {
-                close_image_modal(app);
-                app.open_gallery_piece(piece);
-                return;
-            }
-        }
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             close_image_modal(app);
         }
@@ -907,6 +896,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.chat.has_reader() {
         chat::news::reader::input::handle_input(app, &event);
+        return;
+    }
+
+    if app.chat.gallery_cards.modal().is_some() {
+        crate::app::artboard::gallery::card::input::handle_input(app, &event);
         return;
     }
 
@@ -2019,6 +2013,10 @@ fn dispatch_escape(app: &mut App) {
         app.chat.close_reader();
         return;
     }
+    if app.chat.gallery_cards.modal().is_some() {
+        app.chat.gallery_cards.close();
+        return;
+    }
     if app.chat.has_image_modal() {
         close_image_modal(app);
         return;
@@ -3025,13 +3023,8 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
-            if let Some(piece) = app.chat.selected_gallery_card_in_room(room_id) {
-                if app.artboard_disclaimer_visible_for_chat() {
-                    app.open_gallery_piece(piece);
-                } else {
-                    app.chat.open_selected_image_modal_in_room(room_id);
-                }
-            } else if !app.chat.open_selected_card_in_room(room_id)
+            if !app.chat.open_selected_card_in_room(room_id)
+                && !crate::app::artboard::gallery::card::input::open_selected_card(app, room_id)
                 && !app.chat.open_selected_image_modal_in_room(room_id)
             {
                 crate::app::chat::input::watch_selected_video(app, room_id);
@@ -3952,11 +3945,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
-                && !(ctx.screen == Screen::Dashboard
-                    && app
-                        .chat
-                        .selected_gallery_card_in_room(app.chat.selected_room_id.unwrap_or_default())
-                        .is_some())
                 && app.home_strip_hosted() =>
         {
             crate::app::live::input::open_from_key(app)
@@ -4171,10 +4159,12 @@ pub(crate) fn close_icon_picker(app: &mut App) {
     app.icon_picker_target = IconPickerTarget::Composer;
 }
 
-/// The News reader and the watch player (`app/video/`), for a page change
-/// or another modal opening. A closing player keeps its position.
+/// The News reader, an open Artboard piece and the watch player
+/// (`app/video/`), for a page change or another modal opening. A closing
+/// player keeps its position.
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
+    app.chat.gallery_cards.close();
     crate::app::video::svc::close(app);
 }
 
@@ -4182,9 +4172,6 @@ pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {
     let Some(message_id) = app.chat.selected_message_id_in_room(room_id) else {
         return false;
     };
-    if app.chat.selected_gallery_card_in_room(room_id).is_some() {
-        return false;
-    }
     app.chat.cancel_reaction_leader();
     open_icon_picker(
         app,

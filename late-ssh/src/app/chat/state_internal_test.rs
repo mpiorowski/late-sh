@@ -407,7 +407,6 @@ fn a_spoiled_link_is_fetched_for_a_preview_only_once_revealed() {
     let candidates = |revealed: &HashSet<Uuid>| {
         inline_image_request_candidates(
             &messages,
-            &HashMap::new(),
             revealed,
             &HashSet::new(),
             &HashMap::new(),
@@ -438,7 +437,6 @@ fn a_visible_link_after_a_hidden_one_waits_for_the_reveal() {
     let candidates = |revealed: &HashSet<Uuid>| {
         inline_image_request_candidates(
             &messages,
-            &HashMap::new(),
             revealed,
             &HashSet::new(),
             &HashMap::new(),
@@ -2253,7 +2251,6 @@ fn inline_image_request_candidates_scan_newest_messages_first() {
 
     let requests = inline_image_request_candidates(
         &messages,
-        &HashMap::new(),
         &HashSet::new(),
         &HashSet::new(),
         &HashMap::new(),
@@ -2283,7 +2280,6 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
 
     let requests = inline_image_request_candidates(
         &messages,
-        &HashMap::new(),
         &HashSet::new(),
         &HashSet::new(),
         &HashMap::new(),
@@ -2307,12 +2303,7 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
         ]
     );
     assert_eq!(
-        match &requests[0].1 {
-            InlinePreviewSource::Video { video_id } => {
-                crate::app::audio::thumbnail::thumbnail_url(video_id)
-            }
-            _ => String::new(),
-        },
+        requests[0].1.fetch_url(),
         "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
     );
 }
@@ -2334,7 +2325,6 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert!(
         inline_image_request_candidates(
             &messages,
-            &HashMap::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
@@ -2354,7 +2344,6 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert_eq!(
         inline_image_request_candidates(
             &messages,
-            &HashMap::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
@@ -2377,7 +2366,6 @@ fn inline_image_request_candidates_respect_retry_backoff() {
     assert!(
         inline_image_request_candidates(
             &messages,
-            &HashMap::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),

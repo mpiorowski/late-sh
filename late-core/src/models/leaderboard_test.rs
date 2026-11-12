@@ -203,7 +203,7 @@ async fn top_chat_one_news_item_counts_once_and_its_card_never_counts_as_chat() 
     // News still counts when room rules refuse its card or posting fails.
     let without_card = fetch_top_chat(&client, today, 500).await.unwrap();
     assert_eq!(entry_for(&without_card.news_posts, user.id).value, 1);
-    let card = ChatMessage::create_news_card(
+    let card = ChatMessage::create_house_card(
         &client,
         ChatMessageParams {
             room_id: lounge.id,

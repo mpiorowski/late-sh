@@ -4946,6 +4946,85 @@ async fn artboard_archives_time_travel_from_the_rail() {
     );
 }
 
+/// A refused hang says so in a banner, once: on the board the notice
+/// alone sits in the framing bar, where it is easy to miss.
+#[tokio::test]
+async fn a_refused_hang_raises_one_banner() {
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-cap-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    // Today's three pieces are up already.
+    for n in 0..3 {
+        let hung = ArtboardPiece::hang(
+            &client,
+            HangParams {
+                user_id: user.id,
+                title: format!("piece {n}"),
+                width: 12,
+                height: 4,
+                canvas: serde_json::json!({
+                    "width": 12,
+                    "height": 4,
+                    "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
+                    "colors": [],
+                }),
+                provenance: serde_json::json!({ "cells": [] }),
+                glyph_count: 40,
+                own_share_percent: 100,
+                content_hash: format!("hash-cap-{n}"),
+            },
+        )
+        .await
+        .expect("hang");
+        assert!(matches!(hung, HangOutcome::Hung(_)));
+    }
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-cap-flow-it");
+
+    app.handle_input(b"4v");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~\r");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
+        "dismiss floating paste",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    for _ in 0..5 {
+        app.handle_input(b"j");
+    }
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Frame your work").await;
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    app.banner = None;
+    app.handle_input(b"a fourth\r");
+
+    let refusal = "You have hung today's three pieces already. Tomorrow.";
+    wait_for_app(&mut app, "the refusal's banner", |app| {
+        app.banner
+            .as_ref()
+            .is_some_and(|banner| banner.message == refusal)
+    })
+    .await;
+    // Dismissed, it stays dismissed: the refusal is handed over once.
+    app.banner = None;
+    app.tick();
+    assert!(app.banner.is_none());
+}
+
 #[tokio::test]
 async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     let test_db = new_test_db().await;
@@ -5068,120 +5147,6 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     wait_for_render_contains(&mut app, "rail j/k").await;
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
-}
-
-#[tokio::test]
-async fn artboard_gallery_hangs_two_pieces_in_succession() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-gallery-it2").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-gallery-flow-it2");
-
-    app.handle_input(b"4v");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    // Paint a 10x4 block
-    app.handle_input(b"i");
-    wait_for_render_contains(&mut app, "Mode       active").await;
-    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~\r");
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(
-        &mut app,
-        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
-        "dismiss floating paste",
-    )
-    .await;
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    // Hang piece 1
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "rail j/k").await;
-    for _ in 0..5 {
-        app.handle_input(b"j");
-    }
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Frame your work").await;
-    app.handle_input(b"\x1b[<0;2;2M");
-    app.handle_input(b"\x1b[<32;11;5M");
-    app.handle_input(b"\x1b[<0;11;5m");
-    wait_for_render_contains(&mut app, "frame 10x4").await;
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Hang it in the").await;
-    app.handle_input(b"piece one\r");
-    wait_for_render_contains(&mut app, "now hangs").await;
-
-    // Now paint another 10x4 block at a different position with different chars
-    app.handle_input(b"\x1b"); // back to rail
-    for _ in 0..5 { app.handle_input(b"k"); }
-    app.handle_input(b"\r"); // focus board
-    app.handle_input(b"i");
-    wait_for_render_contains(&mut app, "Mode       active").await;
-    for _ in 0..15 { app.handle_input(b"l"); }
-    app.handle_input(b"\x1b[200~$$$$$$$$$$\n$$$$$$$$$$\n$$$$$$$$$$\n$$$$$$$$$$\x1b[201~\r");
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(
-        &mut app,
-        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
-        "dismiss floating paste 2",
-    )
-    .await;
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    // Now try to hang piece 2. Notice the block is at board (21, 3) to (30, 6).
-    // Screen column starts at 2 (x=2 + board_x, y=2 + board_y):
-    // from (23, 5) to (32, 8).
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "rail j/k").await;
-    for _ in 0..5 {
-        app.handle_input(b"j");
-    }
-    app.handle_input(b"\r");
-    // Select 10x4 frame using Shift+Right and Shift+Down
-    for _ in 0..9 {
-        app.handle_input(b"\x1b[1;2C"); // Shift+Right
-    }
-    for _ in 0..3 {
-        app.handle_input(b"\x1b[1;2B"); // Shift+Down
-    }
-    wait_for_render_contains(&mut app, "frame 10x4").await;
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Hang it in the").await;
-    app.handle_input(b"piece two\r");
-    wait_for_render_contains(&mut app, "now hangs").await;
-    wait_for_render_contains(&mut app, "piece two").await;
-
-    // Re-hang piece two with exact same cells -> Duplicate refusal banner.
-    // After hanging, focus is List and selected row is Mine (row 4: Board, Newest, ThisMonth, HallOfFame, Mine, Hang).
-    // Esc on List focuses Rail. Press 'j' once to move from Mine to Hang a piece.
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "rail j/k").await;
-    app.handle_input(b"j");
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Frame your work").await;
-    app.handle_input(b"\x1b[<0;2;2M");
-    app.handle_input(b"\x1b[<32;11;5M");
-    app.handle_input(b"\x1b[<0;11;5m");
-    wait_for_render_contains(&mut app, "frame 10x4").await;
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Hang it in the").await;
-    app.handle_input(b"piece three\r");
-    wait_for_render_contains(&mut app, "now hangs").await;
-
-    // Fourth piece today -> Daily cap reached refusal banner
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "rail j/k").await;
-    app.handle_input(b"j");
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Frame your work").await;
-    app.handle_input(b"\x1b[<0;2;2M");
-    app.handle_input(b"\x1b[<32;11;5M");
-    app.handle_input(b"\x1b[<0;11;5m");
-    wait_for_render_contains(&mut app, "frame 10x4").await;
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, "Hang it in the").await;
-    app.handle_input(b"piece four\r");
-    wait_for_render_contains(&mut app, "You have hung today's three pieces already").await;
 }
 
 #[tokio::test]

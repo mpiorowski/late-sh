@@ -11,6 +11,7 @@ use late_core::models::user::RadioStation;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
+use crate::app::artboard::gallery::svc::GalleryCardOutcome;
 use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::nudge::RadioNudgeSpot;
 use crate::app::audio::radio_meta::polled::PolledFeed;
@@ -22,7 +23,6 @@ use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite}
 use crate::app::chat::news::svc::{
     BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup,
 };
-use crate::app::artboard::gallery::svc::GalleryCardOutcome;
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::clubhouse::state::Tutorial;
@@ -822,6 +822,7 @@ mod inner {
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
     use super::DoorKind;
+    use super::GalleryCardOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
@@ -857,7 +858,6 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
-    use super::GalleryCardOutcome;
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -4646,6 +4646,7 @@ mod inner {
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
     use super::DoorKind;
+    use super::GalleryCardOutcome;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
     use super::RadioNudgeSpot;
@@ -4680,7 +4681,6 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
-    use super::GalleryCardOutcome;
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{

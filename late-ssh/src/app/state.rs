@@ -1026,6 +1026,8 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
+    /// A piece opened from its #lounge card, until the Artboard page may
+    /// show it (`open_gallery_piece`, `sync_dartboard_connection`).
     pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
@@ -2804,7 +2806,6 @@ impl App {
             self.leave_codekeep();
         }
 
-
         if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
             self.daily.close_board();
         }
@@ -2920,38 +2921,6 @@ impl App {
             self.enter_clubhouse();
         }
         self.sync_visible_chat_room();
-    }
-
-    pub(crate) fn open_gallery_piece(
-        &mut self,
-        piece: crate::app::artboard::gallery::svc::GalleryPiece,
-    ) {
-        self.set_screen(Screen::Artboard);
-        if !self.artboard_disclaimer_visible() {
-            if let Some(state) = self.dartboard_state.as_mut() {
-                state.gallery_mut().open_piece(piece);
-            }
-        } else {
-            self.pending_gallery_piece = Some(piece);
-        }
-    }
-
-    pub(crate) fn applaud_gallery_piece(
-        &mut self,
-        piece: crate::app::artboard::gallery::svc::GalleryPiece,
-    ) {
-        use crate::app::artboard::gallery::state::{applause_refusal, current_period_month};
-        if let Some(refusal) = applause_refusal(&piece, self.user_id, current_period_month()) {
-            self.banner = Some(Banner::error(refusal));
-            return;
-        }
-        let service = self.gallery_service.clone();
-        let user_id = self.user_id;
-        let piece_id = piece.id;
-        tokio::spawn(async move {
-            let _ = service.toggle_applause(piece_id, user_id).await;
-        });
-        self.banner = Some(Banner::success("Toggling applause..."));
     }
 
     fn set_cursor_shape(&mut self, sequence: &[u8]) {
@@ -3124,6 +3093,7 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.chat.reader().is_some()
+            || self.chat.gallery_cards.modal().is_some()
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()

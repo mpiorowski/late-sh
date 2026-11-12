@@ -54,7 +54,12 @@ pub const GALLERY_AWARD_MIN_APPLAUSE: i64 = 3;
 pub const GALLERY_LISTING_LIMIT: i64 = 100;
 /// How many past months the hall of fame walks back.
 pub const HALL_OF_FAME_MONTHS: i64 = 36;
+/// Fired when what a #lounge card shows may have changed (migration 285):
+/// a card linked or unlinked, a piece taken down, applause given or taken
+/// back.
 pub const ARTBOARD_PIECES_CHANGED_CHANNEL: &str = "artboard_pieces_changed";
+/// How many of the newest pieces with a #lounge card every replica keeps
+/// in memory to draw them. An older card reads as its plain line.
 pub const GALLERY_LOUNGE_CARD_LIMIT: i64 = 100;
 
 /// A piece as the gallery shows it: the row, its author's name, and the
@@ -144,7 +149,11 @@ pub struct NewestPiece {
 /// How the hanger's own take-down ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TakeDownOutcome {
-    TakenDown { lounge_message_id: Option<Uuid> },
+    /// Down. `lounge_message_id` is the piece's #lounge card, for the
+    /// caller to delete.
+    TakenDown {
+        lounge_message_id: Option<Uuid>,
+    },
     NotFound,
     /// Somebody else's piece; only a mod takes those down.
     NotYours,
@@ -207,6 +216,7 @@ pub struct RemovedPiece {
     pub id: Uuid,
     pub user_id: Uuid,
     pub title: String,
+    /// The piece's #lounge card, for the caller to delete.
     pub lounge_message_id: Option<Uuid>,
 }
 
@@ -739,6 +749,7 @@ impl ArtboardPiece {
             lounge_message_id: row.get("lounge_message_id"),
         }))
     }
+
     /// The hanger takes their own piece down. Owner and month are in the
     /// `UPDATE` itself: only `user_id`'s piece, only while its month runs.
     /// A miss is looked up once more to say why.
@@ -777,11 +788,10 @@ impl ArtboardPiece {
         }
     }
 
-    /// Up to `limit` pieces that hold a card in `#lounge`, newest piece first.
-    pub async fn list_lounge_cards(
-        client: &impl GenericClient,
-        limit: i64,
-    ) -> Result<Vec<Self>> {
+    /// Up to `limit` pieces still up that hold a card in #lounge, newest
+    /// piece first. No viewer: the cards are one set for everyone, so
+    /// `applauded_by_viewer` is false on every row.
+    pub async fn list_lounge_cards(client: &impl GenericClient, limit: i64) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 &format!(
@@ -796,7 +806,8 @@ impl ArtboardPiece {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Link a piece to its `#lounge` card message.
+    /// Point a piece at its #lounge card. Owner and "still up" are in the
+    /// `UPDATE` itself; zero rows means the piece was taken down first.
     pub async fn link_lounge_message(
         client: &impl GenericClient,
         user_id: Uuid,
@@ -814,11 +825,14 @@ impl ArtboardPiece {
         Ok(updated)
     }
 
-    /// True when `message_id` belongs to an active Artboard gallery card.
+    /// Whether `message_id` is the #lounge card of a piece still up.
     pub async fn is_lounge_card(client: &impl GenericClient, message_id: Uuid) -> Result<bool> {
         let row = client
             .query_one(
-                "SELECT EXISTS (SELECT 1 FROM artboard_pieces WHERE lounge_message_id = $1 AND removed_at IS NULL)",
+                "SELECT EXISTS (
+                     SELECT 1 FROM artboard_pieces
+                     WHERE lounge_message_id = $1 AND removed_at IS NULL
+                 )",
                 &[&message_id],
             )
             .await?;
