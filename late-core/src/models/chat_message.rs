@@ -372,11 +372,11 @@ impl ChatMessage {
     /// daily paper (`paper_room_editions`). No viewer: the page is printed
     /// once for everyone, so there is no membership check and no ignore
     /// list, only the public-room line (`room.visibility = 'public'`), the
-    /// system-feed exclusion, and the house's #lounge cards left out: a News
-    /// share's (the paper prints shares on its own reading page) and a hung
-    /// Artboard piece's (a card is drawn from its piece; its line is only a
-    /// title and a link). Newest-first under
-    /// `limit`, returned oldest-first, same as
+    /// system-feed exclusion, and the house's #lounge cards left out
+    /// ([`Self::create_house_card`]): a News share's (the paper prints
+    /// shares on its own reading page) and a hung Artboard piece's (a card
+    /// is drawn from its piece; its line is only a title and a link).
+    /// Newest-first under `limit`, returned oldest-first, same as
     /// [`Self::list_public_room_since`].
     pub async fn list_public_room_between(
         client: &Client,
@@ -396,13 +396,7 @@ impl ChatMessage {
                    AND msg.created >= $2
                    AND msg.created < $3
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
-                   AND NOT EXISTS (
-                        SELECT 1 FROM articles card WHERE card.lounge_message_id = msg.id
-                   )
-                   AND NOT EXISTS (
-                        SELECT 1 FROM artboard_pieces piece
-                        WHERE piece.lounge_message_id = msg.id
-                   )
+                   AND NOT msg.is_news_card
                  ORDER BY msg.created DESC, msg.id DESC
                  LIMIT $4",
                 &[&room_id, &floor, &ceiling, &limit],
@@ -627,10 +621,26 @@ impl ChatMessage {
         Ok(Self::from(row))
     }
 
-    pub async fn edit_by_author(
+    /// Whether `message_id` was written by [`Self::create_house_card`]. The
+    /// mark is the message's own, so it holds whatever became of the story
+    /// or piece the card was linked to. `false` for a message that is gone.
+    pub async fn is_house_card(client: &impl GenericClient, message_id: Uuid) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM chat_messages WHERE id = $1 AND is_news_card
+                 )",
+                &[&message_id],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
+    /// Rewrite a message's body for an editor the caller already cleared.
+    /// `None` when the message is gone.
+    pub async fn edit_after_authorization(
         client: &impl GenericClient,
         message_id: Uuid,
-        user_id: Uuid,
         body: &str,
     ) -> Result<Option<Self>> {
         let body = body.trim();
@@ -642,36 +652,13 @@ impl ChatMessage {
             .query_opt(
                 "UPDATE chat_messages
                  SET body = $1, updated = current_timestamp
-                 WHERE id = $2 AND user_id = $3
-                 RETURNING *",
-                &[&body, &message_id, &user_id],
-            )
-            .await?;
-
-        Ok(row.map(Self::from))
-    }
-
-    pub async fn edit_after_authorization(
-        client: &impl GenericClient,
-        message_id: Uuid,
-        body: &str,
-    ) -> Result<Self> {
-        let body = body.trim();
-        if body.is_empty() {
-            bail!("message body cannot be empty");
-        }
-
-        let row = client
-            .query_one(
-                "UPDATE chat_messages
-                 SET body = $1, updated = current_timestamp
                  WHERE id = $2
                  RETURNING *",
                 &[&body, &message_id],
             )
             .await?;
 
-        Ok(Self::from(row))
+        Ok(row.map(Self::from))
     }
 
     pub async fn delete_by_author(

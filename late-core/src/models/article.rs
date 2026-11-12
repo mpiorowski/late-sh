@@ -129,17 +129,6 @@ impl Article {
         Ok(count)
     }
 
-    /// Whether `message_id` is a share's card in #lounge.
-    pub async fn is_lounge_card(client: &Client, message_id: Uuid) -> Result<bool> {
-        let row = client
-            .query_one(
-                "SELECT EXISTS (SELECT 1 FROM articles WHERE lounge_message_id = $1)",
-                &[&message_id],
-            )
-            .await?;
-        Ok(row.get(0))
-    }
-
     /// Delete a share and hand back the row as it went, `None` when it was
     /// already gone. The card pointer is read by the delete itself, so a
     /// card linked while the delete ran is never missed.

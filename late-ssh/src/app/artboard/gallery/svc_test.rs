@@ -316,7 +316,7 @@ async fn a_hung_piece_has_a_lounge_card_until_it_is_taken_down() {
             _ => {}
         }
     };
-    assert_eq!(refusal, "A piece's card can't be edited.");
+    assert_eq!(refusal, "That card can't be edited.");
 
     service.take_down_task(piece.id, artist.id, tx);
     let Some(GalleryResult::TakeDown { outcome, .. }) = rx.recv().await else {

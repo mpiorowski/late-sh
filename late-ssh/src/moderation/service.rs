@@ -2116,19 +2116,6 @@ pub(crate) async fn target_tier_for_user_id(
     Ok(tier_for_user(&author))
 }
 
-pub(crate) fn ensure_message_permission(
-    permissions: Permissions,
-    is_owner: bool,
-    cap: Caps,
-    target_tier: Tier,
-) -> Result<()> {
-    if is_owner || permissions.can(cap, target_tier) {
-        Ok(())
-    } else {
-        anyhow::bail!("cannot edit or delete this message")
-    }
-}
-
 pub(crate) const fn cap_for_server_ban(duration: Option<chrono::Duration>) -> Caps {
     if duration.is_some() {
         Caps::TEMP_BAN_USER

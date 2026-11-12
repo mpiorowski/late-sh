@@ -824,18 +824,4 @@ impl ArtboardPiece {
             .await?;
         Ok(updated)
     }
-
-    /// Whether `message_id` is the #lounge card of a piece still up.
-    pub async fn is_lounge_card(client: &impl GenericClient, message_id: Uuid) -> Result<bool> {
-        let row = client
-            .query_one(
-                "SELECT EXISTS (
-                     SELECT 1 FROM artboard_pieces
-                     WHERE lounge_message_id = $1 AND removed_at IS NULL
-                 )",
-                &[&message_id],
-            )
-            .await?;
-        Ok(row.get(0))
-    }
 }
