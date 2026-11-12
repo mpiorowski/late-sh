@@ -2031,6 +2031,22 @@ impl App {
                 text.push(' ');
             }
 
+            // Measure with the same word wrapping used to draw the hint.
+            // Its extra rows come out of the space below the splash first.
+            let hint = match &ctx.whisper {
+                Some(whisper) => whisper.hint.as_deref(),
+                None => Some(ctx.splash_hint),
+            }
+            .map(|text| {
+                ratatui::widgets::Paragraph::new(text)
+                    .style(Style::default().fg(theme::TEXT_DIM()))
+                    .centered()
+                    .wrap(ratatui::widgets::Wrap { trim: true })
+            });
+            let hint_height = hint.as_ref().map_or(0, |hint| {
+                hint.line_count(area.width).min(usize::from(area.height)) as u16
+            });
+
             // The day's wall piece takes the cup's place when the
             // terminal has room for it; the typed line stays under either.
             // A held door (the haunt's whisper) always gets the cup: the
@@ -2038,7 +2054,7 @@ impl App {
             // the voiced line.
             let piece_area = ratatui::layout::Layout::vertical([
                 ratatui::layout::Constraint::Min(0),
-                ratatui::layout::Constraint::Length(3),
+                ratatui::layout::Constraint::Length(hint_height.max(1).saturating_add(2)),
             ])
             .split(area);
             let piece_drawn = match (ctx.splash_piece, &ctx.whisper) {
@@ -2097,27 +2113,25 @@ impl App {
                 ])
                 .split(area);
 
-                frame.render_widget(p, layout[1]);
-                layout[1].bottom()
+                // On short, narrow screens the wrapped hint may need some
+                // of the cup's usual space. Move the cup up before clipping it.
+                let mut cup_area = layout[1];
+                let cup_bottom = area.bottom().saturating_sub(hint_height);
+                cup_area.height = cup_area.height.min(cup_bottom.saturating_sub(area.y));
+                cup_area.y = cup_area.y.min(cup_bottom.saturating_sub(cup_area.height));
+                frame.render_widget(p, cup_area);
+                cup_area.bottom()
             };
             let gap = area.bottom().saturating_sub(splash_bottom);
-            let hint_y = splash_bottom + (gap * 3 / 4);
+            let hint_y =
+                (splash_bottom + (gap * 3 / 4)).min(area.bottom().saturating_sub(hint_height));
             // While the whisper holds the door the hint may be mid-dissolve
             // (or gone); otherwise it draws as-is.
-            let hint_text = match &ctx.whisper {
-                Some(whisper) => whisper.hint.as_deref(),
-                None => Some(ctx.splash_hint),
-            };
-            if let Some(hint_text) = hint_text
+            if let Some(hint) = hint
                 && hint_y < area.bottom()
             {
-                let hint_area = Rect::new(area.x, hint_y, area.width, 1);
-                let hint = ratatui::text::Line::from(ratatui::text::Span::styled(
-                    hint_text.to_string(),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ));
-                let hint_paragraph = ratatui::widgets::Paragraph::new(hint).centered();
-                frame.render_widget(hint_paragraph, hint_area);
+                let hint_area = Rect::new(area.x, hint_y, area.width, hint_height);
+                frame.render_widget(hint, hint_area);
             }
             if let Some(whisper) = &ctx.whisper {
                 crate::app::deadchannel::haunt::ui::draw_splash_whisper(
