@@ -398,9 +398,7 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   `late-ssh/assets/splash_tips/*.json`: one pool every session draws from,
   and a returning pool (the "did you know" lines on the radio, the rung,
   the people, the booth, the Artboard and Nightcap among them) added for
-  any account past its first session. Tips word-wrap to the terminal width
-  and move up as needed to stay on screen, with room reserved below the
-  coffee cup or gallery piece. The first return days hand a
+  any account past its first session. The first return days hand a
   newcomer more than a line: one box per day, three in all, each on
   something the tour never reaches, `app/comeback`.
 
