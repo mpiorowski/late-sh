@@ -1,13 +1,12 @@
 use super::*;
 use chrono::Utc;
 
-fn room(kind: &str, visibility: &str, slug: Option<&str>) -> ChatRoom {
+fn room(kind: RoomKind, slug: Option<&str>) -> ChatRoom {
     ChatRoom {
         id: Uuid::from_u128(1),
         created: Utc::now(),
         updated: Utc::now(),
-        kind: kind.to_string(),
-        visibility: visibility.to_string(),
+        kind,
         auto_join: false,
         permanent: false,
         slug: slug.map(str::to_string),
@@ -155,10 +154,10 @@ fn room_labels_prefix_rooms_and_dms() {
     let mut usernames = std::collections::HashMap::new();
     usernames.insert(peer, "alice".to_string());
 
-    let public = room("topic", "public", Some("rust"));
+    let public = room(RoomKind::Topic(RoomVisibility::Public), Some("rust"));
     assert_eq!(room_label(&public, current, &usernames), "#rust");
 
-    let mut dm = room("dm", "dm", None);
+    let mut dm = room(RoomKind::Dm, None);
     dm.dm_user_a = Some(current);
     dm.dm_user_b = Some(peer);
     assert_eq!(room_label(&dm, current, &usernames), "@alice");

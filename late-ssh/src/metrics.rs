@@ -11,6 +11,7 @@ use late_core::models::user::RadioStation;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
+use crate::app::artboard::gallery::svc::GalleryCardOutcome;
 use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::nudge::RadioNudgeSpot;
 use crate::app::audio::radio_meta::polled::PolledFeed;
@@ -36,7 +37,6 @@ use crate::app::door::realm::svc::{
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
-use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::presence::svc::PulseSampleOutcome;
@@ -822,6 +822,7 @@ mod inner {
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
     use super::DoorKind;
+    use super::GalleryCardOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
@@ -848,7 +849,7 @@ mod inner {
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite};
     use super::{
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
@@ -1590,13 +1591,6 @@ mod inner {
         }
     }
 
-    fn live_origin_label(origin: LiveOrigin) -> &'static str {
-        match origin {
-            LiveOrigin::Strip => "strip",
-            LiveOrigin::Panel => "panel",
-        }
-    }
-
     fn calendar_writes_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1636,18 +1630,6 @@ mod inner {
                 .u64_counter("late_ssh_calendar_announcements_total")
                 .with_description(
                     "Board lines handed to #lounge: a post, or a start claimed by this replica",
-                )
-                .build()
-        })
-    }
-
-    fn calendar_opens_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_calendar_opens_total")
-                .with_description(
-                    "Board events opened from the live strip or the Live panel, by which surface brought the viewer",
                 )
                 .build()
         })
@@ -1914,6 +1896,18 @@ mod inner {
                 .u64_counter("late_ssh_news_cards_total")
                 .with_description(
                     "News share cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its story)",
+                )
+                .build()
+        })
+    }
+
+    fn gallery_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_gallery_cards_total")
+                .with_description(
+                    "Artboard gallery piece cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its piece), piece_gone",
                 )
                 .build()
         })
@@ -2704,6 +2698,7 @@ mod inner {
             Refresh::ShopFlairDirectory => "shop_flair_directory",
             Refresh::CalendarNotices => "calendar_notices",
             Refresh::RealmGames => "realm_games",
+            Refresh::GalleryCards => "gallery_cards",
         }
     }
 
@@ -3536,6 +3531,21 @@ mod inner {
         news_cards_total().add(1, &[KeyValue::new("outcome", news_card_label(outcome))]);
     }
 
+    fn gallery_card_label(outcome: GalleryCardOutcome) -> &'static str {
+        match outcome {
+            GalleryCardOutcome::Posted => "posted",
+            GalleryCardOutcome::Refused => "refused",
+            GalleryCardOutcome::PostFailed => "post_failed",
+            GalleryCardOutcome::LinkFailed => "link_failed",
+            GalleryCardOutcome::PieceGone => "piece_gone",
+        }
+    }
+
+    /// Every piece hung tries one card in #lounge.
+    pub fn record_gallery_card(outcome: GalleryCardOutcome) {
+        gallery_cards_total().add(1, &[KeyValue::new("outcome", gallery_card_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3793,10 +3803,6 @@ mod inner {
                 calendar_announcement_label(announcement),
             )],
         );
-    }
-
-    pub fn record_calendar_open(origin: LiveOrigin) {
-        calendar_opens_total().add(1, &[KeyValue::new("from", live_origin_label(origin))]);
     }
 
     pub fn record_referral_attach(source: ReferralSource, outcome: ReferralAttachOutcome) {
@@ -4640,6 +4646,7 @@ mod inner {
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
     use super::DoorKind;
+    use super::GalleryCardOutcome;
     use super::PosterBeat;
     use super::PulseSampleOutcome;
     use super::RadioNudgeSpot;
@@ -4665,7 +4672,7 @@ mod inner {
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite};
     use super::{
         CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
         TerminalProbeOutcome,
@@ -4788,6 +4795,7 @@ mod inner {
     pub fn record_pulse_sample(_outcome: PulseSampleOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
+    pub fn record_gallery_card(_outcome: GalleryCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_roll_call(
         _result: RollCallResult,
@@ -4818,7 +4826,6 @@ mod inner {
     pub fn record_calendar_refusal(_kind: CalendarRefusalKind) {}
     pub fn record_calendar_failure(_op: CalendarOp) {}
     pub fn record_calendar_announcement(_announcement: CalendarAnnouncement) {}
-    pub fn record_calendar_open(_origin: LiveOrigin) {}
     pub fn record_referral_attach(_source: ReferralSource, _outcome: ReferralAttachOutcome) {}
     pub fn record_referral_settlement(_settlement: ReferralSettlement) {}
     pub fn record_newcomer_minute(_result: NewcomerMinuteResult) {}

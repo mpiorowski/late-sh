@@ -16,6 +16,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
+use super::chat_room::RoomKind;
+
 /// The room the paper prints verbatim at the top instead of as a column.
 pub const ANNOUNCEMENTS_SLUG: &str = "announcements";
 /// The most `#announcements` posts one edition carries, newest kept.
@@ -120,7 +122,7 @@ pub struct PaperCandidate {
     pub room_id: Uuid,
     /// The room's rail name (slug, or the language code for language rooms).
     pub label: String,
-    pub kind: String,
+    pub kind: RoomKind,
     pub permanent: bool,
     pub member_count: i64,
     pub message_count: i64,
@@ -136,7 +138,7 @@ pub struct PaperRoomPage {
     pub member_count: i64,
     /// A shop `room_bump` could put a room at the top of "Elsewhere";
     /// permanent rooms and non-topic rooms never carry one.
-    pub kind: String,
+    pub kind: RoomKind,
     pub permanent: bool,
     pub status: PaperStatus,
     pub message_count: i64,
@@ -151,7 +153,7 @@ impl PaperRoomPage {
             room_id: row.get("room_id"),
             label: row.get("label"),
             member_count: row.get("member_count"),
-            kind: row.get("kind"),
+            kind: RoomKind::from_columns(row.get("kind"), row.get("visibility")),
             permanent: row.get("permanent"),
             status: PaperStatus::parse(&status)?,
             message_count: i64::from(row.get::<_, i32>("message_count")),
@@ -209,6 +211,7 @@ impl PaperEdition {
                 "SELECT e.room_id,
                         COALESCE(r.slug, r.language_code) AS label,
                         r.kind,
+                        r.visibility,
                         r.permanent,
                         e.status,
                         e.message_count,
@@ -351,6 +354,7 @@ impl PaperRoomEdition {
                 "SELECT r.id AS room_id,
                         COALESCE(r.slug, r.language_code) AS label,
                         r.kind,
+                        r.visibility,
                         r.permanent,
                         (SELECT COUNT(*)::bigint FROM chat_room_members m
                           WHERE m.room_id = r.id) AS member_count,
@@ -391,7 +395,7 @@ impl PaperRoomEdition {
             .map(|row| PaperCandidate {
                 room_id: row.get("room_id"),
                 label: row.get("label"),
-                kind: row.get("kind"),
+                kind: RoomKind::from_columns(row.get("kind"), row.get("visibility")),
                 permanent: row.get("permanent"),
                 member_count: row.get("member_count"),
                 message_count: row.get("message_count"),

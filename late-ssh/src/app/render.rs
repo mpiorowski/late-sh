@@ -380,6 +380,7 @@ struct DrawContext<'a> {
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
+    piece_modal: Option<&'a crate::app::artboard::gallery::card::state::PieceModal>,
     video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
     icon_picker_open: bool,
@@ -406,8 +407,9 @@ struct DrawContext<'a> {
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
-    /// Today's all-day board posts for the banner over Home's tiles.
-    home_board_day: Option<String>,
+    /// Today's board posts for the banner over Home's tiles; empty on a day
+    /// the board has nothing.
+    home_board_day: Vec<crate::app::calendar::banner::DayPost>,
     /// The day of headcount buckets for the pulse tile (`PresenceSession::history`).
     pulse_history: crate::app::presence::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
@@ -441,7 +443,7 @@ impl App {
         };
         let home_board_day = match self.on_home() {
             true => self.home_board_day(),
-            false => None,
+            false => Vec::new(),
         };
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
         let realm_live = HubGame::Realm.live_screen(self).is_some();
@@ -487,6 +489,7 @@ impl App {
 
         // Init theme and layout sync — preview settings-modal draft live while open.
         let artboard_disclaimer_visible = self.artboard_disclaimer_visible();
+        let artboard_gated = self.artboard_content_gated();
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
                 .draft()
@@ -729,10 +732,6 @@ impl App {
         let live_panel_rows = crate::app::live::panel::rows(
             &self.chat.live_streams,
             &live_rows,
-            &crate::app::calendar::live::panel_events(
-                &self.calendar.live_at(live_panel_now),
-                self.calendar.tz,
-            ),
             self.chat.news.all_articles(),
             self.chat.news.reads(),
             self.live_games.open_watches(),
@@ -753,7 +752,6 @@ impl App {
                 &self.chat.live_streams,
                 &live_rows,
                 &self.live_games,
-                &self.calendar,
                 &self.realm,
             )
         } else {
@@ -813,7 +811,6 @@ impl App {
                     &self.chat.live_streams,
                     &live_rows,
                     &self.live_games,
-                    &self.calendar,
                     &self.realm,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
@@ -912,6 +909,8 @@ impl App {
             live_strip_hit: &self.live.hit,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
+            gallery_cards: self.gallery_cards.cards(),
+            artboard_gated,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -976,6 +975,7 @@ impl App {
         };
         let work_unread_count = self.chat.work.unread_count();
         let news_reader = self.chat.reader();
+        let piece_modal = self.gallery_cards.modal();
         let video_modal = self.video.modal();
         let selected_image_message = self
             .chat
@@ -1027,6 +1027,8 @@ impl App {
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
+            gallery_cards: self.gallery_cards.cards(),
+            artboard_gated,
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
@@ -1114,6 +1116,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.gallery_cards.cards(),
+                    artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1182,6 +1186,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.gallery_cards.cards(),
+                    artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1253,6 +1259,8 @@ impl App {
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     news_cards: self.chat.news.lounge_cards(),
+                    gallery_cards: self.gallery_cards.cards(),
+                    artboard_gated,
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1323,6 +1331,8 @@ impl App {
                 message_gilds,
                 inline_images: &self.chat.inline_image_cache,
                 news_cards: self.chat.news.lounge_cards(),
+                gallery_cards: self.gallery_cards.cards(),
+                artboard_gated,
                 dividers: crate::app::chat::ui::ChatDividers {
                     afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                     left_app: self.chat.device_left_at(),
@@ -1413,6 +1423,8 @@ impl App {
                             message_gilds,
                             inline_images: &self.chat.inline_image_cache,
                             news_cards: self.chat.news.lounge_cards(),
+                            gallery_cards: self.gallery_cards.cards(),
+                            artboard_gated,
                             dividers: crate::app::chat::ui::ChatDividers {
                                 afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                                 left_app: self.chat.device_left_at(),
@@ -1582,6 +1594,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
+            || piece_modal.is_some()
             || video_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -1606,6 +1619,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
+            || piece_modal.is_some()
             || video_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -1878,6 +1892,7 @@ impl App {
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         news_reader,
+                        piece_modal,
                         video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
@@ -2257,7 +2272,7 @@ impl App {
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
-                    board_day: ctx.home_board_day.as_deref(),
+                    board_day: &ctx.home_board_day,
                     live_panel: crate::app::live::panel::LivePanelProps {
                         rows: &ctx.live_panel_rows,
                         hit: ctx.live_panel_hit,
@@ -2936,6 +2951,10 @@ impl App {
 
         if let Some(reader) = ctx.news_reader {
             chat::news::reader::ui::draw(frame, inner, reader);
+        }
+
+        if let Some(modal) = ctx.piece_modal {
+            crate::app::artboard::gallery::card::ui::draw_modal(frame, inner, modal);
         }
 
         // Over the whole terminal, not the app frame: Full is every cell.

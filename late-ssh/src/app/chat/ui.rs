@@ -1,10 +1,13 @@
+use crate::app::artboard::gallery::svc::GalleryPiece;
 use chrono::{DateTime, Utc};
 use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::ChatMessage,
+    chat_room::{ChatRoom, RoomKind, RoomVisibility},
+    chat_room_member::ChatRoomMember,
 };
 use ratatui::{
     Frame,
@@ -26,7 +29,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint, truncate_cells},
     theme,
     username_effect::ResolvedName,
 };
@@ -44,11 +47,11 @@ use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
     compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
-    is_deadchannel_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    is_deadchannel_room, is_rail_room, is_selected_slot, synthetic_favorite_id,
+    synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
-    AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
+    AuthorTint, Gutter, LoungeCard, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
     without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
 use crate::app::common::spoiler::{self, has_spoiler};
@@ -182,6 +185,12 @@ pub struct DashboardChatView<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    pub gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    pub artboard_gated: bool,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -1070,28 +1079,6 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     }
 }
 
-pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    let ellipsis_width = UnicodeWidthStr::width("…");
-    for ch in text.chars() {
-        let width = UnicodeWidthStr::width(ch.to_string().as_str());
-        if used + width + ellipsis_width > max_width {
-            break;
-        }
-        out.push(ch);
-        used += width;
-    }
-    out.push('…');
-    out
-}
-
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -1220,6 +1207,8 @@ pub fn draw_dashboard_chat_card(
                 message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
                 news_cards: view.news_cards,
+                gallery_cards: view.gallery_cards,
+                artboard_gated: view.artboard_gated,
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
@@ -1319,6 +1308,12 @@ struct ChatRowsContext<'a> {
     /// News shares' #lounge cards by message id (`news::State::lounge_cards`):
     /// those messages draw as the card.
     news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    artboard_gated: bool,
     dividers: ChatDividers,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
@@ -1462,6 +1457,7 @@ struct ChatRowsCacheKey {
     current_user_id: Uuid,
     show_flag_fallback: bool,
     name_flicker: Option<(Uuid, u64)>,
+    artboard_gated: bool,
 }
 
 #[derive(Default)]
@@ -1495,6 +1491,7 @@ fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCache
         current_user_id: ctx.current_user_id,
         show_flag_fallback: ctx.show_flag_fallback,
         name_flicker: ctx.name_flicker,
+        artboard_gated: ctx.artboard_gated,
     }
 }
 
@@ -1988,7 +1985,14 @@ fn ensure_chat_rows_cache(
             is_continuation,
             system_text,
             image_lines,
-            ctx.news_cards.get(&msg.id),
+            match (ctx.news_cards.get(&msg.id), ctx.gallery_cards.get(&msg.id)) {
+                (Some(item), _) => Some(LoungeCard::News(item)),
+                (None, Some(piece)) => Some(LoungeCard::Piece {
+                    piece,
+                    gated: ctx.artboard_gated,
+                }),
+                (None, None) => None,
+            },
             reactions,
             gild,
             translation,
@@ -3091,6 +3095,12 @@ pub struct ChatRenderInput<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    pub gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    pub artboard_gated: bool,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
@@ -3287,6 +3297,12 @@ pub struct EmbeddedRoomChatView<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    pub gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    pub artboard_gated: bool,
     pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
@@ -3514,6 +3530,8 @@ fn draw_embedded_messages(
             message_gilds: view.message_gilds,
             inline_images: view.inline_images,
             news_cards: view.news_cards,
+            gallery_cards: view.gallery_cards,
+            artboard_gated: view.artboard_gated,
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
@@ -4222,7 +4240,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             None => view
                 .chat_rooms
                 .iter()
-                .any(|(r, _)| r.id == *id && is_chat_list_room(r)),
+                .any(|(r, _)| r.id == *id && is_rail_room(r, view.favorite_room_ids)),
         })
         .collect();
     let favorited = |slot: RoomSlot| -> bool {
@@ -4312,13 +4330,20 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
 
     // Stream: live "watch me" streams, directly under Core, mirroring
     // `visual_order_for_rooms`. The section only exists while somebody is
-    // live; a pending stream gets no row.
-    if view.live_streams.iter().any(|stream| stream.live) {
+    // live; a pending stream gets no row. A favorited stream room keeps its
+    // Favorites row instead, live or not.
+    let section_streams: Vec<Uuid> = view
+        .live_streams
+        .iter()
+        .filter(|stream| stream.live && !favorite_ids.contains(&stream.room_id))
+        .map(|stream| stream.room_id)
+        .collect();
+    if !section_streams.is_empty() {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Stream), None, false);
         if !collapsed_set.contains(&RoomSection::Stream) {
-            for stream in view.live_streams.iter().filter(|stream| stream.live) {
-                push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
+            for room_id in section_streams {
+                push_slot(RoomSlot::Room(room_id), &mut push_row);
             }
         }
     }
@@ -4350,9 +4375,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind == "dm"
-                && !favorite_ids.contains(&r.id)
+            let dm = match r.kind {
+                RoomKind::Dm => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
+            dm && !favorite_ids.contains(&r.id)
                 && !dm_peer_is_ignored(r, view.current_user_id, view.ignored_user_ids)
         })
         .partition(|(r, _)| dm_is_promoted_unread(r.id, view.unread_counts, view.sticky_unread_dm));
@@ -4383,11 +4415,15 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind != "dm"
+            let channel = match r.kind {
+                RoomKind::Lounge | RoomKind::Language | RoomKind::Topic(_) => true,
+                RoomKind::Dm | RoomKind::Game(_) | RoomKind::Deadchannel | RoomKind::Nightcap => {
+                    false
+                }
+            };
+            channel
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && r.slug.as_deref() != Some("voice")
-                && !is_deadchannel_room(r)
                 && !favorite_ids.contains(&r.id)
         })
         .collect();
@@ -4574,9 +4610,18 @@ pub(crate) fn bumped_join_room_slugs(
         .values()
         .filter_map(|effects| {
             let first = effects.first()?;
+            let public_topic = match first.room_kind {
+                RoomKind::Topic(RoomVisibility::Public) => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Private)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
             (has_room_effect(effects, "room_bump")
-                && first.room_kind == "topic"
-                && first.room_visibility == "public"
+                && public_topic
                 && !first.room_permanent
                 && first
                     .room_slug
@@ -4601,18 +4646,23 @@ fn room_display_label(
     current_user_id: Uuid,
     away_user_ids: &HashSet<Uuid>,
 ) -> String {
-    if room.kind == "dm" {
-        return dm_display_label(room, usernames, current_user_id, away_user_ids);
-    }
-    let base_label = room
-        .slug
-        .as_deref()
-        .map(str::to_string)
-        .unwrap_or_else(|| room.kind.clone());
-    if room.visibility == "private" {
-        format!("🔒 {}", base_label)
-    } else {
-        base_label
+    let base_label = || {
+        room.slug
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| room.kind.as_str().to_string())
+    };
+    match room.kind {
+        RoomKind::Dm => dm_display_label(room, usernames, current_user_id, away_user_ids),
+        RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+            format!("🔒 {}", base_label())
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Game(RoomVisibility::Public)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => base_label(),
     }
 }
 
@@ -4941,9 +4991,10 @@ fn draw_selected_content(
         let selected_room = selected_room_id
             .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
             // Stream rooms are `kind='game'` (not chat-list rooms) but are
-            // openable from the rail's stream section, so they render here.
+            // openable from the rail's stream section, and a favorited game
+            // room from Favorites, so they render here.
             .filter(|(room, _)| {
-                is_chat_list_room(room)
+                is_rail_room(room, view.favorite_room_ids)
                     || view
                         .live_streams
                         .iter()
@@ -5028,6 +5079,8 @@ fn draw_selected_content(
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
                     news_cards: view.news_cards,
+                    gallery_cards: view.gallery_cards,
+                    artboard_gated: view.artboard_gated,
                     dividers: ChatDividers {
                         afk_line: view.afk_lines.get(&room.id).copied(),
                         left_app: view.device_left_at,

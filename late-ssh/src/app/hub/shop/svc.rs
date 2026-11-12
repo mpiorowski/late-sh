@@ -12,7 +12,7 @@ use late_core::{
     models::{
         aquarium_shield::AquariumShield,
         bonsai_decay_protection::BonsaiDecayProtection,
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind},
         chips::UserChips,
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
@@ -101,8 +101,7 @@ pub struct ActiveUsernameEffect {
 pub struct ActiveChatRoomEffect {
     pub effect_kind: String,
     pub source_sku: String,
-    pub room_kind: String,
-    pub room_visibility: String,
+    pub room_kind: RoomKind,
     pub room_permanent: bool,
     pub room_slug: Option<String>,
     pub ends_at: DateTime<Utc>,
@@ -996,16 +995,13 @@ impl ShopService {
             .collect::<Vec<_>>();
         let mut active_effect_room_meta = HashMap::new();
         for room in ChatRoom::list_by_ids(&client, &active_effect_room_ids).await? {
-            active_effect_room_meta.insert(
-                room.id,
-                (room.kind, room.visibility, room.permanent, room.slug),
-            );
+            active_effect_room_meta.insert(room.id, (room.kind, room.permanent, room.slug));
         }
         for effect in active_effect_rows {
             let Some(room_id) = effect.room_id else {
                 continue;
             };
-            let Some((room_kind, room_visibility, room_permanent, room_slug)) =
+            let Some((room_kind, room_permanent, room_slug)) =
                 active_effect_room_meta.get(&room_id).cloned()
             else {
                 continue;
@@ -1017,7 +1013,6 @@ impl ShopService {
                     effect_kind: effect.effect_kind,
                     source_sku: effect.source_sku,
                     room_kind,
-                    room_visibility,
                     room_permanent,
                     room_slug,
                     ends_at: effect.ends_at,

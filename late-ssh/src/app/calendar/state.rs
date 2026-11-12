@@ -3,6 +3,8 @@
 //! action goes to `svc.rs` and comes back as a `Reply` on the tick.
 pub use super::editor::Editor;
 use super::{
+    banner::{DayPost, day_posts},
+    editor::Existing,
     navigation::{ClickRecord, ContextMenu, NavigationFrame, Selection},
     svc::{CalendarService, Query, Reply, SaveError},
 };
@@ -31,6 +33,7 @@ pub enum Action {
     Today,
     New,
     Edit,
+    Duplicate,
     Delete,
     Rsvp,
     Date(NaiveDate),
@@ -132,7 +135,7 @@ impl CalendarState {
     pub fn new(service: CalendarService, viewer: Uuid) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let changed = service.subscribe();
-        let board = service.board_live();
+        let board = service.board_today();
         let mut s = Self {
             viewer,
             staff: false,
@@ -261,9 +264,6 @@ impl CalendarState {
         e.sort_by_key(|e| event_order(e, self.tz));
         e
     }
-    pub fn selected_event(&self) -> Option<CalendarEvent> {
-        self.selected_target_event()
-    }
     /// Whether the viewer said they are in.
     pub fn going(&self, id: Uuid) -> bool {
         self.rsvps.contains(&id)
@@ -291,6 +291,19 @@ impl CalendarState {
         self.open_generation += 1;
         self.refreshing = None;
     }
+    /// Read the open Details event again and swap the answer in. It may have
+    /// changed under the viewer, or left their sight (staff took it down, its
+    /// owner made it personal), and then `Gone` closes it.
+    pub(super) fn reread_details(&mut self) {
+        if let Some(Modal::Details(e)) = &self.modal {
+            let id = e.id;
+            self.open_generation += 1;
+            self.reload_request = false;
+            self.refreshing = Some(id);
+            self.service
+                .open(self.viewer, id, self.open_generation, self.tx.clone());
+        }
+    }
     pub fn save_editor(&mut self) {
         if self.pending {
             return;
@@ -300,8 +313,13 @@ impl CalendarState {
             match e.draft(today) {
                 Ok(d) => {
                     self.pending = true;
-                    self.service
-                        .save(self.viewer, e.source, e.existing, d, self.tx.clone());
+                    self.service.save(
+                        self.viewer,
+                        e.source,
+                        e.existing.map(|saved| (saved.id, saved.revision)),
+                        d,
+                        self.tx.clone(),
+                    );
                 }
                 Err(err) => e.error = Some(err.to_string()),
             }
@@ -323,11 +341,7 @@ impl CalendarState {
         if self.pending {
             return;
         }
-        let event = match &self.modal {
-            Some(Modal::Details(e)) => Some(e.clone()),
-            _ => self.selected_event(),
-        };
-        let Some(event) = event else {
+        let Some(event) = self.action_event() else {
             self.error = Some("Select an event first".into());
             return;
         };
@@ -339,19 +353,6 @@ impl CalendarState {
         let going = !self.going(event.id);
         self.service
             .rsvp(self.viewer, event.id, going, self.tx.clone());
-    }
-    /// Open an event the strip or the panel showed: the day it starts, then
-    /// its details over the page. The copy is the shared snapshot's, so the
-    /// details are up before the page's own load lands.
-    pub fn show_event(&mut self, event: CalendarEvent) {
-        let start = event.timing.dates(self.tz).0;
-        if self.modal.is_some() || !self.modal_parents.is_empty() {
-            self.modal = None;
-            self.modal_parents.clear();
-        }
-        self.select_date(start);
-        self.selection = Selection::Event(event.id);
-        self.push_modal(Modal::Details(event));
     }
     pub fn tick(&mut self, visible: bool, tz: Tz) -> bool {
         let mut changed = false;
@@ -378,16 +379,7 @@ impl CalendarState {
             if visible {
                 self.refresh();
             }
-            // Details the viewer has open may have changed under them, or
-            // been deleted by staff: read it again and swap it in.
-            if let Some(Modal::Details(e)) = &self.modal {
-                let id = e.id;
-                self.open_generation += 1;
-                self.reload_request = false;
-                self.refreshing = Some(id);
-                self.service
-                    .open(self.viewer, id, self.open_generation, self.tx.clone());
-            }
+            self.reread_details();
             changed = true;
         } else if visible
             && (self.needs_refresh || self.last_refresh.elapsed() >= StdDuration::from_secs(60))
@@ -404,18 +396,11 @@ impl CalendarState {
         }
         changed
     }
-    /// The board's live posts, soonest first: the shared snapshot minus
-    /// what ended since it was read. Personal events are never here.
-    pub fn live(&self) -> Vec<CalendarEvent> {
-        self.live_at(Utc::now())
-    }
-    pub fn live_at(&self, now: DateTime<Utc>) -> Vec<CalendarEvent> {
-        self.board
-            .borrow()
-            .iter()
-            .filter(|e| e.live(now))
-            .cloned()
-            .collect()
+    /// Today's board posts for Home's banner (`banner::day_posts`): the
+    /// shared snapshot narrowed to the viewer's zone. Personal events are
+    /// never here.
+    pub fn day_posts(&self, now: DateTime<Utc>) -> Vec<DayPost> {
+        day_posts(&self.board.borrow(), self.tz, now)
     }
     pub fn apply(&mut self, reply: Reply) -> bool {
         match reply {
@@ -450,7 +435,11 @@ impl CalendarState {
                     Ok(latest) => {
                         if self.reload_request {
                             if let Some(Modal::Editor(e)) = &mut self.modal {
-                                e.existing = Some((latest.id, latest.revision));
+                                e.existing = Some(Existing {
+                                    id: latest.id,
+                                    revision: latest.revision,
+                                    source: latest.source(),
+                                });
                                 e.conflict = false;
                                 e.error = Some(format!(
                                     "Reloaded revision {}: {}. Your draft is retained; review before saving.",
@@ -541,7 +530,7 @@ impl CalendarState {
         }
     }
     /// Swap a fresh copy of an event into every surface holding one.
-    fn replace_event(&mut self, event: CalendarEvent) {
+    pub(super) fn replace_event(&mut self, event: CalendarEvent) {
         for loaded in &mut self.events {
             if loaded.id == event.id {
                 *loaded = event.clone();

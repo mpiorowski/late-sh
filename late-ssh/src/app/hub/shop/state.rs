@@ -18,6 +18,7 @@ use super::{
 use late_core::models::{
     aquarium_shield::AquariumShield,
     bonsai_decay_protection::BonsaiDecayProtection,
+    chat_room::{RoomKind, RoomVisibility},
     marketplace::{CHAT_CONSUMABLE_ITEM_KIND, TankStockKind},
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
@@ -42,8 +43,7 @@ pub(crate) struct ShopState {
 pub(crate) struct RoomEffectTarget {
     pub room_id: Uuid,
     pub label: String,
-    pub kind: String,
-    pub visibility: String,
+    pub kind: RoomKind,
     pub permanent: bool,
     pub slug: Option<String>,
 }
@@ -662,10 +662,18 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
 
 impl RoomEffectTarget {
     fn can_bump(&self) -> bool {
-        self.kind == "topic"
-            && self.visibility == "public"
-            && !self.permanent
-            && self.slug.as_deref().is_some_and(|slug| !slug.is_empty())
+        match self.kind {
+            RoomKind::Topic(RoomVisibility::Public) => {
+                !self.permanent && self.slug.as_deref().is_some_and(|slug| !slug.is_empty())
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => false,
+        }
     }
 }
 

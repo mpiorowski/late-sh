@@ -1,14 +1,13 @@
 use crate::ircd::proj::*;
 use irc_proto::message::Tag;
-use late_core::models::chat_room::ChatRoom;
+use late_core::models::chat_room::{ChatRoom, RoomKind, RoomVisibility};
 
-fn room(kind: &str, visibility: &str, slug: Option<&str>) -> ChatRoom {
+fn room(kind: RoomKind, slug: Option<&str>) -> ChatRoom {
     ChatRoom {
         id: uuid::Uuid::new_v4(),
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        kind: kind.to_string(),
-        visibility: visibility.to_string(),
+        kind,
         auto_join: false,
         permanent: false,
         slug: slug.map(str::to_string),
@@ -24,20 +23,34 @@ fn room(kind: &str, visibility: &str, slug: Option<&str>) -> ChatRoom {
 #[test]
 fn channel_names_follow_room_kinds() {
     assert_eq!(
-        channel_name(&room("lounge", "public", Some("lounge"))).as_deref(),
+        channel_name(&room(RoomKind::Lounge, Some("lounge"))).as_deref(),
         Some("#lounge")
     );
     assert_eq!(
-        channel_name(&room("topic", "private", Some("sekrit"))).as_deref(),
+        channel_name(&room(
+            RoomKind::Topic(RoomVisibility::Private),
+            Some("sekrit")
+        ))
+        .as_deref(),
         Some("##sekrit")
     );
     assert_eq!(
-        channel_name(&room("topic", "public", Some("sekrit"))).as_deref(),
+        channel_name(&room(
+            RoomKind::Topic(RoomVisibility::Public),
+            Some("sekrit")
+        ))
+        .as_deref(),
         Some("#sekrit")
     );
-    assert_eq!(channel_name(&room("game", "public", Some("poker-1"))), None);
-    assert_eq!(channel_name(&room("dm", "dm", None)), None);
-    assert_eq!(channel_name(&room("lounge", "public", None)), None);
+    assert_eq!(
+        channel_name(&room(
+            RoomKind::Game(RoomVisibility::Public),
+            Some("poker-1")
+        )),
+        None
+    );
+    assert_eq!(channel_name(&room(RoomKind::Dm, None)), None);
+    assert_eq!(channel_name(&room(RoomKind::Lounge, None)), None);
 }
 
 #[test]
@@ -61,8 +74,14 @@ fn ctcp_action_round_trip() {
 
 #[test]
 fn channel_lookup_helpers() {
-    assert_eq!(channel_parts("#lounge"), Some(("public", "lounge")));
-    assert_eq!(channel_parts("##compel"), Some(("private", "compel")));
+    assert_eq!(
+        channel_parts("#lounge"),
+        Some((RoomVisibility::Public, "lounge"))
+    );
+    assert_eq!(
+        channel_parts("##compel"),
+        Some((RoomVisibility::Private, "compel"))
+    );
     assert_eq!(channel_parts("lounge"), None);
     assert_eq!(channel_parts("#"), None);
     assert_eq!(channel_parts("##"), None);

@@ -4946,6 +4946,85 @@ async fn artboard_archives_time_travel_from_the_rail() {
     );
 }
 
+/// A refused hang says so in a banner, once: on the board the notice
+/// alone sits in the framing bar, where it is easy to miss.
+#[tokio::test]
+async fn a_refused_hang_raises_one_banner() {
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-cap-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    // Today's three pieces are up already.
+    for n in 0..3 {
+        let hung = ArtboardPiece::hang(
+            &client,
+            HangParams {
+                user_id: user.id,
+                title: format!("piece {n}"),
+                width: 12,
+                height: 4,
+                canvas: serde_json::json!({
+                    "width": 12,
+                    "height": 4,
+                    "cells": [[{"x": 0, "y": 0}, {"Narrow": "#"}]],
+                    "colors": [],
+                }),
+                provenance: serde_json::json!({ "cells": [] }),
+                glyph_count: 40,
+                own_share_percent: 100,
+                content_hash: format!("hash-cap-{n}"),
+            },
+        )
+        .await
+        .expect("hang");
+        assert!(matches!(hung, HangOutcome::Hung(_)));
+    }
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-cap-flow-it");
+
+    app.handle_input(b"4v");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~\r");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
+        "dismiss floating paste",
+    )
+    .await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    for _ in 0..5 {
+        app.handle_input(b"j");
+    }
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Frame your work").await;
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<32;11;5M");
+    app.handle_input(b"\x1b[<0;11;5m");
+    wait_for_render_contains(&mut app, "frame 10x4").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Hang it in the").await;
+    app.banner = None;
+    app.handle_input(b"a fourth\r");
+
+    let refusal = "You have hung today's three pieces already. Tomorrow.";
+    wait_for_app(&mut app, "the refusal's banner", |app| {
+        app.banner
+            .as_ref()
+            .is_some_and(|banner| banner.message == refusal)
+    })
+    .await;
+    // Dismissed, it stays dismissed: the refusal is handed over once.
+    app.banner = None;
+    app.tick();
+    assert!(app.banner.is_none());
+}
+
 #[tokio::test]
 async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     let test_db = new_test_db().await;
@@ -7385,6 +7464,52 @@ async fn f_favorites_the_mentions_entry() {
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "Removed from favorites").await;
     assert!(!app.chat.favorite_room_ids().contains(&mentions_id));
+}
+
+/// A game room is on the rail only while it is a favorite. Unfavoriting the
+/// one open on Home moves the selection to a room the rail still lists
+/// right away, so the next draft goes to the room on screen and not to the
+/// game chat that just left it.
+#[tokio::test]
+async fn unfavoriting_the_open_game_room_moves_the_draft_with_the_screen() {
+    use late_core::models::game_room::GameKind;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-unfav-game").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let game = ChatRoom::get_or_create_game_room(&client, GameKind::Poker, "unfav-open")
+        .await
+        .expect("game room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    ChatRoomMember::join(&client, game.id, viewer.id)
+        .await
+        .expect("join game room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-unfav-game-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "\u{258C}lounge").await;
+
+    // `/fav` typed in the game's own chat is what puts it on the rail.
+    app.chat.start_composing_in_room(game.id);
+    app.handle_input(b"/fav\r");
+    wait_for_render_contains(&mut app, "Added to favorites").await;
+    wait_for_render_contains(&mut app, "favorites").await;
+
+    // Favorites sit above Core: one step left of lounge is the game room.
+    app.handle_input(b"h");
+    assert_eq!(app.chat.selected_room_id, Some(game.id));
+
+    // No tick between the two keys: no snapshot gets to repair anything.
+    app.handle_input(b"f");
+    app.handle_input(b"i");
+    assert!(!app.chat.favorite_room_ids().contains(&game.id));
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    assert_eq!(app.chat.composer_room_id(), Some(lounge.id));
 }
 
 /// The Chat badges picker lists every badge; a game's ladder is one row, and

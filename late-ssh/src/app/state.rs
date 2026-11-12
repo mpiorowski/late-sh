@@ -551,6 +551,9 @@ pub struct App {
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
+    /// Hung Artboard pieces' #lounge cards and the piece Enter on one opens
+    /// over the chat (`app/artboard/gallery/card/`).
+    pub(crate) gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState,
     /// The Jobs shelf: the replica's active postings, the selection, and
     /// the `/jobs` drain.
     pub(crate) jobs: crate::app::jobs::state::JobsState,
@@ -1026,6 +1029,9 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
+    /// A piece opened from its #lounge card, until the Artboard page may
+    /// show it (`open_gallery_piece`, `sync_dartboard_connection`).
+    pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1692,6 +1698,10 @@ impl App {
             ),
             comeback: crate::app::comeback::state::State::new(comeback_arrival),
             video: crate::app::video::state::State::default(),
+            gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState::new(
+                config.gallery_service.clone(),
+                config.user_id,
+            ),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -2014,6 +2024,7 @@ impl App {
             artboard_interacting: false,
             artboard_content_accepted: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
+            pending_gallery_piece: None,
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -2726,6 +2737,7 @@ impl App {
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
+            self.pending_gallery_piece = None;
         }
 
         if self.screen == Screen::Lateania {
@@ -3087,6 +3099,7 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.chat.reader().is_some()
+            || self.gallery_cards.modal().is_some()
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
@@ -3547,17 +3560,16 @@ impl App {
     pub(crate) fn home_tiles_area(&self) -> Rect {
         crate::app::zen::layout::rice_areas(
             self.content_area(),
-            self.home_board_day().is_some(),
+            !self.home_board_day().is_empty(),
             self.home.arrange,
         )
         .tiles
     }
 
-    /// The board's day for Home's banner (`calendar::live::day_text`):
-    /// today's all-day posts, `None` on any other day.
-    pub(crate) fn home_board_day(&self) -> Option<String> {
-        let now = chrono::Utc::now();
-        crate::app::calendar::live::day_text(&self.calendar.live_at(now), now)
+    /// The board's day for Home's banner (`calendar::banner`): today's
+    /// board posts, empty on a day it has none.
+    pub(crate) fn home_board_day(&self) -> Vec<crate::app::calendar::banner::DayPost> {
+        self.calendar.day_posts(chrono::Utc::now())
     }
 
     /// Every tile's rect on Home, in layout order, with the chrome's inner
@@ -3675,11 +3687,12 @@ impl App {
 
     /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions (`unread_rows`), and today's care still
+    /// the unread DMs and mentions (chat's `unread_dms` and
+    /// `unread_mentions`), and today's care still
     /// due. Read each frame while the page hosts the guest and on each of
     /// its keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
-        use crate::app::zen::attention::{Chore, Inputs, Match, items, unread_rows};
+        use crate::app::zen::attention::{Chore, Inputs, Item, Match, items};
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3716,14 +3729,22 @@ impl App {
                 ),
             })
             .collect();
-        let unread = unread_rows(
-            self.user_id,
-            &self.chat.rooms,
-            &self.chat.unread_counts,
-            self.chat.usernames(),
-            self.chat.ignored_user_ids(),
-            self.chat.notifications.all_items(),
-        );
+        let unread_dms = self.chat.unread_dms().into_iter().map(|dm| Item::Dm {
+            room_id: dm.room_id,
+            peer: dm.peer,
+            unread: dm.unread,
+        });
+        let unread_mentions =
+            self.chat
+                .unread_mentions()
+                .into_iter()
+                .map(|mention| Item::Mention {
+                    room_id: mention.room_id,
+                    message_id: mention.message_id,
+                    actor: mention.actor_username.clone(),
+                    room: mention.room_slug.clone(),
+                });
+        let unread = unread_dms.chain(unread_mentions).collect();
         let care = self.care_today();
         items(Inputs {
             my_moves,

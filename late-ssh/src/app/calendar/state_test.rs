@@ -1,5 +1,4 @@
 use super::{
-    navigation::Selection,
     state::*,
     svc::{CalendarService, Reply, Snapshot},
 };
@@ -102,50 +101,23 @@ async fn an_rsvp_reply_flips_the_viewer_and_updates_the_count_everywhere() {
     assert!(!s.pending);
 }
 
-/// Live is the board's shared snapshot minus what has ended since it was
-/// read; the session never adds its own events to it.
+/// Home's banner reads the board's shared snapshot narrowed to the
+/// viewer's today: the post that ended earlier today is still on it, the
+/// one two days out is not, and the session never adds its own events.
 #[tokio::test]
-async fn live_is_the_shared_snapshot_minus_what_ended() {
+async fn the_days_posts_are_the_shared_snapshot_on_the_viewers_today() {
     let service = service();
     let mut s = CalendarState::new(service.clone(), Uuid::now_v7());
-    let now = Utc::now();
-    let soon = event(1, now + Duration::minutes(30), true);
-    let on = event(2, now - Duration::minutes(10), true);
+    let now = Utc.with_ymd_and_hms(2026, 10, 10, 20, 0, 0).unwrap();
     let over = event(3, now - Duration::hours(3), true);
-    service.publish_board(vec![soon.clone(), on.clone(), over]);
+    let on = event(2, now - Duration::minutes(10), true);
+    let far = event(4, now + Duration::days(2), true);
+    service.publish_board(vec![over, on, far]);
     s.tick(false, chrono_tz::UTC);
-    let ids: Vec<_> = s.live().into_iter().map(|e| e.id).collect();
-    assert_eq!(
-        ids,
-        vec![soon.id, on.id],
-        "the snapshot's order, the over one gone"
-    );
-}
-
-/// Opening an event from the strip lands on its day with its details up,
-/// over whatever modal was open.
-#[tokio::test]
-async fn show_event_lands_on_its_day_with_details_open() {
-    let mut s = CalendarState::new(service(), Uuid::now_v7());
-    s.loading = false;
-    s.selected = date("2026-10-02");
-    s.modal = Some(Modal::Delete(event(
-        8,
-        Utc.with_ymd_and_hms(2026, 10, 2, 20, 0, 0).unwrap(),
-        true,
-    )));
-    let e = event(
-        9,
-        Utc.with_ymd_and_hms(2026, 11, 14, 20, 0, 0).unwrap(),
-        true,
-    );
-    s.show_event(e.clone());
-    assert_eq!(s.selected, date("2026-11-14"));
-    assert_eq!(s.selection, Selection::Event(e.id));
-    assert!(matches!(&s.modal, Some(Modal::Details(open)) if open.id == e.id));
-    assert_eq!(
-        s.modal_parents.len(),
-        1,
-        "the page is the only frame under it"
-    );
+    let titles: Vec<_> = s
+        .day_posts(now)
+        .into_iter()
+        .map(|post| post.title)
+        .collect();
+    assert_eq!(titles, vec!["Event 3", "Event 2"], "the snapshot's order");
 }

@@ -13,7 +13,7 @@ use late_core::models::{
     artboard::Snapshot as ArtboardSnapshot,
     artboard_ban::ArtboardBan,
     chat_message::{ChatMessage, ChatMessageParams},
-    chat_room::{ChatRoom, ChatRoomParams},
+    chat_room::{ChatRoom, RoomKind, RoomVisibility},
     chat_room_member::ChatRoomMember,
     chat_slow_mode::ChatSlowMode,
     game_room::GameKind,
@@ -486,24 +486,9 @@ async fn publishes_summary_with_rooms_and_unread_counts() {
     let target_user = create_test_user(&test_db.db, "target").await;
     let author_user = create_test_user(&test_db.db, "author").await;
 
-    let lounge_room = ChatRoom::create(
-        &client,
-        ChatRoomParams {
-            kind: "lounge".to_string(),
-            visibility: "public".to_string(),
-            auto_join: true,
-            permanent: true,
-            slug: Some("lounge".to_string()),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-            topic: None,
-            rules: None,
-            created_by: None,
-        },
-    )
-    .await
-    .expect("create lounge room");
+    let lounge_room = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "en")
         .await
         .expect("language room");
@@ -593,24 +578,9 @@ async fn falls_back_to_first_room_when_selected_room_is_none() {
     let target_user = create_test_user(&test_db.db, "target2").await;
     let author_user = create_test_user(&test_db.db, "author2").await;
 
-    let lounge_room = ChatRoom::create(
-        &client,
-        ChatRoomParams {
-            kind: "lounge".to_string(),
-            visibility: "public".to_string(),
-            auto_join: true,
-            permanent: true,
-            slug: Some("lounge".to_string()),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-            topic: None,
-            rules: None,
-            created_by: None,
-        },
-    )
-    .await
-    .expect("create lounge room");
+    let lounge_room = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("create lounge room");
     let lang_room = ChatRoom::get_or_create_language(&client, "fr")
         .await
         .expect("language room");
@@ -1363,12 +1333,194 @@ async fn editing_a_news_card_is_refused() {
             _ => {}
         }
     };
-    assert_eq!(refusal, "A story's card can't be edited.");
+    assert_eq!(refusal, "That card can't be edited.");
     let stored = ChatMessage::get(&client, card.id)
         .await
         .expect("reload card")
         .expect("card");
     assert_eq!(stored.body, "📰 Edit story https://example.com/edit");
+}
+
+/// A moderator's reach stops at their own rank, so an admin's message is
+/// not theirs to edit, and the banner says that instead of asking them to
+/// try again.
+#[tokio::test]
+async fn a_moderator_editing_an_admins_message_is_told_they_cannot() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let admin = create_test_user(&test_db.db, "edit-admin").await;
+    User::set_admin(&client, admin.id, true)
+        .await
+        .expect("promote admin");
+    let moderator = create_test_user(&test_db.db, "edit-moderator").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: admin.id,
+            body: "the admin's words".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    let mut events = service.subscribe_events();
+    let request_id = Uuid::now_v7();
+
+    service.edit_message_task(
+        moderator.id,
+        message.id,
+        "the moderator's words".to_string(),
+        request_id,
+        Permissions::new(false, true),
+    );
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::EditFailed {
+                request_id: got_request,
+                message,
+                ..
+            } if got_request == request_id => break message,
+            ChatEvent::EditSucceeded {
+                request_id: got_request,
+                ..
+            } if got_request == request_id => panic!("the moderator's edit went through"),
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "You can't edit this message.");
+    let stored = ChatMessage::get(&client, message.id)
+        .await
+        .expect("reload message")
+        .expect("message");
+    assert_eq!(stored.body, "the admin's words");
+}
+
+/// A message deleted while its edit was open is a race the editor lost, not
+/// a failure: the banner says it is gone instead of asking them to try again.
+#[tokio::test]
+async fn editing_a_message_that_is_gone_says_so() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let editor = create_test_user(&test_db.db, "edit-gone").await;
+    let mut events = service.subscribe_events();
+    let request_id = Uuid::now_v7();
+
+    service.edit_message_task(
+        editor.id,
+        Uuid::now_v7(),
+        "too late".to_string(),
+        request_id,
+        Permissions::default(),
+    );
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::EditFailed {
+                request_id: got_request,
+                message,
+                ..
+            } if got_request == request_id => break message,
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "That message is gone.");
+}
+
+/// A moderator's reach stops at their own rank for deletes too: the admin's
+/// message stays, and the banner is the rule, not an error's text.
+#[tokio::test]
+async fn a_moderator_deleting_an_admins_message_is_told_they_cannot() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let admin = create_test_user(&test_db.db, "delete-admin").await;
+    User::set_admin(&client, admin.id, true)
+        .await
+        .expect("promote admin");
+    let moderator = create_test_user(&test_db.db, "delete-moderator").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: admin.id,
+            body: "the admin's words".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    let mut events = service.subscribe_events();
+
+    service.delete_message_task(moderator.id, message.id, Permissions::new(false, true));
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::DeleteFailed { user_id, message } if user_id == moderator.id => {
+                break message;
+            }
+            ChatEvent::MessageDeleted { message_id, .. } if message_id == message.id => {
+                panic!("the moderator's delete went through")
+            }
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "You can't delete this message.");
+    assert!(
+        ChatMessage::get(&client, message.id)
+            .await
+            .expect("reload message")
+            .is_some()
+    );
+}
+
+/// A message someone else deleted first is gone, and the banner says that.
+#[tokio::test]
+async fn deleting_a_message_that_is_gone_says_so() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let deleter = create_test_user(&test_db.db, "delete-gone").await;
+    let mut events = service.subscribe_events();
+
+    service.delete_message_task(deleter.id, Uuid::now_v7(), Permissions::default());
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::DeleteFailed { user_id, message } if user_id == deleter.id => break message,
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "That message is gone.");
 }
 
 #[tokio::test]
@@ -4162,7 +4314,7 @@ async fn opening_a_new_public_room_asks_the_creator_and_reports_to_moderators() 
 async fn wait_for_public_room(db: &late_core::db::Db, slug: &str) -> Uuid {
     for _ in 0..50 {
         let client = db.get().await.expect("db client");
-        let found = ChatRoom::find_topic_room(&client, "public", slug)
+        let found = ChatRoom::find_topic_room(&client, RoomVisibility::Public, slug)
             .await
             .expect("find room");
         drop(client);
@@ -4736,24 +4888,9 @@ mod gild {
 
     async fn public_room(db: &late_core::db::Db, slug: &str) -> ChatRoom {
         let client = db.get().await.expect("db client");
-        ChatRoom::create(
-            &client,
-            ChatRoomParams {
-                kind: "topic".to_string(),
-                visibility: "public".to_string(),
-                auto_join: false,
-                permanent: false,
-                slug: Some(slug.to_string()),
-                language_code: None,
-                dm_user_a: None,
-                dm_user_b: None,
-                topic: None,
-                rules: None,
-                created_by: None,
-            },
-        )
-        .await
-        .expect("create room")
+        ChatRoom::get_or_create_public_room(&client, slug)
+            .await
+            .expect("create room")
     }
 
     async fn message_in(db: &late_core::db::Db, room_id: Uuid, user_id: Uuid) -> ChatMessage {
@@ -4995,24 +5132,9 @@ mod gild {
         let buyer = create_test_user(&test_db.db, "gild-private-buyer").await;
         let room = {
             let client = test_db.db.get().await.expect("db client");
-            ChatRoom::create(
-                &client,
-                ChatRoomParams {
-                    kind: "topic".to_string(),
-                    visibility: "private".to_string(),
-                    auto_join: false,
-                    permanent: false,
-                    slug: Some("gild-private".to_string()),
-                    language_code: None,
-                    dm_user_a: None,
-                    dm_user_b: None,
-                    topic: None,
-                    rules: None,
-                    created_by: None,
-                },
-            )
-            .await
-            .expect("create room")
+            ChatRoom::create_private_room(&client, "gild-private", author.id)
+                .await
+                .expect("create room")
         };
         join(&test_db.db, room.id, author.id).await;
         join(&test_db.db, room.id, buyer.id).await;
@@ -5054,7 +5176,8 @@ mod gild {
             .expect("game room")
         };
         assert_eq!(
-            room.visibility, "public",
+            room.kind,
+            RoomKind::Game(RoomVisibility::Public),
             "the fixture must be the public game room shape"
         );
         join(&test_db.db, room.id, author.id).await;
