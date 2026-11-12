@@ -11,6 +11,7 @@ use super::state::{HubGame, RailEntry};
 use crate::app::common::{primitives::hint_line, theme};
 use crate::app::door::spectate::state::LiveRow;
 use crate::app::door::spectate::ui::{duration_label, minutes_since};
+use crate::app::games::chips::cooldown::CooldownView;
 
 /// The rc config modal, when open: which game's file plus the stored content.
 pub struct RcModalView<'a> {
@@ -29,6 +30,9 @@ pub struct HubView<'a> {
     pub scroll: u16,
     /// Where this frame records how far the selected landing can scroll.
     pub max_scroll: &'a std::cell::Cell<u16>,
+    /// The account's payout timers, once read: the landings with a monthly
+    /// milestone print when each pays again.
+    pub cooldowns: Option<CooldownView<'a>>,
     pub delete_confirm: bool,
     pub rebels_enabled: bool,
     pub nethack_enabled: bool,
@@ -319,6 +323,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.lateania_online,
             &view.lateania_slots,
             view.lateania_slot_cursor,
+            view.cooldowns,
             scroll,
         ),
         HubGame::Realm => {
@@ -339,6 +344,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.nethack_enabled,
             view.nethack_live,
+            view.cooldowns,
             scroll,
         ),
         HubGame::Dcss => crate::app::door::dcss::render::draw_landing(
@@ -346,6 +352,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.dcss_enabled,
             view.dcss_live,
+            view.cooldowns,
             scroll,
         ),
         HubGame::Brogue => crate::app::door::brogue::render::draw_landing(
@@ -353,6 +360,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.brogue_enabled,
             view.brogue_live,
+            view.cooldowns,
             scroll,
         ),
         HubGame::Usurper => crate::app::door::usurper::render::draw_landing(
@@ -365,6 +373,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             frame,
             body[1],
             view.delete_confirm,
+            view.cooldowns,
             scroll,
         ),
         HubGame::Dopewars => crate::app::door::dopewars::render::draw_landing(
@@ -383,6 +392,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             frame,
             body[1],
             view.delete_confirm,
+            view.cooldowns,
             scroll,
         ),
         HubGame::Zork => {

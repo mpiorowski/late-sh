@@ -1,5 +1,6 @@
 use crate::app::{
     activity::event::{ActivityEvent, ActivityGame},
+    games::chips::cooldown::{CooldownReward, PayoutWindow},
     games::chips::svc::{ChipService, GiftError, GiftRefusal, RoundError, RoundRefusal},
 };
 use chrono::NaiveDate;
@@ -12,7 +13,7 @@ use late_core::{
         drinks::{UserDrinks, drunk_level},
         leaderboard::DailyPuzzle,
         reward::{
-            DARKROOM_ESCAPE_REWARD_KEY, GREENDRAGON_DRAGON_REWARD_KEY,
+            DARKROOM_BEACON_REWARD_KEY, DARKROOM_ESCAPE_REWARD_KEY, GREENDRAGON_DRAGON_REWARD_KEY,
             LATEANIA_ARCHDEMON_REWARD_KEY, REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate,
             daily_puzzle_reward_key,
         },
@@ -399,12 +400,12 @@ async fn apply_move_settles_a_seat_and_refuses_what_the_balance_cannot_cover() {
 
 // ---- the repeatable door payouts (migration 158) --------------------------
 
-/// The dragon sends the character back to level 1, so the climb is the gate
-/// and every kill pays. The payout is keyed on the character row plus the kill
-/// number, so a retry of the same kill pays once and a recreated character
-/// starts its own count.
+/// A dragon kill is behind two gates at once (migration 286): the kill, keyed
+/// on the character row plus the kill number, so a retry pays once and a
+/// recreated character starts its own count; and one paid kill a month per
+/// account.
 #[tokio::test]
-async fn a_dragon_kill_pays_every_kill_and_a_new_character_starts_over() {
+async fn a_dragon_kill_pays_once_per_kill_and_once_a_month() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "gd-kills").await;
     let client = test_db.db.get().await.expect("db client");
@@ -419,7 +420,7 @@ async fn a_dragon_kill_pays_every_kill_and_a_new_character_starts_over() {
         let chips = chips.clone();
         async move {
             chips
-                .credit_per_event_reward_template(
+                .credit_run_cooldown_reward_template(
                     user.id,
                     GREENDRAGON_DRAGON_REWARD_KEY,
                     &format!("{character}:{number}"),
@@ -437,19 +438,23 @@ async fn a_dragon_kill_pays_every_kill_and_a_new_character_starts_over() {
 
     // The same kill, seen twice (a retried fire-and-forget task).
     assert!(!kill(first_character, 1).await.credited);
+    // The next kill, and a recreated character's first, inside the month.
+    assert!(!kill(first_character, 2).await.credited);
+    assert!(!kill(second_character, 1).await.credited);
+    assert_eq!(balance(&test_db.db, user.id).await, 11_000);
 
-    // The next kill on the same character, and the first kill of a character
-    // rolled after this one was deleted: both are their own event.
-    assert!(kill(first_character, 2).await.credited);
-    let fresh_character = kill(second_character, 1).await;
-    assert!(fresh_character.credited);
-    assert_eq!(fresh_character.balance, 31_000);
+    // Past the month, the next kill pays.
+    age_payout_claims(&test_db.db, user.id, 31).await;
+    let later = kill(second_character, 1).await;
+    assert!(later.credited);
+    assert_eq!(later.balance, 21_000);
 }
 
-/// A Dark Room wipes the save on the way out, so a repeat is the whole arc
-/// again and every run that gets out pays. The run id is the whole gate.
+/// A Dark Room ending is behind the run id and a monthly window, and the two
+/// endings are two milestones with a window each: a beacon escape in the
+/// month a plain one paid still pays.
 #[tokio::test]
-async fn a_darkroom_escape_pays_every_run() {
+async fn a_darkroom_ending_pays_once_per_run_and_once_a_month_each() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "adr-runs").await;
     let client = test_db.db.get().await.expect("db client");
@@ -459,30 +464,91 @@ async fn a_darkroom_escape_pays_every_run() {
     drop(client);
     let chips = ChipService::new(test_db.db.clone());
 
-    let escape = |run: Uuid| {
+    let escape = |reward_key: &'static str, chip_move: ChipMove, run: Uuid| {
         let chips = chips.clone();
         async move {
             chips
-                .credit_per_event_reward_template(
+                .credit_run_cooldown_reward_template(
                     user.id,
-                    DARKROOM_ESCAPE_REWARD_KEY,
+                    reward_key,
                     &run.to_string(),
-                    ChipMove::DarkroomEscape,
+                    chip_move,
                 )
                 .await
                 .expect("escape payout")
         }
     };
+    let plain = |run| escape(DARKROOM_ESCAPE_REWARD_KEY, ChipMove::DarkroomEscape, run);
+    let beacon = |run| {
+        escape(
+            DARKROOM_BEACON_REWARD_KEY,
+            ChipMove::DarkroomBeaconEscape,
+            run,
+        )
+    };
 
     let run = Uuid::now_v7();
-    let first = escape(run).await;
+    let first = plain(run).await;
     assert!(first.credited);
     assert_eq!(first.amount, 15_000);
-    assert!(!escape(run).await.credited, "one run, one payout");
+    assert!(!plain(run).await.credited, "one run, one payout");
+    assert!(
+        !plain(Uuid::now_v7()).await.credited,
+        "one plain escape a month"
+    );
 
-    let second = escape(Uuid::now_v7()).await;
-    assert!(second.credited);
-    assert_eq!(second.balance, 31_000);
+    let with_beacon = beacon(Uuid::now_v7()).await;
+    assert!(with_beacon.credited, "the other ending has its own window");
+    assert_eq!(with_beacon.balance, 36_000);
+
+    age_payout_claims(&test_db.db, user.id, 31).await;
+    let later = plain(Uuid::now_v7()).await;
+    assert!(later.credited);
+    assert_eq!(later.balance, 51_000);
+}
+
+/// The hub's timers read the same window the grant enforces: a paid ending
+/// is closed for the month and its sibling stays open. Building them at all
+/// also proves every reward on the roster has an active `cooldown` template.
+#[tokio::test]
+async fn cooldown_timers_close_the_milestone_that_paid_for_its_window() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "adr-timers").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(user.id).await.expect("chips row");
+
+    let before = chrono::Utc::now();
+    let open = chips.cooldown_timers(user.id).await.expect("timers");
+    for reward in CooldownReward::ALL {
+        assert_eq!(
+            open.window(reward, before),
+            PayoutWindow::Open,
+            "{reward:?}"
+        );
+    }
+
+    chips
+        .credit_run_cooldown_reward_template(
+            user.id,
+            DARKROOM_ESCAPE_REWARD_KEY,
+            &Uuid::now_v7().to_string(),
+            ChipMove::DarkroomEscape,
+        )
+        .await
+        .expect("escape payout");
+    let timers = chips.cooldown_timers(user.id).await.expect("timers");
+    let now = chrono::Utc::now();
+    match timers.window(CooldownReward::DarkroomEscape, now) {
+        PayoutWindow::Closed { remaining } => {
+            assert!(remaining > chrono::Duration::days(29), "{remaining:?}");
+            assert!(remaining <= chrono::Duration::days(30), "{remaining:?}");
+        }
+        PayoutWindow::Open => panic!("the paid ending is inside its window"),
+    }
+    assert_eq!(
+        timers.window(CooldownReward::DarkroomBeacon, now),
+        PayoutWindow::Open
+    );
 }
 
 /// A Lateania crown is behind two gates at once: the character persists, so a

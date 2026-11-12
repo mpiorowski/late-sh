@@ -21,6 +21,7 @@ use crate::app::activity::{
     channel::ActivitySender,
     event::{ActivityEvent, ActivityKind},
 };
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownTimers};
 
 // `period_kind = "lifetime"` is gone from every write path: migration 158
 // made every door milestone repeatable, so nothing pays once per account for
@@ -736,6 +737,21 @@ impl ChipService {
         )
         .await?;
         Ok(reward_grant(template.reward_chips, claim))
+    }
+
+    /// When each cooldown-gated milestone can pay `user_id` next: the
+    /// windows `credit_run_cooldown_reward_template` enforces, read off the
+    /// same claim rows. Two reads, no writes.
+    pub async fn cooldown_timers(&self, user_id: Uuid) -> anyhow::Result<CooldownTimers> {
+        let client = self.db.get().await?;
+        let keys = CooldownReward::ALL.map(CooldownReward::reward_key);
+        let templates = RewardTemplate::list_active_by_keys(&**client, &keys)
+            .await
+            .context("reading the cooldown reward templates")?;
+        let claims = GamePayout::last_cooldown_claims(&client, user_id)
+            .await
+            .context("reading the last cooldown claims")?;
+        CooldownTimers::from_rows(&templates, &claims)
     }
 
     /// Top a losing house-table seat back up to the floor. `source_ref` is

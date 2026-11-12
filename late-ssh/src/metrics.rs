@@ -211,6 +211,14 @@ pub enum DoorOpeningResult {
     Failed,
 }
 
+/// Whether the Games hub's payout timers (`app/door/hub`) were read when it
+/// opened: `Failed` leaves the landings on the fixed window line alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayoutTimersRead {
+    Loaded,
+    Failed,
+}
+
 /// How one page of The Late Edition (`app/paper`) came off the press.
 /// `Printed` is a page with text on it: a room page, READING and OUTSIDE
 /// spent a model call for it, YESTERDAY is counted from late.sh's own rows
@@ -839,13 +847,14 @@ mod inner {
         GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
         HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
-        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
-        RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RollCallResult, RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, PayoutTimersRead,
+        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
+        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
+        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4373,6 +4382,26 @@ mod inner {
         );
     }
 
+    fn payout_timer_reads_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_payout_timer_reads_total")
+                .with_description(
+                    "Reads of an account's payout timers when the Games hub opens, by result",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_payout_timers_read(result: PayoutTimersRead) {
+        let label = match result {
+            PayoutTimersRead::Loaded => "loaded",
+            PayoutTimersRead::Failed => "failed",
+        };
+        payout_timer_reads_total().add(1, &[KeyValue::new("result", label)]);
+    }
+
     pub fn record_door_ingest_session_failure(door: DoorKind) {
         door_ingest_session_failures_total().add(1, &[KeyValue::new("game", door.key())]);
     }
@@ -4662,13 +4691,14 @@ mod inner {
         GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
         HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
-        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
-        RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RollCallResult, RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, PayoutTimersRead,
+        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
+        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
+        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4862,6 +4892,7 @@ mod inner {
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_door: DoorKind) {}
     pub fn record_door_opening(_card: DoorCard, _result: DoorOpeningResult) {}
+    pub fn record_payout_timers_read(_result: PayoutTimersRead) {}
     pub fn record_door_ingest_session_failure(_door: DoorKind) {}
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}

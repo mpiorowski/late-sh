@@ -675,6 +675,10 @@ impl App {
             let lateania_changed = state.tick();
             changed |= lateania_changed && self.screen == Screen::Lateania;
         }
+        // The payout timers land once per visit; drain always, pay a frame
+        // only where a landing prints them.
+        let timers_changed = self.games_hub_state.tick();
+        changed |= timers_changed && matches!(self.screen, Screen::Lateania | Screen::Games);
         // The character-select list changes from tasks with no session of
         // their own: a logout save, a delete, another connection's character.
         // Only the two screens that draw it pay for the comparison, and a

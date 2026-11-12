@@ -297,7 +297,8 @@ async fn main() -> anyhow::Result<()> {
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
     let live_games = late_ssh::app::door::spectate::svc::LiveGamesService::new(db.clone());
     let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
-    let games_hub_service = late_ssh::app::door::hub::svc::GamesHubService::new(db.clone());
+    let games_hub_service =
+        late_ssh::app::door::hub::svc::GamesHubService::new(db.clone(), chip_service.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
         late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),

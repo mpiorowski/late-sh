@@ -58,13 +58,16 @@ async fn badge_count(db: &late_core::db::Db, user_id: Uuid, category: &str) -> i
         .get("n")
 }
 
+/// What the account was paid for its endings. A credited grant writes one
+/// claim row per gate (the run and the 30-day window), each carrying the full
+/// amount, so the window's row alone counts each payout once.
 async fn payout_total(db: &late_core::db::Db, user_id: Uuid) -> i64 {
     let client = db.get().await.expect("db client");
     client
         .query_one(
             "SELECT COALESCE(SUM(amount), 0)::bigint AS total
              FROM game_payout_claims
-             WHERE user_id = $1 AND game = 'darkroom'",
+             WHERE user_id = $1 AND game = 'darkroom' AND period_kind = 'cooldown'",
             &[&user_id],
         )
         .await
@@ -198,11 +201,11 @@ fn the_beacon_ending_says_something_else_and_pays_its_own_badge() {
     // And they say different prices, because they pay different ones.
     assert_eq!(
         Escape::Plain.reward_line(),
-        "15,000 chips, every run that gets out"
+        "15,000 chips, at most once every 30 days"
     );
     assert_eq!(
         Escape::WithBeacon.reward_line(),
-        "20,000 chips, every run that gets out"
+        "20,000 chips, at most once every 30 days"
     );
 }
 

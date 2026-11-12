@@ -1324,12 +1324,12 @@ impl GreenDragonService {
     /// only, on the `NOT EXISTS` award insert — the rankless GDS profile
     /// badge.
     ///
-    /// Every kill pays (migrations 158 and 159): the kill resets the character to
-    /// level 1, so climbing back to the dragon is a real 7-10 days under the
-    /// daily turn cap, and that is the whole gate. The payout is keyed on
-    /// `<character row id>:<kill number>`, so a retry pays once and a deleted-
-    /// and-recreated character's kill 1 is a different event from the old
-    /// character's kill 1.
+    /// A kill pays behind two gates at once (migration 286, the door
+    /// milestones' `credit_run_cooldown_reward_template`): the kill itself,
+    /// keyed on `<character row id>:<kill number>`, so a retry pays once and a
+    /// deleted-and-recreated character's kill 1 is a different event from the
+    /// old character's kill 1; and at most one paid kill every 30 days per
+    /// account.
     pub fn reward_dragon_kill(&self, user_id: Uuid, kills: u32) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
@@ -1374,7 +1374,7 @@ impl GreenDragonService {
 
             let grant = match inner
                 .chips
-                .credit_per_event_reward_template(
+                .credit_run_cooldown_reward_template(
                     user_id,
                     GREENDRAGON_DRAGON_REWARD_KEY,
                     &event_key,
@@ -1392,16 +1392,16 @@ impl GreenDragonService {
                     return;
                 }
             };
-            // This kill already paid: the chips stay suppressed, but the
-            // badge insert below still runs (it is `NOT EXISTS` idempotent),
-            // so a badge insert that failed on the crediting kill heals here
-            // instead of being lost for good. Same rule as award.rs and
-            // darkroom/svc.rs.
+            // This kill already paid, or a kill paid inside the last 30
+            // days: the chips stay suppressed, but the badge insert below
+            // still runs (it is `NOT EXISTS` idempotent), so a badge insert
+            // that failed on the crediting kill heals here instead of being
+            // lost for good. Same rule as award.rs and darkroom/svc.rs.
             if !grant.credited {
                 tracing::info!(
                     user_id = %user_id,
                     event_key = %event_key,
-                    "suppressed greendragon dragon-kill chips because this kill already paid"
+                    "suppressed greendragon dragon-kill chips: this kill already paid, or a kill paid inside the 30-day window"
                 );
             }
 

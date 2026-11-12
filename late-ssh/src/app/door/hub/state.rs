@@ -23,7 +23,10 @@
 
 use std::cell::Cell;
 
+use tokio::sync::oneshot;
+
 use crate::app::common::primitives::Screen;
+use crate::app::games::chips::cooldown::CooldownTimers;
 use crate::app::state::App;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -350,6 +353,11 @@ pub struct State {
     /// `hub::ui::draw_games_hub`. Input has no layout to measure, so it clamps
     /// to what was last drawn.
     max_scroll: Cell<u16>,
+    /// The account's payout timers, as last read; `None` until the first read
+    /// lands, and the landings print only the fixed window line until then.
+    timers: Option<CooldownTimers>,
+    /// The read in flight, from [`State::request_timers`] to [`State::tick`].
+    timers_reply: Option<oneshot::Receiver<CooldownTimers>>,
 }
 
 impl State {
@@ -399,5 +407,39 @@ impl State {
     /// after a resize shortens the landing the first press already moves it.
     pub fn scroll_up(&mut self) {
         self.scroll = self.scroll.min(self.max_scroll.get()).saturating_sub(1);
+    }
+
+    /// Start a fresh read of the payout timers: the returned sender goes to
+    /// `svc::GamesHubService::load_timers_task`. The timers already shown
+    /// stay up until the new ones land.
+    pub fn request_timers(&mut self) -> oneshot::Sender<CooldownTimers> {
+        let (reply, receiver) = oneshot::channel();
+        self.timers_reply = Some(receiver);
+        reply
+    }
+
+    pub fn timers(&self) -> Option<&CooldownTimers> {
+        self.timers.as_ref()
+    }
+
+    /// Take a read that has landed. Returns whether the timers changed.
+    pub fn tick(&mut self) -> bool {
+        let Some(receiver) = self.timers_reply.as_mut() else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(timers) => {
+                self.timers_reply = None;
+                let changed = self.timers.as_ref() != Some(&timers);
+                self.timers = Some(timers);
+                changed
+            }
+            Err(oneshot::error::TryRecvError::Empty) => false,
+            // The read failed and was logged where it ran.
+            Err(oneshot::error::TryRecvError::Closed) => {
+                self.timers_reply = None;
+                false
+            }
+        }
     }
 }

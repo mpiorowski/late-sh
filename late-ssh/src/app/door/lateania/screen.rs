@@ -17,6 +17,7 @@ use crate::app::{
 use crate::usernames::UsernameLookup;
 
 use super::svc::{CHARACTER_SLOTS, SlotList};
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownView};
 
 pub const GAME: LateaniaDoorGame = LateaniaDoorGame;
 
@@ -74,6 +75,8 @@ pub struct LateaniaScreenView<'a> {
     pub slots: &'a SlotList,
     /// Highlighted slot on the landing.
     pub slot_cursor: usize,
+    /// The account's payout timers, once the hub's read has landed.
+    pub cooldowns: Option<CooldownView<'a>>,
 }
 
 fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
@@ -94,6 +97,7 @@ fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
         view.online,
         view.slots,
         view.slot_cursor,
+        view.cooldowns,
         0,
     );
 }
@@ -241,6 +245,7 @@ pub fn draw_landing(
     online: usize,
     slots: &SlotList,
     slot_cursor: usize,
+    cooldowns: Option<CooldownView<'_>>,
     scroll: u16,
 ) -> u16 {
     draw_launch_copy(
@@ -250,6 +255,7 @@ pub fn draw_landing(
         online,
         slots,
         slot_cursor,
+        cooldowns,
         scroll,
     )
 }
@@ -324,6 +330,7 @@ fn draw_launch_copy(
     online: usize,
     slots: &SlotList,
     slot_cursor: usize,
+    cooldowns: Option<CooldownView<'_>>,
     scroll: u16,
 ) -> u16 {
     let inner = Layout::default()
@@ -358,28 +365,32 @@ fn draw_launch_copy(
     lines.extend(world_stats(online));
     lines.push(Line::raw(""));
     lines.push(landing::heading("Boss Achievements"));
-    lines.push(landing::stat(
+    lines.extend(landing::reward(
         "Archdemon Mal'gareth",
         "10,000 chips, and the LMG badge the first time",
         24,
+        cooldowns.map(|view| view.window(CooldownReward::LateaniaArchdemon)),
     ));
-    lines.push(landing::stat(
+    lines.extend(landing::reward(
         "Frontier King",
         "10,000 chips, and the LKN badge the first time",
         24,
+        cooldowns.map(|view| view.window(CooldownReward::LateaniaFrontierKing)),
     ));
-    lines.push(landing::stat(
+    lines.extend(landing::reward(
         "Yssgar, Sundering Deep",
         "10,000 chips, and the LYS badge the first time",
         24,
+        cooldowns.map(|view| view.window(CooldownReward::LateaniaSunderingDeep)),
     ));
-    lines.push(landing::stat(
+    lines.extend(landing::reward(
         "Kaethyr Ascendant",
         "10,000 chips, and the LKA badge the first time",
         24,
+        cooldowns.map(|view| view.window(CooldownReward::LateaniaKaethyrAscendant)),
     ));
     lines.push(Line::from(Span::styled(
-        "  Each crown pays once per character, and at most once every 30 days per account.",
+        "  Each crown pays once per character, and at most once every 30 days per account: the timer is the account's.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));

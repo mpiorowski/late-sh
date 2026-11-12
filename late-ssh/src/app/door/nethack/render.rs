@@ -8,6 +8,7 @@ use super::state::{Mode, State};
 use crate::app::common::theme;
 use crate::app::door::landing;
 use crate::app::door::rebels::render::blit_screen;
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownView};
 
 /// Draw the nethack page below the top bar: the Launcher when idle, the live
 /// embedded vt100 widget once the process is running.
@@ -23,7 +24,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false, 0);
+        draw_landing(frame, area, false, false, None, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -31,7 +32,7 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         state.entry_input(),
         landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS()),
     );
-    render_landing(frame, area, launch, Vec::new(), 0);
+    render_landing(frame, area, launch, Vec::new(), None, 0);
 }
 
 /// NetHack landing copy with the classic one-line Launch block, used by the
@@ -40,7 +41,14 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 /// The F4 hint for showing or hiding watcher chat beside their game
 /// closes the Launch block; who is playing right now is the hub rail's
 /// `live` section, not this page.
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, scroll: u16) -> u16 {
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    enabled: bool,
+    live: bool,
+    cooldowns: Option<CooldownView<'_>>,
+    scroll: u16,
+) -> u16 {
     let action_line = if live {
         landing::action(
             ">",
@@ -61,7 +69,14 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, sc
     } else {
         Vec::new()
     };
-    render_landing(frame, area, vec![action_line], watch_chat, scroll)
+    render_landing(
+        frame,
+        area,
+        vec![action_line],
+        watch_chat,
+        cooldowns,
+        scroll,
+    )
 }
 
 /// The landing body around a caller-supplied Launch block, closed by any
@@ -71,6 +86,7 @@ fn render_landing(
     area: Rect,
     launch: Vec<Line<'static>>,
     launch_hints: Vec<Line<'static>>,
+    cooldowns: Option<CooldownView<'_>>,
     scroll: u16,
 ) -> u16 {
     let inner = Layout::default()
@@ -112,16 +128,20 @@ fn render_landing(
         flavor_quote(),
         Line::from(""),
         landing::heading("Rewards"),
-        landing::stat(
-            "Amulet of Yendor",
-            "20,000 chips, and the NHA badge the first time",
-            18,
-        ),
-        landing::stat(
-            "Ascension",
-            "40,000 chips, and the NHY badge the first time",
-            18,
-        ),
+    ]);
+    lines.extend(landing::reward(
+        "Amulet of Yendor",
+        "20,000 chips, and the NHA badge the first time",
+        18,
+        cooldowns.map(|view| view.window(CooldownReward::NethackAmulet)),
+    ));
+    lines.extend(landing::reward(
+        "Ascension",
+        "40,000 chips, and the NHY badge the first time",
+        18,
+        cooldowns.map(|view| view.window(CooldownReward::NethackAscension)),
+    ));
+    lines.extend([
         Line::from(Span::styled(
             "  Each pays again 30 days after the last time it paid. One run, one payout.",
             Style::default().fg(theme::TEXT_FAINT()),
