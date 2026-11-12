@@ -2,7 +2,6 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        article::{Article, ArticleParams},
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection, escape_like_pattern},
         chat_message_reaction::{ChatMessageReaction, ChatMessageReactionAction},
         chat_room::ChatRoom,
@@ -719,18 +718,18 @@ async fn first_unread_after_finds_the_oldest_foreign_message_past_the_cutoff() {
     assert!(none.is_none());
 }
 
-/// The paper's room transcript leaves News shares' #lounge cards out (the
-/// paper prints shares on its own reading page) and keeps what people say
-/// about them.
+/// The paper's room transcript leaves the house's #lounge cards out (the
+/// paper prints shares on its own reading page, and a piece's line is only
+/// a title and a link) and keeps what people say about them.
 #[tokio::test]
-async fn list_public_room_between_leaves_out_news_cards() {
+async fn list_public_room_between_leaves_out_house_cards() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
         .expect("ensure lounge room");
     let sharer = create_test_user(&test_db.db, "paper-card-sharer").await;
-    let card = ChatMessage::create(
+    ChatMessage::create_house_card(
         &client,
         ChatMessageParams {
             room_id: lounge.id,
@@ -740,22 +739,6 @@ async fn list_public_room_between_leaves_out_news_cards() {
     )
     .await
     .expect("post card");
-    let article = Article::create_by_user_id(
-        &client,
-        sharer.id,
-        ArticleParams {
-            user_id: sharer.id,
-            url: "https://example.com/card".to_string(),
-            title: "Card story".to_string(),
-            summary: "• one".to_string(),
-            ascii_art: String::new(),
-        },
-    )
-    .await
-    .expect("share");
-    Article::link_lounge_message(&client, sharer.id, article.id, card.id)
-        .await
-        .expect("link card");
     ChatMessage::create(
         &client,
         ChatMessageParams {
@@ -779,6 +762,52 @@ async fn list_public_room_between_leaves_out_news_cards() {
             .collect::<Vec<_>>(),
         vec!["worth a read"]
     );
+}
+
+/// Only a line the house wrote is its card: a typed line is not, and
+/// neither is a message that is gone.
+#[tokio::test]
+async fn is_house_card_holds_only_for_the_house_cards_lines() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let sharer = create_test_user(&test_db.db, "house-card-sharer").await;
+    let card = ChatMessage::create_house_card(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: sharer.id,
+            body: "🎨 \"dawn\" https://example.com/gallery/pieces/1".to_string(),
+        },
+    )
+    .await
+    .expect("post card");
+    let typed = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: sharer.id,
+            body: "🎨 \"dawn\" https://example.com/gallery/pieces/1".to_string(),
+        },
+    )
+    .await
+    .expect("type the same line");
+
+    let marks = (
+        ChatMessage::is_house_card(&client, card.id)
+            .await
+            .expect("card"),
+        ChatMessage::is_house_card(&client, typed.id)
+            .await
+            .expect("typed"),
+        ChatMessage::is_house_card(&client, Uuid::now_v7())
+            .await
+            .expect("gone"),
+    );
+
+    assert_eq!(marks, (true, false, false));
 }
 
 #[tokio::test]

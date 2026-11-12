@@ -597,9 +597,10 @@ async fn a_linked_piece_is_a_lounge_card_until_it_is_taken_down() {
     .await
     .expect("card message");
     assert!(
-        !ArtboardPiece::is_lounge_card(&client, card.id)
+        ArtboardPiece::list_lounge_cards(&client, 10)
             .await
-            .expect("is_lounge_card")
+            .expect("list cards before")
+            .is_empty()
     );
 
     let linked = ArtboardPiece::link_lounge_message(&client, painter.id, piece.id, card.id)
@@ -607,11 +608,6 @@ async fn a_linked_piece_is_a_lounge_card_until_it_is_taken_down() {
         .expect("link");
 
     assert_eq!(linked, 1);
-    assert!(
-        ArtboardPiece::is_lounge_card(&client, card.id)
-            .await
-            .expect("is_lounge_card")
-    );
     let cards = ArtboardPiece::list_lounge_cards(&client, 10)
         .await
         .expect("list cards");
@@ -632,11 +628,6 @@ async fn a_linked_piece_is_a_lounge_card_until_it_is_taken_down() {
         TakeDownOutcome::TakenDown {
             lounge_message_id: Some(card.id)
         }
-    );
-    assert!(
-        !ArtboardPiece::is_lounge_card(&client, card.id)
-            .await
-            .expect("is_lounge_card")
     );
     assert!(
         ArtboardPiece::list_lounge_cards(&client, 10)
