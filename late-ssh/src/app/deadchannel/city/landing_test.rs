@@ -34,6 +34,7 @@ fn the_card_waits_on_the_sheet_and_offers_the_descent() {
         street: &street,
         own_user_id: Uuid::nil(),
         tick: 0,
+        cooldowns: None,
     };
     let screen = render(&view, 90, 60);
     assert!(screen.contains("█████"), "the name in blocks\n{screen}");
@@ -75,6 +76,7 @@ fn the_card_reads_the_sheet_and_counts_the_others() {
         street: &street,
         own_user_id: me,
         tick: 0,
+        cooldowns: None,
     };
     let screen = render(&view, 100, 60);
     assert!(screen.contains("3 crystals"), "the pockets\n{screen}");
@@ -99,6 +101,7 @@ fn a_narrow_pane_stacks_the_name() {
         street: &street,
         own_user_id: Uuid::nil(),
         tick: 12_345,
+        cooldowns: None,
     };
     let narrow = name_rows(41);
     let wide = name_rows(90);

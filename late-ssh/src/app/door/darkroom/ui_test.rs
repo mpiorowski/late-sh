@@ -61,7 +61,7 @@ fn landing_text(delete_confirm: bool) -> String {
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
         .draw(|frame| {
-            draw_landing(frame, frame.area(), delete_confirm, 0);
+            draw_landing(frame, frame.area(), delete_confirm, None, 0);
         })
         .expect("draw");
     let buffer = terminal.backend().buffer();
@@ -78,14 +78,15 @@ fn landing_text(delete_confirm: bool) -> String {
 /// The landing has to tell a player what the two endings pay, which badge
 /// each leaves, why a second run is worth walking (the battleship and the
 /// beacon are not on a first map), and how the door is driven once inside.
-/// The amounts are migration 158's; the badge codes are the profile's.
+/// The amounts are migration 158's, the window 286's; the badge codes are
+/// the profile's.
 #[test]
 fn the_landing_names_both_endings_their_badges_and_the_second_pass() {
     let text = landing_text(false);
     for needle in [
         "15,000 chips, and the ADE badge the first time",
         "20,000 chips, and the ADB badge the first time",
-        "Every run that gets out pays",
+        "Each ending pays again 30 days after the last time it paid",
         "The second pass",
         "ravaged battleship",
         "fleet beacon",

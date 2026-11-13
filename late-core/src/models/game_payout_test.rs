@@ -4,7 +4,7 @@ use crate::{
     models::chips::ChipMove,
     models::game_payout::{
         GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutKey, GamePayoutMultiGrant,
-        GamePayoutPeriodGrant, GamePayoutSource,
+        GamePayoutPeriodGrant, GamePayoutSource, LastCooldownClaim,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -432,5 +432,59 @@ async fn sources_resolve_claim_ids_to_game_and_milestone() {
             game: "minesweeper".to_string(),
             payout_kind: "daily_win_hard".to_string(),
         })
+    );
+}
+
+/// The read behind the hub's payout timers: the newest cooldown claim per
+/// milestone, this account's only. The `event` row the same grant writes and
+/// another account's claim are not part of it.
+#[tokio::test]
+async fn last_cooldown_claims_are_the_newest_per_milestone_and_this_accounts_only() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "cooldown-reader").await;
+    let other = create_test_user(&test_db.db, "cooldown-neighbour").await;
+    let mut client = test_db.db.get().await.expect("db client");
+
+    let first = run_keys("xlogfile:100");
+    GamePayout::grant_multi(&mut client, run_grant(user.id, &first))
+        .await
+        .expect("first run pays");
+    client
+        .execute(
+            "UPDATE game_payout_claims SET created = created - interval '10 days'
+             WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("age claims");
+    let second = run_keys("xlogfile:200");
+    GamePayout::grant_multi(&mut client, run_grant(user.id, &second))
+        .await
+        .expect("second run pays past the week");
+    let neighbour = run_keys("xlogfile:300");
+    GamePayout::grant_multi(&mut client, run_grant(other.id, &neighbour))
+        .await
+        .expect("another account pays");
+
+    let newest: chrono::DateTime<chrono::Utc> = client
+        .query_one(
+            "SELECT max(created) AS at FROM game_payout_claims
+             WHERE user_id = $1 AND period_kind = 'cooldown'",
+            &[&user.id],
+        )
+        .await
+        .expect("newest claim")
+        .get("at");
+
+    let claims = GamePayout::last_cooldown_claims(&client, user.id)
+        .await
+        .expect("read claims");
+    assert_eq!(
+        claims,
+        vec![LastCooldownClaim {
+            game: "nethack".to_string(),
+            payout_kind: "ascension".to_string(),
+            paid_at: newest,
+        }]
     );
 }

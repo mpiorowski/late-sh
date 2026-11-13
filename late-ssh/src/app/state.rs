@@ -2893,6 +2893,16 @@ impl App {
             self.lateania_service
                 .fill_slots_task(self.user_id, self.repaint_signal.clone());
         }
+        // The landings' payout timers are read on the way in, never polled:
+        // a milestone paid while the hub sat open shows on the next visit.
+        if screen_changed && matches!(self.screen, Screen::Lateania | Screen::Games) {
+            let reply = self.games_hub_state.request_timers();
+            self.games_hub_service.load_timers_task(
+                self.user_id,
+                reply,
+                self.repaint_signal.clone(),
+            );
+        }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
         }

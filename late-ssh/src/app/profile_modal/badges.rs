@@ -153,7 +153,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "GDS",
             "Green Dragon Slayer",
-            "slay the green dragon (10,000 chips, every kill)",
+            "slay the green dragon (10,000 chips per kill, 30-day gap)",
         ),
         (
             "DCO",
@@ -178,12 +178,12 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "ADE",
             "A Dark Room Escape",
-            "fly the starship off the rock (15,000 chips, every run)",
+            "fly the starship off the rock (15,000 chips per run, 30-day gap)",
         ),
         (
             "ADB",
             "A Dark Room Homefleet",
-            "fly out holding the fleet beacon (20,000 chips, every run)",
+            "fly out holding the fleet beacon (20,000 chips per run, 30-day gap)",
         ),
         (
             "SIG",

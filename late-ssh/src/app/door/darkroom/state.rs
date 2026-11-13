@@ -122,14 +122,14 @@ impl Escape {
         }
     }
 
-    /// What this ending pays, in the shape the landing and the ending text
-    /// both print. The amounts are the reward templates' (migration 158);
-    /// they are written out here because the door has no reason to read the
-    /// table just to print one line.
+    /// What this ending pays, as the ending text prints it. The amounts and
+    /// the window are the reward templates' (migrations 158 and 286); they
+    /// are written out here because the door has no reason to read the table
+    /// just to print one line.
     pub fn reward_line(self) -> &'static str {
         match self {
-            Escape::Plain => "15,000 chips, every run that gets out",
-            Escape::WithBeacon => "20,000 chips, every run that gets out",
+            Escape::Plain => "15,000 chips, at most once every 30 days",
+            Escape::WithBeacon => "20,000 chips, at most once every 30 days",
         }
     }
 
@@ -151,9 +151,9 @@ pub enum EndingBeat {
     Prose(&'static str),
     /// A figure the run finished on: what it counts, and how much.
     Stat { label: &'static str, value: String },
-    /// The badge and chips the account keeps. The chips land for every run
-    /// that gets out; the badge is once per account. Which of each depends on
-    /// how the ship left.
+    /// The badge and chips the account keeps. The chips land once per run and
+    /// at most once every 30 days per ending; the badge is once per account.
+    /// Which of each depends on how the ship left.
     Award(Escape),
     /// The save is gone, and the only key left is the one out.
     Prompt,
