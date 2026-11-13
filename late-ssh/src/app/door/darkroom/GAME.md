@@ -64,7 +64,8 @@ immortal wanderer (`state::Escape`, `Plain` or `WithBeacon`).
   the next key leaves the door. There is nothing behind the ending to go back
   to, so that is the screen's only exit (`screen::ending_took_key`, which owns
   Esc and the arrows too).
-- **The account keeps the run: chips every time, a badge the first time.**
+- **The account keeps the run: chips once a month per ending, a badge the
+  first time.**
   `svc::reward_escape` is the Green Dragon `reward_dragon_kill` shape: a
   `#lounge` feed line every time (the beacon run's says so:
   `Escape::feed_detail` appends "followed the fleet beacon home"), the chip

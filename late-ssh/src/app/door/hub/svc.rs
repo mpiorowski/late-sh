@@ -35,7 +35,8 @@ impl GamesHubService {
     /// Read `user_id`'s payout timers into `reply` (`hub::state::State`
     /// holds the other end and drains it on tick), and wake the render loop
     /// so the landing shows them on the next frame. A failed read sends
-    /// nothing: the landings keep printing the fixed window line.
+    /// nothing: the state drops the timers it held and the landings print
+    /// only the fixed window line.
     pub fn load_timers_task(
         &self,
         user_id: Uuid,

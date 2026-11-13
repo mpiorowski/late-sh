@@ -411,7 +411,7 @@ impl State {
 
     /// Start a fresh read of the payout timers: the returned sender goes to
     /// `svc::GamesHubService::load_timers_task`. The timers already shown
-    /// stay up until the new ones land.
+    /// stay up until the new ones land, or the read fails.
     pub fn request_timers(&mut self) -> oneshot::Sender<CooldownTimers> {
         let (reply, receiver) = oneshot::channel();
         self.timers_reply = Some(receiver);
@@ -422,7 +422,8 @@ impl State {
         self.timers.as_ref()
     }
 
-    /// Take a read that has landed. Returns whether the timers changed.
+    /// Take a read that has landed or failed. Returns whether the timers
+    /// changed.
     pub fn tick(&mut self) -> bool {
         let Some(receiver) = self.timers_reply.as_mut() else {
             return false;
@@ -435,10 +436,12 @@ impl State {
                 changed
             }
             Err(oneshot::error::TryRecvError::Empty) => false,
-            // The read failed and was logged where it ran.
+            // The read failed and was logged where it ran. The timers shown
+            // go with it: they may predate a payout, and would say "pays now"
+            // for a milestone inside its window.
             Err(oneshot::error::TryRecvError::Closed) => {
                 self.timers_reply = None;
-                false
+                self.timers.take().is_some()
             }
         }
     }

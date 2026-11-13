@@ -19,6 +19,9 @@ pub struct FeedListView<'a> {
 }
 
 const ITEM_HEIGHT: u16 = 7;
+/// The unread dot's column and the space after it, the same gutter the News
+/// list keeps, so both lists start their text at the same column.
+const GUTTER: u16 = 2;
 const SUMMARY_MAX_CHARS: usize = 240;
 
 pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
@@ -61,39 +64,35 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
             .marker_read_at
             .map(|last_read_at| item.entry.created > last_read_at)
             .unwrap_or(true);
+        let [gutter, text] =
+            Layout::horizontal([Constraint::Length(GUTTER), Constraint::Fill(1)]).areas(content);
+        if is_unread {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "●",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )),
+                gutter,
+            );
+        }
         frame.render_widget(
-            Paragraph::new(entry_lines(item, is_unread, content.width as usize))
-                .wrap(Wrap { trim: true }),
-            content,
+            Paragraph::new(entry_lines(item, text.width as usize)).wrap(Wrap { trim: true }),
+            text,
         );
     }
 }
 
-fn entry_lines(item: &RssEntryView, is_unread: bool, width: usize) -> Vec<Line<'static>> {
-    let mut title_spans = Vec::with_capacity(4);
-    if is_unread {
-        title_spans.push(Span::styled(
-            "● ",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    let unread_w = if is_unread {
-        UnicodeWidthStr::width("● ")
-    } else {
-        0
-    };
+fn entry_lines(item: &RssEntryView, width: usize) -> Vec<Line<'static>> {
+    let mut title_spans = Vec::with_capacity(3);
     let shared = item.entry.shared_at.is_some();
     let badge = if shared { "(shared)" } else { "" };
     let badge_w = UnicodeWidthStr::width(badge);
     let title_budget = if shared {
-        width
-            .saturating_sub(unread_w)
-            .saturating_sub(badge_w + 1)
-            .max(4)
+        width.saturating_sub(badge_w + 1).max(4)
     } else {
-        width.saturating_sub(unread_w).max(4)
+        width.max(4)
     };
     let title = truncate_to_width(&item.entry.title, title_budget);
     let title_w = UnicodeWidthStr::width(title.as_str());
@@ -104,8 +103,7 @@ fn entry_lines(item: &RssEntryView, is_unread: bool, width: usize) -> Vec<Line<'
             .add_modifier(Modifier::BOLD),
     ));
     if shared {
-        let used = unread_w + title_w;
-        let pad = width.saturating_sub(used + badge_w).max(1);
+        let pad = width.saturating_sub(title_w + badge_w).max(1);
         title_spans.push(Span::raw(" ".repeat(pad)));
         title_spans.push(Span::styled(
             badge,

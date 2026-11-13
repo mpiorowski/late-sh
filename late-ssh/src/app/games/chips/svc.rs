@@ -575,36 +575,6 @@ impl ChipService {
         Ok(reward_grant(template.reward_chips, claim))
     }
 
-    /// Credit a `per_event` reward once per distinct `event_key` (forever).
-    /// Unlike the lifetime grant this pays for each event — e.g. every
-    /// distinct daily-match win, keyed on the match id — while staying
-    /// idempotent per event, so a re-broadcast or retry never double-pays.
-    pub async fn credit_per_event_reward_template(
-        &self,
-        user_id: Uuid,
-        reward_key: &str,
-        event_key: &str,
-        chip_move: ChipMove,
-    ) -> anyhow::Result<RewardGrant> {
-        let client = self.db.get().await?;
-        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
-        template.ensure_claim_policy(REWARD_CLAIM_POLICY_PER_EVENT)?;
-        let claim = GamePayout::grant_period(
-            &client,
-            late_core::models::game_payout::GamePayoutPeriodGrant {
-                user_id,
-                game: template.game()?,
-                payout_kind: template.payout_kind()?,
-                period_kind: PER_EVENT_REWARD_PERIOD_KIND,
-                period_key: event_key,
-                amount: template.reward_chips,
-                chip_move,
-            },
-        )
-        .await?;
-        Ok(reward_grant(template.reward_chips, claim))
-    }
-
     /// Credit a `per_event` reward for an amount the caller computes, rather
     /// than the flat figure on the template.
     ///
