@@ -166,8 +166,12 @@ fn centers_km(grid: &TerritoryGrid, a: (u16, u16), b: (u16, u16)) -> f64 {
             (x as f64 + 0.5) / w * 360.0 - 180.0,
         )
     };
-    let (lat1, lon1) = lat_lon(a);
-    let (lat2, lon2) = lat_lon(b);
+    great_circle_km(lat_lon(a), lat_lon(b))
+}
+
+/// Great-circle kilometres between two points given in degrees, on Earth's
+/// sphere. Every distance on a map, Earth or drawn, is measured with this.
+pub(crate) fn great_circle_km((lat1, lon1): (f64, f64), (lat2, lon2): (f64, f64)) -> f64 {
     const EARTH_RADIUS_KM: f64 = 6371.0;
     let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
     let dp = (lat2 - lat1).to_radians();
@@ -394,8 +398,6 @@ pub(crate) fn compute_landmasses(territories: &mut [Territory], grid: &Territory
         }
     }
 
-    let mut masses: Vec<std::collections::BTreeSet<u32>> =
-        vec![Default::default(); territories.len()];
     let mut links: Vec<std::collections::BTreeSet<(TerritoryId, u32)>> =
         vec![Default::default(); territories.len()];
     for y in 0..height {
@@ -406,9 +408,6 @@ pub(crate) fn compute_landmasses(territories: &mut [Territory], grid: &Territory
                 continue;
             }
             let mass = label[index];
-            if let Some(set) = masses.get_mut(cell as usize) {
-                set.insert(mass);
-            }
             // East and south only: every touching pair is seen once, and
             // recorded both ways.
             for (dx, dy) in [(1, 0), (0, 1)] {
@@ -431,7 +430,7 @@ pub(crate) fn compute_landmasses(territories: &mut [Territory], grid: &Territory
         }
     }
 
-    for ((territory, mass), link) in territories.iter_mut().zip(masses).zip(links) {
+    for (territory, link) in territories.iter_mut().zip(links) {
         let links: Vec<(TerritoryId, u32)> = link.into_iter().collect();
         // Only landmasses this territory has a *border* on are kept. Earth is
         // tens of thousands of islets, and a territory standing alone on one
@@ -440,7 +439,6 @@ pub(crate) fn compute_landmasses(territories: &mut [Territory], grid: &Territory
         // reached from such a place is reached by sea, which is priced
         // separately and does not need a node here.
         let linked: std::collections::BTreeSet<u32> = links.iter().map(|(_, m)| *m).collect();
-        let _ = mass;
         territory.landmasses = linked.into_iter().collect();
         territory.land_links = links;
     }

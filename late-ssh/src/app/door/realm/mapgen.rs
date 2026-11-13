@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::common::worldmap::data::{
     Territory, TerritoryGrid, TerritoryId, WATER, WorldMap, build_mips, compute_bboxes,
-    compute_coastal, compute_landmasses, compute_sea_lanes, compute_weights,
+    compute_coastal, compute_landmasses, compute_sea_lanes, compute_weights, great_circle_km,
 };
 
 /// Grid resolution of a generated world. A quarter of Earth's linear
@@ -348,7 +348,7 @@ fn planned_areas(spec: &GeneratedMapSpec, rng: &mut SplitMix64) -> (Vec<f64>, us
 fn shape_plan(start: (u16, u16), area: f64, is_island: bool, rng: &mut SplitMix64) -> MassPlan {
     // The radius a disc of this area would have, in cells at this
     // latitude — the yardstick everything else is measured against.
-    let lat = 90.0 - (start.1 as f64 + 0.5) / GEN_HEIGHT as f64 * 180.0;
+    let lat = cell_latitude(start.1 as i32);
     let cell_km2 = {
         let d_lon = std::f64::consts::TAU / GEN_WIDTH as f64;
         let top = (lat + 90.0 / GEN_HEIGHT as f64).to_radians();
@@ -552,7 +552,7 @@ fn grow_landmass(
 fn cost_from_center(plan: &MassPlan, x: i32, y: i32, jitter: f64) -> u64 {
     // Longitude degrees shrink toward the poles; without this a northern
     // landmass smears sideways across a quarter of the map.
-    let lat = 90.0 - (y as f64 + 0.5) / GEN_HEIGHT as f64 * 180.0;
+    let lat = cell_latitude(y);
     let lat_scale = lat.to_radians().cos().max(0.2);
 
     // Bend the ground before measuring it. The sample point is pushed about
@@ -1059,14 +1059,6 @@ fn cell_lat_lon((x, y): (u16, u16)) -> (f64, f64) {
         cell_latitude(y as i32),
         (x as f64 + 0.5) / GEN_WIDTH as f64 * 360.0 - 180.0,
     )
-}
-
-fn great_circle_km((lat1, lon1): (f64, f64), (lat2, lon2): (f64, f64)) -> f64 {
-    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
-    let dp = (lat2 - lat1).to_radians();
-    let dl = (lon2 - lon1).to_radians();
-    let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
-    2.0 * EARTH_RADIUS_KM * a.sqrt().clamp(0.0, 1.0).asin()
 }
 
 /// Where `km` along `bearing` (radians, clockwise from north) from a point
