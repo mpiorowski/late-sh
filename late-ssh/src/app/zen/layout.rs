@@ -70,7 +70,7 @@ pub fn rice_fits(area: Rect) -> bool {
 /// Home's content area cut into its rows (`rice_areas`).
 pub struct RiceAreas {
     /// The board's day across the top, over every tile, on a day the
-    /// board has an all-day post.
+    /// board has a post.
     pub banner: Option<Rect>,
     pub tiles: Rect,
     /// The arrange mode's key footer, while the mode is on.

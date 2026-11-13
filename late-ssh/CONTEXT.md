@@ -31,6 +31,7 @@ late-ssh/src/
     state.rs input.rs tick.rs render.rs   root glue: hold domain state, delegate
     terminal_backend.rs                   GlyphIsolatingBackend
     activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ pot/ ...
+    comeback/                             the box a newcomer's return day owes, three in all (own CONTEXT.md)
 ```
 
 Root glue rule: a root file holds a domain's state and delegates to it. The
@@ -73,7 +74,8 @@ sequenceDiagram
   event is published in `pty_request`, the first point that knows whether
   the session's CLI moved it here, off a draining pod or on a quit-modal
   restart (`LATE_RESUME`); a moved session publishes none. Creating the receiver after the publish misses the user's
-  own login event.
+  own login event. The same point counts the login (`users.login_count`,
+  `User::note_login`); a moved session is not counted.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
 - SSH compression is pinned to `NONE`: a client that negotiates zlib drops
@@ -393,7 +395,12 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   support list per terminal, why there is no OSC 8, Shift+drag to select past
   mouse reporting, OSC 777/9 notification support (tmux needs
   `allow-passthrough`). Splash tips live in
-  `late-ssh/assets/splash_tips/*.json`.
+  `late-ssh/assets/splash_tips/*.json`: one pool every session draws from,
+  and a returning pool (the "did you know" lines on the radio, the rung,
+  the people, the booth, the Artboard and Nightcap among them) added for
+  any account past its first session. The first return days hand a
+  newcomer more than a line: one box per day, three in all, each on
+  something the tour never reaches, `app/comeback`.
 
 ## 11. Global keys
 
@@ -459,10 +466,17 @@ a no-op twin when built without `otel`.
   is a Grafana question, not a database one.
 - Newcomers: `late_ssh_tour_stops_total{stop}` (a first-visit tour stop
   reached: the welcome box when the tour begins, `App::enter_clubhouse`,
-  then each stop an Enter at the one before reaches, `input.rs::tour_advance`;
-  the drop between two stops is where they leave the tour. A tour left
+  then each stop an Enter at the one before reaches,
+  `clubhouse/input.rs::tour_advance`;
+  the drop between two stops is where they leave the tour. The route in
+  force (`clubhouse::state::TOUR_ROUTE`) reaches `welcome`, `chat`,
+  `table`, `board`, `week`, `done`, and `board` against `week` is what
+  the board costs. A tour left
   midway starts over at the welcome box next session, a new attempt;
-  `/onboard` reruns are not counted) and
+  `/onboard` reruns are not counted),
+  `late_ssh_comeback_moments_total{moment,beat}` (a return day's box,
+  `app/comeback/CONTEXT.md`: shown, taken or skipped; `/comeback` reruns
+  are not counted) and
   `late_ssh_session_ends_total{tenure,screen}` (the screen that was up when
   a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
   row (`monitoring/dashboards/observability.json`) reads these plus the

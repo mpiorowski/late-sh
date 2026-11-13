@@ -13,6 +13,7 @@ use late_core::models::profile_award::{award_badge, award_category_label};
 
 use crate::app::common::theme;
 use crate::app::door::landing;
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownView};
 
 use super::data::{self, Building, Resource, ResourceKind};
 use super::model::{Game, View};
@@ -583,7 +584,13 @@ fn beat_lines(beat: &EndingBeat) -> Vec<Line<'static>> {
 }
 
 /// The two-column landing card for the Games hub.
-pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll: u16) -> u16 {
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    delete_confirm: bool,
+    cooldowns: Option<CooldownView<'_>>,
+    scroll: u16,
+) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -640,22 +647,26 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll:
         ),
         Line::from(""),
         landing::heading("Rewards"),
-        landing::stat(
-            "Fly out",
-            "15,000 chips, and the ADE badge the first time",
-            15,
-        ),
-        landing::stat(
-            "Fleet beacon",
-            "20,000 chips, and the ADB badge the first time",
-            15,
-        ),
+    ]);
+    lines.extend(landing::reward(
+        "Fly out",
+        "15,000 chips, and the ADE badge the first time",
+        15,
+        cooldowns.map(|view| view.window(CooldownReward::DarkroomEscape)),
+    ));
+    lines.extend(landing::reward(
+        "Fleet beacon",
+        "20,000 chips, and the ADB badge the first time",
+        15,
+        cooldowns.map(|view| view.window(CooldownReward::DarkroomBeacon)),
+    ));
+    lines.extend([
         Line::from(Span::styled(
-            "  Every run that gets out pays: the ending wipes the save,",
+            "  Each ending pays again 30 days after the last time it paid.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(Span::styled(
-            "  so a repeat is the whole arc again, not a shortcut.",
+            "  One run, one payout: the ending wipes the save.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(""),

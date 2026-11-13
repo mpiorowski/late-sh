@@ -814,7 +814,14 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if handle_tour_gate(app, &event) {
+    if crate::app::clubhouse::input::handle_tour_gate(app, &event) {
+        return;
+    }
+
+    // A comeback moment's box holds every key but its two, like the tour's
+    // welcome box, so a stray key never takes the pitch off the screen.
+    if app.comeback.is_open() {
+        crate::app::comeback::input::handle_input(app, event);
         return;
     }
 
@@ -889,6 +896,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.chat.has_reader() {
         chat::news::reader::input::handle_input(app, &event);
+        return;
+    }
+
+    if app.gallery_cards.modal().is_some() {
+        crate::app::artboard::gallery::card::input::handle_input(app, &event);
         return;
     }
 
@@ -1865,9 +1877,13 @@ fn dispatch_escape(app: &mut App) {
         quit_confirm::input::handle_escape(app);
         return;
     }
-    // A lone Esc skips the tour gate the same way, and would close the modal
-    // or the practice table a stop is holding open.
-    if app.clubhouse.tutorial_forced_step().is_some() {
+    // A lone Esc skips the tour gate the same way, and would close the modal,
+    // the practice table or the board a stop is holding open; the tour takes
+    // it first while a stop is up.
+    if crate::app::clubhouse::input::handle_tour_escape(app) {
+        return;
+    }
+    if crate::app::comeback::input::handle_escape(app) {
         return;
     }
     if app.show_help {
@@ -1995,6 +2011,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.chat.has_reader() {
         app.chat.close_reader();
+        return;
+    }
+    if app.gallery_cards.modal().is_some() {
+        app.gallery_cards.close();
         return;
     }
     if app.chat.has_image_modal() {
@@ -3018,6 +3038,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
             if !app.chat.open_selected_card_in_room(room_id)
+                && !crate::app::artboard::gallery::card::input::open_selected_card(app, room_id)
                 && !app.chat.open_selected_image_modal_in_room(room_id)
             {
                 crate::app::chat::input::watch_selected_video(app, room_id);
@@ -3526,141 +3547,6 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
     }
 }
 
-/// The forced first-visit tour: while a stop is up
-/// (`clubhouse::state::State::tutorial_forced_step`), Enter moves it on and
-/// quitting is the way out. Everything else, mouse, arrows, and chords
-/// included, dies here so no modal, composer, or game can hijack a newcomer
-/// mid-route. Returns true when the event was consumed.
-fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::clubhouse::state::{TableStop, TourStep};
-
-    let Some(step) = app.clubhouse.tutorial_forced_step() else {
-        return false;
-    };
-    let byte = match event {
-        ParsedInput::Byte(byte) => *byte,
-        ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
-        // Arrows, mouse, pastes: swallowed while the tour runs.
-        _ => return true,
-    };
-    match (step, byte) {
-        // The Artboard stop lands behind its content disclaimer: `s` shows
-        // the art for this visit only, Enter skips ahead without it. Neither
-        // touches the account tweak; the standalone dialog never runs here.
-        (TourStep::Enter, b's' | b'S') if app.artboard_disclaimer_visible() => {
-            app.artboard_content_accepted = true;
-            app.sync_dartboard_connection();
-        }
-        (TourStep::Enter, b'\r' | b'\n') => tour_advance(app),
-        // The table's one shot has to be played: Enter or Space strikes the
-        // break, and only then does Enter move on. A terminal the table does
-        // not fit has no shot to see, so Enter walks on from there.
-        (TourStep::Table, b'\r' | b'\n' | b' ') => {
-            let table = crate::app::clubhouse::ui::table_stop(
-                app.content_area(),
-                app.daily.practice_played(),
-            );
-            match (table, byte) {
-                (TableStop::Racked, _) => app.daily.practice_break(),
-                (TableStop::TooSmall | TableStop::Played, b' ') => {}
-                (TableStop::TooSmall | TableStop::Played, _) => tour_advance(app),
-            }
-        }
-        // The fight is the same: every press is the next blow until it is won.
-        (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
-        (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
-        // The way out is always open.
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, b'q' | b'Q') => {
-            trigger_global_quit(app)
-        }
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
-    }
-    sync_tour_modal(app);
-    true
-}
-
-/// `/onboard`: the first-visit tour from the top, for anyone who asks.
-/// Through `leave_board` so a board left behind is closed properly.
-pub(crate) fn start_tour(app: &mut App) {
-    crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
-    app.clubhouse.begin_tutorial(
-        crate::app::presence::svc::now_ms(),
-        crate::app::clubhouse::state::TourStart::Rerun,
-    );
-}
-
-/// Enter at a tour stop: walk the newcomer to wherever the next one lives.
-fn tour_advance(app: &mut App) {
-    use crate::app::clubhouse::state::{TourMove, TourStart};
-
-    match app.clubhouse.tutorial_advance() {
-        TourMove::Stay => {}
-        // Through `leave_board` so a practice table left behind is dropped.
-        TourMove::Page(screen) => crate::app::lobby::daily::board_input::leave_board(app, screen),
-        // The People page, on its map whatever section a rerun left it on.
-        TourMove::Map => {
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Profiles);
-            crate::app::directory::input::switch_shelf(
-                app,
-                crate::app::directory::state::Shelf::Map,
-            );
-        }
-        // `]`: the next section of the People page.
-        TourMove::NextSection => {
-            let next = app.directory_state.shelf().next();
-            crate::app::directory::input::switch_shelf(app, next);
-        }
-        // A pool table nobody else sees, for one break.
-        TourMove::Table => {
-            let username = app.username.clone();
-            app.daily.open_practice_table(Screen::Arcade, &username);
-            app.set_screen(Screen::DailyMatch);
-        }
-        // Home with its stock second layout up, the street: a device that
-        // deleted it gets the missing-name banner under the stop.
-        TourMove::Layouts => {
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Dashboard);
-            crate::app::zen::input::run_layout_command(
-                app,
-                crate::app::zen::presets::LayoutCommand::Load(
-                    crate::app::zen::presets::STOCK_STREET_NAME.to_string(),
-                ),
-            );
-        }
-        // Home's first layout back before the tavern, so the newcomer's
-        // page is as the tour found it.
-        TourMove::Homecoming => {
-            crate::app::zen::input::load_home_layout(app);
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
-        }
-        TourMove::Finished => app.persist_clubhouse_tutorial_done(),
-    }
-    // The stop just reached, on a first visit's tour only (its welcome box
-    // is counted where the tour began, `App::enter_clubhouse`): a rerun is
-    // a regular walking the route again, not a newcomer leaving it.
-    match app.clubhouse.tour_start() {
-        TourStart::FirstVisit => crate::metrics::record_tour_stop(app.clubhouse.tutorial),
-        TourStart::Rerun => {}
-    }
-}
-
-/// Hold open the real modal the current stop pitches, and close it once the
-/// tour has moved past.
-fn sync_tour_modal(app: &mut App) {
-    use crate::app::clubhouse::state::TourModal;
-
-    let modal = app.clubhouse.tour_modal();
-    match (
-        modal == TourModal::Stations,
-        app.stations_modal_state.is_open(),
-    ) {
-        (true, false) => app.stations_modal_state.open(app.selected_radio_station),
-        (false, true) => app.stations_modal_state.close(),
-        (true, true) | (false, false) => {}
-    }
-    app.show_lobby_modal = modal == TourModal::Lobby;
-}
-
 /// Live games own Ctrl+S even when they currently leave it unbound. Running
 /// terminal doors receive raw bytes in App::handle_input before this router;
 /// their launchers and the Arcade/Games menus still offer the Shop shortcut.
@@ -3776,8 +3662,6 @@ pub(crate) fn toggle_lobby_globally(app: &mut App) {
 /// The global guide, opened on the topic that fits the current page. Shared
 /// by `?` and `/guide`.
 pub(crate) fn open_guide_globally(app: &mut App) {
-    app.help_modal_state
-        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     let topic = if app.screen == Screen::Lateania {
         HelpTopic::Lateania
     } else if app.screen == Screen::Profiles {
@@ -3787,6 +3671,13 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     } else {
         HelpTopic::Pair
     };
+    open_guide_on_globally(app, topic);
+}
+
+/// The global guide, opened on a named topic (a comeback moment's Enter).
+pub(crate) fn open_guide_on_globally(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
     app.show_help = true;
 }
@@ -3864,9 +3755,15 @@ fn handle_numbered_page_switch(app: &mut App, byte: u8) -> bool {
         b'7' => Screen::Calendars,
         _ => return false,
     };
+    switch_page_globally(app, screen);
+    true
+}
+
+/// What a page's number key does: the composers reset, then the page
+/// (a comeback moment's Enter takes the same path).
+pub(crate) fn switch_page_globally(app: &mut App, screen: Screen) {
     reset_composers_for_page_change(app);
     app.set_screen(screen);
-    true
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
@@ -4276,10 +4173,12 @@ pub(crate) fn close_icon_picker(app: &mut App) {
     app.icon_picker_target = IconPickerTarget::Composer;
 }
 
-/// The News reader and the watch player (`app/video/`), for a page change
-/// or another modal opening. A closing player keeps its position.
+/// The News reader, an open Artboard piece and the watch player
+/// (`app/video/`), for a page change or another modal opening. A closing
+/// player keeps its position.
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
+    app.gallery_cards.close();
     crate::app::video::svc::close(app);
 }
 

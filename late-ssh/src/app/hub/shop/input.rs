@@ -1,3 +1,5 @@
+use late_core::models::chat_room::RoomKind;
+
 use crate::app::{
     common::primitives::Banner,
     hub::aquarium::state::CutOutcome,
@@ -133,6 +135,16 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             app.shop_state.move_selection(1);
             true
         }
+        ParsedInput::PageUp => {
+            let index = app.shop_state.selected_index().saturating_sub(8);
+            app.shop_state.select_item(index);
+            true
+        }
+        ParsedInput::PageDown => {
+            let index = app.shop_state.selected_index().saturating_add(8);
+            app.shop_state.select_item(index);
+            true
+        }
         ParsedInput::Byte(b'[' | b'h' | b'H') | ParsedInput::Char('[' | 'h' | 'H') => {
             app.shop_state.select_previous_category();
             true
@@ -187,19 +199,23 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
 fn current_room_effect_target(app: &App) -> Option<RoomEffectTarget> {
     let room_id = app.chat.selected_room_id?;
     let (room, _) = app.chat.rooms.iter().find(|(room, _)| room.id == room_id)?;
-    let label = if room.kind == "dm" {
-        "current DM".to_string()
-    } else {
-        room.slug
+    let label = match room.kind {
+        RoomKind::Dm => "current DM".to_string(),
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => room
+            .slug
             .as_deref()
             .map(|slug| format!("#{slug}"))
-            .unwrap_or_else(|| "current room".to_string())
+            .unwrap_or_else(|| "current room".to_string()),
     };
     Some(RoomEffectTarget {
         room_id,
         label,
-        kind: room.kind.clone(),
-        visibility: room.visibility.clone(),
+        kind: room.kind,
         permanent: room.permanent,
         slug: room.slug.clone(),
     })

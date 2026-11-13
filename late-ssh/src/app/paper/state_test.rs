@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use chrono::{NaiveDate, TimeZone, Utc};
+use late_core::models::chat_room::{RoomKind, RoomVisibility};
 use late_core::models::paper::{
     PaperEdition, PaperRoomPage, PaperSection, PaperSectionKind, PaperStatus,
 };
@@ -23,11 +24,10 @@ fn page(
         label: label.to_string(),
         member_count: 10 + id as i64,
         kind: match label {
-            "lounge" => "lounge",
-            "pl" => "language",
-            _ => "topic",
-        }
-        .to_string(),
+            "lounge" => RoomKind::Lounge,
+            "pl" => RoomKind::Language,
+            _ => RoomKind::Topic(RoomVisibility::Public),
+        },
         permanent: label == "lounge",
         status,
         message_count: messages,

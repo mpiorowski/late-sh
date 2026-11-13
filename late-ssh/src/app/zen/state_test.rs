@@ -1,3 +1,4 @@
+use late_core::models::chat_room::{RoomKind, RoomVisibility};
 use ratatui::layout::Rect;
 use uuid::Uuid;
 
@@ -1034,8 +1035,7 @@ fn a_tile_goes_down_only_for_a_room_the_account_still_holds() {
             id: Uuid::now_v7(),
             created: now,
             updated: now,
-            kind: "topic".to_string(),
-            visibility: "public".to_string(),
+            kind: RoomKind::Topic(RoomVisibility::Public),
             auto_join: false,
             permanent,
             slug: slug.map(str::to_string),

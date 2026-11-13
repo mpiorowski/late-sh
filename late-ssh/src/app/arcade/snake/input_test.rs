@@ -1,21 +1,21 @@
-use super::canonical_direction_key;
+use super::{Direction, canonical_direction_key};
 
 #[test]
-fn wasd_and_hjkl_map_to_arrow_direction_bytes() {
-    assert_eq!(canonical_direction_key(b'w'), Some(b'A'));
-    assert_eq!(canonical_direction_key(b'k'), Some(b'A'));
-    assert_eq!(canonical_direction_key(b's'), Some(b'B'));
-    assert_eq!(canonical_direction_key(b'j'), Some(b'B'));
-    assert_eq!(canonical_direction_key(b'd'), Some(b'C'));
-    assert_eq!(canonical_direction_key(b'l'), Some(b'C'));
-    assert_eq!(canonical_direction_key(b'a'), Some(b'D'));
-    assert_eq!(canonical_direction_key(b'h'), Some(b'D'));
+fn wasd_and_hjkl_map_to_directions() {
+    assert_eq!(canonical_direction_key(b'w'), Some(Direction::Up));
+    assert_eq!(canonical_direction_key(b'k'), Some(Direction::Up));
+    assert_eq!(canonical_direction_key(b's'), Some(Direction::Down));
+    assert_eq!(canonical_direction_key(b'j'), Some(Direction::Down));
+    assert_eq!(canonical_direction_key(b'd'), Some(Direction::Right));
+    assert_eq!(canonical_direction_key(b'l'), Some(Direction::Right));
+    assert_eq!(canonical_direction_key(b'a'), Some(Direction::Left));
+    assert_eq!(canonical_direction_key(b'h'), Some(Direction::Left));
 }
 
 #[test]
 fn uppercase_wasd_do_not_collide_with_arrow_meanings() {
-    assert_eq!(canonical_direction_key(b'W'), Some(b'A'));
-    assert_eq!(canonical_direction_key(b'S'), Some(b'B'));
-    assert_eq!(canonical_direction_key(b'D'), Some(b'C'));
-    assert_eq!(canonical_direction_key(b'A'), Some(b'D'));
+    assert_eq!(canonical_direction_key(b'W'), Some(Direction::Up));
+    assert_eq!(canonical_direction_key(b'S'), Some(Direction::Down));
+    assert_eq!(canonical_direction_key(b'D'), Some(Direction::Right));
+    assert_eq!(canonical_direction_key(b'A'), Some(Direction::Left));
 }

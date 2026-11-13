@@ -187,8 +187,8 @@ disconnecting forfeits time, which is pacing rule 1.
 The whole classic game is in, upstream's prestige/scoring, the `cache`
 landmark and the marketing event are cut; expeditions park (a fight
 included) and the village almost never decays. Winning the ascent is the only
-terminal state: it pays chips every run and a badge per ending kind (`ADE`,
-`ADB`), writes the `darkroom_veterans` row first and on its own, and deletes
+terminal state: it pays chips once per run and at most once every 30 days
+per ending kind, and a badge per ending kind (`ADE`, `ADB`), writes the `darkroom_veterans` row first and on its own, and deletes
 the save, so `State::save` and `save_on_leave` return early while the ending
 is up. The ravaged battleship appears only on a veteran's map and is never
 marked visited. All of it, with the reasons, is in [`GAME.md`](GAME.md).

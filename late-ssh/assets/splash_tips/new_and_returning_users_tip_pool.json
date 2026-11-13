@@ -26,7 +26,7 @@
   "Solve a daily puzzle every day to build a streak and earn chip rewards",
   "Earn chips by solving daily puzzles and quests (page 2)",
   "Share a web link in the special 'news' chatroom",
-  "Press s on a News story to save it for later: saved stories sit on their own shelf above the feed",
+  "Press s on a News story to save it for later: saved stories sit on their own shelf under the feed",
   "Install and use Nerd Fonts for the best experience!",
   "Click your pet to pet it, or press o on it in the /shop to put it away",
   "Try a different color theme in ctrl+o settings",
@@ -69,8 +69,9 @@
   "A game somebody just moved in heads #lounge for a while; click the board to watch",
   "Playing NetHack, DCSS, Brogue or Zork? The title bar says how many are watching, F4 opens their chat",
   "Press 7 for the events board: anyone can post one, and i says I'm in",
+  "On Calendars, c duplicates an event into a private draft; adjust its dates and times for another session",
   "Posting an event? Type movie night saturday 9pm as the title and the time fills itself in",
-  "An hour before a board event starts it heads the now strip on Home; o opens it",
+  "Today's board events sit in one row across the top of Home, timed ones with their start; 7 opens the board",
   "One world, everyone on it: the Realm lives on page 3, under the house",
   "The Realm's gates stay open until most of the world is claimed ~ j on the map takes your spot",
   "Where is everyone? /map shades the Earth by who is online where ~ Ctrl+O sets your country so you are on it",
@@ -79,5 +80,6 @@
   "Netwalk in the Arcade: turn tiles until the network lights every one ~ f locks a tile you are sure of",
   "Chess Puzzle in the Arcade: a real Lichess puzzle a day per tier ~ three lives, any mate wins, and i swaps PNG and ASCII pieces",
   "Word Wheel in the Arcade: spell words from seven letters round a hub ~ Bronze, Silver and Gold all pay",
-  "Quartets in the Arcade: sixteen words, four hidden groups of four ~ a miss tells you how your four split"
+  "Quartets in the Arcade: sixteen words, four hidden groups of four ~ a miss tells you how your four split",
+  "Page 6, Top Chat: public messages, longest chat streaks and News posts race each UTC month; wheel over the standings to scroll"
 ]

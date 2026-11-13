@@ -102,6 +102,9 @@ impl App {
         // the clock-glitch scheduler, and the `/haunt` drain. Must follow
         // the splash block, which advances the clock it reads.
         changed |= crate::app::deadchannel::haunt::svc::tick(self);
+        // The comeback moments: the box a return day owes, once the splash
+        // is down and the tour settled.
+        changed |= crate::app::comeback::svc::tick(self);
         // The Late Edition: the login pop once the splash is down, `/paper`,
         // and the results of both.
         changed |= crate::app::paper::svc::tick(self);
@@ -223,6 +226,16 @@ impl App {
             self.directory_state.feed_changed();
             self.directory_editor.feed_changed();
             self.jobs.feed_changed();
+        }
+        let cards_tick = self.gallery_cards.tick();
+        changed |= cards_tick.cards_changed || cards_tick.modal_changed;
+        if cards_tick.cards_changed {
+            self.chat.gallery_cards_changed();
+        }
+        if cards_tick.taken_down {
+            self.banner = Some(crate::app::common::primitives::Banner::error(
+                "That piece was taken down.",
+            ));
         }
         if let Some(b) = chat_tick.banner {
             self.banner = Some(b);
@@ -547,7 +560,6 @@ impl App {
             &self.audio,
             &self.chat.live_streams,
             &self.live_games.live_rows(),
-            &self.calendar,
             &self.realm,
             reading,
             picture_settings,
@@ -649,6 +661,12 @@ impl App {
             // is up, and it reports its own changes (own edits are
             // input-driven).
             changed |= state.tick();
+            // A refused or failed hang: the board shows the notice only in
+            // its framing bar, so it gets a banner too, once.
+            if let Some(error) = state.gallery_mut().take_hang_error() {
+                self.banner = Some(crate::app::common::primitives::Banner::error(&error));
+                changed = true;
+            }
         }
         if let Some(state) = self.lateania_state.as_mut() {
             // Drain even off-screen so the snapshot stays current; only an
@@ -657,6 +675,10 @@ impl App {
             let lateania_changed = state.tick();
             changed |= lateania_changed && self.screen == Screen::Lateania;
         }
+        // The payout timers land once per visit; drain always, pay a frame
+        // only where a landing prints them.
+        let timers_changed = self.games_hub_state.tick();
+        changed |= timers_changed && matches!(self.screen, Screen::Lateania | Screen::Games);
         // The character-select list changes from tasks with no session of
         // their own: a logout save, a delete, another connection's character.
         // Only the two screens that draw it pay for the comparison, and a
@@ -1091,6 +1113,9 @@ impl App {
         }
 
         // Leaderboard
+        changed |= self
+            .leaderboard_page
+            .sync_month(chrono::Utc::now().date_naive());
         if let Some(rx) = &mut self.leaderboard_rx
             && rx.has_changed().unwrap_or(false)
         {

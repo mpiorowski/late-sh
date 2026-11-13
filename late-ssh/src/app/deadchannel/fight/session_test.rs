@@ -59,6 +59,40 @@ async fn into_the_first_fight(session: &mut FightSession) {
     session.enter();
 }
 
+/// A reload and an action answer race each other. The reload asked for on
+/// the walk up reads the row before the first step is on it; landing after
+/// the step's answer, it must not take the fight off the mirror.
+#[tokio::test]
+async fn a_reload_an_answer_overtook_does_not_take_the_fight_back() {
+    let (_test_db, mut session) = session_with_runner("fight-session-stale-reload").await;
+
+    session.step_up();
+    answered(&mut session).await;
+    let before_the_step = session.sheet.clone().expect("the mirror landed");
+    assert!(before_the_step.fight.is_none(), "no fight on the road yet");
+    session.enter();
+    answered(&mut session).await;
+    assert!(
+        session.sheet.as_ref().expect("a sheet").fight.is_some(),
+        "the step started a fight"
+    );
+
+    session
+        .outcome_tx
+        .send(FightOutcome::Reloaded {
+            sheet: before_the_step,
+            lookout: Lookout::default(),
+            answers_seen: 0,
+        })
+        .expect("the session is listening");
+    session.tick();
+
+    assert!(
+        session.sheet.as_ref().expect("a sheet").fight.is_some(),
+        "the fight is still on the mirror"
+    );
+}
+
 #[tokio::test]
 async fn one_action_is_out_at_a_time() {
     let (_test_db, mut session) = session_with_runner("fight-session-guard").await;
@@ -510,6 +544,7 @@ fn crossed_by_tom(id: u128) -> Ambush {
 /// The lookout's news, handed to the session the way a reload would.
 fn hand_news(session: &mut FightSession, news: Option<Ambush>) {
     let sheet = session.sheet.clone().expect("the mirror landed");
+    let answers_seen = session.answers;
     session
         .outcome_tx
         .send(FightOutcome::Reloaded {
@@ -519,6 +554,7 @@ fn hand_news(session: &mut FightSession, news: Option<Ambush>) {
                 token: None,
                 news,
             },
+            answers_seen,
         })
         .expect("the session is listening");
     assert!(session.tick(), "the lookout landed");

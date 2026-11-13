@@ -308,9 +308,7 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run_webview_watch_subcommand(args: &[String]) -> Result<()> {
-    let url = args
-        .first()
-        .context("usage: late webview-watch <url>")?;
+    let url = args.first().context("usage: late webview-watch <url>")?;
     let _ = init_logging(true)?;
     late_webview::run_watch(url)
 }
@@ -355,9 +353,7 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn run_webview_watch_subcommand(args: &[String]) -> Result<()> {
-    let url = args
-        .first()
-        .context("usage: late webview-watch <url>")?;
+    let url = args.first().context("usage: late webview-watch <url>")?;
     forward_to_webview_helper(&["watch", url])
 }
 

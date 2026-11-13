@@ -12,7 +12,7 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `/gift @user <chips>` transfers chips through `ChipService` and `late-core::models::chips::UserChips::transfer_gift`. The transfer is one transaction: sender debit, recipient credit, two ledger rows each carrying the other party's id as `source_ref`, and chip notifications. It enforces the chip floor, rejects self-gifts, caps gift size, and applies a short per-sender cooldown in `ChatService`. Neither gift reason counts on Top Chips.
 
-`/buy round` and `/buy @user` post `@bartender round for everyone` / `@bartender buy @user a drink` to the composer's room as a normal message (`buy_order_body`), so the purchase, its price, every refusal and his answer run through the bartender exactly as if the phrase had been typed (see `ai/ROUND.md`). Only in auto-join public rooms (`visibility == "public" && auto_join`), refused with a banner elsewhere: those are the rooms he is joined to, and in any other room the order would go unanswered (he leaves a mention in a room he is not in alone).
+`/buy round` and `/buy @user` post `@bartender round for everyone` / `@bartender buy @user a drink` to the composer's room as a normal message (`buy_order_body`), so the purchase, its price, every refusal and his answer run through the bartender exactly as if the phrase had been typed (see `ai/ROUND.md`). Only in auto-join public rooms (`auto_join`, which the DB allows on a public room alone), refused with a banner elsewhere: those are the rooms he is joined to, and in any other room the order would go unanswered (he leaves a mention in a room he is not in alone).
 
 `/grant @user <chips>` is the admin mint. `parse_grant_command` takes a user and an amount and nothing else; the composer refuses it for non-admins, and `ChatService::grant_chips` decides admin by the session bootstrap's own rule, `users.is_admin || force_admin`, re-read from the database rather than trusted from the session (the `force_admin` half is what makes local and staging accounts admins). The credit goes through `ChipService::grant_chips` to `UserChips::admin_grant`, which by decision writes **no ledger row**: the ledger records what players did, and a grant is the house's doing. The recipient's row is ensured first, so a player who has never logged in lands on the stipend plus the grant. Both parties get a banner (`ChatEvent::GrantSucceeded` / `GrantFailed`).
 
@@ -33,7 +33,7 @@ Submit flow in `ChatState::submit_composer`:
 - `/leave` and `/invite` resolve through the active composer room or selected real room. Synthetic entries do not fall back to stale `selected_room_id` values; `/leave` on a selected synthetic entry exits that entry back to the last real room.
 - `/members` uses the same real-room resolver as `/leave` and `/invite`.
 - Normal send calls `send_message_with_reply_task`.
-- Edit calls `edit_message_task`. A News share's #lounge card is never edited (`news/CONTEXT.md`, the #lounge card): the edit key banners `A story's card can't be edited.` and `ChatService::edit_message` refuses it too (a line linked as a card after its edit began). There is no edited flag: a message counts as edited when `updated > created`, which appends `(edited)` to the author header's stamp. Because of that, an edited message never groups as a continuation under the message above it (`ensure_chat_rows_cache`): it takes its own author header back so the marker has somewhere to live. Editing the second message in a run visibly breaks the run; that is the intent.
+- Edit calls `edit_message_task`. A house card in #lounge (a News share's, `news/CONTEXT.md`, the #lounge card; a hung Artboard piece's) is never edited: the edit key banners `A story's card can't be edited.` or `A piece's card can't be edited.` from the session's own card sets, and `ChatService::edit_message` refuses any line `ChatMessage::create_house_card` wrote (`ChatMessage::is_house_card`, `That card can't be edited.`), which covers a card the session's sets do not hold yet. An edit that does not land is an `EditError`: `Refused(EditRefusal)` for a rule the editor can act on (empty, a message deleted while its edit was open, not theirs, a report losing its marker, a house card), each worded once in `EditRefusal::message`, or `Failed` for anything else, logged as `chat_edit_failed` and bannered `Could not edit message. Please try again.` A delete that does not land (`delete_message_task`) has the same shape: `DeleteError`, `Refused(DeleteRefusal)` (already gone, not theirs) or `Failed`, logged as `chat_delete_failed` and bannered `Could not delete message. Please try again.` There is no edited flag: a message counts as edited when `updated > created`, which appends `(edited)` to the author header's stamp. Because of that, an edited message never groups as a continuation under the message above it (`ensure_chat_rows_cache`): it takes its own author header back so the marker has somewhere to live. Editing the second message in a run visibly breaks the run; that is the intent.
 - An image upload started from the composer carries its reply target with it (`PendingUrlUpload`/`PendingClipboardImageUpload`, then `image_upload_reply_target`), because both `/upload` and `/paste-image` clear the composer at submit and the finished URL reopens it through `start_composing_in_room`. `tick.rs` restores the target after reopening, and drops it on a failed upload.
 - Enter submits and closes.
 - `Alt+S` submits and keeps the composer open.
@@ -49,7 +49,7 @@ Reply mode:
 - Enters compose mode and clears edit.
 - On submit, stores `reply_to_message_id` and prefixes the stored body with a visible quote line for backward-compatible rendering.
 - Enter on a selected reply jumps only if the target is already loaded in the current room tail.
-- `G` on a selected reply also jumps to the loaded target. Enter is overloaded (an inline image opens first, then a YouTube link plays), so a reply whose own text carries either can only be followed with `G`, not Enter. A link inside the quote line does not count: it is the parent's, so Enter jumps there and a second Enter opens it. Lowercase `g` is the gild key.
+- `G` on a selected reply also jumps to the loaded target. Enter is overloaded: it first reveals the reply's own `||spoilers||`, once, and a second Enter then moves on. After that an inline image opens, else a YouTube link plays, so a reply whose own text carries either of those can only be followed with `G`, not Enter; a reply with nothing but a spoiler is followed by the second Enter. A link inside the quote line does not count: it is the parent's, so Enter jumps there and a second Enter opens it. Lowercase `g` is the gild key.
 
 Edit mode:
 - Allowed for the message author or admins.
@@ -107,6 +107,7 @@ User commands:
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
 - `/ignore [@user]` mutes a user or lists muted users.
 - `/invite @user` adds a user to the selected non-DM room.
+- `/fav` favorites or unfavorites the composer's room (else the selected real room), the same toggle as `f` on the rail. It is how a game room's chat (a door watch room, a Realm world, a house table, a stream room) gets onto the Home rail: `f` is the game's key on those screens and they have no rail row to press it on. Parsed in `submit_composer` into `requested_favorite_toggle`, drained in `handle_post_submit_requests` (the favorites live on the profile).
 - `/leave` leaves the selected non-permanent room.
 - `/list` lists public rooms.
 - `/members` lists selected-room members.
@@ -120,6 +121,7 @@ User commands:
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `. `/chips [@user]` is the same modal opened on its chips ledger (`ProfileSection::Chips` rides on `OpenProfileResolved` and the `requested_open_profile` handoff; the modal scrolls there on its first measured draw).
 - `/onboard` starts the first-visit tour again from the tavern door (`app/clubhouse/CONTEXT.md` §5).
+- `/comeback N` opens comeback moment N's box again, for anyone, without the stamp or the count a return day's login gives it (`app/comeback/CONTEXT.md`); a bad or missing number banners the usage.
 - `/public #room` (alias `/join #room`) opens or creates an opt-in public room for the caller only. A new room starts with `auto_join=false`; an existing room keeps its flag.
 - `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `sheet_modal/`.
 - `/settings` opens settings.
@@ -235,8 +237,8 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
 | `i` | Start composing in selected room, or start News composer when selected |
 | `/` | Start command composer in selected room |
-| `Enter` | Submit composer; jump reply target; open the reader in News; join Discover; jump Mention; on a selected message, open its image, else watch its YouTube link (`../video/CONTEXT.md`) |
-| `G` | Jump a selected reply to its loaded original, even when the reply contains an inline image or a YouTube link (Enter opens the image or watches the video instead) |
+| `Enter` | Submit composer; jump reply target; open the reader in News; join Discover; jump Mention; on a selected message, reveal its `||spoilers||`, else open its image, else watch its YouTube link (`../video/CONTEXT.md`) |
+| `G` | Jump a selected reply to its loaded original, even when the reply contains an inline image or a YouTube link (Enter reveals its spoilers, opens the image or watches the video instead) |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
 | `Ctrl+R` | Redo in the main chat composer (ratatui-textarea's keymap via `ctrl_byte_to_input`). An open composer takes it ahead of the global repaint chord in `app/input.rs::handle_reserved_global_chord`; `/redraw` repaints from inside one |
 | `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |
@@ -248,7 +250,7 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `c` | Copy selected message body |
 | `t` | Translate selected message; press again to collapse, again to reopen. A message already in your target language banners instead of spending a call. |
 | `g` | Open the gild tier picker on the selected message (your own message, a DM, a private room, or a game/stream chat banners the refusal instead of opening). In the picker: `j`/`k` or `1`-`3` pick a tier, `Enter` buys, `Esc` cancels. |
-| `f` | Favorite/unfavorite the selected real room |
+| `f` | Favorite/unfavorite the selected real room or live stream row (`/fav` does the same from inside a game's chat) |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
 | `f` then `1..9` | Quick-react to selected message |
 | `f` then `w` | Wave hi (👋) on selected message |
@@ -293,7 +295,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | `i` | Compose in `#lounge` |
 | `j` / `k` / arrows | Move message selection |
 | `r` / `e` / `d` / `p` / `c` / `f` | Same selected-message actions as Home chat center |
-| `Enter` | Jump selected reply target when loaded |
+| `Enter` | Reveal the selected message's `||spoilers||`; jump selected reply target when loaded |
 
 ### Synthetic Entries
 

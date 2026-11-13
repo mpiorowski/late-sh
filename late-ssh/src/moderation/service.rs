@@ -9,7 +9,7 @@ use late_core::{
         artboard_piece::{ArtboardPiece, PieceLookup},
         audio_ban::{AudioBan, AudioBanListItem},
         calendar_ban::{CalendarBan, CalendarBanListItem},
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind, RoomVisibility},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::{ChatSlowMode, ChatSlowModeListItem},
         deadchannel_runner::DeadchannelRunner,
@@ -27,6 +27,7 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::chat::svc::ChatService;
 use crate::app::stream::registry::EndReason;
 use crate::app::stream::svc::StreamService;
 use crate::app::ultimates::UltimateKind;
@@ -48,6 +49,9 @@ pub(crate) struct ModerationService {
     effects: ModerationSessionEffects,
     event_tx: broadcast::Sender<ModerationEvent>,
     infra: ModerationInfra,
+    /// Chat builds this service and hands itself over: a take-down that
+    /// leaves a #lounge card behind asks chat to delete it.
+    chat: ChatService,
 }
 
 #[derive(Clone, Default)]
@@ -103,12 +107,14 @@ impl ModerationService {
         effects: ModerationSessionEffects,
         event_tx: broadcast::Sender<ModerationEvent>,
         infra: ModerationInfra,
+        chat: ChatService,
     ) -> Self {
         Self {
             db,
             effects,
             event_tx,
             infra,
+            chat,
         }
     }
 }
@@ -388,7 +394,10 @@ impl ModerationService {
         let client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, slug).await?;
         let member_count = ChatRoomMember::count_for_room(&client, room.id).await?;
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let room_slug = room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string());
         let voice_target = voice_target_for_room(&room)?;
         let voice_is_enabled = VoiceChannel::find_for_target(
             &client,
@@ -397,11 +406,18 @@ impl ModerationService {
         )
         .await?
         .is_some_and(|channel| channel.enabled);
+        let visibility = match room.kind {
+            RoomKind::Dm => "dm",
+            RoomKind::Topic(visibility) | RoomKind::Game(visibility) => visibility.as_str(),
+            RoomKind::Lounge | RoomKind::Language | RoomKind::Deadchannel | RoomKind::Nightcap => {
+                RoomVisibility::Public.as_str()
+            }
+        };
         Ok(vec![
             format!("#{room_slug}"),
             format!("id: {}", room.id),
-            format!("kind: {}", room.kind),
-            format!("visibility: {}", room.visibility),
+            format!("kind: {}", room.kind.as_str()),
+            format!("visibility: {visibility}"),
             format!("auto_join: {}", room.auto_join),
             format!("permanent: {}", room.permanent),
             format!("voice: {}", if voice_is_enabled { "on" } else { "off" }),
@@ -539,7 +555,10 @@ impl ModerationService {
             }
             BanListScope::Room { slug } => {
                 let room = find_room_by_mod_slug(&client, &slug).await?;
-                let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+                let room_slug = room
+                    .slug
+                    .clone()
+                    .unwrap_or_else(|| room.kind.as_str().to_string());
                 let items = RoomBan::active_for_room_with_usernames_page(
                     &client,
                     room.id,
@@ -568,7 +587,10 @@ impl ModerationService {
         match scope {
             SlowListScope::Room { slug } => {
                 let room = find_room_by_mod_slug(&client, &slug).await?;
-                let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+                let room_slug = room
+                    .slug
+                    .clone()
+                    .unwrap_or_else(|| room.kind.as_str().to_string());
                 let items = ChatSlowMode::active_for_room_with_usernames_page(
                     &client,
                     room.id,
@@ -666,7 +688,10 @@ impl ModerationService {
 
         let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &old_slug).await?;
-        let current_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let current_slug = room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string());
         if current_slug == new_slug {
             return Ok(vec![format!("room already named #{new_slug}")]);
         }
@@ -707,7 +732,10 @@ impl ModerationService {
         let slug = normalize_mod_slug(slug)?;
         let mut client = self.db.get().await?;
         let room = find_room_by_mod_slug(&client, &slug).await?;
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let room_slug = room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string());
         let voice_target = voice_target_for_room(&room)?;
         let current_enabled = VoiceChannel::find_for_target(
             &client,
@@ -871,7 +899,10 @@ impl ModerationService {
                 anyhow::bail!("this ban was placed by staff; only staff can change it");
             }
         }
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let room_slug = room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string());
         let affected_voice_channel =
             if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
                 let voice_target = voice_target_for_room(&room)?;
@@ -1064,7 +1095,10 @@ impl ModerationService {
             )
             .await;
         if let Some(room) = &room {
-            let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+            let room_slug = room
+                .slug
+                .clone()
+                .unwrap_or_else(|| room.kind.as_str().to_string());
             let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
                 actor_user_id,
                 target_user_id: target.id,
@@ -1135,7 +1169,10 @@ impl ModerationService {
             .notify_toast(target.id, format!("Slow mode lifted in {scope_label}."))
             .await;
         if let Some(room) = &room {
-            let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+            let room_slug = room
+                .slug
+                .clone()
+                .unwrap_or_else(|| room.kind.as_str().to_string());
             let _ = self.event_tx.send(ModerationEvent::RoomSlowModeChanged {
                 actor_user_id,
                 target_user_id: target.id,
@@ -1718,6 +1755,21 @@ impl ModerationService {
         .await?;
         tx.commit().await?;
 
+        // The piece is down whatever happens to its card, so a card that
+        // would not go (the gallery logs it) is named in the reply for the
+        // mod to delete by hand.
+        let card_line = match crate::app::artboard::gallery::svc::withdraw_card(
+            &self.chat,
+            actor_user_id,
+            piece_id,
+            removed.lounge_message_id,
+        )
+        .await
+        {
+            true => None,
+            false => Some("its #lounge card could not be deleted; delete that message by hand"),
+        };
+
         let _ = self.event_tx.send(ModerationEvent::ArtboardPieceRemoved {
             actor_user_id,
             piece_id,
@@ -1726,10 +1778,12 @@ impl ModerationService {
             reason,
         });
 
-        Ok(vec![format!(
+        let mut lines = vec![format!(
             "took down gallery piece {piece_id} (\"{}\")",
             removed.title
-        )])
+        )];
+        lines.extend(card_line.map(str::to_string));
+        Ok(lines)
     }
 
     /// Take a runner's poster down: the lever for a picture its owner will
@@ -1986,24 +2040,31 @@ async fn resolve_room_ownership(
     actor_user_id: Uuid,
     permissions: Permissions,
 ) -> Result<Permissions> {
-    if room.kind == "game" {
-        // Stream rooms only. Other game rooms (house tables, daily match
-        // chats) have no owner-moderator: a daily match's `created_by` is the
-        // challenger, who must not get powers over their opponent.
-        let owner = ChatRoom::stream_room_owner(client, room.id).await?;
-        return Ok(match owner {
-            Some(owner) if owner == actor_user_id => permissions.as_stream_owner(),
-            _ => permissions,
-        });
+    match room.kind {
+        RoomKind::Game(_) => {
+            // Stream rooms only. Other game rooms (house tables, daily match
+            // chats) have no owner-moderator: a daily match's `created_by` is
+            // the challenger, who must not get powers over their opponent.
+            let owner = ChatRoom::stream_room_owner(client, room.id).await?;
+            Ok(match owner {
+                Some(owner) if owner == actor_user_id => permissions.as_stream_owner(),
+                _ => permissions,
+            })
+        }
+        RoomKind::Topic(RoomVisibility::Private) => {
+            let owner = ChatRoom::owner_id(client, room.id).await?;
+            Ok(match owner {
+                Some(owner) if owner == actor_user_id => permissions.as_room_owner(),
+                _ => permissions,
+            })
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Dm
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => Ok(permissions),
     }
-    if room.kind == "topic" && room.visibility == "private" {
-        let owner = ChatRoom::owner_id(client, room.id).await?;
-        return Ok(match owner {
-            Some(owner) if owner == actor_user_id => permissions.as_room_owner(),
-            _ => permissions,
-        });
-    }
-    Ok(permissions)
 }
 
 pub(crate) fn ensure_mod_surface(permissions: Permissions) -> Result<()> {
@@ -2053,19 +2114,6 @@ pub(crate) async fn target_tier_for_user_id(
         .await?
         .ok_or_else(|| anyhow::anyhow!("target user not found"))?;
     Ok(tier_for_user(&author))
-}
-
-pub(crate) fn ensure_message_permission(
-    permissions: Permissions,
-    is_owner: bool,
-    cap: Caps,
-    target_tier: Tier,
-) -> Result<()> {
-    if is_owner || permissions.can(cap, target_tier) {
-        Ok(())
-    } else {
-        anyhow::bail!("cannot edit or delete this message")
-    }
 }
 
 pub(crate) const fn cap_for_server_ban(duration: Option<chrono::Duration>) -> Caps {
@@ -2245,7 +2293,9 @@ fn slow_scope_label(room: Option<&ChatRoom>) -> String {
     room.map(|room| {
         format!(
             "#{}",
-            room.slug.clone().unwrap_or_else(|| room.kind.clone())
+            room.slug
+                .clone()
+                .unwrap_or_else(|| room.kind.as_str().to_string())
         )
     })
     .unwrap_or_else(|| "server".to_string())
@@ -2389,9 +2439,17 @@ async fn find_room_by_mod_slug(client: &tokio_postgres::Client, slug: &str) -> R
 /// The room a chat command named by id. Same contract as the slug lookup:
 /// DMs are not moddable rooms and stay invisible here.
 async fn find_room_by_mod_id(client: &tokio_postgres::Client, room_id: Uuid) -> Result<ChatRoom> {
-    match ChatRoom::get(client, room_id).await? {
-        Some(room) if room.kind != "dm" => Ok(room),
-        _ => Err(anyhow::anyhow!("room not found")),
+    let Some(room) = ChatRoom::get(client, room_id).await? else {
+        anyhow::bail!("room not found");
+    };
+    match room.kind {
+        RoomKind::Dm => Err(anyhow::anyhow!("room not found")),
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => Ok(room),
     }
 }
 
@@ -2405,6 +2463,9 @@ fn voice_target_for_room(room: &ChatRoom) -> Result<RoomVoiceTarget> {
     Ok(RoomVoiceTarget {
         target_kind: TARGET_CHAT_ROOM,
         target_id: room.id,
-        display_name: room.slug.clone().unwrap_or_else(|| room.kind.clone()),
+        display_name: room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string()),
     })
 }

@@ -1,3 +1,4 @@
+use crate::app::artboard::gallery;
 use crate::app::chat::state::ComposerCommands;
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
@@ -209,7 +210,10 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         crate::app::input::open_shop_modal_globally(app);
     }
     if app.chat.take_requested_onboard() {
-        crate::app::input::start_tour(app);
+        crate::app::clubhouse::input::start_tour(app);
+    }
+    if let Some(moment) = app.chat.take_requested_comeback() {
+        crate::app::comeback::svc::show(app, moment, crate::app::comeback::state::Start::Command);
     }
     if app.chat.take_requested_lobby_toggle() {
         crate::app::input::toggle_lobby_globally(app);
@@ -279,6 +283,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if app.chat.take_requested_room_picker() {
         crate::app::input::open_room_search_modal_globally(app);
+    }
+    if let Some(room_id) = app.chat.take_requested_favorite_toggle() {
+        toggle_room_favorite(app, room_id);
     }
     if let Some(query) = app.chat.take_requested_message_search() {
         crate::app::input::open_message_search_modal_globally(app, &query);
@@ -380,15 +387,29 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     let Some(room_id) = app.chat.selected_favorite_room_id() else {
         return false;
     };
+    toggle_room_favorite(app, room_id);
+    true
+}
+
+fn toggle_room_favorite(app: &mut App, room_id: Uuid) {
     let added = app.profile_state.toggle_favorite_room(room_id);
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
+    // A game room is on the rail only while it is a favorite. When the one
+    // open on Home just left it, the selection moves now, as a room switch
+    // does: the next draft goes to the room on screen, not the one that left.
+    let selected = app.chat.selected_room_id;
+    app.chat.sync_selection();
+    if app.chat.selected_room_id != selected {
+        app.chat.reset_composer();
+        app.sync_visible_chat_room();
+        app.chat.request_list();
+    }
     app.banner = Some(if added {
         Banner::success("Added to favorites")
     } else {
         Banner::success("Removed from favorites")
     });
-    true
 }
 
 /// The favorite keys for the selected entry: `[` / `]` reorder, `f` toggles.
@@ -515,7 +536,10 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         b'e' | b'E' => {
-            if let Some(b) = app.chat.begin_edit_selected_in_room(room_id) {
+            if let Some(b) = app
+                .chat
+                .begin_edit_selected_in_room(room_id, &app.gallery_cards)
+            {
                 app.banner = Some(b);
             } else {
                 app.chat.clear_message_selection();
@@ -566,14 +590,24 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         // `G` always jumps to a reply's referenced message. Enter is overloaded
         // (a News card, an image, then a YouTube link, take precedence), so a
         // reply that contains any of them can't be followed with Enter alone;
+        // a spoiler only costs it one press, the reveal.
         // `G` reaches the parent regardless. Lowercase `g` is the gild key
         // above.
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
+        // Enter reveals a message's `||spoilers||` before anything else, so
+        // a spoiled link is read before it is opened.
+        b'\r' | b'\n' if app.chat.reveal_selected_spoilers_in_room(room_id) => {
+            return true;
+        }
         // A News share's #lounge card opens the reader on its story, ahead
         // of the preview its link would otherwise get.
         b'\r' | b'\n' if app.chat.open_selected_card_in_room(room_id) => {
+            return true;
+        }
+        // A hung piece's card opens the piece over the chat.
+        b'\r' | b'\n' if gallery::card::input::open_selected_card(app, room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {

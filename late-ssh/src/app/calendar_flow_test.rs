@@ -6,14 +6,13 @@ use crate::{
             state::{Action, Modal},
         },
         common::primitives::Screen,
-        live::pick::LiveSource,
         profile::state::profile_params_from_profile,
         state::App,
     },
     pg_listener::Signal,
     test_helpers::{make_app, new_test_db, render_plain, wait_for_app},
 };
-use chrono::{Duration, Utc};
+use chrono::{Duration, Timelike, Utc};
 use late_core::models::calendar::{CalendarSource, CalendarStore, EventDraft, EventTiming};
 use late_core::test_utils::create_test_user;
 use ratatui::layout::Rect;
@@ -147,8 +146,8 @@ async fn posting_to_the_board_and_saying_youre_in() {
     let menu = app.calendar.context_menu.as_ref().expect("context menu");
     assert_eq!(
         menu.items.len(),
-        4,
-        "open, in, edit, delete: {:?}",
+        5,
+        "open, duplicate, in, edit, delete: {:?}",
         menu.items
     );
     app.handle_input(b"\x1b");
@@ -158,8 +157,164 @@ async fn posting_to_the_board_and_saying_youre_in() {
     .await;
 }
 
+#[tokio::test]
+async fn duplicating_a_visible_event_makes_an_independent_session_with_its_own_timing() {
+    let db = new_test_db().await;
+    let poster = create_test_user(&db.db, "calendar_source").await;
+    let viewer = create_test_user(&db.db, "calendar_copy").await;
+    let day = Utc::now().date_naive() + Duration::days(1);
+    let original_draft = EventDraft {
+        title: "Workshop tomorrow at 9pm".into(),
+        description: "Shared session details".into(),
+        timing: EventTiming::Timed {
+            start: day.and_hms_opt(9, 0, 0).unwrap().and_utc(),
+            end: Some(day.and_hms_opt(11, 0, 0).unwrap().and_utc()),
+        },
+    };
+    let store = CalendarStore::new(db.db.clone());
+    let original = store
+        .save(poster.id, CalendarSource::Board, None, &original_draft)
+        .await
+        .unwrap()
+        .event;
+    let mut app = make_app(db.db.clone(), viewer.id, "calendar-copy-flow");
+    app.show_splash = false;
+    app.handle_input(b"7");
+    app.calendar.select_date(day);
+    app.calendar.refresh();
+    wait_for_app(&mut app, "original loaded", |a| {
+        !a.calendar.loading && a.calendar.events.iter().any(|e| e.id == original.id)
+    })
+    .await;
+    act(&mut app.calendar, Action::Event(original.id));
+    wait_for_app(&mut app, "original details", |a| {
+        matches!(&a.calendar.modal,
+        Some(Modal::Details(e)) if e.id == original.id)
+    })
+    .await;
+    app.handle_input(b"c");
+    app.handle_input(b"\x1b");
+    wait_for_app(
+        &mut app,
+        "copy discard prompt",
+        |a| matches!(&a.calendar.modal, Some(Modal::Editor(e)) if e.discard_prompt),
+    )
+    .await;
+    app.handle_input(b"d");
+    assert!(
+        matches!(&app.calendar.modal, Some(Modal::Details(e)) if e.id == original.id),
+        "discarding the copy restores its source details"
+    );
+    app.handle_input(b"c");
+    let Some(Modal::Editor(e)) = &mut app.calendar.modal else {
+        panic!("copy editor");
+    };
+    assert!(e.existing.is_none());
+    assert_eq!(e.source, CalendarSource::Personal);
+    assert_eq!(e.text(0), original.title);
+    let next = (day + Duration::days(1)).to_string();
+    for (index, value) in [(2, next.as_str()), (3, "10"), (4, next.as_str()), (5, "12")] {
+        e.fields[index] = ratatui_textarea::TextArea::from(vec![value.to_string()]);
+    }
+    app.handle_input(b"\x13");
+    wait_for_app(&mut app, "copy saved", |a| !a.calendar.pending).await;
+    let Some(Modal::Details(copy)) = &app.calendar.modal else {
+        panic!("copy details");
+    };
+    let copy = copy.clone();
+    assert_ne!(copy.id, original.id);
+    assert_eq!(copy.owner_id, Some(viewer.id));
+    assert_eq!(copy.creator_id, viewer.id);
+    assert_eq!(copy.title, original.title);
+    assert_eq!(copy.description, original.description);
+    assert_ne!(copy.timing, original.timing);
+    assert_eq!(
+        copy.starts_at,
+        (day + Duration::days(1))
+            .and_hms_opt(10, 0, 0)
+            .unwrap()
+            .and_utc()
+    );
+    assert!(store.event(poster.id, copy.id).await.is_err());
+    assert_eq!(store.event(viewer.id, original.id).await.unwrap(), original);
+
+    // The same target control can publish a saved copy.
+    app.handle_input(b"e\t\t \x13");
+    wait_for_app(&mut app, "copy published", |a| !a.calendar.pending).await;
+    assert!(store.event(poster.id, copy.id).await.unwrap().is_board());
+}
+
 /// A moderator sees a stranger's post with Delete and without Edit, and the
 /// delete returns to the agenda with the selection moved on.
+/// A change notice only re-reads Details while they are on top. Details
+/// kept under a copy's editor come back when the draft is discarded, and by
+/// then the post may be out of the viewer's sight.
+#[tokio::test]
+async fn details_under_a_discarded_copy_close_when_the_post_was_withdrawn() {
+    let db = new_test_db().await;
+    let poster = create_test_user(&db.db, "calendar_withdraw").await;
+    let viewer = create_test_user(&db.db, "calendar_reader").await;
+    let day = Utc::now().date_naive() + Duration::days(1);
+    let draft = EventDraft {
+        title: "Workshop".into(),
+        description: "Shared session details".into(),
+        timing: EventTiming::Timed {
+            start: day.and_hms_opt(9, 0, 0).unwrap().and_utc(),
+            end: Some(day.and_hms_opt(11, 0, 0).unwrap().and_utc()),
+        },
+    };
+    let store = CalendarStore::new(db.db.clone());
+    let post = store
+        .save(poster.id, CalendarSource::Board, None, &draft)
+        .await
+        .unwrap()
+        .event;
+    let mut app = make_app(db.db.clone(), viewer.id, "calendar-withdraw-flow");
+    app.show_splash = false;
+    app.handle_input(b"7");
+    app.calendar.select_date(day);
+    app.calendar.refresh();
+    wait_for_app(&mut app, "post loaded", |a| {
+        !a.calendar.loading && a.calendar.events.iter().any(|e| e.id == post.id)
+    })
+    .await;
+    act(&mut app.calendar, Action::Event(post.id));
+    wait_for_app(&mut app, "post details", |a| {
+        matches!(&a.calendar.modal,
+        Some(Modal::Details(e)) if e.id == post.id)
+    })
+    .await;
+    app.handle_input(b"c");
+    assert!(matches!(&app.calendar.modal, Some(Modal::Editor(_))));
+
+    store
+        .save(
+            poster.id,
+            CalendarSource::Personal,
+            Some((post.id, post.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+
+    app.handle_input(b"\x1b");
+    wait_for_app(
+        &mut app,
+        "copy discard prompt",
+        |a| matches!(&a.calendar.modal, Some(Modal::Editor(e)) if e.discard_prompt),
+    )
+    .await;
+    app.handle_input(b"d");
+    wait_for_app(&mut app, "withdrawn details closed", |a| {
+        a.calendar.modal.is_none()
+    })
+    .await;
+    assert!(
+        app.calendar.events.iter().all(|e| e.id != post.id),
+        "a post made personal is out of the reader's month"
+    );
+}
+
 #[tokio::test]
 async fn staff_take_a_post_down_from_its_details() {
     let db = new_test_db().await;
@@ -234,18 +389,20 @@ async fn staff_take_a_post_down_from_its_details() {
     assert_eq!(app.calendar.selected, date);
 }
 
-/// An event an hour out reaches the live strip and the Live panel, and
-/// opening it from there lands on the board with its details up.
+/// A timed board post on today is on Home's banner with its start for the
+/// whole day, and the board's key is beside it.
 #[tokio::test]
-async fn an_event_about_to_start_opens_from_the_live_strip() {
+async fn a_timed_post_today_is_on_homes_banner() {
     let db = new_test_db().await;
     let user = create_test_user(&db.db, "calendar_live").await;
     let mut app = make_app(db.db.clone(), user.id, "calendar-live-flow");
     app.show_splash = false;
-    // Fifty-eight minutes out: the strip stamp (an hour before) is two
-    // minutes old, inside the five the strip keeps something up.
-    let start = Utc::now() + Duration::minutes(58);
-    let event = CalendarStore::new(db.db.clone())
+    // A viewer whose clock reads noon, whatever the wall clock, so the
+    // hour that began five minutes ago began on their today.
+    let noon_here = format!("Etc/GMT{:+}", Utc::now().hour() as i32 - 12);
+    set_timezone(&mut app, user.id, &noon_here).await;
+    let start = Utc::now() - Duration::minutes(5);
+    CalendarStore::new(db.db.clone())
         .save(
             user.id,
             CalendarSource::Board,
@@ -260,31 +417,26 @@ async fn an_event_about_to_start_opens_from_the_live_strip() {
             },
         )
         .await
-        .unwrap()
-        .event;
+        .unwrap();
     // The replica's board worker, nudged once as a write's notify would.
     let (signals, worker) = mpsc::unbounded_channel();
     let _worker = app.calendar.service().start_notify_worker(worker);
     signals.send(Signal::Resync).unwrap();
     app.handle_input(b"1");
     assert_eq!(app.screen, Screen::Dashboard);
-    wait_for_app(&mut app, "strip shows the event", |a| {
-        a.live.showing() == Some(LiveSource::BoardEvent(event.id))
+    wait_for_app(&mut app, "banner lists the post", |a| {
+        !a.home_board_day().is_empty()
     })
     .await;
-    // The test database has no #lounge, so no card carries the strip; the
-    // stock Live tile lists it with its start.
     let rendered = render_plain(&mut app);
-    let time = start.format("%H:%M").to_string();
+    let post = format!(
+        "Standup ({})",
+        start.with_timezone(&app.calendar.tz).format("%H:%M")
+    );
     assert!(
-        rendered.contains("event") && rendered.contains(&time),
+        rendered.contains(&post) && rendered.contains("7 for the board"),
         "{rendered}"
     );
-    assert!(crate::app::live::input::open_from_key(&mut app));
-    assert_eq!(app.screen, Screen::Calendars);
-    assert!(matches!(&app.calendar.modal, Some(Modal::Details(e)) if e.id == event.id));
-    let rendered = render_plain(&mut app);
-    assert!(rendered.contains("On the board"), "{rendered}");
 }
 
 /// The editor reads its clock fields in the zone it opened in. Changing the

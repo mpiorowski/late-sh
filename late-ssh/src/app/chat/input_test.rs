@@ -37,21 +37,26 @@ fn leader_reaction_keys_include_digits_and_wave_except_custom_zero() {
 /// still gets the picker.
 #[tokio::test]
 async fn gild_key_refuses_before_opening_the_picker_outside_public_rooms() {
-    use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
+    use late_core::models::{
+        chat_message::ChatMessage,
+        chat_room::{ChatRoom, RoomKind, RoomVisibility},
+    };
     use uuid::Uuid;
 
     let db = crate::test_helpers::new_test_db().await;
     let mut app = crate::test_helpers::make_app(db.db.clone(), Uuid::now_v7(), "gild-preflight");
 
-    for (kind, visibility, refusal) in [
-        ("dm", "dm", Some("Gilds only work in public rooms")),
-        ("topic", "private", Some("Gilds only work in public rooms")),
+    for (kind, refusal) in [
+        (RoomKind::Dm, Some("Gilds only work in public rooms")),
         (
-            "game",
-            "public",
+            RoomKind::Topic(RoomVisibility::Private),
+            Some("Gilds only work in public rooms"),
+        ),
+        (
+            RoomKind::Game(RoomVisibility::Public),
             Some("Gilds do not work in game or stream chats"),
         ),
-        ("topic", "public", None),
+        (RoomKind::Topic(RoomVisibility::Public), None),
     ] {
         let opens = refusal.is_none();
         let room_id = Uuid::now_v7();
@@ -60,8 +65,7 @@ async fn gild_key_refuses_before_opening_the_picker_outside_public_rooms() {
             id: room_id,
             created: Utc::now(),
             updated: Utc::now(),
-            kind: kind.to_string(),
-            visibility: visibility.to_string(),
+            kind,
             auto_join: false,
             permanent: false,
             slug: None,
@@ -88,13 +92,13 @@ async fn gild_key_refuses_before_opening_the_picker_outside_public_rooms() {
 
         assert!(
             super::handle_message_action_in_room(&mut app, room_id, b'g'),
-            "`g` is consumed whenever a message is selected ({kind}/{visibility})"
+            "`g` is consumed whenever a message is selected ({kind:?})"
         );
-        assert_eq!(app.show_gild_modal, opens, "{kind}/{visibility}");
+        assert_eq!(app.show_gild_modal, opens, "{kind:?}");
         assert_eq!(
             app.banner.as_ref().map(|banner| banner.message.as_str()),
             refusal,
-            "{kind}/{visibility}"
+            "{kind:?}"
         );
         crate::app::chat::gild::input::close(&mut app);
     }

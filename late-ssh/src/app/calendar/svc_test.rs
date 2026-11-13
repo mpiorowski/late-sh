@@ -135,14 +135,74 @@ async fn only_board_changes_wake_the_sessions() {
         .unwrap()
         .event;
     assert_eq!(next_payload(&mut observed).await, "");
+    let private = store
+        .save(
+            user.id,
+            CalendarSource::Personal,
+            Some((post.id, post.revision)),
+            &EventDraft::from(&post),
+        )
+        .await
+        .unwrap()
+        .event;
+    assert_eq!(
+        next_payload(&mut observed).await,
+        "",
+        "privatizing without RSVPs still notifies"
+    );
+    let post = store
+        .save(
+            user.id,
+            CalendarSource::Board,
+            Some((private.id, private.revision)),
+            &EventDraft::from(&private),
+        )
+        .await
+        .unwrap()
+        .event;
+    assert_eq!(next_payload(&mut observed).await, "");
     store.set_rsvp(user.id, post.id, true).await.unwrap();
     assert_eq!(next_payload(&mut observed).await, "");
     connection.abort();
 }
 
+#[tokio::test]
+async fn publishing_an_existing_personal_event_ships_the_post_line() {
+    let db = new_test_db().await;
+    let user = create_test_user(&db.db, "cal_publish").await;
+    let (activity_tx, mut activity_rx) = channel::new(16);
+    let svc = CalendarService::new(db.db.clone())
+        .with_activity(ActivityPublisher::new(db.db.clone(), activity_tx));
+    let draft = timed(Duration::hours(1));
+    let own = svc
+        .store
+        .save(user.id, CalendarSource::Personal, None, &draft)
+        .await
+        .unwrap()
+        .event;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.save(
+        user.id,
+        CalendarSource::Board,
+        Some((own.id, own.revision)),
+        draft,
+        tx,
+    );
+    assert!(
+        matches!(timeout(std::time::Duration::from_secs(10), rx.recv()).await.unwrap().unwrap(),
+        Reply::Saved(Ok(e)) if e.id == own.id && e.is_board())
+    );
+    let line = timeout(std::time::Duration::from_secs(10), activity_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(line.kind, ActivityKind::EventPosted { event_id, .. } if event_id == own.id));
+    assert!(activity_rx.try_recv().is_err());
+}
+
 /// The minute tick re-reads the board alone, without invalidating every
 /// session; a notify invalidates them and re-reads the board without
-/// blanking it first, so the strip and the panel keep what they show.
+/// blanking it first, so Home's banner keeps what it shows.
 #[tokio::test]
 async fn the_board_stays_up_and_the_minute_tick_stays_quiet() {
     let db = new_test_db().await;
@@ -160,7 +220,7 @@ async fn the_board_stays_up_and_the_minute_tick_stays_quiet() {
         .unwrap()
         .event;
     let mut epoch = svc.subscribe();
-    let mut board = svc.board_live();
+    let mut board = svc.board_today();
     let (signals, worker_signals) = mpsc::unbounded_channel();
     // The worker's first minute tick fires at once.
     let worker = svc.start_notify_worker(worker_signals);
@@ -394,11 +454,11 @@ async fn the_listener_keeps_the_board_in_step_and_closes_a_deleted_post() {
         .await
         .unwrap()
         .event;
-    let mut board = svc.board_live();
+    let mut board = svc.board_today();
     contains(&mut board, post.id, true).await;
 
     // Kill only this isolated database's LISTEN connection, then move the
-    // event out of the live window while notifications are down. Resync
+    // event out of today's window while notifications are down. Resync
     // must reconstruct the snapshot.
     let client = db.db.get().await.unwrap();
     let pid: i32 = client.query_one("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LISTEN calendar_changed;%' AND pid<>pg_backend_pid()", &[]).await.unwrap().get(0);

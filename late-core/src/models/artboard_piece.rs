@@ -54,6 +54,13 @@ pub const GALLERY_AWARD_MIN_APPLAUSE: i64 = 3;
 pub const GALLERY_LISTING_LIMIT: i64 = 100;
 /// How many past months the hall of fame walks back.
 pub const HALL_OF_FAME_MONTHS: i64 = 36;
+/// Fired when what a #lounge card shows may have changed (migration 285):
+/// a card linked or unlinked, a piece taken down, applause given or taken
+/// back.
+pub const ARTBOARD_PIECES_CHANGED_CHANNEL: &str = "artboard_pieces_changed";
+/// How many of the newest pieces with a #lounge card every replica keeps
+/// in memory to draw them. An older card reads as its plain line.
+pub const GALLERY_LOUNGE_CARD_LIMIT: i64 = 100;
 
 /// A piece as the gallery shows it: the row, its author's name, and the
 /// applause count with the viewer's own hand marked.
@@ -73,6 +80,7 @@ pub struct ArtboardPiece {
     pub period_month: NaiveDate,
     pub applause: i64,
     pub applauded_by_viewer: bool,
+    pub lounge_message_id: Option<Uuid>,
 }
 
 impl From<Row> for ArtboardPiece {
@@ -92,6 +100,7 @@ impl From<Row> for ArtboardPiece {
             period_month: row.get("period_month"),
             applause: row.get("applause"),
             applauded_by_viewer: row.get("applauded_by_viewer"),
+            lounge_message_id: row.get("lounge_message_id"),
         }
     }
 }
@@ -140,7 +149,11 @@ pub struct NewestPiece {
 /// How the hanger's own take-down ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TakeDownOutcome {
-    TakenDown,
+    /// Down. `lounge_message_id` is the piece's #lounge card, for the
+    /// caller to delete.
+    TakenDown {
+        lounge_message_id: Option<Uuid>,
+    },
     NotFound,
     /// Somebody else's piece; only a mod takes those down.
     NotYours,
@@ -203,6 +216,8 @@ pub struct RemovedPiece {
     pub id: Uuid,
     pub user_id: Uuid,
     pub title: String,
+    /// The piece's #lounge card, for the caller to delete.
+    pub lounge_message_id: Option<Uuid>,
 }
 
 /// How a mod's id prefix resolved.
@@ -224,6 +239,7 @@ pub const PIECE_ID_PREFIX_MIN_CHARS: usize = 8;
 const PIECE_VIEW_SQL: &str =
     "SELECT p.id, p.created, p.user_id, u.username, p.title, p.width, p.height,
             p.canvas, p.provenance, p.glyph_count, p.own_share_percent, p.period_month,
+            p.lounge_message_id,
             (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) AS applause,
             EXISTS (
                 SELECT 1 FROM artboard_piece_votes v
@@ -722,7 +738,7 @@ impl ArtboardPiece {
                 "UPDATE artboard_pieces
                  SET removed_at = now()
                  WHERE id = $1 AND removed_at IS NULL
-                 RETURNING id, user_id, title",
+                 RETURNING id, user_id, title, lounge_message_id",
                 &[&piece_id],
             )
             .await?;
@@ -730,6 +746,7 @@ impl ArtboardPiece {
             id: row.get("id"),
             user_id: row.get("user_id"),
             title: row.get("title"),
+            lounge_message_id: row.get("lounge_message_id"),
         }))
     }
 
@@ -741,19 +758,22 @@ impl ArtboardPiece {
         piece_id: Uuid,
         user_id: Uuid,
     ) -> Result<TakeDownOutcome> {
-        let updated = client
-            .execute(
+        let row = client
+            .query_opt(
                 "UPDATE artboard_pieces
                  SET removed_at = now()
                  WHERE id = $1
                    AND user_id = $2
                    AND removed_at IS NULL
-                   AND period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date",
+                   AND period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                 RETURNING lounge_message_id",
                 &[&piece_id, &user_id],
             )
             .await?;
-        if updated == 1 {
-            return Ok(TakeDownOutcome::TakenDown);
+        if let Some(row) = row {
+            return Ok(TakeDownOutcome::TakenDown {
+                lounge_message_id: row.get("lounge_message_id"),
+            });
         }
         let piece = client
             .query_opt(
@@ -766,5 +786,42 @@ impl ArtboardPiece {
             Some(row) if row.get::<_, Uuid>("user_id") != user_id => Ok(TakeDownOutcome::NotYours),
             Some(_) => Ok(TakeDownOutcome::Closed),
         }
+    }
+
+    /// Up to `limit` pieces still up that hold a card in #lounge, newest
+    /// piece first. No viewer: the cards are one set for everyone, so
+    /// `applauded_by_viewer` is false on every row.
+    pub async fn list_lounge_cards(client: &impl GenericClient, limit: i64) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                &format!(
+                    "{PIECE_VIEW_SQL}
+                     WHERE p.lounge_message_id IS NOT NULL
+                     ORDER BY p.created DESC
+                     LIMIT $2"
+                ),
+                &[&Uuid::nil(), &limit],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Point a piece at its #lounge card. Owner and "still up" are in the
+    /// `UPDATE` itself; zero rows means the piece was taken down first.
+    pub async fn link_lounge_message(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        piece_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE artboard_pieces
+                 SET lounge_message_id = $3
+                 WHERE id = $2 AND user_id = $1 AND removed_at IS NULL",
+                &[&user_id, &piece_id, &message_id],
+            )
+            .await?;
+        Ok(updated)
     }
 }

@@ -765,6 +765,7 @@ async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_run_the_press() 
 
 #[tokio::test]
 async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
+    use crate::app::arcade::netwalk::state::{self as netwalk, LENT_DIFFICULTY};
     use crate::app::clubhouse::state::Tutorial;
     use crate::app::common::primitives::Screen;
 
@@ -792,14 +793,15 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
         .enter_screen(crate::app::presence::svc::now_ms());
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
-    // Nothing pops while the tour holds the keys, however long it takes.
-    // Enter is the only key the route takes, stop after stop (it skips the
-    // hidden Artboard without showing it).
+    // Nothing pops while the tour holds the keys, however long it takes:
+    // Enter walks the stops to the board (at the table it strikes the
+    // break first, or walks on where the table does not fit), and the
+    // board waits on its solve.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while app.clubhouse.tutorial != Tutorial::Homecoming {
+    while app.clubhouse.tutorial != Tutorial::VisitBoard {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "tour did not reach Homecoming: {:?}",
+            "tour did not reach the board: {:?}",
             app.clubhouse.tutorial
         );
         app.handle_input(b"\r");
@@ -808,7 +810,20 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     }
     assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
 
-    // Settling in is the last step of the opening; the paper is next.
+    // Solved (the board set to its own network), Enter reaches the week
+    // stop, still inside the opening; the Enter after it is the last step,
+    // and the paper is next.
+    let solution = netwalk::generate(
+        LENT_DIFFICULTY,
+        netwalk::daily_seed(chrono::Utc::now().date_naive(), LENT_DIFFICULTY),
+    )
+    .solution;
+    app.netwalk_state
+        .set_board_for_test(LENT_DIFFICULTY, solution, 1);
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitWeek);
+    let frame = render_plain(&mut app);
+    assert!(!frame.contains("The Late Edition"), "{frame}");
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
     wait_for_render_contains(&mut app, "The Late Edition").await;

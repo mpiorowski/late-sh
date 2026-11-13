@@ -322,11 +322,7 @@ impl PairedClientRegistry {
     /// Deliver to the first paired CLI advertising the `stream_viewer`
     /// capability. Returns whether anyone got it, so the caller can fall
     /// back to the browser or the QR modal.
-    pub fn send_control_to_stream_viewer_cli(
-        &self,
-        token: &str,
-        msg: PairControlMessage,
-    ) -> bool {
+    pub fn send_control_to_stream_viewer_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_stream_viewer) > 0
     }
 

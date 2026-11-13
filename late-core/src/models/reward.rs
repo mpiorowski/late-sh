@@ -86,6 +86,23 @@ impl RewardTemplate {
             .with_context(|| format!("active reward template {key:?} not found"))
     }
 
+    /// The active templates among `keys`, in no particular order. A key with
+    /// no active template is absent.
+    pub async fn list_active_by_keys(
+        client: &impl GenericClient,
+        keys: &[&str],
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT id, key, kind, params, reward_chips, claim_policy, cooldown_seconds
+                 FROM reward_templates
+                 WHERE key = ANY($1) AND active = true",
+                &[&keys],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
     pub fn ensure_claim_policy(&self, expected: &str) -> Result<()> {
         ensure!(
             self.claim_policy == expected,

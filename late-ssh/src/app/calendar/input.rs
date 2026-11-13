@@ -77,6 +77,7 @@ pub(super) fn handle_key(s: &mut CalendarState, event: &ParsedInput) -> bool {
         Some('t' | 'T') => Some(Action::Today),
         Some('n' | 'N') => Some(Action::New),
         Some('e') => Some(Action::Edit),
+        Some('c') => Some(Action::Duplicate),
         Some('d') => Some(Action::Delete),
         Some('i' | 'I') => Some(Action::Rsvp),
         Some('\r') => Some(enter(s)),
@@ -394,13 +395,15 @@ pub fn act(s: &mut CalendarState, action: Action) {
             ))));
         }
         Action::Rsvp => s.toggle_rsvp(),
-        Action::Edit | Action::Delete => {
-            let event = if let Some(Modal::Details(e)) = &s.modal {
-                Some(e.clone())
+        Action::Duplicate => {
+            if let Some(event) = s.action_event() {
+                s.push_modal(Modal::Editor(Box::new(Editor::duplicate(&event, s.tz))));
             } else {
-                s.selected_event()
-            };
-            if let Some(e) = event {
+                s.error = Some("Select an event first".into());
+            }
+        }
+        Action::Edit | Action::Delete => {
+            if let Some(e) = s.action_event() {
                 let access = event_access(&e, s.viewer, s.staff);
                 let allowed = match action {
                     Action::Edit => access.edit,
@@ -438,9 +441,9 @@ pub fn act(s: &mut CalendarState, action: Action) {
         }
         Action::Reload => {
             if let Some(Modal::Editor(e)) = &s.modal
-                && let Some((id, _)) = e.existing
+                && let Some(saved) = e.existing
             {
-                s.service_reload(id);
+                s.service_reload(saved.id);
             }
         }
         Action::MenuChoice(i) => {
@@ -460,6 +463,7 @@ pub fn act(s: &mut CalendarState, action: Action) {
                 },
                 MenuAction::New => act(s, Action::New),
                 MenuAction::Edit => act(s, Action::Edit),
+                MenuAction::Duplicate => act(s, Action::Duplicate),
                 MenuAction::Delete => act(s, Action::Delete),
                 MenuAction::Rsvp(_) => act(s, Action::Rsvp),
             }
@@ -516,6 +520,7 @@ pub(super) fn handle_modal(s: &mut CalendarState, event: &ParsedInput) {
     match &s.modal {
         Some(Modal::Details(_)) => match event {
             ParsedInput::Byte(b'e') => act(s, Action::Edit),
+            ParsedInput::Byte(b'c') => act(s, Action::Duplicate),
             ParsedInput::Byte(b'd') | ParsedInput::Delete => act(s, Action::Delete),
             ParsedInput::Byte(b'i' | b'I') => act(s, Action::Rsvp),
             ParsedInput::Byte(b'q') => escape(s),

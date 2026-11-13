@@ -446,6 +446,9 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    /// The last comeback moment this account was shown and when
+    /// (`app/comeback`), `None` until one has been.
+    pub comeback_mark: Option<late_core::models::user::ComebackMark>,
     /// Tweak: the page the session starts on. Ignored for brand-new users so
     /// they still get the clubhouse first-visit tutorial.
     pub landing_page: LandingPage,
@@ -541,11 +544,16 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The comeback moments (`app/comeback`): the box a return day owes.
+    pub(crate) comeback: crate::app::comeback::state::State,
     /// The herald: the `/herald` drain and its answers.
     pub(crate) herald: crate::app::herald::state::HeraldState,
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
+    /// Hung Artboard pieces' #lounge cards and the piece Enter on one opens
+    /// over the chat (`app/artboard/gallery/card/`).
+    pub(crate) gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState,
     /// The Jobs shelf: the replica's active postings, the selection, and
     /// the `/jobs` drain.
     pub(crate) jobs: crate::app::jobs::state::JobsState,
@@ -1021,6 +1029,9 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
+    /// A piece opened from its #lounge card, until the Artboard page may
+    /// show it (`open_gallery_piece`, `sync_dartboard_connection`).
+    pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1577,7 +1588,6 @@ impl App {
         let active_users = config.active_users.clone();
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
-        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -1605,6 +1615,14 @@ impl App {
         let resume = match tour_pending {
             true => None,
             false => config.resume,
+        };
+        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        // How the comeback moments (`app/comeback`) see this session: a
+        // session with the tour to walk owes none, and a handoff is not a
+        // login. Which moment, if any, is read once the splash is down.
+        let comeback_arrival = match (tour_pending, resume.is_none()) {
+            (false, true) => crate::app::comeback::state::Arrival::Login(config.comeback_mark),
+            (true, _) | (false, false) => crate::app::comeback::state::Arrival::NotALogin,
         };
         let landing = match (tour_pending, resume) {
             (true, _) => LandingPage::Clubhouse,
@@ -1678,7 +1696,12 @@ impl App {
                 config.paper_service,
                 config.paper_at_login && resume.is_none(),
             ),
+            comeback: crate::app::comeback::state::State::new(comeback_arrival),
             video: crate::app::video::state::State::default(),
+            gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState::new(
+                config.gallery_service.clone(),
+                config.user_id,
+            ),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -2001,6 +2024,7 @@ impl App {
             artboard_interacting: false,
             artboard_content_accepted: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
+            pending_gallery_piece: None,
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -2418,8 +2442,17 @@ impl App {
         if self.dopewars_state.is_some() {
             return;
         }
+        // The playname is how a run finds its account, so it is the name the
+        // account has now: `self.username` is the one the session started
+        // with, and a rename since then would send runs to nobody. It stands
+        // in only until the profile has loaded.
+        let profile_username = &self.profile_state.profile().username;
+        let username = match profile_username.is_empty() {
+            true => self.username.clone(),
+            false => profile_username.clone(),
+        };
         self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
-            self.user_id,
+            username,
             self.dopewars_host.clone(),
             self.dopewars_port,
             self.dopewars_secret.clone(),
@@ -2704,6 +2737,7 @@ impl App {
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
+            self.pending_gallery_piece = None;
         }
 
         if self.screen == Screen::Lateania {
@@ -2858,6 +2892,16 @@ impl App {
         if matches!(self.screen, Screen::Lateania | Screen::Games) {
             self.lateania_service
                 .fill_slots_task(self.user_id, self.repaint_signal.clone());
+        }
+        // The landings' payout timers are read on the way in, never polled:
+        // a milestone paid while the hub sat open shows on the next visit.
+        if screen_changed && matches!(self.screen, Screen::Lateania | Screen::Games) {
+            let reply = self.games_hub_state.request_timers();
+            self.games_hub_service.load_timers_task(
+                self.user_id,
+                reply,
+                self.repaint_signal.clone(),
+            );
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
@@ -3060,10 +3104,12 @@ impl App {
             || self.show_bonsai_modal
             || self.show_lobby_modal
             || self.paper.modal.is_some()
+            || self.comeback.is_open()
             || self.stream_modal.is_some()
             || self.show_help
             || self.show_ultimate_modal
             || self.chat.reader().is_some()
+            || self.gallery_cards.modal().is_some()
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
@@ -3524,17 +3570,16 @@ impl App {
     pub(crate) fn home_tiles_area(&self) -> Rect {
         crate::app::zen::layout::rice_areas(
             self.content_area(),
-            self.home_board_day().is_some(),
+            !self.home_board_day().is_empty(),
             self.home.arrange,
         )
         .tiles
     }
 
-    /// The board's day for Home's banner (`calendar::live::day_text`):
-    /// today's all-day posts, `None` on any other day.
-    pub(crate) fn home_board_day(&self) -> Option<String> {
-        let now = chrono::Utc::now();
-        crate::app::calendar::live::day_text(&self.calendar.live_at(now), now)
+    /// The board's day for Home's banner (`calendar::banner`): today's
+    /// board posts, empty on a day it has none.
+    pub(crate) fn home_board_day(&self) -> Vec<crate::app::calendar::banner::DayPost> {
+        self.calendar.day_posts(chrono::Utc::now())
     }
 
     /// Every tile's rect on Home, in layout order, with the chrome's inner
@@ -3652,11 +3697,12 @@ impl App {
 
     /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions (`unread_rows`), and today's care still
+    /// the unread DMs and mentions (chat's `unread_dms` and
+    /// `unread_mentions`), and today's care still
     /// due. Read each frame while the page hosts the guest and on each of
     /// its keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
-        use crate::app::zen::attention::{Chore, Inputs, Match, items, unread_rows};
+        use crate::app::zen::attention::{Chore, Inputs, Item, Match, items};
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3693,14 +3739,22 @@ impl App {
                 ),
             })
             .collect();
-        let unread = unread_rows(
-            self.user_id,
-            &self.chat.rooms,
-            &self.chat.unread_counts,
-            self.chat.usernames(),
-            self.chat.ignored_user_ids(),
-            self.chat.notifications.all_items(),
-        );
+        let unread_dms = self.chat.unread_dms().into_iter().map(|dm| Item::Dm {
+            room_id: dm.room_id,
+            peer: dm.peer,
+            unread: dm.unread,
+        });
+        let unread_mentions =
+            self.chat
+                .unread_mentions()
+                .into_iter()
+                .map(|mention| Item::Mention {
+                    room_id: mention.room_id,
+                    message_id: mention.message_id,
+                    actor: mention.actor_username.clone(),
+                    room: mention.room_slug.clone(),
+                });
+        let unread = unread_dms.chain(unread_mentions).collect();
         let care = self.care_today();
         items(Inputs {
             my_moves,
@@ -4106,8 +4160,7 @@ impl App {
                             self.open_stream_viewer(url);
                         }
                         None => {
-                            self.banner =
-                                Some(Banner::error("This stream is not live right now."));
+                            self.banner = Some(Banner::error("This stream is not live right now."));
                         }
                     }
                 }

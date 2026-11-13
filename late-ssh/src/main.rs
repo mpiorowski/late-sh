@@ -297,7 +297,8 @@ async fn main() -> anyhow::Result<()> {
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
     let live_games = late_ssh::app::door::spectate::svc::LiveGamesService::new(db.clone());
     let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
-    let games_hub_service = late_ssh::app::door::hub::svc::GamesHubService::new(db.clone());
+    let games_hub_service =
+        late_ssh::app::door::hub::svc::GamesHubService::new(db.clone(), chip_service.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
         late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
@@ -383,8 +384,15 @@ async fn main() -> anyhow::Result<()> {
     let _jobs_press_task = jobs_service.start_press_task();
     // The Artboard gallery's splash wall: every replica re-reads the day's
     // piece hourly; the first replica awake on a day assigns it. See `app/artboard/gallery/svc.rs`.
-    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(db.clone());
+    let gallery_service = late_ssh::app::artboard::gallery::svc::GalleryService::new(
+        db.clone(),
+        chat_service.clone(),
+        config.web_url.clone(),
+    );
     let _gallery_splash_task = gallery_service.start_splash_refresh_task();
+    let _gallery_notify_task = gallery_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::artboard::gallery::svc::GalleryService::CHANNELS),
+    );
     // Runner looks (the #deadchannel portraits) cross replicas the same
     // way; the listener seeds this replica on every (re)connect. See
     // `app/deadchannel/runner/svc.rs`.
@@ -623,6 +631,16 @@ async fn main() -> anyhow::Result<()> {
                 host: state.config.brogue_host.clone(),
                 port: state.config.brogue_port,
                 secret: state.config.brogue_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _dopewars_ingest_task = state.config.dopewars_enabled.then(|| {
+        door_ingest_service.clone().start_dopewars_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.dopewars_host.clone(),
+                port: state.config.dopewars_port,
+                secret: state.config.dopewars_secret.clone(),
             },
             singleton_shutdown.clone(),
         )
