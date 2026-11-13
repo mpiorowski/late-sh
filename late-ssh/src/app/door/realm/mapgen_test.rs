@@ -6,6 +6,7 @@ fn spec(continents: u8, islands: u8, territories: u16) -> GeneratedMapSpec {
         continents,
         islands,
         territories,
+        generator: Generator::Relief,
         names: Vec::new(),
     }
 }
@@ -179,6 +180,7 @@ fn the_parameters_are_clamped_rather_than_trusted() {
         continents: 200,
         islands: 200,
         territories: 5_000,
+        generator: Generator::Relief,
         names: Vec::new(),
     }
     .normalized();
@@ -192,6 +194,7 @@ fn the_parameters_are_clamped_rather_than_trusted() {
         continents: 0,
         islands: 0,
         territories: 50,
+        generator: Generator::Relief,
         names: Vec::new(),
     }
     .normalized();
@@ -262,6 +265,11 @@ fn the_cache_returns_the_same_world_for_the_same_spec() {
     let other = map_for_spec(&spec(2, 3, 61));
     assert!(!Arc::ptr_eq(&one, &other));
     assert_ne!(spec(2, 3, 60).key(), spec(2, 3, 61).key());
+    let flood = GeneratedMapSpec {
+        generator: Generator::Flood,
+        ..spec(2, 3, 60)
+    };
+    assert_ne!(flood.key(), spec(2, 3, 60).key(), "the generator is the world");
 }
 
 /// Determinism across *processes*, not just within one. The in-run test above
@@ -269,9 +277,33 @@ fn the_cache_returns_the_same_world_for_the_same_spec() {
 /// a `HashMap` walked in its own order handed cells to territories in a
 /// different order, and summing their areas in a different order changes the
 /// last bit of a float. A pinned fingerprint is what catches that.
+///
+/// Each generator is pinned: a live world is rebuilt by the one it was opened
+/// under, so `Flood` (season 2) must keep drawing exactly what it drew.
 #[test]
 fn a_built_world_has_a_stable_fingerprint() {
-    let map = generate(&spec(3, 5, 80));
+    for (generator, expected) in [
+        (
+            Generator::Flood,
+            "5a89d33e397b3957b7b918119fdfd30ad6344782ee21241971854209bac3e2df",
+        ),
+        (
+            Generator::Relief,
+            "aa356be2bea1a5942c51492bea5a23f59306a1e2a3277084b497628c665bf379",
+        ),
+    ] {
+        assert_eq!(
+            fingerprint(&generate(&GeneratedMapSpec {
+                generator,
+                ..spec(3, 5, 80)
+            })),
+            expected,
+            "{generator:?}"
+        );
+    }
+}
+
+fn fingerprint(map: &WorldMap) -> String {
     let mut hasher = blake3::Hasher::new();
     for cell in &map.grid.cells {
         hasher.update(&cell.to_le_bytes());
@@ -286,10 +318,7 @@ fn a_built_world_has_a_stable_fingerprint() {
             hasher.update(&n.to_le_bytes());
         }
     }
-    assert_eq!(
-        hasher.finalize().to_hex().as_str(),
-        "5a89d33e397b3957b7b918119fdfd30ad6344782ee21241971854209bac3e2df"
-    );
+    hasher.finalize().to_hex().to_string()
 }
 
 /// Continents have to look drawn, not compassed. The measure is the
@@ -352,4 +381,17 @@ fn continents_are_not_discs() {
             "seed {seed}: biggest landmass is a filigree ({quotient:.3})"
         );
     }
+}
+
+/// Season 2's spec was stored before the generator was part of it; it has to
+/// come back as the generator that drew it, or its world is redrawn under
+/// its players.
+#[test]
+fn a_spec_stored_before_the_generator_is_a_flood() {
+    let stored: GeneratedMapSpec = serde_json::from_str(
+        r#"{"seed": 9, "continents": 5, "islands": 8, "territories": 300, "names": []}"#,
+    )
+    .expect("an old spec parses");
+    assert_eq!(stored.generator, Generator::Flood);
+    assert_eq!(GeneratedMapSpec::default().generator, Generator::Relief);
 }

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::common::worldmap::data::{
     Territory, TerritoryGrid, TerritoryId, WATER, WorldMap, build_mips, compute_bboxes,
-    compute_coastal, compute_landmasses, compute_weights,
+    compute_coastal, compute_landmasses, compute_sea_lanes, compute_weights,
 };
 
 /// Grid resolution of a generated world. A quarter of Earth's linear
@@ -61,11 +61,46 @@ pub struct GeneratedMapSpec {
     pub continents: u8,
     pub islands: u8,
     pub territories: u16,
+    /// How the world is drawn from the rest of the spec. Part of the recipe:
+    /// a world opened under one generator is rebuilt by it for life.
+    #[serde(default = "Generator::written_before_relief")]
+    pub generator: Generator,
     /// Territory names in id order. Empty (or short) falls back to the
     /// built-in pool, which is what keeps this working with no AI key and
     /// deterministic in tests.
     #[serde(default)]
     pub names: Vec<String>,
+}
+
+/// The algorithm that turns a spec into a world. A generated world is rebuilt
+/// from its spec on every load, so changing how worlds are drawn has to be a
+/// new variant beside the old one, never an edit to it: an edit redraws every
+/// live world under its players' feet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Generator {
+    /// Each landmass flooded outward from its own centre, centres spread as
+    /// far apart as they go, countries cut by four-way flood. Kept for the
+    /// worlds opened under it (season 2); delete it once none is live.
+    Flood,
+    /// A relief: every landmass a rise in one elevation field, the sea level
+    /// set so the land is Earth's share, continents strung off one another
+    /// and islands off their coasts, countries cut by an eight-way flood over
+    /// rough ground. What every world is opened with now (`MAPS.md`).
+    Relief,
+}
+
+impl Generator {
+    /// Specs stored before the field existed were all drawn by `Flood`.
+    fn written_before_relief() -> Self {
+        Self::Flood
+    }
+
+    fn tag(self) -> u8 {
+        match self {
+            Self::Flood => 0,
+            Self::Relief => 1,
+        }
+    }
 }
 
 impl GeneratedMapSpec {
@@ -88,6 +123,7 @@ impl GeneratedMapSpec {
             territories: self
                 .territories
                 .clamp(GEN_MIN_TERRITORIES, GEN_MAX_TERRITORIES),
+            generator: self.generator,
             names: self.names.clone(),
         }
     }
@@ -100,6 +136,7 @@ impl GeneratedMapSpec {
         hasher.update(&spec.seed.to_le_bytes());
         hasher.update(&[spec.continents, spec.islands]);
         hasher.update(&spec.territories.to_le_bytes());
+        hasher.update(&[spec.generator.tag()]);
         for name in &spec.names {
             hasher.update(name.as_bytes());
             hasher.update(b"\0");
@@ -132,6 +169,7 @@ impl Default for GeneratedMapSpec {
             continents: 5,
             islands: 8,
             territories: 300,
+            generator: Generator::Relief,
             names: Vec::new(),
         }
     }
@@ -191,36 +229,26 @@ pub fn generate(spec: &GeneratedMapSpec) -> WorldMap {
     let height = GEN_HEIGHT;
     let cell_area = cell_areas(height);
 
-    let masses = plan_landmasses(&spec, &mut rng);
+    let grown: Vec<Vec<usize>> = match spec.generator {
+        Generator::Flood => flood_landmasses(&spec, &cell_area, &mut rng),
+        Generator::Relief => relief_landmasses(&spec, &cell_area, &mut rng),
+    };
     let mut cells = vec![WATER; width as usize * height as usize];
-    // Landmass index + 1 is painted first, so the partition pass can tell the
-    // masses apart before any territory ids exist.
-    let mut owner = vec![0u16; cells.len()];
-    let mut grown: Vec<Vec<usize>> = Vec::with_capacity(masses.len());
-    for (index, mass) in masses.iter().enumerate() {
-        let filled = grow_landmass(mass, index as u16 + 1, &mut owner, &cell_area, &mut rng);
-        grown.push(filled);
-    }
-
-    // Landmasses that came out too small to hold a country are sea again:
-    // better a world of nine continents than one with a one-cell speck
-    // carrying a name and a seat in the standings.
     let counts = allocate_territories(&spec, &grown, &cell_area);
 
     let mut territories: Vec<Territory> = Vec::with_capacity(spec.territories as usize);
     for (mass_index, mass_cells) in grown.iter().enumerate() {
         let want = counts[mass_index];
         if want == 0 || mass_cells.is_empty() {
-            for index in mass_cells {
-                owner[*index] = 0;
-            }
             continue;
         }
-        partition_landmass(
-            mass_cells,
-            want,
+        let members = match spec.generator {
+            Generator::Flood => partition_flood(mass_cells, want, width, &mut rng),
+            Generator::Relief => partition_relief(mass_cells, want, &mut rng),
+        };
+        found_territories(
+            &members,
             width,
-            height,
             &mut cells,
             &mut territories,
             &cell_area,
@@ -243,6 +271,7 @@ pub fn generate(spec: &GeneratedMapSpec) -> WorldMap {
     compute_landmasses(&mut territories, &grid);
     compute_bboxes(&mut territories, &grid);
     compute_coastal(&mut territories, &grid);
+    compute_sea_lanes(&mut territories, &grid);
     compute_weights(&mut territories);
     let mips = build_mips(&grid);
 
@@ -285,7 +314,9 @@ struct MassPlan {
     roughness: f64,
 }
 
-fn plan_landmasses(spec: &GeneratedMapSpec, rng: &mut SplitMix64) -> Vec<MassPlan> {
+/// How much land each mass is planned to hold, continents first and then
+/// islands, and how many of them are continents.
+fn planned_areas(spec: &GeneratedMapSpec, rng: &mut SplitMix64) -> (Vec<f64>, usize) {
     let globe_area = 4.0 * std::f64::consts::PI * EARTH_RADIUS_KM * EARTH_RADIUS_KM;
     let land_area = globe_area * LAND_FRACTION;
     let (continent_area, island_area) = match (spec.continents, spec.islands) {
@@ -296,8 +327,6 @@ fn plan_landmasses(spec: &GeneratedMapSpec, rng: &mut SplitMix64) -> Vec<MassPla
             land_area * (1.0 - CONTINENT_SHARE),
         ),
     };
-
-    let mut plans: Vec<MassPlan> = Vec::new();
     let shares = |count: u8, pool: f64, rng: &mut SplitMix64| -> Vec<f64> {
         if count == 0 {
             return Vec::new();
@@ -308,82 +337,104 @@ fn plan_landmasses(spec: &GeneratedMapSpec, rng: &mut SplitMix64) -> Vec<MassPla
         let total: f64 = weights.iter().sum();
         weights.iter().map(|w| pool * w / total).collect()
     };
-
     let continent_areas = shares(spec.continents, continent_area, rng);
-    let island_count = spec.islands as usize;
     let island_areas = shares(spec.islands, island_area, rng);
+    let continent_count = continent_areas.len();
     let all: Vec<f64> = continent_areas.into_iter().chain(island_areas).collect();
-    let continent_count = all.len() - island_count;
+    (all, continent_count)
+}
 
-    for (index, area) in all.into_iter().enumerate() {
-        let is_island = index >= continent_count;
-        let start = pick_center(&plans, rng);
-        // The radius a disc of this area would have, in cells at this
-        // latitude — the yardstick everything else is measured against.
-        let lat = 90.0 - (start.1 as f64 + 0.5) / GEN_HEIGHT as f64 * 180.0;
-        let cell_km2 = {
-            let d_lon = std::f64::consts::TAU / GEN_WIDTH as f64;
-            let top = (lat + 90.0 / GEN_HEIGHT as f64).to_radians();
-            let bottom = (lat - 90.0 / GEN_HEIGHT as f64).to_radians();
-            (EARTH_RADIUS_KM * EARTH_RADIUS_KM * d_lon * (top.sin() - bottom.sin())).max(1.0)
-        };
-        let radius_cells = (area / cell_km2 / std::f64::consts::PI).sqrt().max(2.0);
+/// The shape of one landmass around `start`: its nuclei, lobes and noise.
+fn shape_plan(start: (u16, u16), area: f64, is_island: bool, rng: &mut SplitMix64) -> MassPlan {
+    // The radius a disc of this area would have, in cells at this
+    // latitude — the yardstick everything else is measured against.
+    let lat = 90.0 - (start.1 as f64 + 0.5) / GEN_HEIGHT as f64 * 180.0;
+    let cell_km2 = {
+        let d_lon = std::f64::consts::TAU / GEN_WIDTH as f64;
+        let top = (lat + 90.0 / GEN_HEIGHT as f64).to_radians();
+        let bottom = (lat - 90.0 / GEN_HEIGHT as f64).to_radians();
+        (EARTH_RADIUS_KM * EARTH_RADIUS_KM * d_lon * (top.sin() - bottom.sin())).max(1.0)
+    };
+    let radius_cells = (area / cell_km2 / std::f64::consts::PI).sqrt().max(2.0);
 
-        // Continents get two to four nuclei strung along an axis: that is
-        // what gives a mass a long side, a narrow waist, and lobes hanging
-        // off it rather than one centre and a rim. Islands get one or two.
-        let nuclei_count = if is_island {
-            1 + (rng.next_u64() % 2) as usize
-        } else {
-            2 + (rng.next_u64() % 3) as usize
-        };
-        let axis = rng.next_f64() * std::f64::consts::TAU;
-        let mut nuclei = vec![(start.0 as f64, start.1 as f64)];
-        for _ in 1..nuclei_count {
-            // Along the axis, but not on it: a string of beads that bends.
-            let along = (0.35 + rng.next_f64() * 0.75) * radius_cells;
-            let wobble = (rng.next_f64() - 0.5) * 1.1;
-            let angle = axis + wobble;
-            let lat_scale = lat.to_radians().cos().max(0.2);
-            nuclei.push((
-                start.0 as f64 + angle.cos() * along / lat_scale,
-                (start.1 as f64 + angle.sin() * along).clamp(0.0, (GEN_HEIGHT - 1) as f64),
-            ));
-        }
-
-        let lobes = [
-            (
-                0.16 + rng.next_f64() * 0.22,
-                rng.next_f64() * std::f64::consts::TAU,
-            ),
-            (
-                0.10 + rng.next_f64() * 0.16,
-                rng.next_f64() * std::f64::consts::TAU,
-            ),
-            (
-                0.05 + rng.next_f64() * 0.11,
-                rng.next_f64() * std::f64::consts::TAU,
-            ),
-            (
-                0.03 + rng.next_f64() * 0.07,
-                rng.next_f64() * std::f64::consts::TAU,
-            ),
-        ];
-        plans.push(MassPlan {
-            start,
-            nuclei,
-            target_area: area,
-            radius_cells,
-            lobes,
-            noise: Noise::new(rng.next_u64()),
-            warp_x: Noise::new(rng.next_u64()),
-            warp_y: Noise::new(rng.next_u64()),
-            // Islands are rougher for their size: an archipelago reads as
-            // scattered rock, a continent as a coastline.
-            roughness: if is_island { 0.62 } else { 0.5 },
-        });
+    // Continents get two to four nuclei strung along an axis: that is
+    // what gives a mass a long side, a narrow waist, and lobes hanging
+    // off it rather than one centre and a rim. Islands get one or two.
+    let nuclei_count = if is_island {
+        1 + (rng.next_u64() % 2) as usize
+    } else {
+        2 + (rng.next_u64() % 3) as usize
+    };
+    let axis = rng.next_f64() * std::f64::consts::TAU;
+    let mut nuclei = vec![(start.0 as f64, start.1 as f64)];
+    for _ in 1..nuclei_count {
+        // Along the axis, but not on it: a string of beads that bends.
+        let along = (0.35 + rng.next_f64() * 0.75) * radius_cells;
+        let wobble = (rng.next_f64() - 0.5) * 1.1;
+        let angle = axis + wobble;
+        let lat_scale = lat.to_radians().cos().max(0.2);
+        nuclei.push((
+            start.0 as f64 + angle.cos() * along / lat_scale,
+            (start.1 as f64 + angle.sin() * along).clamp(0.0, (GEN_HEIGHT - 1) as f64),
+        ));
     }
+
+    let lobes = [
+        (
+            0.16 + rng.next_f64() * 0.22,
+            rng.next_f64() * std::f64::consts::TAU,
+        ),
+        (
+            0.10 + rng.next_f64() * 0.16,
+            rng.next_f64() * std::f64::consts::TAU,
+        ),
+        (
+            0.05 + rng.next_f64() * 0.11,
+            rng.next_f64() * std::f64::consts::TAU,
+        ),
+        (
+            0.03 + rng.next_f64() * 0.07,
+            rng.next_f64() * std::f64::consts::TAU,
+        ),
+    ];
+    MassPlan {
+        start,
+        nuclei,
+        target_area: area,
+        radius_cells,
+        lobes,
+        noise: Noise::new(rng.next_u64()),
+        warp_x: Noise::new(rng.next_u64()),
+        warp_y: Noise::new(rng.next_u64()),
+        // Islands are rougher for their size: an archipelago reads as
+        // scattered rock, a continent as a coastline.
+        roughness: if is_island { 0.62 } else { 0.5 },
+    }
+}
+
+// ----- Generator::Flood
+
+/// Every landmass flooded from its own centre, centres as far apart as they
+/// go. The cells of each mass, in mass order.
+fn flood_landmasses(
+    spec: &GeneratedMapSpec,
+    cell_area: &[f64],
+    rng: &mut SplitMix64,
+) -> Vec<Vec<usize>> {
+    let (areas, continent_count) = planned_areas(spec, rng);
+    let mut plans: Vec<MassPlan> = Vec::new();
+    for (index, area) in areas.into_iter().enumerate() {
+        let start = pick_center(&plans, rng);
+        plans.push(shape_plan(start, area, index >= continent_count, rng));
+    }
+    // Landmass index + 1 is painted as each grows, so a flood stops at the
+    // masses grown before it.
+    let mut owner = vec![0u16; GEN_WIDTH as usize * GEN_HEIGHT as usize];
     plans
+        .iter()
+        .enumerate()
+        .map(|(index, plan)| grow_landmass(plan, index as u16 + 1, &mut owner, cell_area, rng))
+        .collect()
 }
 
 /// Best-of-N sampling: take the candidate furthest from every landmass
@@ -596,9 +647,14 @@ impl Noise {
     /// Octaves of `at`, each twice as fine and half as loud — the standard
     /// recipe, and the reason a coastline has both bays and inlets.
     fn fbm(&self, u: f64, v: f64, octaves: u32) -> f64 {
+        self.fbm_from(u, v, octaves, 6)
+    }
+
+    /// `fbm` starting at `base` lattice cells across the world.
+    fn fbm_from(&self, u: f64, v: f64, octaves: u32, base: i64) -> f64 {
         let mut total = 0.0;
         let mut amplitude = 1.0;
-        let mut freq = 6i64;
+        let mut freq = base;
         let mut norm = 0.0;
         for _ in 0..octaves {
             total += self.at(u, v, freq) * amplitude;
@@ -682,19 +738,14 @@ fn allocate_territories(
 /// Cut one landmass into `want` territories: scatter seeds far apart, then
 /// let them race outward at different speeds. The speed spread is what gives
 /// a world a few sprawling countries and a lot of small ones, which is how
-/// the real one looks and what makes the map worth reading.
-#[allow(clippy::too_many_arguments)]
-fn partition_landmass(
+/// the real one looks and what makes the map worth reading. Four-way, so
+/// the countries come out as diamonds. The cells of each, by seed.
+fn partition_flood(
     mass_cells: &[usize],
     want: usize,
     width: u16,
-    _height: u16,
-    cells: &mut [u16],
-    territories: &mut Vec<Territory>,
-    cell_area: &[f64],
     rng: &mut SplitMix64,
-) {
-    let first_id = territories.len() as TerritoryId;
+) -> Vec<Vec<usize>> {
     let seeds = scatter_seeds(mass_cells, want, rng);
     let speeds: Vec<f64> = (0..seeds.len())
         .map(|_| {
@@ -709,9 +760,9 @@ fn partition_landmass(
     // that changes between processes, and summing areas in a different order
     // changes the last bit of a float — which is enough to make the same seed
     // build two different worlds.
-    const UNASSIGNED: u16 = u16::MAX;
-    let mut assigned: Vec<u16> = vec![UNASSIGNED; cells.len()];
-    let mut in_mass: Vec<bool> = vec![false; cells.len()];
+    let grid_cells = GEN_WIDTH as usize * GEN_HEIGHT as usize;
+    let mut assigned: Vec<u16> = vec![UNASSIGNED; grid_cells];
+    let mut in_mass: Vec<bool> = vec![false; grid_cells];
     for index in mass_cells {
         in_mass[*index] = true;
     }
@@ -740,14 +791,33 @@ fn partition_landmass(
             heap.push(Reverse((cost + step.max(1), neighbour, slot)));
         }
     }
+    members_by_slot(mass_cells, &assigned, seeds.len())
+}
 
-    let mut members: Vec<Vec<usize>> = vec![Vec::new(); seeds.len()];
+const UNASSIGNED: u16 = u16::MAX;
+
+/// Each slot's cells, in the landmass's own cell order.
+fn members_by_slot(mass_cells: &[usize], assigned: &[u16], slots: usize) -> Vec<Vec<usize>> {
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); slots];
     for index in mass_cells {
         let slot = assigned[*index];
         if slot != UNASSIGNED {
             members[slot as usize].push(*index);
         }
     }
+    members
+}
+
+/// Paint one landmass's countries onto the grid and give each its numbers.
+fn found_territories(
+    members: &[Vec<usize>],
+    width: u16,
+    cells: &mut [u16],
+    territories: &mut Vec<Territory>,
+    cell_area: &[f64],
+    rng: &mut SplitMix64,
+) {
+    let first_id = territories.len() as TerritoryId;
     for (slot, member_cells) in members.iter().enumerate() {
         let id = first_id + slot as TerritoryId;
         for index in member_cells {
@@ -772,12 +842,304 @@ fn partition_landmass(
             neighbors: Vec::new(),
             landmasses: Vec::new(),
             land_links: Vec::new(),
+            sea_lanes: Vec::new(),
             center,
             coastal: false,
             bbox: (center.0, center.1, center.0, center.1),
             weight: 0.0,
         });
     }
+}
+
+// ----- Generator::Relief
+
+/// How far past a mass's own radius its rise is evaluated: past it the
+/// field is far below any sea level the land fraction sets.
+const RELIEF_REACH: f64 = 3.2;
+/// Land pieces smaller than this many cells (~25,000 km² at the equator)
+/// go back under the sea: every landmass holds at least one country, and a
+/// speck is a seat in the standings nobody can see.
+const RELIEF_MIN_CELLS: usize = 16;
+/// Where the land starts to sink towards the poles, in degrees: the coast
+/// curves away before `MAX_LATITUDE` instead of being cut off along it.
+const RELIEF_POLAR_FALL: f64 = 50.0;
+
+/// Every landmass a rise in one elevation field, cut at the sea level that
+/// leaves Earth's share of land. Continents are strung off one another and
+/// islands sit off their coasts, so no shore is an ocean away from all the
+/// rest; where two rises meet they merge into one coast, and where the field
+/// hovers near the sea level it leaves capes, straits and offshore islets.
+/// The cells of each landmass, in grid order.
+fn relief_landmasses(
+    spec: &GeneratedMapSpec,
+    cell_area: &[f64],
+    rng: &mut SplitMix64,
+) -> Vec<Vec<usize>> {
+    let (areas, continent_count) = planned_areas(spec, rng);
+    let mut plans: Vec<MassPlan> = Vec::new();
+    for (index, area) in areas.iter().enumerate() {
+        let is_island = index >= continent_count;
+        let start = relief_center(&plans, *area, is_island, continent_count, rng);
+        plans.push(shape_plan(start, *area, is_island, rng));
+    }
+    let detail = Noise::new(rng.next_u64());
+
+    let width = GEN_WIDTH as i32;
+    let height = GEN_HEIGHT as i32;
+    let mut elevation = vec![f64::NEG_INFINITY; width as usize * height as usize];
+    for plan in &plans {
+        let lat = cell_latitude(plan.start.1 as i32);
+        let lat_scale = lat.to_radians().cos().max(0.2);
+        let reach_y = (plan.radius_cells * RELIEF_REACH) as i32 + 1;
+        let reach_x = ((plan.radius_cells * RELIEF_REACH / lat_scale) as i32 + 1).min(width / 2);
+        for dy in -reach_y..=reach_y {
+            let y = plan.start.1 as i32 + dy;
+            if y < 0 || y >= height || cell_latitude(y).abs() > MAX_LATITUDE {
+                continue;
+            }
+            for dx in -reach_x..=reach_x {
+                let x = (plan.start.0 as i32 + dx).rem_euclid(width);
+                let rise = 1.0 - cost_from_center(plan, x, y, 0.0) as f64 / 4096.0;
+                let slot = &mut elevation[(y * width + x) as usize];
+                *slot = slot.max(rise);
+            }
+        }
+    }
+    for (index, value) in elevation.iter_mut().enumerate() {
+        if !value.is_finite() {
+            continue;
+        }
+        let x = (index % width as usize) as f64;
+        let y = index / width as usize;
+        let (u, v) = (x / GEN_WIDTH as f64, y as f64 / GEN_HEIGHT as f64);
+        let polar = ((cell_latitude(y as i32).abs() - RELIEF_POLAR_FALL)
+            / (MAX_LATITUDE - RELIEF_POLAR_FALL))
+            .max(0.0);
+        *value += 0.18 * detail.fbm_from(u, v, 5, 12) - 1.4 * polar * polar;
+    }
+
+    // The sea level: the highest ground first, until the land is the area
+    // the spec planned. Ties go by cell, so the cut is the same every time.
+    let mut ground: Vec<usize> = (0..elevation.len())
+        .filter(|index| elevation[*index].is_finite())
+        .collect();
+    ground.sort_by(|a, b| elevation[*b].total_cmp(&elevation[*a]).then(a.cmp(b)));
+    let target: f64 = areas.iter().sum();
+    let mut land = vec![false; elevation.len()];
+    let mut area = 0.0;
+    for index in ground {
+        if area >= target {
+            break;
+        }
+        land[index] = true;
+        area += cell_area[index / GEN_WIDTH as usize];
+    }
+
+    // The landmasses are what the sea level left joined, whichever rise
+    // each piece came from. A spec with no islands keeps only the pieces a
+    // continent rose from: the islets the detail leaves offshore are islands.
+    let starts: Vec<usize> = plans
+        .iter()
+        .map(|p| p.start.1 as usize * GEN_WIDTH as usize + p.start.0 as usize)
+        .collect();
+    let mut seen = vec![false; land.len()];
+    let mut masses: Vec<Vec<usize>> = Vec::new();
+    for first in 0..land.len() {
+        if !land[first] || seen[first] {
+            continue;
+        }
+        seen[first] = true;
+        let mut mass = vec![first];
+        let mut cursor = 0;
+        while cursor < mass.len() {
+            let index = mass[cursor];
+            cursor += 1;
+            let x = (index % width as usize) as i32;
+            let y = (index / width as usize) as i32;
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = ((x + dx).rem_euclid(width), y + dy);
+                if ny < 0 || ny >= height {
+                    continue;
+                }
+                let next = (ny * width + nx) as usize;
+                if land[next] && !seen[next] {
+                    seen[next] = true;
+                    mass.push(next);
+                }
+            }
+        }
+        mass.sort_unstable();
+        let risen = starts.iter().any(|start| mass.binary_search(start).is_ok());
+        if mass.len() >= RELIEF_MIN_CELLS && (spec.islands > 0 || risen) {
+            masses.push(mass);
+        }
+    }
+    masses
+}
+
+/// Where a relief mass rises. The first anywhere in the temperate band;
+/// each continent after it off the coast of one already placed, so the
+/// continents hang together as a world rather than as scattered discs; each
+/// island off a continent's shore. Best of a few draws, by how clear it
+/// keeps of every mass already placed (overlap merges coasts, which is
+/// fine in moderation and a blob in excess).
+fn relief_center(
+    placed: &[MassPlan],
+    area: f64,
+    is_island: bool,
+    continent_count: usize,
+    rng: &mut SplitMix64,
+) -> (u16, u16) {
+    const CANDIDATES: usize = 24;
+    const MAX_CENTER_LAT: f64 = 56.0;
+    let radius_km = |area: f64| (area / std::f64::consts::PI).sqrt();
+    let to_cell = |(lat, lon): (f64, f64)| -> (u16, u16) {
+        let x = ((lon + 180.0) / 360.0 * GEN_WIDTH as f64).floor() as i64;
+        let y = ((90.0 - lat) / 180.0 * GEN_HEIGHT as f64).floor() as i64;
+        (
+            x.rem_euclid(GEN_WIDTH as i64) as u16,
+            y.clamp(0, GEN_HEIGHT as i64 - 1) as u16,
+        )
+    };
+    if placed.is_empty() {
+        let lat = ((rng.next_f64() * 2.0 - 1.0) * 40f64.to_radians().sin())
+            .asin()
+            .to_degrees();
+        let lon = rng.next_f64() * 360.0 - 180.0;
+        return to_cell((lat, lon));
+    }
+    let parents = match is_island && continent_count > 0 {
+        true => &placed[..continent_count.min(placed.len())],
+        false => placed,
+    };
+    let own = radius_km(area);
+    let mut best = parents[0].start;
+    let mut best_score = f64::NEG_INFINITY;
+    for _ in 0..CANDIDATES {
+        let parent = &parents[(rng.next_u64() % parents.len() as u64) as usize];
+        let parent_radius = radius_km(parent.target_area);
+        let (spread, own_spread, bearing) = (rng.next_f64(), rng.next_f64(), rng.next_f64());
+        let gap = match is_island {
+            true => parent_radius * (1.0 + spread * 0.35) + own * (1.2 + own_spread),
+            false => (parent_radius + own) * (0.85 + spread * 0.4),
+        };
+        let (lat, lon) = travel(
+            cell_lat_lon(parent.start),
+            bearing * std::f64::consts::TAU,
+            gap,
+        );
+        if lat.abs() > MAX_CENTER_LAT {
+            continue;
+        }
+        let candidate = to_cell((lat, lon));
+        let clear = placed
+            .iter()
+            .map(|p| {
+                great_circle_km(cell_lat_lon(p.start), cell_lat_lon(candidate))
+                    / (radius_km(p.target_area) + own)
+            })
+            .fold(f64::INFINITY, f64::min);
+        // Past clear of everything is no better: farther only opens an ocean.
+        let score = clear.min(1.0);
+        if score > best_score {
+            best_score = score;
+            best = candidate;
+        }
+    }
+    best
+}
+
+/// Latitude of a grid row's centre, in degrees.
+fn cell_latitude(y: i32) -> f64 {
+    90.0 - (y as f64 + 0.5) / GEN_HEIGHT as f64 * 180.0
+}
+
+fn cell_lat_lon((x, y): (u16, u16)) -> (f64, f64) {
+    (
+        cell_latitude(y as i32),
+        (x as f64 + 0.5) / GEN_WIDTH as f64 * 360.0 - 180.0,
+    )
+}
+
+fn great_circle_km((lat1, lon1): (f64, f64), (lat2, lon2): (f64, f64)) -> f64 {
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let dp = (lat2 - lat1).to_radians();
+    let dl = (lon2 - lon1).to_radians();
+    let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_KM * a.sqrt().clamp(0.0, 1.0).asin()
+}
+
+/// Where `km` along `bearing` (radians, clockwise from north) from a point
+/// lands, on the great circle.
+fn travel((lat, lon): (f64, f64), bearing: f64, km: f64) -> (f64, f64) {
+    let delta = km / EARTH_RADIUS_KM;
+    let p1 = lat.to_radians();
+    let p2 = (p1.sin() * delta.cos() + p1.cos() * delta.sin() * bearing.cos()).asin();
+    let l2 = lon.to_radians()
+        + (bearing.sin() * delta.sin() * p1.cos()).atan2(delta.cos() - p1.sin() * p2.sin());
+    let lon = (l2.to_degrees() + 540.0).rem_euclid(360.0) - 180.0;
+    (p2.to_degrees(), lon)
+}
+
+/// Cut one landmass into `want` territories over rough ground: seeds race
+/// outward eight ways, slowed by a noise field, so borders bend where the
+/// ground does instead of running as straight diamonds. Sizes vary by where
+/// the seeds fall (`scatter_seeds_spaced`), not by how fast they grow: a
+/// slow seed boxed in by fast ones comes out as an enclave, a country
+/// sitting in another like a hole. The cells of each, by seed.
+fn partition_relief(mass_cells: &[usize], want: usize, rng: &mut SplitMix64) -> Vec<Vec<usize>> {
+    let spacing = Noise::new(rng.next_u64());
+    let seeds = scatter_seeds_spaced(mass_cells, want, &spacing, rng);
+    let speeds: Vec<f64> = (0..seeds.len())
+        .map(|_| 0.8 + rng.next_f64() * 0.5)
+        .collect();
+    let ground = Noise::new(rng.next_u64());
+    let width = GEN_WIDTH as i32;
+    let grid_cells = GEN_WIDTH as usize * GEN_HEIGHT as usize;
+    let mut assigned: Vec<u16> = vec![UNASSIGNED; grid_cells];
+    let mut in_mass: Vec<bool> = vec![false; grid_cells];
+    for index in mass_cells {
+        in_mass[*index] = true;
+    }
+    // How hard a cell is to cross: rough where the noise runs far from
+    // zero, easy along its zero lines, which become the valleys countries
+    // spread down and the ridges they stop at.
+    let roughness = |index: usize| -> f64 {
+        let u = (index % GEN_WIDTH as usize) as f64 / GEN_WIDTH as f64;
+        let v = (index / GEN_WIDTH as usize) as f64 / GEN_HEIGHT as f64;
+        1.0 + 2.2 * ground.fbm_from(u, v, 4, 24).abs()
+    };
+    let mut heap: BinaryHeap<Reverse<(u64, usize, u16)>> = BinaryHeap::new();
+    for (slot, cell) in seeds.iter().enumerate() {
+        heap.push(Reverse((0, *cell, slot as u16)));
+    }
+    while let Some(Reverse((cost, index, slot))) = heap.pop() {
+        if assigned[index] != UNASSIGNED {
+            continue;
+        }
+        assigned[index] = slot;
+        let x = (index % GEN_WIDTH as usize) as i32;
+        let y = (index / GEN_WIDTH as usize) as i32;
+        // A step east or west is shorter on the ground the further from
+        // the equator, as the cells are.
+        let lat_scale = cell_latitude(y).to_radians().cos().max(0.2);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let ny = y + dy;
+                if (dx, dy) == (0, 0) || ny < 0 || ny >= GEN_HEIGHT as i32 {
+                    continue;
+                }
+                let neighbour = (ny * width + (x + dx).rem_euclid(width)) as usize;
+                if !in_mass[neighbour] || assigned[neighbour] != UNASSIGNED {
+                    continue;
+                }
+                let run = ((dx as f64 * lat_scale).powi(2) + (dy as f64).powi(2)).sqrt();
+                let step = (100.0 * run * roughness(neighbour) / speeds[slot as usize]) as u64;
+                heap.push(Reverse((cost + step.max(1), neighbour, slot)));
+            }
+        }
+    }
+    members_by_slot(mass_cells, &assigned, seeds.len())
 }
 
 /// Farthest-point sampling, approximated: each new seed is the best of a
@@ -817,6 +1179,60 @@ fn scatter_seeds(mass_cells: &[usize], want: usize, rng: &mut SplitMix64) -> Vec
             // Every sample collided with an existing seed: the landmass is
             // saturated, and asking for more countries than it has room for
             // would spin here forever.
+            break;
+        }
+        seeds.push(best);
+    }
+    seeds
+}
+
+/// `scatter_seeds` over uneven ground: a slow noise field sets how far apart
+/// seeds want to be, so one region fills with small countries and the next
+/// holds a few sprawling ones, which is how the real world reads (crowded
+/// coasts, empty interiors) without any one of them swallowing another.
+fn scatter_seeds_spaced(
+    mass_cells: &[usize],
+    want: usize,
+    spacing: &Noise,
+    rng: &mut SplitMix64,
+) -> Vec<usize> {
+    const SAMPLES: usize = 256;
+    let want = want.min(mass_cells.len()).max(1);
+    let coords = |index: usize| -> (u16, u16) {
+        (
+            (index % GEN_WIDTH as usize) as u16,
+            (index / GEN_WIDTH as usize) as u16,
+        )
+    };
+    // From about half to about twice the even spacing.
+    let room = |index: usize| -> f64 {
+        let (x, y) = coords(index);
+        let (u, v) = (x as f64 / GEN_WIDTH as f64, y as f64 / GEN_HEIGHT as f64);
+        2f64.powf(1.6 * spacing.fbm_from(u, v, 3, 8))
+    };
+    let mut seeds: Vec<usize> = Vec::with_capacity(want);
+    seeds.push(mass_cells[(rng.next_u64() % mass_cells.len() as u64) as usize]);
+    while seeds.len() < want {
+        let mut best = mass_cells[0];
+        let mut best_score = -1.0;
+        for _ in 0..SAMPLES {
+            let candidate = mass_cells[(rng.next_u64() % mass_cells.len() as u64) as usize];
+            if seeds.contains(&candidate) {
+                continue;
+            }
+            let point = coords(candidate);
+            let clear = seeds
+                .iter()
+                .map(|s| wrapped_distance(point, coords(*s)))
+                .fold(f64::INFINITY, f64::min);
+            let score = clear / room(candidate);
+            if score > best_score {
+                best_score = score;
+                best = candidate;
+            }
+        }
+        if seeds.contains(&best) {
+            // Saturated: see `scatter_seeds`.
             break;
         }
         seeds.push(best);

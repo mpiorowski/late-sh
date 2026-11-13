@@ -44,6 +44,12 @@ pub struct Territory {
     /// countries cannot be invaded from the sea, and (depending on the
     /// game's options) cannot launch a sea attack either.
     pub coastal: bool,
+    /// Sea lanes: coastal territories on another shore that this one is
+    /// joined to whatever the distance. They are the few crossings that tie
+    /// every landmass into one world (`compute_sea_lanes`), so a rule that
+    /// caps sailing by kilometres can never leave an island, or a whole
+    /// continent, with nowhere to go. Symmetric.
+    pub sea_lanes: Vec<TerritoryId>,
     /// Bounding box in base-grid cells, `(x0, y0, x1, y1)` inclusive —
     /// computed once at map build so "show me this country" can pick a zoom
     /// that actually frames it.
@@ -104,29 +110,12 @@ impl WorldMap {
         self.mips.len() as u8
     }
 
-    /// Latitude/longitude of a grid point. The grid is equirectangular over
-    /// the whole globe, so this is a straight linear mapping.
-    pub fn lat_lon(&self, x: u16, y: u16) -> (f64, f64) {
-        let w = self.grid.width.max(1) as f64;
-        let h = self.grid.height.max(1) as f64;
-        let lon = (x as f64 + 0.5) / w * 360.0 - 180.0;
-        let lat = 90.0 - (y as f64 + 0.5) / h * 180.0;
-        (lat, lon)
-    }
-
     /// Great-circle kilometres between two territories' centers.
     pub fn distance_km(&self, a: TerritoryId, b: TerritoryId) -> f64 {
         let (Some(ta), Some(tb)) = (self.territory(a), self.territory(b)) else {
             return f64::INFINITY;
         };
-        let (lat1, lon1) = self.lat_lon(ta.center.0, ta.center.1);
-        let (lat2, lon2) = self.lat_lon(tb.center.0, tb.center.1);
-        const EARTH_RADIUS_KM: f64 = 6371.0;
-        let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
-        let dp = (lat2 - lat1).to_radians();
-        let dl = (lon2 - lon1).to_radians();
-        let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
-        2.0 * EARTH_RADIUS_KM * a.sqrt().clamp(0.0, 1.0).asin()
+        centers_km(&self.grid, ta.center, tb.center)
     }
 
     /// Border-hop distance from a set of sources to every land-reachable
@@ -162,6 +151,81 @@ impl WorldMap {
             .iter()
             .map(|s| self.distance_km(*s, target))
             .fold(f64::INFINITY, f64::min)
+    }
+}
+
+/// Great-circle kilometres between two grid points. The grid is
+/// equirectangular over the whole globe, so a point's latitude and longitude
+/// are a straight linear mapping of its cell.
+fn centers_km(grid: &TerritoryGrid, a: (u16, u16), b: (u16, u16)) -> f64 {
+    let w = grid.width.max(1) as f64;
+    let h = grid.height.max(1) as f64;
+    let lat_lon = |(x, y): (u16, u16)| {
+        (
+            90.0 - (y as f64 + 0.5) / h * 180.0,
+            (x as f64 + 0.5) / w * 360.0 - 180.0,
+        )
+    };
+    let (lat1, lon1) = lat_lon(a);
+    let (lat2, lon2) = lat_lon(b);
+    const EARTH_RADIUS_KM: f64 = 6371.0;
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let dp = (lat2 - lat1).to_radians();
+    let dl = (lon2 - lon1).to_radians();
+    let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_KM * a.sqrt().clamp(0.0, 1.0).asin()
+}
+
+/// Join every landmass into one world with the shortest crossings that do
+/// it: a minimum spanning tree over the groups of territories that can walk
+/// to each other (`land_links`), each edge the closest pair of coastal
+/// territories between two groups, centre to centre. Kruskal over every
+/// coastal pair, shortest first, so a group already joined by a short
+/// crossing never gets a long one. The tree is a property of the map, not of
+/// any rule: most of its crossings are short enough that sailing reaches
+/// them anyway, and the long few are the ones that keep a remote island in
+/// the game. Needs `land_links` and `coastal` first.
+pub(crate) fn compute_sea_lanes(territories: &mut [Territory], grid: &TerritoryGrid) {
+    fn root(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut parent: Vec<usize> = (0..territories.len()).collect();
+    for territory in territories.iter() {
+        for (neighbour, _) in &territory.land_links {
+            let a = root(&mut parent, territory.id as usize);
+            let b = root(&mut parent, *neighbour as usize);
+            parent[a] = b;
+        }
+    }
+    let coastal: Vec<&Territory> = territories.iter().filter(|t| t.coastal).collect();
+    let mut pairs: Vec<(f64, TerritoryId, TerritoryId)> = Vec::new();
+    for (index, a) in coastal.iter().enumerate() {
+        for b in &coastal[index + 1..] {
+            pairs.push((centers_km(grid, a.center, b.center), a.id, b.id));
+        }
+    }
+    pairs.sort_by(|x, y| {
+        x.0.total_cmp(&y.0)
+            .then_with(|| x.1.cmp(&y.1))
+            .then_with(|| x.2.cmp(&y.2))
+    });
+    let mut lanes: Vec<Vec<TerritoryId>> = vec![Vec::new(); territories.len()];
+    for (_, a, b) in pairs {
+        let (ra, rb) = (root(&mut parent, a as usize), root(&mut parent, b as usize));
+        if ra == rb {
+            continue;
+        }
+        parent[ra] = rb;
+        lanes[a as usize].push(b);
+        lanes[b as usize].push(a);
+    }
+    for (territory, mut lanes) in territories.iter_mut().zip(lanes) {
+        lanes.sort_unstable();
+        territory.sea_lanes = lanes;
     }
 }
 
@@ -430,6 +494,7 @@ fn build_earth() -> WorldMap {
             area_km2: t["area_km2"].as_u64().expect("area"),
             landmasses: Vec::new(),
             land_links: Vec::new(),
+            sea_lanes: Vec::new(),
             neighbors: t["neighbors"]
                 .as_array()
                 .expect("neighbors")
@@ -454,6 +519,7 @@ fn build_earth() -> WorldMap {
     compute_bboxes(&mut territories, &grid);
     compute_coastal(&mut territories, &grid);
     compute_landmasses(&mut territories, &grid);
+    compute_sea_lanes(&mut territories, &grid);
     assert_eq!(
         u16::from_le_bytes([EARTH_GRID_BIN[9], EARTH_GRID_BIN[10]]) as usize,
         territories.len(),
@@ -552,6 +618,7 @@ fn build_testmap() -> WorldMap {
                 neighbors,
                 landmasses: Vec::new(),
                 land_links: Vec::new(),
+                sea_lanes: Vec::new(),
                 center: (
                     MARGIN + col * BLOCK_W + BLOCK_W / 2,
                     MARGIN + row * BLOCK_H + BLOCK_H / 2,
@@ -587,6 +654,7 @@ fn build_testmap() -> WorldMap {
     compute_bboxes(&mut territories, &grid);
     compute_coastal(&mut territories, &grid);
     compute_landmasses(&mut territories, &grid);
+    compute_sea_lanes(&mut territories, &grid);
 
     WorldMap {
         id: "testmap".to_string(),
@@ -679,5 +747,52 @@ mod tests {
             .find(|t| t.name == "Ireland")
             .unwrap();
         assert!(uk.neighbors.contains(&ie.id));
+    }
+
+    /// Walking the land and sailing the lanes, with no limit on how far a
+    /// lane goes, reaches every territory from any other: no landmass is
+    /// left out of the world. Antarctica is the case Earth needs it for (the
+    /// nearest shore is past a campaign's 3000km of sailing), and the lanes
+    /// are a tree, so it is the fewest crossings that do it.
+    #[test]
+    fn sea_lanes_join_every_landmass_into_one_world() {
+        for map in [map_by_id("earth").unwrap(), map_by_id("testmap").unwrap()] {
+            let mut seen = vec![false; map.territories.len()];
+            let mut queue = VecDeque::from([0 as TerritoryId]);
+            seen[0] = true;
+            while let Some(id) = queue.pop_front() {
+                let t = map.territory(id).unwrap();
+                let land = t.land_links.iter().map(|(n, _)| *n);
+                for next in land.chain(t.sea_lanes.iter().copied()) {
+                    if !seen[next as usize] {
+                        seen[next as usize] = true;
+                        queue.push_back(next);
+                    }
+                }
+            }
+            let cut_off: Vec<&str> = map
+                .territories
+                .iter()
+                .filter(|t| !seen[t.id as usize])
+                .map(|t| t.name.as_str())
+                .collect();
+            assert!(cut_off.is_empty(), "{}: cut off {cut_off:?}", map.id);
+            for t in &map.territories {
+                for other in &t.sea_lanes {
+                    let other = map.territory(*other).unwrap();
+                    assert!(t.coastal && other.coastal, "{}: lanes run shore to shore", map.id);
+                    assert!(other.sea_lanes.contains(&t.id), "{}: lanes are symmetric", map.id);
+                }
+            }
+        }
+        let earth = map_by_id("earth").unwrap();
+        let antarctica = earth
+            .territories
+            .iter()
+            .find(|t| t.name == "Antarctica")
+            .unwrap();
+        assert!(!antarctica.sea_lanes.is_empty());
+        let testmap = map_by_id("testmap").unwrap();
+        assert!(testmap.territories.iter().all(|t| t.sea_lanes.is_empty()));
     }
 }
