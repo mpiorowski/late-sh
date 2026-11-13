@@ -21,16 +21,16 @@ fn step(lane: u8, mark: Mark) -> Trace {
 }
 
 /// The day's card: the lane walked, lit by how each step went, on a road
-/// everybody had. Whole, as it is pasted.
+/// everybody had, a crossing won in its own color. Whole, as it is pasted.
 #[test]
 fn a_walked_road_is_a_card() {
     let mut walked = sheet();
     walked.rations_left = 0;
-    walked.kills_today = 4;
+    walked.kills_today = 3;
     walked.road.path = vec![
         step(1, Mark::Won),
         step(0, Mark::Cached),
-        step(0, Mark::Won),
+        step(0, Mark::Crossed),
         step(1, Mark::Cleared),
         step(2, Mark::BrightWon),
         step(2, Mark::Cleared),
@@ -47,14 +47,14 @@ fn a_walked_road_is_a_card() {
         render(&card, ShareFormat::Ascii),
         format!(
             "late.sh the road #{number} · walked\n\
-             .-#......#\n\
+             .-%......#\n\
              #..@..o-@.\n\
              ....+@....\n\
-             lv 7 · 4 glyphs · signal 12/70\n\
+             lv 7 · 3 glyphs · signal 12/70\n\
              ssh late.sh"
         )
     );
-    assert!(render(&card, ShareFormat::Emoji).contains("⬛⬜🟩⬛⬛⬛⬛⬛⬛🟩"));
+    assert!(render(&card, ShareFormat::Emoji).contains("⬛⬜🟪⬛⬛⬛⬛⬛⬛🟩"));
 }
 
 /// Falling is a card too, and a better one: the step it happened on is

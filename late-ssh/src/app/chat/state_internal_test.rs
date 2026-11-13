@@ -5108,7 +5108,7 @@ async fn bare_watch_opens_the_selected_rooms_live_stream_here() {
     // Live: both the command and the click resolve to this room.
     stream.live = true;
     state.live_streams = vec![stream];
-    assert_eq!(submit(&mut state, "/watch"), None);
+    assert!(submit(&mut state, "/watch").is_none());
     assert_eq!(
         state.take_requested_watch(),
         Some(StreamWatchRequest::Here { room_id })
@@ -5119,7 +5119,7 @@ async fn bare_watch_opens_the_selected_rooms_live_stream_here() {
         Some(StreamWatchRequest::Here { room_id })
     );
 
-    assert_eq!(submit(&mut state, "/watch @bob"), None);
+    assert!(submit(&mut state, "/watch @bob").is_none());
     assert_eq!(
         state.take_requested_watch(),
         Some(StreamWatchRequest::User("bob".to_string()))

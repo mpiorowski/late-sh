@@ -2742,7 +2742,7 @@ fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
     assert_eq!(sheet.kills_today, 0);
     assert_eq!(
         sheet.road.path.last().map(|trace| trace.mark),
-        Some(Mark::Won)
+        Some(Mark::Crossed)
     );
     let (step, _) = crossing_at(&sheet);
     assert_eq!(

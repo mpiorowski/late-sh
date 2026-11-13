@@ -1372,6 +1372,7 @@ fn walked_cell(node: Node, mark: Mark, tick: u64) -> MapCell {
         Mark::Fighting => (node_char(node, tick), lit(Neon::White)),
         Mark::Won => (node_char(node, tick), lit(Neon::Green)),
         Mark::BrightWon => ('▓', lit(Neon::Amber)),
+        Mark::Crossed => (node_char(node, tick), lit(Neon::Magenta)),
         Mark::Ran => (node_char(node, tick), dim(Neon::Amber)),
         Mark::Fell => ('░', lit(Neon::Red)),
         Mark::Cleared => ('+', lit(Neon::Cyan)),

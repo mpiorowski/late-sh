@@ -56,7 +56,8 @@ stake off their hand (`Sheet::robbed(stake, Reach::Hand)`; what they
 carry now, so a deposit mid-fight shrinks it; an answer reaches
 `Reach::HandAndLocker`, below), puts it on the attacker's with the garnish
 (`Sheet::earn`), closes the row as won with `bits_moved`, and the scene
-gets the took line. `Applied::Downed { rival, bits_lost }` is the
+gets the took line; the step is marked `Mark::Crossed`, drawn magenta on
+the road and 🟪 on the share card. `Applied::Downed { rival, bits_lost }` is the
 attacker's full fall (signal down, every bit on hand, the exp cut) with
 the bits onto the sleeper's row (`settle_lost`) and the row closed as
 lost. A run closes it as ran. A rival fight the day roll drops is closed

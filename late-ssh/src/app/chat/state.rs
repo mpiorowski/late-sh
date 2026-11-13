@@ -3171,7 +3171,7 @@ impl ChatState {
     /// thumbnail: what Enter or a click on it watches (`app/video/`). An
     /// image in the same message takes the preview, and Enter opens it
     /// instead.
-    pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<StreamWatchRequest> {
+    pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<WatchRequest> {
         let message = self.selected_message_in_room(room_id)?;
         let video_id = match inline_preview_source_in_body(&self.shown_body(message)) {
             Some(InlinePreviewSource::Video { video_id }) => video_id,

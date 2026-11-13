@@ -18,6 +18,7 @@ fn glyph(mark: Mark) -> Glyph {
     match mark {
         Mark::Won => Glyph::Green,
         Mark::BrightWon => Glyph::Yellow,
+        Mark::Crossed => Glyph::Purple,
         Mark::Ran => Glyph::Orange,
         Mark::Fell => Glyph::Boom,
         Mark::Cleared => Glyph::Blue,
