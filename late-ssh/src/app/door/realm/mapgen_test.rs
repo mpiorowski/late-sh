@@ -269,7 +269,11 @@ fn the_cache_returns_the_same_world_for_the_same_spec() {
         generator: Generator::Flood,
         ..spec(2, 3, 60)
     };
-    assert_ne!(flood.key(), spec(2, 3, 60).key(), "the generator is the world");
+    assert_ne!(
+        flood.key(),
+        spec(2, 3, 60).key(),
+        "the generator is the world"
+    );
 }
 
 /// Determinism across *processes*, not just within one. The in-run test above

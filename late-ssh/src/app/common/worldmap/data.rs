@@ -778,8 +778,16 @@ mod tests {
             for t in &map.territories {
                 for other in &t.sea_lanes {
                     let other = map.territory(*other).unwrap();
-                    assert!(t.coastal && other.coastal, "{}: lanes run shore to shore", map.id);
-                    assert!(other.sea_lanes.contains(&t.id), "{}: lanes are symmetric", map.id);
+                    assert!(
+                        t.coastal && other.coastal,
+                        "{}: lanes run shore to shore",
+                        map.id
+                    );
+                    assert!(
+                        other.sea_lanes.contains(&t.id),
+                        "{}: lanes are symmetric",
+                        map.id
+                    );
                 }
             }
         }

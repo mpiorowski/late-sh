@@ -236,30 +236,6 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
     true
 }
 
-/// Lateania landing, used both by the standalone screen fallback and the Games
-/// hub when Lateania is the selected card.
-pub fn draw_landing(
-    frame: &mut Frame,
-    area: Rect,
-    delete_confirm: bool,
-    online: usize,
-    slots: &SlotList,
-    slot_cursor: usize,
-    cooldowns: Option<CooldownView<'_>>,
-    scroll: u16,
-) -> u16 {
-    draw_launch_copy(
-        frame,
-        area,
-        delete_confirm,
-        online,
-        slots,
-        slot_cursor,
-        cooldowns,
-        scroll,
-    )
-}
-
 /// One row of the character-select list: the highlighted slot gets a `>`
 /// marker and bright text.
 fn slot_row(slot: i16, desc: String, desc_color: Color, highlighted: bool) -> Line<'static> {
@@ -323,7 +299,10 @@ fn slot_rows(slots: &SlotList, slot_cursor: usize) -> Vec<Line<'static>> {
     }
 }
 
-fn draw_launch_copy(
+/// Lateania landing, used both by the standalone screen fallback and the Games
+/// hub when Lateania is the selected card.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     delete_confirm: bool,
