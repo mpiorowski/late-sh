@@ -6,9 +6,11 @@
 
 use std::time::Instant;
 
+use chrono::Utc;
 use late_core::models::user::TerminalImagesMode;
+use uuid::Uuid;
 
-use super::state::{SetupInputs, WatchOutcome, WatchRequest, WatchSource};
+use super::state::{LiveTicket, SetupInputs, WatchOutcome, WatchRequest, WatchSource};
 use crate::app::common::primitives::Banner;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::state::App;
@@ -45,10 +47,69 @@ pub(crate) fn watch(app: &mut App, request: WatchRequest) -> Watched {
             close(app);
             let inputs = setup_inputs(app);
             app.video.open_setup(&request.url, &inputs);
-            record(app, request.source, None, WatchOutcome::Setup);
+            record(app, &request.source, None, WatchOutcome::Setup);
             Watched::Setup
         }
     }
+}
+
+/// `▶ watch here` (or a bare `/watch`) in a live stream's room: the stream
+/// in the player, received by the paired CLI itself. A session whose CLI
+/// cannot play it gets one line pointing at the browser and nothing else:
+/// it either plays here or it does not.
+pub(crate) fn watch_stream(app: &mut App, room_id: Uuid) {
+    // The button is a toggle: pressed on the stream already open, it stops.
+    if app.video.stream_room() == Some(room_id) {
+        close(app);
+        return;
+    }
+    if !can_play_stream(app) {
+        app.banner = Some(Banner::error(
+            "Can't play streams in this terminal. Watch in your browser with /watch @user.",
+        ));
+        return;
+    }
+    let watcher_id = format!("cli-{}", app.presence.session_id());
+    let viewer_voice_channel = app.voice.current_room(app.user_id);
+    let watch = match app
+        .stream_service
+        .cli_watch(room_id, &watcher_id, viewer_voice_channel)
+    {
+        Ok(Some(watch)) => watch,
+        Ok(None) => {
+            app.banner = Some(Banner::error("This stream is not live right now."));
+            return;
+        }
+        Err(error) => {
+            late_core::error_span!(
+                "stream_watch_ticket_failed",
+                error = ?error,
+                room_id = %room_id,
+                "failed to mint a stream watch ticket for the paired cli"
+            );
+            app.banner = Some(Banner::error("Couldn't open the stream."));
+            return;
+        }
+    };
+    app.stream_service
+        .note_viewer_in_room(room_id, app.user_id, &app.username);
+    play(
+        app,
+        WatchRequest {
+            source: WatchSource::LiveStream(LiveTicket {
+                room_id,
+                stream_id: watch.stream_id,
+                watcher_id,
+                livekit_url: watch.livekit_url,
+                token: watch.token,
+                voices: watch.voices,
+            }),
+            url: watch.watch_url,
+            title: watch.title,
+            author: watch.streamer_username,
+            shared_at: Utc::now(),
+        },
+    );
 }
 
 /// Open the player on `request`, for a caller that checked `can_play`. It
@@ -56,13 +117,14 @@ pub(crate) fn watch(app: &mut App, request: WatchRequest) -> Watched {
 /// reader's row, a chat link where this session left it.
 pub(crate) fn play(app: &mut App, request: WatchRequest) {
     close(app);
-    let resume_from = match request.source {
-        WatchSource::NewsArticle(article_id) => app.chat.news.watch_position(article_id),
+    let resume_from = match &request.source {
+        WatchSource::NewsArticle(article_id) => app.chat.news.watch_position(*article_id),
         WatchSource::ChatLink => app.video.link_position(&request.url),
+        WatchSource::LiveStream(_) => None,
     };
-    let source = request.source;
+    let source = request.source.clone();
     let play_id = app.video.open_player(request, resume_from, Instant::now());
-    record(app, source, Some(play_id), WatchOutcome::Opened);
+    record(app, &source, Some(play_id), WatchOutcome::Opened);
 }
 
 /// Both gates: a paired CLI that can play (it sits in the terminal and
@@ -79,6 +141,21 @@ pub(crate) fn can_play(app: &App) -> bool {
         TerminalImagesMode::Off => false,
     };
     video_cli && images_on
+}
+
+/// The same two gates for a live stream, against the `video_stream`
+/// capability: a CLI new enough to receive a stream itself, with everything
+/// a video needs but yt-dlp.
+fn can_play_stream(app: &App) -> bool {
+    let stream_cli = app
+        .paired_client_registry
+        .as_ref()
+        .is_some_and(|registry| registry.has_video_stream_cli(&app.session_token));
+    let images_on = match app.profile_state.profile().terminal_images {
+        TerminalImagesMode::Auto | TerminalImagesMode::Sixel => true,
+        TerminalImagesMode::Off => false,
+    };
+    stream_cli && images_on
 }
 
 fn setup_inputs(app: &App) -> SetupInputs {
@@ -114,6 +191,7 @@ pub(crate) fn close(app: &mut App) {
             app.chat.news.remember_watch(article_id, closed.memory);
         }
         WatchSource::ChatLink => app.video.remember_link(closed.url, closed.memory),
+        WatchSource::LiveStream(_) => {}
     }
 }
 
@@ -132,6 +210,11 @@ pub(crate) fn send_control(app: &mut App, control: VideoControl) {
 /// After every draw: tell the CLI what the drawn player wants (a play, a
 /// move after `f` or a resize, a stop once it closed).
 pub(crate) fn sync(app: &mut App) {
+    // An inline stream lives while its room's pane draws it: switching
+    // rooms or pages ends the watch.
+    if app.video.inline_left_the_screen() {
+        close(app);
+    }
     for message in app.video.cli_messages() {
         deliver(app, message);
     }
@@ -157,16 +240,19 @@ pub(crate) fn apply_report(app: &mut App, play_id: u64, report: &VideoReport) {
         tracing::debug!(play_id, "dropping video state for a play no longer open");
         return;
     };
-    let source = player.source();
+    let source = player.source().clone();
     let outcome = player.apply(report, now);
-    match (source, player.checkpoint(now)) {
+    match (&source, player.checkpoint(now)) {
         (WatchSource::NewsArticle(article_id), Some(position)) => {
-            app.chat.news.save_watch_position(article_id, position);
+            app.chat.news.save_watch_position(*article_id, position);
         }
         // A chat link's position lives as long as the session; the close
-        // keeps it.
-        (WatchSource::ChatLink, Some(_))
-        | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, None) => {}
+        // keeps it. A live stream has none.
+        (WatchSource::ChatLink | WatchSource::LiveStream(_), Some(_))
+        | (
+            WatchSource::NewsArticle(_) | WatchSource::ChatLink | WatchSource::LiveStream(_),
+            None,
+        ) => {}
     }
     let Some(outcome) = outcome else {
         return;
@@ -181,25 +267,45 @@ pub(crate) fn apply_report(app: &mut App, play_id: u64, report: &VideoReport) {
             "paired cli could not play the video"
         );
     }
-    record(app, source, Some(play_id), outcome);
+    record(app, &source, Some(play_id), outcome);
 }
 
-/// The world tick: a play the CLI went quiet on is lost. True while a
-/// player is up, once a second, so a status that changed outside a draw
-/// (a send that reached nobody) repaints.
+/// The world tick: a play the CLI went quiet on is lost, and a live
+/// stream's player heartbeats once a second, which keeps this viewer in the
+/// stream's watcher count and is how the player learns the stream is over.
+/// True while a player is up, once a second, so a status that changed
+/// outside a draw (a send that reached nobody) repaints.
 pub(crate) fn tick(app: &mut App, now: Instant, one_hz: bool) -> bool {
     let Some(player) = app.video.player_mut() else {
         return false;
     };
-    let (source, play_id) = (player.source(), player.play_id());
-    match player.expire(now) {
-        Some(outcome) => {
-            lost(source, play_id, LostCause::Silent);
-            record(app, source, Some(play_id), outcome);
-            true
-        }
-        None => one_hz,
+    let (source, play_id) = (player.source().clone(), player.play_id());
+    if let Some(outcome) = player.expire(now) {
+        lost(&source, play_id, LostCause::Silent);
+        record(app, &source, Some(play_id), outcome);
+        return true;
     }
+    match (&source, one_hz) {
+        (WatchSource::LiveStream(ticket), true) => {
+            let live = app
+                .stream_service
+                .watch_heartbeat(&ticket.stream_id, &ticket.watcher_id);
+            let ended = match live {
+                true => None,
+                false => app.video.player_mut().and_then(|player| player.end()),
+            };
+            // A stream that is over leaves nothing to look at: the player
+            // goes, inline or full screen, and one line says why.
+            if let Some(outcome) = ended {
+                record(app, &source, Some(play_id), outcome);
+                close(app);
+                app.banner = Some(Banner::info("The stream ended."));
+            }
+        }
+        (WatchSource::LiveStream(_), false)
+        | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => {}
+    }
+    one_hz
 }
 
 fn deliver(app: &mut App, message: PairControlMessage) {
@@ -213,14 +319,14 @@ fn deliver(app: &mut App, message: PairControlMessage) {
     let Some(player) = app.video.player_mut() else {
         return;
     };
-    let (source, play_id) = (player.source(), player.play_id());
+    let (source, play_id) = (player.source().clone(), player.play_id());
     if let Some(outcome) = player.lose() {
-        lost(source, play_id, LostCause::Unreachable);
-        record(app, source, Some(play_id), outcome);
+        lost(&source, play_id, LostCause::Unreachable);
+        record(app, &source, Some(play_id), outcome);
     }
 }
 
-fn lost(source: WatchSource, play_id: u64, cause: LostCause) {
+fn lost(source: &WatchSource, play_id: u64, cause: LostCause) {
     match cause {
         LostCause::Silent => late_core::error_span!(
             "video_watch_lost",
@@ -238,7 +344,7 @@ fn lost(source: WatchSource, play_id: u64, cause: LostCause) {
 }
 
 /// Count an outcome and log the ones without a cause of their own.
-fn record(app: &mut App, source: WatchSource, play_id: Option<u64>, outcome: WatchOutcome) {
+fn record(app: &mut App, source: &WatchSource, play_id: Option<u64>, outcome: WatchOutcome) {
     metrics::record_video_watch(source, outcome);
     match outcome {
         WatchOutcome::Opened => tracing::info!(?play_id, ?source, "video opened"),

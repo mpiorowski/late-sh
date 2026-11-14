@@ -334,7 +334,9 @@ pub(crate) enum GoLiveCommand {
 /// Where a stream opens. `User` is `/watch @user`: the browser through the
 /// paired CLI, else the QR modal. `Here` is the stream room's `▶ watch
 /// here` button or a bare `/watch` typed inside a live stream room: the
-/// paired CLI's own viewer window, falling back to the `User` path.
+/// stream played inline in the room's pane by the paired CLI
+/// (`video::svc`), stopped when it already is, or one banner pointing at
+/// the browser when the CLI cannot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum StreamWatchRequest {
     User(String),

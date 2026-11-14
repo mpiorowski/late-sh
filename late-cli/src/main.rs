@@ -17,6 +17,7 @@ mod mpris;
 mod pty;
 mod raw_mode;
 mod ssh;
+mod stream_view;
 mod update;
 mod video;
 mod voice;
@@ -42,7 +43,6 @@ async fn main() -> Result<()> {
     match raw_args.first().map(String::as_str) {
         Some("webview-spike") => return run_webview_spike_subcommand(&raw_args[1..]),
         Some("webview-pair") => return run_webview_pair_subcommand(&raw_args[1..]),
-        Some("webview-watch") => return run_webview_watch_subcommand(&raw_args[1..]),
         _ => {}
     }
 
@@ -307,13 +307,6 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-fn run_webview_watch_subcommand(args: &[String]) -> Result<()> {
-    let url = args.first().context("usage: late webview-watch <url>")?;
-    let _ = init_logging(true)?;
-    late_webview::run_watch(url)
-}
-
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn read_webview_pair_token_from_stdin() -> Result<String> {
     use std::io::BufRead;
 
@@ -349,12 +342,6 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
         anyhow::bail!("usage: late webview-pair (token is read from stdin)");
     }
     forward_to_webview_helper(&[])
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn run_webview_watch_subcommand(args: &[String]) -> Result<()> {
-    let url = args.first().context("usage: late webview-watch <url>")?;
-    forward_to_webview_helper(&["watch", url])
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]

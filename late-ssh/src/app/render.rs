@@ -482,6 +482,7 @@ impl App {
         self.own_chat_undrawn.set(false);
         self.chat.last_composer_rect.set(None);
         self.chat.last_stream_watch_hit.set(None);
+        self.video.begin_frame();
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
         // previous frame's top to know when the viewport stays put. Clearing
@@ -912,6 +913,13 @@ impl App {
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
             stream_watch_hit: Some(&self.chat.last_stream_watch_hit),
+            // A modal over the page would sit under the picture the CLI
+            // draws, so the pane gives the stream no seat while one is up
+            // (and an inline stream nobody drew is closed, `video::svc`).
+            stream_video: self
+                .video
+                .inline_slot()
+                .filter(|_| !foreground_overlay_open),
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
             gallery_cards: self.gallery_cards.cards(),
@@ -1090,6 +1098,13 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             stream_watch_hit: Some(&self.chat.last_stream_watch_hit),
+            // A modal over the page would sit under the picture the CLI
+            // draws, so the pane gives the stream no seat while one is up
+            // (and an inline stream nobody drew is closed, `video::svc`).
+            stream_video: self
+                .video
+                .inline_slot()
+                .filter(|_| !foreground_overlay_open),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),

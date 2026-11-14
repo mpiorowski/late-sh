@@ -3465,10 +3465,11 @@ mod inner {
         news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
     }
 
-    fn video_watch_source_label(source: WatchSource) -> &'static str {
+    fn video_watch_source_label(source: &WatchSource) -> &'static str {
         match source {
             WatchSource::NewsArticle(_) => "news",
             WatchSource::ChatLink => "chat",
+            WatchSource::LiveStream(_) => "stream",
         }
     }
 
@@ -3485,8 +3486,9 @@ mod inner {
 
     /// Setup against opened is how many people want to watch and cannot;
     /// a run of failed or lost is a CLI or mpv regression. `source` is the
-    /// surface that asked: a News story or a YouTube link in chat.
-    pub(crate) fn record_video_watch(source: WatchSource, outcome: WatchOutcome) {
+    /// surface that asked: a News story, a YouTube link in chat, or a live
+    /// stream's room.
+    pub(crate) fn record_video_watch(source: &WatchSource, outcome: WatchOutcome) {
         video_watches_total().add(
             1,
             &[
@@ -4821,7 +4823,7 @@ mod inner {
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
-    pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
+    pub(crate) fn record_video_watch(_source: &WatchSource, _outcome: WatchOutcome) {}
     pub fn record_pulse_sample(_outcome: PulseSampleOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}

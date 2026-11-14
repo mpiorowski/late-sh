@@ -84,12 +84,6 @@ pub enum PairControlMessage {
     OpenUrl {
         url: String,
     },
-    /// Ask a CLI advertising `stream_viewer` to open a stream's watch page
-    /// in its own embedded window (`late-webview watch`). Sent for the
-    /// stream room's `▶ watch here`; `OpenUrl` stays the browser path.
-    WatchStream {
-        url: String,
-    },
     /// Play a News video in the rectangle the TUI reserved, in 0-based
     /// terminal cells. Only CLIs advertising `video` get it. `play_id` is a
     /// per-session counter tying every later message to this play, so a
@@ -103,6 +97,22 @@ pub enum PairControlMessage {
         cols: u16,
         rows: u16,
         start_s: u64,
+    },
+    /// Play a live stream in the rectangle the TUI reserved: the CLI joins
+    /// the stream's LiveKit room with this subscribe-only ticket and shows
+    /// what it receives. Only CLIs advertising `video_stream` get it; the
+    /// play's later `video_place`, `video_control` and `video_stop` are the
+    /// same ones a video uses. `voices` is whether the CLI plays the room's
+    /// voices too (false when the viewer already hears them in voice).
+    VideoPlayStream {
+        play_id: u64,
+        livekit_url: String,
+        token: String,
+        voices: bool,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
     },
     /// The play's rectangle moved (Window/Full, a resize).
     VideoPlace {
@@ -319,18 +329,15 @@ impl PairedClientRegistry {
         self.send_control_filter(token, msg, ClientAudioState::supports_open_url) > 0
     }
 
-    /// Deliver to the first paired CLI advertising the `stream_viewer`
-    /// capability. Returns whether anyone got it, so the caller can fall
-    /// back to the browser or the QR modal.
-    pub fn send_control_to_stream_viewer_cli(&self, token: &str, msg: PairControlMessage) -> bool {
-        self.send_control_filter(token, msg, ClientAudioState::supports_stream_viewer) > 0
-    }
-
     /// Deliver a video control to the paired CLIs on `token` advertising
-    /// `video`. The webview helper never gets one. Returns whether anyone
-    /// did, so the watch modal can tell a dead pairing at once.
+    /// `video` or `video_stream` (the player's gate already checked the one
+    /// its source needs). The webview helper never gets one. Returns
+    /// whether anyone did, so the watch modal can tell a dead pairing at
+    /// once.
     pub fn send_control_to_video_cli(&self, token: &str, msg: PairControlMessage) -> bool {
-        self.send_control_filter(token, msg, ClientAudioState::supports_video) > 0
+        self.send_control_filter(token, msg, |state| {
+            state.supports_video() || state.supports_video_stream()
+        }) > 0
     }
 
     /// Deliver a drain handoff to the paired CLIs on `token` advertising
@@ -554,6 +561,17 @@ impl PairedClientRegistry {
         clients
             .get(token)
             .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_video()))
+    }
+
+    /// True when a paired CLI on `token` advertises `video_stream`: it can
+    /// receive a live stream itself and play it in the terminal.
+    pub fn has_video_stream_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients.get(token).is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.state.supports_video_stream())
+        })
     }
 
     /// True when a paired CLI on `token` advertises `reconnect`: the quit

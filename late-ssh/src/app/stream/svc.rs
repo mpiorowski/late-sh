@@ -644,15 +644,36 @@ impl StreamService {
         self.watch_url_for_view(&view, viewer_voice_channel)
     }
 
-    /// `▶ watch here` or a bare `/watch` in a stream room: the room's watch
-    /// URL, if its stream is live. Same voices rule as `/watch @user`.
-    pub fn watch_url_for_room(
+    /// `▶ watch here` or a bare `/watch` in a stream room: what the paired
+    /// CLI needs to receive the room's stream itself and play it in the
+    /// terminal. `None` unless the stream is live. The ticket is the watch
+    /// page's (`watch_grant`), under this session's `watcher_id`, and the
+    /// voices rule is `/watch @user`'s: a viewer already in the room's
+    /// voice channel gets the stream's own audio only.
+    pub fn cli_watch(
         &self,
         room_id: Uuid,
+        watcher_id: &str,
         viewer_voice_channel: Option<Uuid>,
-    ) -> Option<String> {
-        let view = self.registry.snapshot().for_room(room_id).cloned()?;
-        self.watch_url_for_view(&view, viewer_voice_channel)
+    ) -> anyhow::Result<Option<CliWatch>> {
+        let Some(view) = self.registry.snapshot().for_room(room_id).cloned() else {
+            return Ok(None);
+        };
+        let Some(watch_url) = self.watch_url_for_view(&view, viewer_voice_channel) else {
+            return Ok(None);
+        };
+        let Some(ticket) = self.watch_grant(&view.stream_id, watcher_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(CliWatch {
+            stream_id: view.stream_id,
+            streamer_username: view.username,
+            title: view.title,
+            watch_url,
+            livekit_url: ticket.url,
+            token: ticket.token,
+            voices: viewer_voice_channel != Some(view.voice_channel_id),
+        }))
     }
 
     fn watch_url_for_view(
@@ -722,6 +743,20 @@ impl StreamService {
             self.end_stream_task(ended);
         }
     }
+}
+
+/// A live stream as the paired CLI plays it (`StreamService::cli_watch`):
+/// the subscribe-only LiveKit ticket, and what the player shows around it.
+pub struct CliWatch {
+    pub stream_id: String,
+    pub streamer_username: String,
+    pub title: String,
+    /// The watch page, for a viewer whose play fails.
+    pub watch_url: String,
+    pub livekit_url: String,
+    pub token: String,
+    /// Whether the CLI plays the room's voices too.
+    pub voices: bool,
 }
 
 /// How the watch page starts its room-voices audio. `Off` is the query the

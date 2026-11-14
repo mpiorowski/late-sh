@@ -144,7 +144,7 @@ Cross-domain touchpoints:
   pickable before joining), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
   room's chat (title, watcher count, the `▶ watch here` button once the
-  stream is live, watch-URL nudge; the URL carries a
+  stream is live, `■ stop watching` while it plays here, watch-URL nudge; the URL carries a
   trailing space so it never lands in the last column, where terminal link
   detection swallows the pane border `│` or the `────` rule below it and
   hands the clicker a 404), and the stream-room arm in `select_room_slot`
@@ -162,13 +162,28 @@ Cross-domain touchpoints:
 - `paired_clients.rs` / `late-cli/src/ws.rs`: `PairControlMessage::OpenUrl`
   + the `open_url` capability (xdg-open/open/cmd start: the browser, for
   `/watch @user` and the `/golive` console, whose `getDisplayMedia` needs a
-  real one), and `PairControlMessage::WatchStream` + the `stream_viewer`
-  capability: the stream room's `▶ watch here` button (or a bare `/watch`
-  typed there) opens the watch page in the CLI's own embedded window
-  (`late-webview watch`, see `late-webview/CONTEXT.md`). The CLI falls back
-  to the browser when the window cannot start; `App::open_stream_viewer`
-  falls back to the `OpenUrl`/QR path when no paired CLI advertises
-  `stream_viewer`.
+  real one).
+- `app/video` (`video::svc::watch_stream`): the stream room's `▶ watch here`
+  button (or a bare `/watch` typed there) plays the stream in the terminal,
+  inline in the room's own pane, between the header and the messages, so
+  the chat stays usable; a click on the picture takes it full screen and
+  the button turns into `■ stop watching` (`video/CONTEXT.md`, "Live
+  streams"). It is the News video player underneath.
+  `StreamService::cli_watch` hands it
+  what the paired CLI needs: the watch page's subscribe-only ticket
+  (`watch_grant`, under a `cli-{session}` watcher id), the title and
+  streamer for the player's header, the watch URL for a failed play, and
+  the voices rule below. The CLI receives the stream itself with the
+  LiveKit SDK it links for voice and feeds its mpv
+  (`PairControlMessage::VideoPlayStream`, the `video_stream` capability;
+  `late-cli/VIDEO.md`, "Live streams"): no browser, and no webview, since
+  WebKitGTK ships without WebRTC. While the player is up `video::svc::tick`
+  calls `watch_heartbeat` once a second, which keeps the viewer in the
+  watcher count and closes the player when the stream is gone. Leaving the
+  room, or opening a modal over it, ends the watch too. A session
+  whose CLI cannot play it (no CLI, an older one, no kitty-graphics
+  terminal, tmux, no mpv) gets one banner pointing at `/watch @user` and
+  nothing else: there is no fallback.
 - `late-cli/src/voice.rs`: the audio-only voice runtime unsubscribes from
   any remote video track (`publication.set_subscribed(false)`), so a CLI
   voice participant in a stream room never downloads the screen share. Same
@@ -214,13 +229,14 @@ Cross-domain touchpoints:
    poll reconnects in place, never stranding a viewer on "reload to retry". Note the two halves take different network paths
    (the page over HTTPS to `late.sh`, media over WebRTC to `rtc.late.sh`),
    so a working page with no picture is a normal failure mode and the status
-   line says so after three failures. `/watch @user` and `▶ watch here`
-   compose the URL with `StreamService::watch_url_for_username` /
-   `watch_url_for_room`, which append `?voices=off` when the viewer sits in
-   that stream room's voice channel: they already hear the voices through
-   the terminal, so the page starts with its voices toggle off (one audio
-   path per sound); the toggle still works. Every other watch URL (the room
-   header's nudge, the rail) is bare.
+   line says so after three failures. `/watch @user` composes the URL with
+   `StreamService::watch_url_for_username`, which appends `?voices=off`
+   when the viewer sits in that stream room's voice channel: they already
+   hear the voices through the terminal, so the page starts with its voices
+   toggle off (one audio path per sound); the toggle still works. Every
+   other watch URL (the room header's nudge, the rail) is bare. `▶ watch
+   here` applies the same rule without a page: `cli_watch` tells the CLI
+   whether to play the room's voices (`voices`).
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -357,10 +373,20 @@ Cross-domain touchpoints:
   a bare `/watch` and the click both resolve to the selected room's live
   stream, are usage errors elsewhere or while pending, and `/watch @user`
   stays the browser request.
-- `late-cli/src/ws_test.rs`: `watch_stream` deserializes from its wire name
-  and `stream_viewer` is advertised.
-- `late-webview/src/lib_test.rs`: the `watch` mode's argv boundary accepts
-  only absolute http(s) URLs without whitespace.
+- `video/state_test.rs`: a live stream sits in its room until taken full
+  screen, plays from its ticket (`video_play_stream`), has no pause, seek
+  or position, ends when the stream does, offers its watch page when it
+  fails, and never prints its token.
+- `chat/ui_test.rs::room_header_seats_an_inline_stream_above_the_messages`
+  and `room_header_keeps_a_stream_alive_in_a_pane_too_short_for_it`: the
+  picture's rows, the rectangle reported to the player, the `■ stop
+  watching` label, and a short pane that draws no picture without ending
+  the watch.
+- `late-cli/src/ws_test.rs`: `video_play_stream` deserializes from its wire
+  name. `late-cli/src/video_test.rs`: the mpv command line for a stream,
+  and `video_stream` needing everything but yt-dlp.
+  `late-cli/src/stream_view_test.rs`: the canvas, the fit, the composed
+  frame, and the voices rule.
 - `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`:
   `/mod ban stream` tears a live stream out of the registry and writes the
   row; `/mod unban stream` clears it.

@@ -29,9 +29,10 @@ use super::{
     config::{open_state_log, state_log_path},
     latency::LatencySample,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
+    stream_view::StreamTicket,
     video::{
-        self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState,
-        VideoUpdate,
+        self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoSource,
+        VideoState, VideoUpdate,
     },
     voice::VoiceRuntimeState,
 };
@@ -122,12 +123,6 @@ enum PairControlMessage {
     OpenUrl {
         url: String,
     },
-    /// Open a stream's watch page in the embedded viewer window
-    /// (`late-webview watch`). Advertised via the `stream_viewer`
-    /// capability; the browser is the fallback when the window cannot start.
-    WatchStream {
-        url: String,
-    },
     /// Play a News video in the TUI's reserved rectangle. Advertised via the
     /// `video` capability; `play_id` ties every later message to this play.
     /// `start_s` is where to begin; a server from before resumes sends
@@ -141,6 +136,22 @@ enum PairControlMessage {
         rows: u16,
         #[serde(default)]
         start_s: u64,
+    },
+    /// Play a live stream in the TUI's reserved rectangle: the CLI joins the
+    /// stream's LiveKit room with this subscribe-only ticket and shows what
+    /// it receives. Advertised via the `video_stream` capability; the later
+    /// `video_place`, `video_control` and `video_stop` are the same ones.
+    VideoPlayStream {
+        play_id: u64,
+        livekit_url: String,
+        token: String,
+        /// Whether the room's voices play here too; false when the viewer
+        /// already hears them in the voice channel.
+        voices: bool,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
     },
     VideoPlace {
         play_id: u64,
@@ -183,23 +194,21 @@ impl From<PairAudioSource> for MediaSource {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-const BASE_CAPABILITIES: &[&str] = &[
-    "clipboard_image",
-    "youtube",
-    "voice",
-    "open_url",
-    "stream_viewer",
-];
+const BASE_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "open_url"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const BASE_CAPABILITIES: &[&str] = &[];
 
-/// `video` joins the base list only when nothing blocks it, `reconnect` only
-/// in a mode that can redial.
+/// `video` joins the base list only when nothing blocks it, `video_stream`
+/// when nothing but a missing yt-dlp does (a stream never calls it),
+/// `reconnect` only in a mode that can redial.
 fn client_capabilities(client: &PairClientInfo) -> Vec<&'static str> {
     let mut capabilities = BASE_CAPABILITIES.to_vec();
     if client.video_blockers.is_empty() {
         capabilities.push("video");
+    }
+    if video::can_play_streams(&client.video_blockers) {
+        capabilities.push("video_stream");
     }
     if client.reconnect {
         capabilities.push("reconnect");
@@ -1168,10 +1177,6 @@ async fn handle_pair_control(
             open_url_in_browser(&url);
             Ok(false)
         }
-        PairControlMessage::WatchStream { url } => {
-            open_stream_viewer(&url);
-            Ok(false)
-        }
         PairControlMessage::VideoPlay {
             play_id,
             url,
@@ -1188,7 +1193,34 @@ async fn handle_pair_control(
                 rows,
             };
             info!(play_id, url = %url, ?rect, start_s, "starting video");
-            let update = video.play(play_id, url, rect, start_s);
+            let update = video.play(play_id, VideoSource::Url { url, start_s }, rect);
+            report_video(ws, update).await?;
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoPlayStream {
+            play_id,
+            livekit_url,
+            token,
+            voices,
+            left,
+            top,
+            cols,
+            rows,
+        } => {
+            let rect = VideoRect {
+                left,
+                top,
+                cols,
+                rows,
+            };
+            info!(play_id, livekit_url = %livekit_url, voices, ?rect, "starting stream");
+            let ticket = StreamTicket {
+                livekit_url,
+                token,
+                voices,
+            };
+            let update = video.play(play_id, VideoSource::Stream(ticket), rect);
             report_video(ws, update).await?;
             silence_for_video(video.is_active(), playback, webview);
             Ok(false)
@@ -1311,72 +1343,6 @@ pub(super) fn end_video_without_socket(
         log_and_settle_video_update(&update);
     }
     silence_for_video(false, playback, webview);
-}
-
-/// Open a stream's watch page in the embedded viewer. A viewer that fails
-/// to start (no helper binary, no webview stack) falls back to the browser
-/// so the click always lands somewhere; the one warn line below is where
-/// to look for why.
-fn open_stream_viewer(url: &str) {
-    match spawn_stream_viewer(url) {
-        Ok(()) => info!(url = %url, "opened stream in the embedded viewer"),
-        Err(err) => {
-            warn!(
-                url = %url,
-                error = ?err,
-                "embedded stream viewer failed to start; opening in the browser instead"
-            );
-            open_url_in_browser(url);
-        }
-    }
-}
-
-/// Open the stream watch page in a `late-webview watch` window: in-process
-/// as `late webview-watch` on Windows/macOS, the standalone helper
-/// everywhere else, the same split as the YouTube helper. The window is
-/// the user's to close and runs in its own process group so it outlives
-/// the terminal session, as a browser tab would. Its stderr lands in the
-/// webview log next to the YouTube helper's.
-fn spawn_stream_viewer(url: &str) -> Result<()> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        anyhow::bail!("refusing to open non-http url");
-    }
-    let helper_stderr = webview_helper_stderr().context("opening the webview log")?;
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    let mut command = {
-        let exe = std::env::current_exe().context("locating the late executable")?;
-        let mut command = Command::new(exe);
-        command.arg("webview-watch");
-        command
-    };
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new(webview_helper_program());
-        command.arg("watch");
-        command
-    };
-    command
-        .arg(url)
-        // Same reason as the YouTube helper: stale at-spi-bus-launcher/dbus
-        // state crashes WebKitGTK through the AT-SPI bridge, and a window
-        // that dies after spawn never reaches the browser fallback.
-        .env("NO_AT_BRIDGE", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(helper_stderr.stdio);
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-    #[cfg(unix)]
-    command.process_group(0);
-    match command.spawn() {
-        Ok(_viewer) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(anyhow::anyhow!(
-            "late-webview helper binary not found (reinstall the CLI or set LATE_WEBVIEW_BIN)"
-        )),
-        Err(err) => Err(err).context("spawning the stream viewer"),
-    }
 }
 
 /// Open a server-sent URL in the default browser. Only `https://`/`http://`
@@ -1524,8 +1490,8 @@ fn apply_audio_pair_control(
         | PairControlMessage::VoiceSetMuted { .. }
         | PairControlMessage::VoiceSetDeafened { .. }
         | PairControlMessage::OpenUrl { .. }
-        | PairControlMessage::WatchStream { .. }
         | PairControlMessage::VideoPlay { .. }
+        | PairControlMessage::VideoPlayStream { .. }
         | PairControlMessage::VideoPlace { .. }
         | PairControlMessage::VideoControl { .. }
         | PairControlMessage::VideoStop { .. }

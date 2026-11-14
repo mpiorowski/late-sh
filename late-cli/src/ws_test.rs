@@ -419,15 +419,25 @@ fn video_controls_deserialize_from_wire_names() {
     assert!(matches!(stop, PairControlMessage::VideoStop { play_id: 7 }));
 }
 
+/// A stream play carries a ticket, not a URL, and shares the play's later
+/// controls with a video.
 #[test]
-fn watch_stream_deserializes_from_its_wire_name() {
+fn video_play_stream_deserializes_from_its_wire_name() {
     let msg = serde_json::from_str::<PairControlMessage>(
-        r#"{"event":"watch_stream","url":"https://late.sh/live/abc?voices=off"}"#,
+        r#"{"event":"video_play_stream","play_id":4,"livekit_url":"wss://rtc.late.sh","token":"jwt","voices":false,"left":10,"top":3,"cols":100,"rows":28}"#,
     )
     .unwrap();
     assert!(matches!(
         msg,
-        PairControlMessage::WatchStream { ref url } if url == "https://late.sh/live/abc?voices=off"
+        PairControlMessage::VideoPlayStream {
+            play_id: 4,
+            ref livekit_url,
+            ref token,
+            voices: false,
+            left: 10,
+            top: 3,
+            cols: 100,
+            rows: 28,
+        } if livekit_url == "wss://rtc.late.sh" && token == "jwt"
     ));
-    assert!(BASE_CAPABILITIES.contains(&"stream_viewer"));
 }

@@ -7,6 +7,9 @@
 //! tty with mpv's own terminal-mode writes filtered out; it does the work
 //! and returns data, and the pair loop in `ws.rs` sends, logs, and
 //! silences the house audio around it.
+//!
+//! A live stream plays through the same mpv: the CLI receives it itself
+//! (`stream_view.rs`) and feeds mpv raw frames on stdin instead of a URL.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,6 +27,7 @@ use std::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 
 use super::config::{SshMode, open_state_log, state_log_path};
+use super::stream_view::{Canvas, StreamFeed, StreamTicket};
 
 /// The first mpv release with `--vo=kitty`.
 const MIN_MPV: (u32, u32) = (0, 36);
@@ -44,6 +48,10 @@ const YTDL_FORMAT: &str = "bestvideo[protocol^=m3u8][height<=720]+bestaudio[prot
 /// A relay sequence held past this many bytes is written as it is: mpv's
 /// graphics commands are chunked at 4 KB, so nothing legitimate gets here.
 const RELAY_HOLD_CAP: usize = 8 * 1024 * 1024;
+/// The frame rate mpv stamps a live stream's raw frames with. Only the
+/// position it reports depends on it: `--untimed` shows each frame as it
+/// arrives.
+const STREAM_NOMINAL_FPS: u32 = 30;
 
 /// One failing precondition for the `video` capability. Sent as
 /// `client_state.video_blockers` so the server's setup box can say which
@@ -79,6 +87,21 @@ impl VideoBlocker {
             Self::NoYtDlp => "no_ytdlp",
         }
     }
+}
+
+/// Whether a live stream can play (the `video_stream` capability): every
+/// `video` precondition but yt-dlp, which a stream never calls.
+pub(super) fn can_play_streams(blockers: &[VideoBlocker]) -> bool {
+    blockers.iter().all(|blocker| match blocker {
+        VideoBlocker::NoYtDlp => true,
+        VideoBlocker::NotNative
+        | VideoBlocker::Platform
+        | VideoBlocker::Multiplexer
+        | VideoBlocker::NotKitty
+        | VideoBlocker::NoPixelSize
+        | VideoBlocker::NoMpv
+        | VideoBlocker::MpvTooOld => false,
+    })
 }
 
 /// The Kitty-graphics terminals the CLI recognizes from its env, the same
@@ -235,6 +258,10 @@ pub(super) enum VideoFailure {
     UnsupportedUrl,
     /// Neither now nor at startup did the tty report a pixel size.
     NoPixelSize,
+    /// The rectangle is too small to draw a stream in.
+    RectTooSmall,
+    /// The stream viewer could not join its room, or lost it.
+    Stream(String),
     /// mpv could not be started.
     Spawn(String),
     /// mpv could not be inspected after it started.
@@ -258,6 +285,8 @@ impl VideoFailure {
         match self {
             Self::UnsupportedUrl => "refused a non-http url".to_string(),
             Self::NoPixelSize => "the terminal reports no pixel size".to_string(),
+            Self::RectTooSmall => "the video rectangle is too small for a stream".to_string(),
+            Self::Stream(error) => format!("stream viewer failed: {error}"),
             Self::Spawn(error) => format!("failed to start mpv: {error}"),
             Self::Inspect(error) => format!("failed to inspect mpv: {error}"),
             Self::IpcTimeout => "mpv never opened its ipc socket".to_string(),
@@ -492,17 +521,30 @@ fn ipc_socket_path() -> PathBuf {
 /// Where a respawned mpv picks up after a geometry change.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct MpvLaunch<'a> {
-    pub(super) url: &'a str,
+    pub(super) input: MpvInput<'a>,
     pub(super) rect: VideoRect,
     pub(super) tty: TtySize,
     pub(super) use_shm: bool,
     pub(super) ipc_path: &'a Path,
-    pub(super) ytdlp_override: Option<&'a Path>,
     /// mpv's own log: with `--terminal=no` nothing reaches stderr, so this
     /// file is where a failed play says why.
     pub(super) log_path: &'a Path,
-    /// Where to begin, in seconds; zero is the top and adds no argument.
-    pub(super) start_s: u64,
+}
+
+/// What mpv plays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum MpvInput<'a> {
+    /// A URL mpv resolves through its ytdl hook.
+    Url {
+        url: &'a str,
+        ytdlp_override: Option<&'a Path>,
+        /// Where to begin, in seconds; zero is the top and adds no argument.
+        start_s: u64,
+    },
+    /// Raw I420 frames of exactly this size on stdin: a live stream the CLI
+    /// decodes itself. No audio; the stream's sound never passes through
+    /// mpv.
+    Frames(Canvas),
 }
 
 /// The whole mpv command line. The six geometry numbers are the contract
@@ -517,14 +559,12 @@ pub(super) struct MpvLaunch<'a> {
 /// removes the frames a killed mpv leaves behind.
 pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
     let MpvLaunch {
-        url,
+        input,
         rect,
         tty,
         use_shm,
         ipc_path,
-        ytdlp_override,
         log_path,
-        start_s,
     } = launch;
     let (left, top) = rect.origin_cell();
     let (width, height) = tty.pixels_for(*rect);
@@ -547,25 +587,52 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         format!("--vo-kitty-rows={}", rect.rows).into(),
         format!("--vo-kitty-width={width}").into(),
         format!("--vo-kitty-height={height}").into(),
-        "--ytdl=yes".into(),
-        format!("--ytdl-format={YTDL_FORMAT}").into(),
     ];
-    if *start_s > 0 {
-        args.push(format!("--start={start_s}").into());
+    match input {
+        MpvInput::Url {
+            url,
+            ytdlp_override,
+            start_s,
+        } => {
+            args.extend([
+                "--ytdl=yes".into(),
+                format!("--ytdl-format={YTDL_FORMAT}").into(),
+            ]);
+            if *start_s > 0 {
+                args.push(format!("--start={start_s}").into());
+            }
+            if let Some(ytdlp) = ytdlp_override {
+                args.push(path_arg("--script-opts=ytdl_hook-ytdl_path=", ytdlp));
+            }
+            // Full level, as any video player opens: the house volume is
+            // for the radio, which is silenced while a video plays, and a
+            // video at 30 percent of itself is just quiet. `m` and the
+            // system mixer remain.
+            args.extend([
+                "--volume=100".into(),
+                "--keep-open=no".into(),
+                path_arg("--input-ipc-server=", ipc_path),
+                "--".into(),
+                (*url).into(),
+            ]);
+        }
+        // Each frame is shown the moment it arrives and nothing is
+        // buffered: this is live, and a queue would only be delay.
+        MpvInput::Frames(canvas) => args.extend([
+            "--demuxer=rawvideo".into(),
+            format!("--demuxer-rawvideo-w={}", canvas.width).into(),
+            format!("--demuxer-rawvideo-h={}", canvas.height).into(),
+            "--demuxer-rawvideo-mp-format=yuv420p".into(),
+            format!("--demuxer-rawvideo-fps={STREAM_NOMINAL_FPS}").into(),
+            "--profile=low-latency".into(),
+            "--untimed".into(),
+            "--cache=no".into(),
+            "--keep-open=no".into(),
+            path_arg("--input-ipc-server=", ipc_path),
+            "--".into(),
+            "-".into(),
+        ]),
     }
-    if let Some(ytdlp) = ytdlp_override {
-        args.push(path_arg("--script-opts=ytdl_hook-ytdl_path=", ytdlp));
-    }
-    // Full level, as any video player opens: the house volume is for the
-    // radio, which is silenced while a video plays, and a video at 30
-    // percent of itself is just quiet. `m` and the system mixer remain.
-    args.extend([
-        "--volume=100".into(),
-        "--keep-open=no".into(),
-        path_arg("--input-ipc-server=", ipc_path),
-        "--".into(),
-        (*url).into(),
-    ]);
     args
 }
 
@@ -1011,6 +1078,16 @@ enum IpcLink {
     Connected(MpvIpc),
 }
 
+/// What a play shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum VideoSource {
+    /// A URL for mpv, from `start_s` (zero for the top, the saved position
+    /// for a resume).
+    Url { url: String, start_s: u64 },
+    /// A live stream the CLI joins as a viewer.
+    Stream(StreamTicket),
+}
+
 struct Playback {
     play_id: u64,
     rect: VideoRect,
@@ -1025,6 +1102,9 @@ struct Playback {
     /// A `video_place` that arrived before the socket was up: the
     /// rectangle whose frame to settle once the move goes through.
     pending_place: Option<VideoRect>,
+    /// The viewer feeding mpv's stdin, for a live stream. Dropped with the
+    /// playback, which leaves the room.
+    feed: Option<StreamFeed>,
 }
 
 impl Playback {
@@ -1071,17 +1151,17 @@ impl VideoPlayer {
         self.current.is_some()
     }
 
-    /// Start `url` in `rect` from `start_s`, stopping whatever was playing
-    /// first. The old play gets no report: the server superseded it.
+    /// Start `source` in `rect`, stopping whatever was playing first. The
+    /// old play gets no report: the server superseded it. A stream's viewer
+    /// starts on the tokio runtime, so this must be called from it.
     pub(super) fn play(
         &mut self,
         play_id: u64,
-        url: String,
+        source: VideoSource,
         rect: VideoRect,
-        start_s: u64,
     ) -> VideoUpdate {
         let residue = self.take_and_kill().map(|old| old.rect);
-        let state = match self.spawn(play_id, url, rect, start_s) {
+        let state = match self.spawn(play_id, source, rect) {
             Ok(playback) => {
                 self.current = Some(playback);
                 VideoState::Starting
@@ -1129,6 +1209,24 @@ impl VideoPlayer {
         control: VideoControl,
     ) -> Option<VideoUpdate> {
         let playback = self.current_for(play_id)?;
+        match (&playback.feed, control) {
+            // A stream's sound is the viewer's, not mpv's.
+            (Some(feed), VideoControl::ToggleMute) => {
+                feed.toggle_mute();
+                return None;
+            }
+            // Live: nothing to pause or seek.
+            (
+                Some(_),
+                VideoControl::TogglePause
+                | VideoControl::SeekBack
+                | VideoControl::SeekForward
+                | VideoControl::SeekBackFar
+                | VideoControl::SeekForwardFar
+                | VideoControl::Restart,
+            ) => return None,
+            (None, _) => {}
+        }
         let IpcLink::Connected(ipc) = &mut playback.ipc else {
             return None;
         };
@@ -1167,6 +1265,11 @@ impl VideoPlayer {
     /// repeat `starting`.
     pub(super) async fn poll(&mut self) -> Option<VideoUpdate> {
         let playback = self.current.as_mut()?;
+        // Before mpv's exit: a viewer that gave up closed mpv's stdin, and
+        // its reason is the one worth reporting.
+        if let Some(reason) = playback.feed.as_ref().and_then(StreamFeed::failure) {
+            return Some(self.fail(VideoFailure::Stream(reason)));
+        }
         match playback.child.try_wait() {
             Ok(Some(status)) => {
                 let state = match status.code() {
@@ -1245,17 +1348,44 @@ impl VideoPlayer {
     fn spawn(
         &self,
         play_id: u64,
-        url: String,
+        source: VideoSource,
         rect: VideoRect,
-        start_s: u64,
     ) -> Result<Playback, VideoFailure> {
-        // The server is trusted, but the URL is the one string here that
-        // ends up as a command argument, so the scheme gate stays.
-        if !(url.starts_with("https://") || url.starts_with("http://")) {
-            return Err(VideoFailure::UnsupportedUrl);
-        }
         let Some(tty) = TtySize::read().or(self.tools.startup_tty) else {
             return Err(VideoFailure::NoPixelSize);
+        };
+        let launch = |input| MpvLaunch {
+            input,
+            rect,
+            tty,
+            use_shm: self.tools.use_shm,
+            ipc_path: &self.tools.ipc_path,
+            log_path: &self.tools.log_path,
+        };
+        // The whole command line, and for a stream what its viewer needs
+        // once mpv is up.
+        let (args, stream) = match source {
+            // The server is trusted, but the URL is the one string here
+            // that ends up as a command argument, so the scheme gate stays.
+            VideoSource::Url { url, start_s } => {
+                if !(url.starts_with("https://") || url.starts_with("http://")) {
+                    return Err(VideoFailure::UnsupportedUrl);
+                }
+                let args = mpv_args(&launch(MpvInput::Url {
+                    url: &url,
+                    ytdlp_override: self.tools.ytdlp_override.as_deref(),
+                    start_s,
+                }));
+                (args, None)
+            }
+            VideoSource::Stream(ticket) => {
+                let (width, height) = tty.pixels_for(rect);
+                let Some(canvas) = Canvas::for_pixels(width, height) else {
+                    return Err(VideoFailure::RectTooSmall);
+                };
+                let args = mpv_args(&launch(MpvInput::Frames(canvas)));
+                (args, Some((ticket, canvas)))
+            }
         };
         match fs::remove_file(&self.tools.ipc_path) {
             Ok(()) => {}
@@ -1270,21 +1400,16 @@ impl VideoPlayer {
             Ok(log) => log,
             Err(error) => return Err(VideoFailure::Spawn(format!("{error:#}"))),
         };
-        let args = mpv_args(&MpvLaunch {
-            url: &url,
-            rect,
-            tty,
-            use_shm: self.tools.use_shm,
-            ipc_path: &self.tools.ipc_path,
-            ytdlp_override: self.tools.ytdlp_override.as_deref(),
-            log_path: &self.tools.log_path,
-            start_s,
-        });
+        // A stream's frames arrive on stdin; a URL needs none.
+        let stdin = match stream {
+            Some(_) => Stdio::piped(),
+            None => Stdio::null(),
+        };
         // mpv never writes to the tty itself: its stdout is a pipe the relay
         // carries to the tty with mpv's terminal-mode writes filtered out.
         let child = Command::new(&self.tools.mpv)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log))
             .spawn();
@@ -1297,6 +1422,17 @@ impl VideoPlayer {
             let _ = child.wait();
             return Err(VideoFailure::Spawn("mpv has no stdout pipe".to_string()));
         };
+        let feed = match stream {
+            Some((ticket, canvas)) => {
+                let Some(to_mpv) = child.stdin.take() else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(VideoFailure::Spawn("mpv has no stdin pipe".to_string()));
+                };
+                Some(StreamFeed::start(ticket, canvas, to_mpv))
+            }
+            None => None,
+        };
         Ok(Playback {
             play_id,
             rect,
@@ -1307,6 +1443,7 @@ impl VideoPlayer {
                 since: Instant::now(),
             },
             pending_place: None,
+            feed,
         })
     }
 

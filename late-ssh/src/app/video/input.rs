@@ -2,10 +2,12 @@
 //! a minute with Shift), restart and mute to the paired CLI and toggles
 //! its size; the setup box only copies and closes. Everything else, mouse
 //! included, is swallowed, so nothing reaches the page under the video.
+//! A live stream is only here while full screen (inline in its room it is
+//! no modal, and this module never sees a key): `f` and Esc send it back.
 
 use ratatui::layout::Position;
 
-use super::state::WatchModal;
+use super::state::{Player, WatchModal};
 use super::svc;
 use crate::app::common::primitives::Banner;
 use crate::app::input::{
@@ -32,7 +34,14 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
                 svc::close(app);
             }
         }
-        ParsedInput::Byte(0x1B) => svc::close(app),
+        // A full-screen live stream goes back to its room; anything else
+        // closes.
+        ParsedInput::Byte(0x1B) => {
+            let back_in_room = app.video.player_mut().is_some_and(Player::back_inline);
+            if !back_in_room {
+                svc::close(app);
+            }
+        }
         ParsedInput::Byte(b'c') | ParsedInput::Char('c') => copy_link(app),
         ParsedInput::Byte(b' ') | ParsedInput::Char(' ') if player => {
             svc::send_control(app, VideoControl::TogglePause);

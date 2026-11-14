@@ -179,14 +179,15 @@ impl ClientAudioState {
                 .any(|capability| capability == "open_url")
     }
 
-    /// The `stream_viewer` capability: the CLI can open a stream's watch
-    /// page in its own embedded window.
-    pub fn supports_stream_viewer(&self) -> bool {
+    /// The `video_stream` capability: the CLI can receive a live stream
+    /// itself and play it in the terminal (everything `video` needs but
+    /// yt-dlp).
+    pub fn supports_video_stream(&self) -> bool {
         self.client_kind == ClientKind::Cli
             && self
                 .capabilities
                 .iter()
-                .any(|capability| capability == "stream_viewer")
+                .any(|capability| capability == "video_stream")
     }
 
     /// The `video` capability: every precondition for playing a News video

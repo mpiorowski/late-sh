@@ -182,8 +182,11 @@ pub struct DashboardChatView<'a> {
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
     /// Receives the stream header's `▶ watch here` button rect, for the
-    /// click that opens the room's stream in the paired CLI's viewer window.
+    /// click that plays the room's stream in the terminal (the video player).
     pub stream_watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// The stream playing inline, when one is: its room's pane reserves
+    /// the picture's rows under the stream header.
+    pub stream_video: Option<crate::app::video::state::InlineSlot<'a>>,
     pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
@@ -1146,6 +1149,9 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             watch_hit: view.stream_watch_hit,
+            video: view
+                .room
+                .and_then(|room| view.stream_video.filter(|slot| slot.room_id() == room.id)),
             voice,
             // The live strip stands in for the topic row while it is up:
             // the board is the room's news, and the topic is a key away in
@@ -3188,8 +3194,11 @@ pub struct ChatRenderInput<'a> {
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
     /// Receives the stream header's `▶ watch here` button rect, for the
-    /// click that opens the room's stream in the paired CLI's viewer window.
+    /// click that plays the room's stream in the terminal (the video player).
     pub stream_watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// The stream playing inline, when one is: its room's pane reserves
+    /// the picture's rows under the stream header.
+    pub stream_video: Option<crate::app::video::state::InlineSlot<'a>>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -4754,6 +4763,9 @@ struct RoomHeader<'a> {
     /// Where the stream row's `▶ watch here` button lands this frame, for
     /// `app::input`'s click; `None` when nothing is drawn.
     watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// This room's stream playing inline: the picture's rows go under the
+    /// header block, above the messages.
+    video: Option<crate::app::video::state::InlineSlot<'a>>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     row: Option<TopicRow<'a>>,
     /// Whether the block ends in a rule. False when the daily live strip
@@ -4796,9 +4808,12 @@ struct StreamHeaderRow {
 }
 
 const STREAM_WATCH_BUTTON: &str = "\u{25B6} watch here";
+/// The same button while this room's stream is playing here: it stops it.
+const STREAM_STOP_BUTTON: &str = "\u{25A0} stop watching";
 
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
+    playing_here: bool,
     width: usize,
 ) -> StreamHeaderRow {
     let hint = if stream.watch_url.is_empty() {
@@ -4846,7 +4861,10 @@ fn stream_header_line(
     // title for space; it sits two cells after whatever precedes it.
     let button = stream.live.then(|| {
         Span::styled(
-            STREAM_WATCH_BUTTON,
+            match playing_here {
+                true => STREAM_STOP_BUTTON,
+                false => STREAM_WATCH_BUTTON,
+            },
             Style::default()
                 .fg(theme::TEXT())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -4887,11 +4905,22 @@ fn stream_header_line(
 /// voice nor a topic (most of them) is left untouched, and the header yields
 /// entirely rather than squeeze the message area below one row.
 fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Rect {
+    let rule_width = area.width.max(1) as usize;
+    let rule = || {
+        Line::from(Span::styled(
+            "\u{2500}".repeat(rule_width),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))
+    };
     let height = header.height();
     if height == 0 || area.height <= height {
-        return area;
+        // No header rows (or no room for them): the stream still gets its
+        // seat, straight under the pane's top.
+        return match header.video {
+            Some(slot) => draw_inline_stream(frame, area, slot, rule()),
+            None => area,
+        };
     }
-    let rule_width = area.width.max(1) as usize;
     // Text rows keep the messages' side padding: they skip the pad cell
     // every message row opens with (the selection bar's column) and leave
     // the same one cell clear on the right. The rules run edge to edge.
@@ -4902,16 +4931,9 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         Line::from(spans)
     };
 
-    let rule = || {
-        Line::from(Span::styled(
-            "\u{2500}".repeat(rule_width),
-            Style::default().fg(theme::BORDER_DIM()),
-        ))
-    };
-
     let mut lines: Vec<Line> = Vec::new();
     if let Some(stream) = header.stream {
-        let row = stream_header_line(stream, width);
+        let row = stream_header_line(stream, header.video.is_some(), width);
         if let Some(slot) = header.watch_hit {
             // The stream row is the block's first; its content starts one
             // cell in, after the pad cell every text row opens with.
@@ -4962,9 +4984,87 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     }
 
     frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
-    Rect {
+    let below = Rect {
         y: area.y + height,
         height: area.height.saturating_sub(height),
+        ..area
+    };
+    match header.video {
+        Some(slot) => draw_inline_stream(frame, below, slot, rule()),
+        None => below,
+    }
+}
+
+/// The fewest rows a stream's picture is worth drawing in.
+const INLINE_STREAM_MIN_ROWS: u16 = 6;
+/// The fewest message rows the picture leaves under it.
+const INLINE_STREAM_MIN_CHAT_ROWS: u16 = 6;
+
+/// Rows for a stream's picture in a pane of `width` by `height` cells: a
+/// 16:9 picture as wide as the pane (a cell is about twice as tall as it
+/// is wide, so that is `width * 9 / 32` rows), held to three fifths of the
+/// pane and to what leaves the chat its floor. Zero when no picture worth
+/// drawing fits.
+fn inline_stream_rows(width: u16, height: u16) -> u16 {
+    let wanted = (u32::from(width) * 9 / 32) as u16;
+    let rows = wanted
+        .min((u32::from(height) * 3 / 5) as u16)
+        .min(height.saturating_sub(INLINE_STREAM_MIN_CHAT_ROWS + 1));
+    match rows >= INLINE_STREAM_MIN_ROWS {
+        true => rows,
+        false => 0,
+    }
+}
+
+/// The stream playing inline: its black rectangle at the top of `area`
+/// (the paired CLI draws the picture there), a rule under it, and the rest
+/// handed back for the messages. The slot hears where the rectangle landed,
+/// an empty one included, since being drawn at all is what keeps the watch
+/// alive.
+fn draw_inline_stream(
+    frame: &mut Frame,
+    area: Rect,
+    slot: crate::app::video::state::InlineSlot<'_>,
+    rule: Line<'static>,
+) -> Rect {
+    let rows = inline_stream_rows(area.width, area.height);
+    let picture = Rect {
+        height: rows,
+        ..area
+    };
+    slot.place(picture);
+    if rows == 0 {
+        return area;
+    }
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ratatui::style::Color::Black)),
+        picture,
+    );
+    if let Some(caption) = slot.caption() {
+        frame.render_widget(
+            Paragraph::new(caption).centered().style(
+                Style::default()
+                    .fg(theme::TEXT_DIM())
+                    .bg(ratatui::style::Color::Black),
+            ),
+            Rect {
+                y: picture.y + rows / 2,
+                height: 1,
+                ..picture
+            },
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(rule),
+        Rect {
+            y: picture.y + rows,
+            height: 1,
+            ..area
+        },
+    );
+    Rect {
+        y: area.y + rows + 1,
+        height: area.height - rows - 1,
         ..area
     }
 }
@@ -5086,6 +5186,7 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     watch_hit: view.stream_watch_hit,
+                    video: view.stream_video.filter(|slot| slot.room_id() == room.id),
                     voice,
                     row: room_topic(room).map(|text| TopicRow {
                         text,
