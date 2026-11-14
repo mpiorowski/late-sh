@@ -153,7 +153,7 @@ Env knobs on both halves, the pinned dopewars 1.6.2 source build (SHA-256 verifi
 
 ## 8. Tests And Verification [STABLE]
 
-Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-dopewars -p late-ssh -E 'package(late-dopewars) or test(dopewars)'"`.
+Agents run the focused tests with `make test ARGS="-p late-dopewars -p late-ssh -E 'package(late-dopewars) or test(dopewars)'"`.
 
 Inline pure tests cover:
 - Client `proxy.rs`: `dopewars_playname` (keeps valid `late.sh` characters, caps at 32, `drifter` fallback, rewrites the reserved `late_stats`) and `username_of_playname` (reads that rewrite back for the log pipe).

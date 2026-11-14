@@ -211,7 +211,7 @@ against this table before its cadence is picked. The report is
 asserts):
 
 ```
-make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"
+make test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"
 ```
 
 It draws each piece in both styles on a 200x50 terminal at its own

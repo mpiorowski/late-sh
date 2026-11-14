@@ -114,13 +114,13 @@ Most of the NetHack/DCSS door invariants apply verbatim, auth compares key DATA,
 
 ## 5. Tests And Verification [STABLE]
 
-Root policy applies: agents run targeted tests (`make test-llm ARGS=...`); humans run the suite.
+Root policy applies: agents run targeted tests (`make test ARGS=...`); humans run the suite.
 
 Sibling `_test.rs` files cover: host `cp437` (ASCII/ANSI passthrough, box art, full-range validity), `dropfile` (comm 0, identity fields, rewrite), `nodes` (lowest-free lease, exhaustion, RAII recycle), `seed` (fill-in-missing, never-overwrite, boot sweeps), `playname` (sanitize incl. whitespace), `identity` (determinism + KAT); client `identity` (same KAT) and `state` (disabled no-op, F-key/mouse/paste stripping vs arrows/nav keys, exit grace, claim-prompt basics). Hub/screen ordering tests updated in place.
 
 ```bash
-make test-llm ARGS="-p late-usurper"
-make test-llm ARGS="-p late-ssh --lib -E 'test(usurper)'"
+make test ARGS="-p late-usurper"
+make test ARGS="-p late-ssh --lib -E 'test(usurper)'"
 ```
 
 The PTY bridge and russh loops are process/network-bound and not unit-tested; verify launch/play/quit manually against a real host (compose `service-usurper`).

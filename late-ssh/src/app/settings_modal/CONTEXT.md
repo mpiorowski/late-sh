@@ -116,4 +116,4 @@ wheel do nothing.
 
 `app/common/mouse_test.rs` covers geometry; `mouse_flow_test.rs` covers rendered
 and application flows with disposable databases/accounts. Run focused tests
-through `make test-llm`.
+through `make test`.

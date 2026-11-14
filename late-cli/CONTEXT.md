@@ -328,7 +328,7 @@ Inline unit tests in `late-cli/src/` should stay pure logic only:
 Do not put integration-flavored tests inside `#[cfg(test)]` modules if they require live SSH, WebSocket, audio devices, network, or async service orchestration.
 
 LLM command policy from root context applies here:
-- Agents run the tests targeted at their change only through `make test-llm ARGS="-p late-cli -E 'test(<filter>)'"`, never raw `cargo test`/`cargo nextest`, and never `cargo clippy`.
+- Agents run the tests targeted at their change only through `make test ARGS="-p late-cli -E 'test(<filter>)'"`, never raw `cargo test`/`cargo nextest`, and never `cargo clippy`.
 - Full suites and `make check` stay with the human owner.
 - `mix format` is irrelevant here; for Rust formatting, mention `cargo fmt --all -- --check` when handing off.
 

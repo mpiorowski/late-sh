@@ -85,7 +85,7 @@ const WEBVIEW_WINDOW_HEIGHT: f64 = 200.0;
 const WATCH_WINDOW_FALLBACK_WIDTH: f64 = 960.0;
 const WATCH_WINDOW_FALLBACK_HEIGHT: f64 = 540.0;
 
-/// `late-webview watch <url>`: a plain, decorated, resizable window on the
+/// `late-webview watch <url>`: a plain, decorated window on the
 /// stream watch page (`late.sh/live/{id}`). Nothing is bridged and no page
 /// is served: the watch page is a complete LiveKit client that only
 /// receives, so the helper has to be no more than a browser with WebRTC
@@ -98,14 +98,21 @@ const WATCH_WINDOW_FALLBACK_HEIGHT: f64 = 540.0;
 pub fn run_watch(url: &str) -> Result<()> {
     let url = parse_watch_url(url)?;
 
-    let mut event_loop_builder = EventLoopBuilder::<()>::new();
-    #[cfg(target_os = "linux")]
-    event_loop_builder.with_app_id("sh.late.watch");
-    let event_loop: EventLoop<()> = event_loop_builder.build();
+    // No app id, unlike the YouTube helper: GIO makes a second process
+    // under a taken id a remote instance, and tao segfaults building its
+    // window, so a second `▶ watch here` would die after the CLI spawned it
+    // (past its browser fallback). Without an id every window is its own.
+    let event_loop: EventLoop<()> = EventLoopBuilder::<()>::new().build();
 
+    // Born non-resizable so a tiling compositor floats it at the requested
+    // size instead of tiling it full-screen: Hyprland floats a fixed-size
+    // window, the same rule that keeps the YouTube window small, and it
+    // decides only at map. The first focus (which no compositor can give
+    // before the map) hands resizing back to the user.
     let window = WindowBuilder::new()
         .with_title("late.sh · live")
         .with_inner_size(watch_window_size(&event_loop))
+        .with_resizable(false)
         .build(&event_loop)
         .context("failed to build stream watch window")?;
 
@@ -139,17 +146,26 @@ pub fn run_watch(url: &str) -> Result<()> {
     info!(target: "late_cli::webview", url = %url, "stream watch window ready");
 
     event_loop.run(move |event, _, control_flow| {
-        let _keep_window_alive = &window;
         let _keep_webview_alive = &webview;
 
         *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
-            info!(target: "late_cli::webview", "stream watch window closed");
-            *control_flow = ControlFlow::Exit;
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::Focused(true),
+                ..
+            } => {
+                if !window.is_resizable() {
+                    window.set_resizable(true);
+                }
+            }
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                info!(target: "late_cli::webview", "stream watch window closed");
+                *control_flow = ControlFlow::Exit;
+            }
+            _ => {}
         }
     });
 }
