@@ -301,10 +301,7 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
         )));
         let scale = board.scale.get();
         lines.push(Line::from(Span::styled(
-            format!(
-                "zoom ~{}km per pixel",
-                (scale * 10.0).round().max(1.0) as i64
-            ),
+            format!("zoom ~{}km per pixel", km_per_pixel(&map, scale)),
             dim,
         )));
         lines.push(Line::from(""));
@@ -330,10 +327,8 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
             ),
             dim,
         )));
-        // Roughly how much ground a drawn pixel covers, so the zoom means
-        // something (the base grid is ~10km per cell at the equator).
         let scale = board.scale.get();
-        let km = (scale * 10.0).round().max(1.0) as i64;
+        let km = km_per_pixel(&map, scale);
         let borders = if scale <= BORDER_MAX_SCALE {
             ""
         } else {
@@ -433,6 +428,15 @@ pub fn fort_bar(level: u8, max: u8) -> String {
     (1..=max)
         .map(|n| if n <= level { '▮' } else { '·' })
         .collect()
+}
+
+/// Roughly how much ground a drawn pixel covers at `scale` (base cells per
+/// pixel), at the equator. From the map's own grid: Earth's is ~10km a cell,
+/// a drawn world's four times coarser over the same globe.
+fn km_per_pixel(map: &WorldMap, scale: f32) -> i64 {
+    const EQUATOR_KM: f64 = 40_075.0;
+    let cell_km = EQUATOR_KM / f64::from(map.grid.width.max(1));
+    (f64::from(scale) * cell_km).round().max(1.0) as i64
 }
 
 /// `12.3M` style figures for the info rail.
@@ -562,6 +566,21 @@ mod tests {
         let now = Utc.timestamp_opt(86_400 * 100 + 18 * 3_600, 0).unwrap();
         let reset = super::super::svc::next_reset(now, 18);
         assert_eq!((reset - now).num_seconds(), 86_400);
+    }
+
+    /// The label is ground, not cells: a drawn world's cell is four times
+    /// Earth's, so the same scale covers four times the kilometres.
+    #[test]
+    fn the_zoom_label_reads_kilometres_on_either_world() {
+        let earth = map_by_id("earth").unwrap();
+        let drawn = super::super::mapgen::generate(&super::super::mapgen::GeneratedMapSpec {
+            territories: 60,
+            ..Default::default()
+        });
+        assert_eq!(km_per_pixel(&earth, 1.0), 10);
+        assert_eq!(km_per_pixel(&drawn, 1.0), 39);
+        let whole_world = km_per_pixel(&drawn, f32::from(drawn.grid.width) / 160.0) * 160;
+        assert!((39_000..=41_000).contains(&whole_world), "{whole_world}");
     }
 
     #[test]
