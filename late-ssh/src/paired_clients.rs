@@ -126,6 +126,11 @@ pub enum PairControlMessage {
         play_id: u64,
         control: VideoControl,
     },
+    /// A live stream's picture comes off the terminal and the stream plays
+    /// on, heard and not seen; the next `VideoPlace` brings it back.
+    VideoHide {
+        play_id: u64,
+    },
     VideoStop {
         play_id: u64,
     },

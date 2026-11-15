@@ -644,9 +644,8 @@ impl StreamService {
         self.watch_url_for_view(&view, viewer_voice_channel)
     }
 
-    /// `▶ watch here` or a bare `/watch` in a stream room: what the paired
-    /// CLI needs to receive the room's stream itself and play it in the
-    /// terminal. `None` unless the stream is live. The ticket is the watch
+    /// A stream room playing its stream in the terminal: what the paired
+    /// CLI needs to receive the room's stream itself and play it there. `None` unless the stream is live. The ticket is the watch
     /// page's (`watch_grant`), under this session's `watcher_id`, and the
     /// voices rule is `/watch @user`'s: a viewer already in the room's
     /// voice channel gets the stream's own audio only.
@@ -667,6 +666,7 @@ impl StreamService {
         };
         Ok(Some(CliWatch {
             stream_id: view.stream_id,
+            streamer_id: view.user_id,
             streamer_username: view.username,
             title: view.title,
             watch_url,
@@ -749,6 +749,7 @@ impl StreamService {
 /// the subscribe-only LiveKit ticket, and what the player shows around it.
 pub struct CliWatch {
     pub stream_id: String,
+    pub streamer_id: Uuid,
     pub streamer_username: String,
     pub title: String,
     /// The watch page, for a viewer whose play fails.

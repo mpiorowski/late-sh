@@ -2006,7 +2006,7 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.video.modal().is_some() {
-        crate::app::video::svc::close(app);
+        crate::app::video::svc::dismiss(app);
         return;
     }
     if app.chat.has_reader() {
@@ -2504,6 +2504,7 @@ fn chat_room_list_view<'a>(
         chat_rooms: &app.chat.rooms,
         away_user_ids: &app.away_user_ids,
         live_streams: &app.chat.live_streams,
+        stream_playing: app.video.playing_stream_room(),
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
@@ -2708,9 +2709,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if app.on_home() && !chat_scroll_clicks_blocked(app) {
         crate::app::zen::input::focus_home_tile_at(app, x, y);
     }
-    if !chat_scroll_clicks_blocked(app)
-        && (handle_stream_watch_click(app, x, y) || handle_stream_video_click(app, x, y))
-    {
+    if !chat_scroll_clicks_blocked(app) && handle_stream_video_click(app, x, y) {
         return true;
     }
     if handle_chat_composer_click(app, screen, x, y) {
@@ -2759,18 +2758,6 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             false
         }
         _ => false,
-    }
-}
-
-/// A click on the stream header's `▶ watch here` plays the room's stream in
-/// the room's pane through the paired CLI (and stops it when it is already
-/// playing); `App::tick_stream` hands the request to the video player.
-fn handle_stream_watch_click(app: &mut App, x: u16, y: u16) -> bool {
-    match app.chat.last_stream_watch_hit.get() {
-        Some(rect) if rect.contains(ratatui::layout::Position { x, y }) => {
-            app.chat.request_watch_here()
-        }
-        Some(_) | None => false,
     }
 }
 
@@ -4191,11 +4178,12 @@ pub(crate) fn close_icon_picker(app: &mut App) {
 
 /// The News reader, an open Artboard piece and the watch player
 /// (`app/video/`), for a page change or another modal opening. A closing
-/// player keeps its position.
+/// player keeps its position; a live stream is not closed, it plays on
+/// with its picture out of the way (`video::svc::dismiss`).
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
     app.gallery_cards.close();
-    crate::app::video::svc::close(app);
+    crate::app::video::svc::dismiss(app);
 }
 
 pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {

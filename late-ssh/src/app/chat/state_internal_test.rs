@@ -5061,11 +5061,12 @@ fn buy_posts_the_order_the_bar_rings_up() {
     );
 }
 
-/// A bare `/watch` is the typed twin of the header's `▶ watch here`: it
-/// resolves to the selected room's stream only while that stream is live,
-/// and `/watch @user` stays the browser path whatever room is open.
+/// A bare `/watch` is the stream switch: it always asks, carrying the
+/// selected room only while that room's stream is live (the video player
+/// decides what the switch does), and `/watch @user` stays the browser
+/// path whatever room is open.
 #[tokio::test]
-async fn bare_watch_opens_the_selected_rooms_live_stream_here() {
+async fn bare_watch_toggles_streams_with_the_selected_rooms_live_stream() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "watch_here").await;
     let mut state = counter_test_state(&test_db, user.id);
@@ -5087,36 +5088,32 @@ async fn bare_watch_opens_the_selected_rooms_live_stream_here() {
         watch_url: String::new(),
     };
 
-    // Nowhere in particular: usage.
+    // Nowhere in particular: the switch, with no stream to turn on.
     state.live_streams = vec![stream.clone()];
     state.selected_room_id = None;
-    assert!(
-        submit(&mut state, "/watch").is_some(),
-        "no stream room selected is a usage error"
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle { room_here: None })
     );
-    assert_eq!(state.take_requested_watch(), None);
 
-    // In the room, but the stream is still pending: nothing to watch.
+    // In the room, but the stream is still pending: nothing to watch yet.
     state.selected_room_id = Some(room_id);
-    assert!(
-        submit(&mut state, "/watch").is_some(),
-        "a pending stream is a usage error"
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle { room_here: None })
     );
-    assert_eq!(state.take_requested_watch(), None);
-    assert!(!state.request_watch_here());
 
-    // Live: both the command and the click resolve to this room.
+    // Live: the command carries this room.
     stream.live = true;
     state.live_streams = vec![stream];
     assert!(submit(&mut state, "/watch").is_none());
     assert_eq!(
         state.take_requested_watch(),
-        Some(StreamWatchRequest::Here { room_id })
-    );
-    assert!(state.request_watch_here());
-    assert_eq!(
-        state.take_requested_watch(),
-        Some(StreamWatchRequest::Here { room_id })
+        Some(StreamWatchRequest::Toggle {
+            room_here: Some(room_id)
+        })
     );
 
     assert!(submit(&mut state, "/watch @bob").is_none());

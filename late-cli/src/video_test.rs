@@ -736,6 +736,7 @@ async fn messages_for_another_play_are_dropped() {
         rows: 24,
     };
     assert_eq!(player.place(7, rect).await, PlaceOutcome::Unchanged);
+    assert_eq!(player.hide(7), None);
     assert_eq!(player.control(7, VideoControl::TogglePause).await, None);
     assert_eq!(player.stop(7).await, None);
     assert_eq!(player.poll().await, None);

@@ -4146,11 +4146,13 @@ impl App {
                         }
                     }
                 }
-                crate::app::chat::state::StreamWatchRequest::Here { room_id } => {
-                    crate::app::video::svc::watch_stream(self, room_id);
+                crate::app::chat::state::StreamWatchRequest::Toggle { room_here } => {
+                    crate::app::video::svc::toggle_stream(self, room_here);
                 }
             }
         }
+        // A live stream room on screen plays its stream by itself.
+        crate::app::video::svc::auto_watch(self, self.chat.last_stream_room_drawn.get());
 
         // Walking into a stream room counts as arriving at the stream. No
         // banner for the viewer: they can see where they are.

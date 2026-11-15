@@ -143,16 +143,19 @@ Cross-domain touchpoints:
   `Ctrl+/` room picker lists the same live streams as `#{username}-live`,
   pickable before joining), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
-  room's chat (title, watcher count, the `▶ watch here` button once the
-  stream is live, `■ stop watching` while it plays here, watch-URL nudge; the URL carries a
+  room's chat (title, watcher count, the `/watch to stop` / `/watch to
+  play` hint for a session that can play it in the terminal, watch-URL
+  nudge; the URL carries a
   trailing space so it never lands in the last column, where terminal link
   detection swallows the pane border `│` or the `────` rule below it and
   hands the clicker a 404), and the stream-room arm in `select_room_slot`
-  (lazy join on first open). The button's rect rides
-  `ChatState::last_stream_watch_hit` (reset every frame) to the click in
-  `app/input.rs`; a bare `/watch` typed in the room is its typed twin. Both
-  record `StreamWatchRequest::Here`, `/watch @user` records
-  `StreamWatchRequest::User`, and `App::tick_stream` consumes either.
+  (lazy join on first open). The header also records the room whose live
+  stream row it drew in `ChatState::last_stream_room_drawn` (reset every
+  frame), which is where a stream starts playing by itself. A bare
+  `/watch` records `StreamWatchRequest::Toggle` (carrying the selected
+  room when its stream is live), `/watch @user` records
+  `StreamWatchRequest::User`, and `App::tick_stream` consumes either. The
+  rail row of the stream this session is playing leads with `♪`.
 - `app/voice/ui.rs::OnAirView`: the ⦿ ON AIR strip marker while the
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
@@ -163,27 +166,30 @@ Cross-domain touchpoints:
   + the `open_url` capability (xdg-open/open/cmd start: the browser, for
   `/watch @user` and the `/golive` console, whose `getDisplayMedia` needs a
   real one).
-- `app/video` (`video::svc::watch_stream`): the stream room's `▶ watch here`
-  button (or a bare `/watch` typed there) plays the stream in the terminal,
-  inline in the room's own pane, between the header and the messages, so
-  the chat stays usable; a click on the picture takes it full screen and
-  the button turns into `■ stop watching` (`video/CONTEXT.md`, "Live
-  streams"). It is the News video player underneath.
-  `StreamService::cli_watch` hands it
+- `app/video` (`video::svc::auto_watch`, `toggle_stream`): a live stream
+  room on screen plays its stream by itself in the terminal, inline in the
+  room's own pane, between the header and the messages, so the chat stays
+  usable; a click on the picture takes it full screen. A bare `/watch` is
+  the session's switch: it stops the stream and keeps stream rooms quiet
+  until typed again (`video/CONTEXT.md`, "Live streams"). It is the News
+  video player underneath. `StreamService::cli_watch` hands it
   what the paired CLI needs: the watch page's subscribe-only ticket
   (`watch_grant`, under a `cli-{session}` watcher id), the title and
-  streamer for the player's header, the watch URL for a failed play, and
-  the voices rule below. The CLI receives the stream itself with the
+  streamer for the player's header (and the streamer's id, so a streamer
+  is not played their own stream unasked), the watch URL for a failed
+  play, and the voices rule below. The CLI receives the stream itself with the
   LiveKit SDK it links for voice and feeds its mpv
   (`PairControlMessage::VideoPlayStream`, the `video_stream` capability;
   `late-cli/VIDEO.md`, "Live streams"): no browser, and no webview, since
   WebKitGTK ships without WebRTC. While the player is up `video::svc::tick`
   calls `watch_heartbeat` once a second, which keeps the viewer in the
   watcher count and closes the player when the stream is gone. Leaving the
-  room, or opening a modal over it, ends the watch too. A session
-  whose CLI cannot play it (no CLI, an older one, no kitty-graphics
-  terminal, tmux, no mpv) gets one banner pointing at `/watch @user` and
-  nothing else: there is no fallback.
+  room, or opening a modal over it, only hides the picture
+  (`PairControlMessage::VideoHide`): the stream plays on, heard, and the
+  viewer still counts as watching. A session whose CLI cannot play it (no
+  CLI, an older one, no kitty-graphics terminal, tmux, no mpv) sees
+  nothing start, and one banner pointing at `/watch @user` if it types
+  `/watch`: there is no fallback.
 - `late-cli/src/voice.rs`: the audio-only voice runtime unsubscribes from
   any remote video track (`publication.set_subscribed(false)`), so a CLI
   voice participant in a stream room never downloads the screen share. Same
@@ -369,21 +375,24 @@ Cross-domain touchpoints:
 - `chat/ui_test.rs::stream_header_offers_watch_here_only_once_the_stream_is_live`:
   the button is on the row for a live stream with its recorded columns
   covering exactly the label, and absent while pending.
-- `chat/state_internal_test.rs::bare_watch_opens_the_selected_rooms_live_stream_here`:
-  a bare `/watch` and the click both resolve to the selected room's live
-  stream, are usage errors elsewhere or while pending, and `/watch @user`
-  stays the browser request.
+- `chat/state_internal_test.rs::bare_watch_toggles_streams_with_the_selected_rooms_live_stream`:
+  a bare `/watch` always records the toggle, carrying the selected room
+  only while its stream is live, and `/watch @user` stays the browser
+  request.
 - `video/state_test.rs`: a live stream sits in its room until taken full
-  screen, plays from its ticket (`video_play_stream`), has no pause, seek
-  or position, ends when the stream does, offers its watch page when it
-  fails, and never prints its token.
+  screen, hides its picture and plays on when its room leaves the screen,
+  starts by itself while the switch is on, plays from its ticket
+  (`video_play_stream`), has no pause, seek or position, ends when the
+  stream does, offers its watch page when it fails, and never prints its
+  token.
 - `chat/ui_test.rs::room_header_seats_an_inline_stream_above_the_messages`
-  and `room_header_keeps_a_stream_alive_in_a_pane_too_short_for_it`: the
-  picture's rows, the rectangle reported to the player, the `■ stop
-  watching` label, and a short pane that draws no picture without ending
-  the watch.
-- `late-cli/src/ws_test.rs`: `video_play_stream` deserializes from its wire
-  name. `late-cli/src/video_test.rs`: the mpv command line for a stream,
+  and `room_header_gives_a_stream_no_rows_in_a_pane_too_short_for_it`: the
+  picture's rows, the rectangle reported to the player, the drawn-room
+  cell, and a short pane that draws no picture;
+  `stream_rail_label_is_the_username_and_a_bracketed_watcher_count` covers
+  the `♪` marker.
+- `late-cli/src/ws_test.rs`: `video_play_stream` and `video_hide`
+  deserialize from their wire names. `late-cli/src/video_test.rs`: the mpv command line for a stream,
   and `video_stream` needing everything but yt-dlp.
   `late-cli/src/stream_view_test.rs`: the canvas, the fit, the composed
   frame, and the voices rule.

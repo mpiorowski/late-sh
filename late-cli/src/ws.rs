@@ -164,6 +164,11 @@ enum PairControlMessage {
         play_id: u64,
         control: VideoControl,
     },
+    /// Take a live stream's picture off the terminal and keep the stream:
+    /// its sound plays on. A later `video_place` brings the picture back.
+    VideoHide {
+        play_id: u64,
+    },
     VideoStop {
         play_id: u64,
     },
@@ -1240,6 +1245,7 @@ async fn handle_pair_control(
             };
             match video.place(play_id, rect).await {
                 PlaceOutcome::Moved => info!(play_id, ?rect, "moved video"),
+                PlaceOutcome::Shown => info!(play_id, ?rect, "showing the stream's picture again"),
                 PlaceOutcome::Deferred => info!(play_id, ?rect, "video move waits for mpv"),
                 PlaceOutcome::Unchanged => {}
                 PlaceOutcome::Failed(update) => report_video(ws, update).await?,
@@ -1250,6 +1256,16 @@ async fn handle_pair_control(
         PairControlMessage::VideoControl { play_id, control } => {
             if let Some(update) = video.control(play_id, control).await {
                 report_video(ws, update).await?;
+            }
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoHide { play_id } => {
+            if let Some(rect) = video.hide(play_id) {
+                info!(play_id, "hid the stream's picture; the stream plays on");
+                if let Err(err) = video::settle_terminal(rect) {
+                    warn!(play_id, error = %err, "failed to clear the last video frame");
+                }
             }
             silence_for_video(video.is_active(), playback, webview);
             Ok(false)
@@ -1494,6 +1510,7 @@ fn apply_audio_pair_control(
         | PairControlMessage::VideoPlayStream { .. }
         | PairControlMessage::VideoPlace { .. }
         | PairControlMessage::VideoControl { .. }
+        | PairControlMessage::VideoHide { .. }
         | PairControlMessage::VideoStop { .. }
         | PairControlMessage::Reconnect { .. } => {}
     }

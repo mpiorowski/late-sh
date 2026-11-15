@@ -419,6 +419,14 @@ fn video_controls_deserialize_from_wire_names() {
     assert!(matches!(stop, PairControlMessage::VideoStop { play_id: 7 }));
 }
 
+/// Hiding a stream's picture is its own message: the stream plays on.
+#[test]
+fn video_hide_deserializes_from_its_wire_name() {
+    let msg = serde_json::from_str::<PairControlMessage>(r#"{"event":"video_hide","play_id":4}"#)
+        .unwrap();
+    assert!(matches!(msg, PairControlMessage::VideoHide { play_id: 4 }));
+}
+
 /// A stream play carries a ticket, not a URL, and shares the play's later
 /// controls with a video.
 #[test]

@@ -181,12 +181,14 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
-    /// Receives the stream header's `▶ watch here` button rect, for the
-    /// click that plays the room's stream in the terminal (the video player).
-    pub stream_watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Receives the room whose live stream row this frame drew: where a
+    /// stream may start playing by itself (`video::svc::auto_watch`).
+    pub stream_room_drawn: Option<&'a std::cell::Cell<Option<Uuid>>>,
     /// The stream playing inline, when one is: its room's pane reserves
     /// the picture's rows under the stream header.
     pub stream_video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// What a bare `/watch` would do for this session, for the stream row.
+    pub stream_switch: crate::app::video::state::SwitchHint,
     pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
@@ -1148,10 +1150,11 @@ pub fn draw_dashboard_chat_card(
                     .iter()
                     .find(|stream| stream.room_id == room.id)
             }),
-            watch_hit: view.stream_watch_hit,
+            drawn: view.stream_room_drawn,
             video: view
                 .room
                 .and_then(|room| view.stream_video.filter(|slot| slot.room_id() == room.id)),
+            switch: view.stream_switch,
             voice,
             // The live strip stands in for the topic row while it is up:
             // the board is the room's news, and the topic is a key away in
@@ -3193,12 +3196,17 @@ pub struct ChatRenderInput<'a> {
     pub work_unread_count: i64,
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
-    /// Receives the stream header's `▶ watch here` button rect, for the
-    /// click that plays the room's stream in the terminal (the video player).
-    pub stream_watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Receives the room whose live stream row this frame drew: where a
+    /// stream may start playing by itself (`video::svc::auto_watch`).
+    pub stream_room_drawn: Option<&'a std::cell::Cell<Option<Uuid>>>,
     /// The stream playing inline, when one is: its room's pane reserves
     /// the picture's rows under the stream header.
     pub stream_video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// What a bare `/watch` would do for this session, for the stream row.
+    pub stream_switch: crate::app::video::state::SwitchHint,
+    /// The room whose stream this session is playing, seen or only heard:
+    /// its rail row says so, since the sound may come from another room.
+    pub stream_playing: Option<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3241,6 +3249,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub away_user_ids: &'a HashSet<Uuid>,
     /// Registered "watch me" streams driving the rail's `stream` section.
     pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
+    /// The room whose stream this session is playing, for its row's marker.
+    pub stream_playing: Option<Uuid>,
     pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
@@ -3716,6 +3726,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         chat_rooms: view.chat_rooms,
         away_user_ids: view.away_user_ids,
         live_streams: view.live_streams,
+        stream_playing: view.stream_playing,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
@@ -4520,7 +4531,8 @@ fn room_slot_label_and_unread(
                 .find(|stream| stream.room_id == room_id)
             {
                 let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
-                return (stream_rail_label(stream, label_max), unread);
+                let playing_here = view.stream_playing == Some(room_id);
+                return (stream_rail_label(stream, playing_here, label_max), unread);
             }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
@@ -4600,6 +4612,10 @@ pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStre
 /// (registered, no media yet) shows `[…]` in the count's slot; the watch
 /// count only means something once frames flow.
 ///
+/// The stream this session is playing leads with `♪` instead of `▶`: its
+/// sound follows the user into other rooms, and this is where it says
+/// which stream that is.
+///
 /// The label fits `max_width` by shortening the username, never the bracket:
 /// the row renderer clips labels from the right, which would drop the count
 /// first and end the row in the same `…` a pending stream shows. A username
@@ -4607,13 +4623,18 @@ pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStre
 /// so a long name is the ordinary case, not a corner.
 fn stream_rail_label(
     stream: &crate::app::stream::registry::LiveStreamView,
+    playing_here: bool,
     max_width: usize,
 ) -> String {
     let count = stream_count_badge(stream);
-    // `▶ ` before the name, one space before the count.
+    // The marker and a space before the name, one space before the count.
     let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
     let name = truncate_cells(&stream.username, name_budget);
-    format!("▶ {name} {count}")
+    let marker = match playing_here {
+        true => '♪',
+        false => '▶',
+    };
+    format!("{marker} {name} {count}")
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
@@ -4760,12 +4781,14 @@ struct RoomHeader<'a> {
     /// watcher count, and the watch-URL nudge (a terminal-only person in
     /// the room is otherwise missing the show).
     stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
-    /// Where the stream row's `▶ watch here` button lands this frame, for
-    /// `app::input`'s click; `None` when nothing is drawn.
-    watch_hit: Option<&'a std::cell::Cell<Option<Rect>>>,
+    /// Told the room whose live stream row is drawn this frame: a stream
+    /// starts playing by itself only where its room is on screen.
+    drawn: Option<&'a std::cell::Cell<Option<Uuid>>>,
     /// This room's stream playing inline: the picture's rows go under the
     /// header block, above the messages.
     video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// What `/watch` would do, for the stream row's hint.
+    switch: crate::app::video::state::SwitchHint,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     row: Option<TopicRow<'a>>,
     /// Whether the block ends in a rule. False when the daily live strip
@@ -4789,7 +4812,12 @@ impl RoomHeader<'_> {
 }
 
 /// The stream row of the header: `● LIVE title · 3 watching` on the left,
-/// the watch URL flushed right.
+/// and flushed right what to do about it: the `/watch` switch for a
+/// session that can play the stream in its terminal (`/watch to stop`
+/// while one plays, `/watch to play` otherwise; a pending stream has
+/// nothing to switch), then the watch URL. When both do not fit, such a
+/// session keeps the switch and loses the URL: the stream is already in
+/// front of it.
 ///
 /// The link is the point of the row, so it is measured first and everything
 /// else is fitted around it: the title clips to what is left, and the watcher
@@ -4799,24 +4827,19 @@ impl RoomHeader<'_> {
 /// here the hint *is* the URL. A live stream's `watch: https://…/live/<id>`
 /// runs 51 cells, so at ordinary chat-pane widths something has to give for
 /// the link to show at all.
-struct StreamHeaderRow {
-    line: Line<'static>,
-    /// The `▶ watch here` button's columns, counted from the row's first
-    /// content cell. `None` while the stream is pending (nothing to watch
-    /// yet) or when the row is too tight to hold the button.
-    watch_button: Option<std::ops::Range<u16>>,
-}
-
-const STREAM_WATCH_BUTTON: &str = "\u{25B6} watch here";
-/// The same button while this room's stream is playing here: it stops it.
-const STREAM_STOP_BUTTON: &str = "\u{25A0} stop watching";
-
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
-    playing_here: bool,
+    switch: crate::app::video::state::SwitchHint,
     width: usize,
-) -> StreamHeaderRow {
-    let hint = if stream.watch_url.is_empty() {
+) -> Line<'static> {
+    use crate::app::video::state::SwitchHint;
+    let switch = match (switch, stream.live) {
+        (SwitchHint::Stop, true) => Some("/watch to stop"),
+        (SwitchHint::Play, true) => Some("/watch to play"),
+        (SwitchHint::Unavailable, _) | (SwitchHint::Stop | SwitchHint::Play, false) => None,
+    }
+    .map(|text| Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
+    let link = if stream.watch_url.is_empty() {
         Vec::new()
     } else {
         vec![
@@ -4854,29 +4877,28 @@ fn stream_header_line(
     // What the rest of the row may not eat into: the hint (its own trailing
     // cell included) plus the two cells `row_with_hint` keeps between the two
     // sides. Nothing to reserve when there is no hint to flush right.
-    let hint_width: usize = hint.iter().map(Span::width).sum();
-    let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
     let status_width = status.width();
-    // The button is the row's one action, so it outranks the count and the
-    // title for space; it sits two cells after whatever precedes it.
-    let button = stream.live.then(|| {
-        Span::styled(
-            match playing_here {
-                true => STREAM_STOP_BUTTON,
-                false => STREAM_WATCH_BUTTON,
-            },
-            Style::default()
-                .fg(theme::TEXT())
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )
-    });
-    let button = button.filter(|button| status_width + 2 + button.width() + reserved <= width);
-    let button_width = button.as_ref().map_or(0, |button| 2 + button.width());
-    let watching =
-        watching.filter(|count| status_width + count.width() + button_width + reserved <= width);
-    let title_budget = width.saturating_sub(
-        status_width + watching.as_ref().map_or(0, Span::width) + button_width + reserved,
-    );
+    let width_of = |spans: &[Span<'static>]| spans.iter().map(Span::width).sum::<usize>();
+    let hint = match (switch, link.is_empty()) {
+        (None, _) => link,
+        (Some(switch), true) => vec![switch],
+        (Some(switch), false) => {
+            let mut both = vec![
+                switch.clone(),
+                Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+            ];
+            both.extend(link);
+            match status_width + width_of(&both) + 2 <= width {
+                true => both,
+                false => vec![switch],
+            }
+        }
+    };
+    let hint_width = width_of(&hint);
+    let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
+    let watching = watching.filter(|count| status_width + count.width() + reserved <= width);
+    let title_budget =
+        width.saturating_sub(status_width + watching.as_ref().map_or(0, Span::width) + reserved);
 
     let mut left = vec![status];
     let title = stream.title.trim();
@@ -4887,18 +4909,8 @@ fn stream_header_line(
         ));
     }
     left.extend(watching);
-    let watch_button = button.map(|button| {
-        let start = left.iter().map(Span::width).sum::<usize>() + 2;
-        let end = start + button.width();
-        left.push(Span::raw("  "));
-        left.push(button);
-        start as u16..end as u16
-    });
 
-    StreamHeaderRow {
-        line: row_with_hint(left, hint, width),
-        watch_button,
-    }
+    row_with_hint(left, hint, width)
 }
 
 /// Draw the header and return the area left for messages. A room with neither
@@ -4933,18 +4945,10 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
 
     let mut lines: Vec<Line> = Vec::new();
     if let Some(stream) = header.stream {
-        let row = stream_header_line(stream, header.video.is_some(), width);
-        if let Some(slot) = header.watch_hit {
-            // The stream row is the block's first; its content starts one
-            // cell in, after the pad cell every text row opens with.
-            slot.set(row.watch_button.map(|cols| Rect {
-                x: area.x + 1 + cols.start,
-                y: area.y,
-                width: cols.end - cols.start,
-                height: 1,
-            }));
+        if let (Some(drawn), true) = (header.drawn, stream.live) {
+            drawn.set(Some(stream.room_id));
         }
-        lines.push(padded(row.line));
+        lines.push(padded(stream_header_line(stream, header.switch, width)));
     }
     if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
@@ -5185,8 +5189,9 @@ fn draw_selected_content(
                         .live_streams
                         .iter()
                         .find(|stream| stream.room_id == room.id),
-                    watch_hit: view.stream_watch_hit,
+                    drawn: view.stream_room_drawn,
                     video: view.stream_video.filter(|slot| slot.room_id() == room.id),
+                    switch: view.stream_switch,
                     voice,
                     row: room_topic(room).map(|text| TopicRow {
                         text,

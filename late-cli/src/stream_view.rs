@@ -170,7 +170,10 @@ mod feed {
 
     use futures_util::StreamExt;
     use livekit::PlatformAudio;
-    use livekit::prelude::{RemoteTrack, RemoteVideoTrack, Room, RoomEvent, RoomOptions};
+    use livekit::prelude::{
+        RemoteTrack, RemoteTrackPublication, RemoteVideoTrack, Room, RoomEvent, RoomOptions,
+        TrackKind,
+    };
     use livekit::webrtc::prelude::VideoBuffer;
     use livekit::webrtc::video_stream::native::NativeVideoStream;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -180,6 +183,8 @@ mod feed {
 
     enum FeedCommand {
         ToggleMute,
+        HidePicture,
+        ShowPicture { canvas: Canvas, to_mpv: ChildStdin },
     }
 
     /// The running viewer: the room connection, the frame pump, and the
@@ -215,6 +220,20 @@ mod feed {
             // A closed channel means the viewer already stopped; `failure`
             // says why.
             let _ = self.commands.send(FeedCommand::ToggleMute);
+        }
+
+        /// Stop receiving the picture: the pipe to mpv closes and the video
+        /// track is unsubscribed, so a stream listened to costs no video
+        /// bandwidth or decoding. The sound plays on.
+        pub(in super::super) fn hide_picture(&self) {
+            let _ = self.commands.send(FeedCommand::HidePicture);
+        }
+
+        /// Receive the picture again, onto `canvas` and into a new mpv.
+        pub(in super::super) fn show_picture(&self, canvas: Canvas, to_mpv: ChildStdin) {
+            let _ = self
+                .commands
+                .send(FeedCommand::ShowPicture { canvas, to_mpv });
         }
 
         /// Why the viewer gave up, once it has.
@@ -259,7 +278,8 @@ mod feed {
             };
         info!(url = %ticket.livekit_url, voices = ticket.voices, "joined the stream room as a viewer");
 
-        let to_writer = spawn_writer(to_mpv);
+        // Where the picture goes; `None` while it is hidden.
+        let mut picture = Some((canvas, spawn_writer(to_mpv)));
         let mut muted = false;
         let mut pump: Option<tokio::task::JoinHandle<()>> = None;
         let outcome = loop {
@@ -268,6 +288,42 @@ mod feed {
                     Some(FeedCommand::ToggleMute) => {
                         muted = !muted;
                         set_audio_enabled(&room, !muted);
+                    }
+                    Some(FeedCommand::HidePicture) => {
+                        if let Some(old) = pump.take() {
+                            old.abort();
+                        }
+                        // Dropping the writer's sender closes mpv's stdin.
+                        picture = None;
+                        for publication in video_publications(&room) {
+                            publication.set_subscribed(false);
+                        }
+                    }
+                    Some(FeedCommand::ShowPicture { canvas, to_mpv }) => {
+                        if let Some(old) = pump.take() {
+                            old.abort();
+                        }
+                        let to_writer = spawn_writer(to_mpv);
+                        for publication in video_publications(&room) {
+                            match publication.track() {
+                                // Still subscribed (the hide had not gone
+                                // through): no event will announce it.
+                                Some(RemoteTrack::Video(video)) => {
+                                    if let Some(old) = pump.take() {
+                                        old.abort();
+                                    }
+                                    pump = Some(tokio::spawn(pump_frames(
+                                        video,
+                                        canvas,
+                                        to_writer.clone(),
+                                    )));
+                                }
+                                Some(RemoteTrack::Audio(_)) | None => {
+                                    publication.set_subscribed(true);
+                                }
+                            }
+                        }
+                        picture = Some((canvas, to_writer));
                     }
                     None => break Ok(()),
                 },
@@ -282,7 +338,18 @@ mod feed {
                             if let Some(old) = pump.take() {
                                 old.abort();
                             }
-                            pump = Some(tokio::spawn(pump_frames(video, canvas, to_writer.clone())));
+                            match &picture {
+                                Some((canvas, to_writer)) => {
+                                    pump = Some(tokio::spawn(pump_frames(
+                                        video,
+                                        *canvas,
+                                        to_writer.clone(),
+                                    )));
+                                }
+                                // Hidden: a track published meanwhile is
+                                // not received either.
+                                None => publication.set_subscribed(false),
+                            }
                         }
                         RemoteTrack::Audio(audio_track) => {
                             let identity = participant.identity().to_string();
@@ -314,6 +381,15 @@ mod feed {
         }
         drop(audio);
         outcome
+    }
+
+    /// Every video track published in the room, subscribed or not.
+    fn video_publications(room: &Room) -> Vec<RemoteTrackPublication> {
+        room.remote_participants()
+            .values()
+            .flat_map(|participant| participant.track_publications().into_values())
+            .filter(|publication| publication.kind() == TrackKind::Video)
+            .collect()
     }
 
     fn set_audio_enabled(room: &Room, enabled: bool) {
@@ -381,6 +457,10 @@ mod feed {
         }
 
         pub(in super::super) fn toggle_mute(&self) {}
+
+        pub(in super::super) fn hide_picture(&self) {}
+
+        pub(in super::super) fn show_picture(&self, _: Canvas, _: ChildStdin) {}
 
         pub(in super::super) fn failure(&self) -> Option<String> {
             Some("watching streams is not supported on this platform".to_string())

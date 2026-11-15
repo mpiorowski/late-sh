@@ -461,6 +461,7 @@ impl App {
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
         let own_chat_open = crate::app::door::spectate::input::open_own_chat_game(self);
         let foreground_overlay_open = self.foreground_overlay_open();
+        let stream_switch = crate::app::video::svc::switch_hint(self);
         // Read before the views borrow `self` mutably below.
         let hears_music = self.paired_client_state().is_some();
         let crate::app::door::spectate::chat::WatcherCounts {
@@ -481,7 +482,7 @@ impl App {
         self.own_chat_hit.set(None);
         self.own_chat_undrawn.set(false);
         self.chat.last_composer_rect.set(None);
-        self.chat.last_stream_watch_hit.set(None);
+        self.chat.last_stream_room_drawn.set(None);
         self.video.begin_frame();
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -912,14 +913,15 @@ impl App {
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
-            stream_watch_hit: Some(&self.chat.last_stream_watch_hit),
+            stream_room_drawn: Some(&self.chat.last_stream_room_drawn),
             // A modal over the page would sit under the picture the CLI
-            // draws, so the pane gives the stream no seat while one is up
-            // (and an inline stream nobody drew is closed, `video::svc`).
+            // draws, so the pane gives the stream no seat while one is up:
+            // its picture hides and it plays on (`video::state::Seat`).
             stream_video: self
                 .video
                 .inline_slot()
                 .filter(|_| !foreground_overlay_open),
+            stream_switch,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
             gallery_cards: self.gallery_cards.cards(),
@@ -1028,6 +1030,7 @@ impl App {
             app_ctx_epoch: self.chat_ctx_epoch,
             chat_rooms: self.chat.rooms.as_slice(),
             live_streams: &self.chat.live_streams,
+            stream_playing: self.video.playing_stream_room(),
             overlay: self.chat.overlay(),
             image_modal,
             usernames: chat_usernames,
@@ -1097,14 +1100,15 @@ impl App {
             work_unread_count,
             work_view,
             work_state: Some(&self.chat.work),
-            stream_watch_hit: Some(&self.chat.last_stream_watch_hit),
+            stream_room_drawn: Some(&self.chat.last_stream_room_drawn),
             // A modal over the page would sit under the picture the CLI
-            // draws, so the pane gives the stream no seat while one is up
-            // (and an inline stream nobody drew is closed, `video::svc`).
+            // draws, so the pane gives the stream no seat while one is up:
+            // its picture hides and it plays on (`video::state::Seat`).
             stream_video: self
                 .video
                 .inline_slot()
                 .filter(|_| !foreground_overlay_open),
+            stream_switch,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),

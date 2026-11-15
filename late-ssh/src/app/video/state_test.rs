@@ -150,7 +150,10 @@ fn sync_plays_places_and_stops_from_what_was_drawn() {
 #[test]
 fn sync_replaces_an_older_play() {
     let rect = Rect::new(1, 1, 10, 5);
-    let mut live = Some(LivePlay { play_id: 3, rect });
+    let mut live = Some(LivePlay {
+        play_id: 3,
+        seat: Seat::At(rect),
+    });
     assert_eq!(
         sync(
             &mut live,
@@ -160,7 +163,7 @@ fn sync_replaces_an_older_play() {
                     url: URL,
                     start_s: 1391,
                 },
-                rect,
+                seat: Seat::At(rect),
             })
         ),
         vec![
@@ -176,7 +179,13 @@ fn sync_replaces_an_older_play() {
             },
         ]
     );
-    assert_eq!(live, Some(LivePlay { play_id: 4, rect }));
+    assert_eq!(
+        live,
+        Some(LivePlay {
+            play_id: 4,
+            seat: Seat::At(rect)
+        })
+    );
 }
 
 /// The reports a play goes through, each one's status and outcome, and the
@@ -920,10 +929,9 @@ fn watching_stream(now: Instant) -> State {
 }
 
 /// A live stream opens in its room's pane, not over the page: nothing
-/// takes the keys, and the pane says where the picture goes. A frame that
-/// did not draw it (another room, another page) leaves it nowhere, which is
-/// what ends the watch. `f` takes it full screen, a modal like any video,
-/// and Esc brings it back instead of closing it.
+/// takes the keys, and the pane says where the picture goes. `f` takes it
+/// full screen, a modal like any video, and Esc brings it back instead of
+/// closing it.
 #[test]
 fn a_live_stream_sits_in_its_room_until_taken_full_screen() {
     let mut state = State::default();
@@ -933,21 +941,15 @@ fn a_live_stream_sits_in_its_room_until_taken_full_screen() {
     assert_eq!(state.stream_room(), Some(STREAM_ROOM));
 
     state.begin_frame();
-    assert!(state.inline_left_the_screen(), "no pane drew it");
-
-    state.begin_frame();
     let slot = state.inline_slot().expect("a stream opens inline");
     assert_eq!(slot.room_id(), STREAM_ROOM);
     assert_eq!(slot.caption(), Some("connecting…".to_string()));
     slot.place(STREAM_SEAT);
     assert_eq!(slot.body(), STREAM_SEAT);
-    assert!(!state.inline_left_the_screen());
 
     state.player_mut().expect("player").toggle_size();
     assert!(state.modal().is_some(), "full screen takes the keys");
     assert!(state.inline_slot().is_none());
-    state.begin_frame();
-    assert!(!state.inline_left_the_screen(), "full screen needs no pane");
 
     assert!(state.player_mut().expect("player").back_inline());
     assert!(state.modal().is_none());
@@ -955,6 +957,91 @@ fn a_live_stream_sits_in_its_room_until_taken_full_screen() {
         !state.player_mut().expect("player").back_inline(),
         "already in the room: Esc is not ours"
     );
+}
+
+/// A stream whose room goes off screen (another room, another page, a
+/// modal over it) is not stopped: its picture is hidden and it plays on,
+/// and coming back is a move like any other. It starts only once a pane
+/// has somewhere to draw it. Once it has stopped playing, unseen, nothing
+/// is left to keep.
+#[test]
+fn a_stream_off_screen_hides_its_picture_and_plays_on() {
+    let now = Instant::now();
+    let mut state = State::default();
+    state.open_player(stream_request(), None, now);
+    state.begin_frame();
+    assert_eq!(state.cli_messages(), Vec::new(), "nowhere to draw it yet");
+
+    state.inline_slot().expect("inline").place(STREAM_SEAT);
+    assert!(matches!(
+        state.cli_messages().as_slice(),
+        [PairControlMessage::VideoPlayStream { play_id: 1, .. }]
+    ));
+    assert_eq!(state.playing_stream_room(), Some(STREAM_ROOM));
+
+    // A frame that does not draw the room.
+    state.begin_frame();
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoHide { play_id: 1 }]
+    );
+    assert!(!state.unseen_dead_stream(), "it is playing");
+    state.begin_frame();
+    assert_eq!(state.cli_messages(), Vec::new(), "hidden once");
+    assert_eq!(state.playing_stream_room(), Some(STREAM_ROOM));
+
+    // Back in the room, in a pane that moved.
+    state.begin_frame();
+    state
+        .inline_slot()
+        .expect("inline")
+        .place(Rect::new(31, 6, 100, 28));
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoPlace {
+            play_id: 1,
+            left: 31,
+            top: 6,
+            cols: 100,
+            rows: 28,
+        }]
+    );
+
+    state.player_mut().expect("player").apply(
+        &VideoReport::Failed {
+            message: "stream viewer failed".to_string(),
+        },
+        now,
+    );
+    assert_eq!(state.playing_stream_room(), None);
+    assert!(!state.unseen_dead_stream(), "on screen, saying why");
+    state.begin_frame();
+    assert!(state.unseen_dead_stream());
+}
+
+/// The session's `/watch` switch is on until turned off. A room whose
+/// stream would not start by itself is left alone while it stays on
+/// screen, and asked again the next time it is entered.
+#[test]
+fn a_stream_room_starts_by_itself_while_the_switch_is_on() {
+    let other_room = Uuid::from_u128(2);
+    let mut state = State::default();
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), Some(STREAM_ROOM));
+    assert_eq!(state.may_auto_start(None), None, "no stream room on screen");
+
+    state.decline_auto(STREAM_ROOM);
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), None);
+    assert_eq!(state.may_auto_start(Some(other_room)), Some(other_room));
+    assert_eq!(
+        state.may_auto_start(Some(STREAM_ROOM)),
+        Some(STREAM_ROOM),
+        "entered again"
+    );
+
+    state.set_streams(StreamSwitch::Off);
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), None);
+    state.set_streams(StreamSwitch::On);
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), Some(STREAM_ROOM));
 }
 
 /// A live stream's play carries its ticket to the CLI, not a URL: the CLI

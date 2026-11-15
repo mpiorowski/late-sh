@@ -24,7 +24,7 @@ Client to server, on every state change and once a second while playing or pause
 { "event": "video_state", "play_id": 7, "state": "stopped" }
 ```
 
-Live streams. `▶ watch here` in a stream's room plays the stream through the same mpv, in a rectangle the server places inside the room's pane (or over the whole terminal, full screen; the CLI cannot tell and does not care), with no browser and no webview (WebKitGTK ships without WebRTC on Arch and the other distros checked, so a webview window can never show it). Only to a CLI that advertised `video_stream`:
+Live streams. A live stream's room plays the stream through the same mpv, in a rectangle the server places inside the room's pane (or over the whole terminal, full screen; the CLI cannot tell and does not care), with no browser and no webview (WebKitGTK ships without WebRTC on Arch and the other distros checked, so a webview window can never show it). Only to a CLI that advertised `video_stream`:
 
 ```json
 { "event": "video_play_stream", "play_id": 8, "livekit_url": "wss://rtc.late.sh", "token": "<jwt>", "voices": true, "left": 10, "top": 3, "cols": 100, "rows": 28 }
@@ -35,6 +35,13 @@ Live streams. `▶ watch here` in a stream's room plays the stream through the s
 - Audio never passes through mpv. The viewer holds a `PlatformAudio` (shared with the voice runtime's when one is up), so the tracks it stays subscribed to play through the SDK's audio device: the stream's own audio (a `stream-*` publisher: the go-live console or the OBS ingress) always, the room's microphones only when `voices` is true. The server sends `voices: false` to a viewer sitting in the stream's voice channel, who already hears them through `voice.rs` (one audio path per sound; `keep_audio`). The house audio is silenced as for any play.
 - `video_control` carries only `toggle_mute` for a stream (the server sends nothing else), and the mute is the viewer's, not mpv's; any other control is dropped. There is no pause, seek or resume.
 - `video_state` is the same: `starting` until mpv has a first frame, then `playing` once a second with a `position_s` that counts frames at a nominal 30 fps and a `duration_s` that grows with it (mpv's view of a pipe), neither of which the server shows. A viewer that cannot join its room, or loses it, reports `failed` (`VideoFailure::Stream`, checked before mpv's own exit, since the viewer closing stdin is what ends mpv). The stream ending is the server's to notice (its registry); it sends `video_stop`.
+- Hiding. A stream outlives its picture: when its room leaves the screen the server sends
+
+  ```json
+  { "event": "video_hide", "play_id": 8 }
+  ```
+
+  and the play carries on with no mpv (`Show::Stream { screen: None }`): mpv is killed and its last frame settled, the viewer stays in the room and its sound plays on, and it unsubscribes from the video track, so a stream only listened to costs no video bandwidth or decoding (`StreamFeed::hide_picture`). While hidden the CLI still reports `playing` once a second (position 0), which is what keeps the server from counting the play lost. The next `video_place` brings the picture back: a fresh mpv in that rectangle, on a canvas sized for it, fed by the same viewer (`StreamFeed::show_picture` resubscribes). `video_hide` for a URL play is dropped: a video has no life without its mpv. The house audio stays silenced for as long as the play exists, hidden or not.
 - Leaving: dropping the play drops the `StreamFeed`, which closes its room connection.
 
 `ended`, `failed`, and `stopped` are final: mpv is gone and whatever it left in the terminal is settled, so the server can re-assert its own terminal modes (see "Terminal residue"). `message` is for the server's log, never shown raw.

@@ -10,7 +10,10 @@ use chrono::Utc;
 use late_core::models::user::TerminalImagesMode;
 use uuid::Uuid;
 
-use super::state::{LiveTicket, SetupInputs, WatchOutcome, WatchRequest, WatchSource};
+use super::state::{
+    LiveTicket, Player, SetupInputs, StreamSwitch, SwitchHint, WatchOutcome, WatchRequest,
+    WatchSource,
+};
 use crate::app::common::primitives::Banner;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::state::App;
@@ -53,20 +56,85 @@ pub(crate) fn watch(app: &mut App, request: WatchRequest) -> Watched {
     }
 }
 
-/// `▶ watch here` (or a bare `/watch`) in a live stream's room: the stream
-/// in the player, received by the paired CLI itself. A session whose CLI
-/// cannot play it gets one line pointing at the browser and nothing else:
-/// it either plays here or it does not.
-pub(crate) fn watch_stream(app: &mut App, room_id: Uuid) {
-    // The button is a toggle: pressed on the stream already open, it stops.
-    if app.video.stream_room() == Some(room_id) {
-        close(app);
+/// Who asked for a stream: the user, who is told when it cannot play, or
+/// the room coming on screen, which stays quiet about it.
+#[derive(Clone, Copy)]
+enum Asked {
+    Typed,
+    Auto,
+}
+
+/// A bare `/watch`, the session's stream switch. While a stream plays
+/// (seen in its room, or only heard from another) it stops it and turns
+/// the switch off: no stream room plays by itself until it is typed again.
+/// Typed in a live stream's room with nothing playing, it turns the switch
+/// on and plays that stream now.
+pub(crate) fn toggle_stream(app: &mut App, room_here: Option<Uuid>) {
+    match (app.video.playing_stream_room(), room_here) {
+        (Some(_), _) => {
+            close(app);
+            app.video.set_streams(StreamSwitch::Off);
+            app.banner = Some(Banner::info(
+                "Stream off. /watch in a live stream room turns it back on.",
+            ));
+        }
+        (None, Some(room_id)) => {
+            app.video.set_streams(StreamSwitch::On);
+            start_stream(app, room_id, Asked::Typed);
+        }
+        (None, None) => {
+            app.banner = Some(Banner::error(
+                "Usage: /watch @user, or /watch inside a live stream room",
+            ));
+        }
+    }
+}
+
+/// What the stream row tells this session about `/watch`: the same
+/// reading of the player and the gate that `toggle_stream` acts on.
+pub(crate) fn switch_hint(app: &App) -> SwitchHint {
+    match (app.video.playing_stream_room(), can_play_stream(app)) {
+        (Some(_), _) => SwitchHint::Stop,
+        (None, true) => SwitchHint::Play,
+        (None, false) => SwitchHint::Unavailable,
+    }
+}
+
+/// Every tick: the live stream room on screen (`drawn`, from the chat
+/// pane's last frame) plays its stream by itself, taking over from the
+/// stream of another room. Not with the switch off, not under a modal
+/// (a video, a setup box, help), not twice for a stream that is already
+/// open here, and not for a session that cannot play one.
+pub(crate) fn auto_watch(app: &mut App, drawn: Option<Uuid>) {
+    let Some(room_id) = app.video.may_auto_start(drawn) else {
+        return;
+    };
+    if app.video.stream_room() == Some(room_id)
+        || app.foreground_overlay_open()
+        || !can_play_stream(app)
+    {
         return;
     }
+    start_stream(app, room_id, Asked::Auto);
+    if app.video.stream_room() != Some(room_id) {
+        app.video.decline_auto(room_id);
+    }
+}
+
+/// Play `room_id`'s stream in the player, received by the paired CLI
+/// itself. A session whose CLI cannot play it gets one line pointing at
+/// the browser when it asked, and nothing else: it either plays here or it
+/// does not.
+fn start_stream(app: &mut App, room_id: Uuid, asked: Asked) {
+    let refuse = |app: &mut App, message: &str| match asked {
+        Asked::Typed => app.banner = Some(Banner::error(message)),
+        Asked::Auto => {}
+    };
     if !can_play_stream(app) {
-        app.banner = Some(Banner::error(
+        refuse(
+            app,
             "Can't play streams in this terminal. Watch in your browser with /watch @user.",
-        ));
+        );
         return;
     }
     let watcher_id = format!("cli-{}", app.presence.session_id());
@@ -77,7 +145,7 @@ pub(crate) fn watch_stream(app: &mut App, room_id: Uuid) {
     {
         Ok(Some(watch)) => watch,
         Ok(None) => {
-            app.banner = Some(Banner::error("This stream is not live right now."));
+            refuse(app, "This stream is not live right now.");
             return;
         }
         Err(error) => {
@@ -87,10 +155,16 @@ pub(crate) fn watch_stream(app: &mut App, room_id: Uuid) {
                 room_id = %room_id,
                 "failed to mint a stream watch ticket for the paired cli"
             );
-            app.banner = Some(Banner::error("Couldn't open the stream."));
+            refuse(app, "Couldn't open the stream.");
             return;
         }
     };
+    // A streamer in their own room is not played their own stream back
+    // unasked: it would be their sound again, a moment late.
+    match (asked, watch.streamer_id == app.user_id) {
+        (Asked::Auto, true) => return,
+        (Asked::Auto, false) | (Asked::Typed, _) => {}
+    }
     app.stream_service
         .note_viewer_in_room(room_id, app.user_id, &app.username);
     play(
@@ -195,6 +269,17 @@ pub(crate) fn close(app: &mut App) {
     }
 }
 
+/// Take the player off the page: Esc and `[x]` in it, a page change,
+/// another modal opening. A full-screen stream goes back to its room and
+/// plays on (`/watch` is what stops a stream), and one already there is
+/// left alone; anything else closes.
+pub(crate) fn dismiss(app: &mut App) {
+    let back_in_room = app.video.player_mut().is_some_and(Player::back_inline);
+    if !back_in_room && app.video.modal().is_some() {
+        close(app);
+    }
+}
+
 /// A key in the player, relayed to mpv while it is up.
 pub(crate) fn send_control(app: &mut App, control: VideoControl) {
     let Some(message) = app
@@ -210,9 +295,9 @@ pub(crate) fn send_control(app: &mut App, control: VideoControl) {
 /// After every draw: tell the CLI what the drawn player wants (a play, a
 /// move after `f` or a resize, a stop once it closed).
 pub(crate) fn sync(app: &mut App) {
-    // An inline stream lives while its room's pane draws it: switching
-    // rooms or pages ends the watch.
-    if app.video.inline_left_the_screen() {
+    // A stream that stopped playing and is not on screen has nothing left
+    // to say. One that plays stays: its picture is hidden instead.
+    if app.video.unseen_dead_stream() {
         close(app);
     }
     for message in app.video.cli_messages() {

@@ -113,7 +113,11 @@ fn live_stream_view(watch_url: &str) -> crate::app::stream::registry::LiveStream
 fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
     let url = "https://late.sh/live/abc123";
     let width = 80;
-    let line = stream_header_line(&live_stream_view(url), false, width).line;
+    let line = stream_header_line(
+        &live_stream_view(url),
+        crate::app::video::state::SwitchHint::Unavailable,
+        width,
+    );
     let text: String = line
         .spans
         .iter()
@@ -126,9 +130,46 @@ fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
     assert!(text.ends_with(&format!("{url} ")), "got {text:?}");
 }
 
+/// A session that can play the stream in its terminal is told what `/watch`
+/// does right now, ahead of the watch URL; in a row too tight for both it
+/// keeps the switch, not the link. A pending stream has nothing to switch.
+#[test]
+fn stream_header_says_what_watch_does_for_a_session_that_can_play() {
+    use crate::app::video::state::SwitchHint;
+    let url = "https://late.sh/live/abc123";
+    let text = |stream: &crate::app::stream::registry::LiveStreamView, switch, width| {
+        stream_header_line(stream, switch, width).to_string()
+    };
+    let stream = live_stream_view(url);
+
+    let playing = text(&stream, SwitchHint::Stop, 120);
+    assert!(
+        playing.ends_with(&format!("/watch to stop · watch: {url} ")),
+        "got {playing:?}"
+    );
+    let off = text(&stream, SwitchHint::Play, 120);
+    assert!(
+        off.ends_with(&format!("/watch to play · watch: {url} ")),
+        "got {off:?}"
+    );
+
+    let tight = text(&stream, SwitchHint::Stop, 50);
+    assert!(tight.ends_with("/watch to stop"), "got {tight:?}");
+    assert!(!tight.contains("watch:"), "got {tight:?}");
+
+    let mut pending = live_stream_view(url);
+    pending.live = false;
+    let waiting = text(&pending, SwitchHint::Play, 120);
+    assert!(!waiting.contains("/watch"), "got {waiting:?}");
+}
+
 #[test]
 fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
-    let line = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), false, 30).line;
+    let line = stream_header_line(
+        &live_stream_view("https://late.sh/live/abc123"),
+        crate::app::video::state::SwitchHint::Unavailable,
+        30,
+    );
     let text: String = line
         .spans
         .iter()
@@ -136,46 +177,6 @@ fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
         .collect();
 
     assert!(!text.contains("watch:"), "got {text:?}");
-}
-
-/// The button is the row's one action: it is there for a live stream, its
-/// recorded columns cover exactly the label (so a click on the URL beside
-/// it is not a click on the button), and a pending stream offers nothing.
-#[test]
-fn stream_header_offers_watch_here_only_once_the_stream_is_live() {
-    let row = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), false, 120);
-    let text: String = row
-        .line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    let cols = row.watch_button.expect("a live stream has the button");
-    let start = usize::from(cols.start);
-    let end = usize::from(cols.end);
-    let button: String = text
-        .chars()
-        .scan(0usize, |col, c| {
-            let at = *col;
-            *col += UnicodeWidthStr::width(c.to_string().as_str());
-            Some((at, c))
-        })
-        .filter(|(at, _)| (start..end).contains(at))
-        .map(|(_, c)| c)
-        .collect();
-    assert_eq!(button, STREAM_WATCH_BUTTON, "in {text:?}");
-
-    let mut pending = live_stream_view("");
-    pending.live = false;
-    let row = stream_header_line(&pending, false, 120);
-    assert!(row.watch_button.is_none());
-    let text: String = row
-        .line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    assert!(!text.contains(STREAM_WATCH_BUTTON), "got {text:?}");
 }
 
 #[test]
@@ -1399,8 +1400,10 @@ fn chat_view<'a>(
             mine_only: false,
         },
         work_state: None,
-        stream_watch_hit: None,
+        stream_room_drawn: None,
         stream_video: None,
+        stream_switch: crate::app::video::state::SwitchHint::Unavailable,
+        stream_playing: None,
         keep_composer_focused: false,
         composer_rect_slot: None,
         composer_viewport_top_slot: None,
@@ -3203,8 +3206,9 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 f,
                 area,
                 super::RoomHeader {
-                    watch_hit: None,
+                    drawn: None,
                     video: None,
+                    switch: crate::app::video::state::SwitchHint::Unavailable,
                     stream: None,
                     voice: None,
                     row: super::room_topic(&room).map(|text| super::TopicRow {
@@ -3247,8 +3251,9 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 f,
                 area,
                 super::RoomHeader {
-                    watch_hit: None,
+                    drawn: None,
                     video: None,
+                    switch: crate::app::video::state::SwitchHint::Unavailable,
                     stream: None,
                     voice: None,
                     row: super::room_topic(&room).map(|text| super::TopicRow {
@@ -3293,11 +3298,13 @@ fn watching_inline() -> crate::app::video::state::State {
 /// messages: a black rectangle as wide as the pane and at most three
 /// fifths of it tall, a rule under it, and the chat keeps the rest. The
 /// player hears exactly where the rectangle is (the CLI draws there), and
-/// the header's button now stops the watch.
+/// the frame records the live stream room it drew, which is what lets a
+/// stream start by itself.
 #[test]
 fn room_header_seats_an_inline_stream_above_the_messages() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     let video = watching_inline();
+    let drawn = std::cell::Cell::new(None);
     let stream = live_stream_view("https://late.sh/live/abc123");
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("term");
     let area = Rect::new(0, 0, 120, 40);
@@ -3308,8 +3315,9 @@ fn room_header_seats_an_inline_stream_above_the_messages() {
                 f,
                 area,
                 super::RoomHeader {
-                    watch_hit: None,
+                    drawn: Some(&drawn),
                     video: video.inline_slot(),
+                    switch: crate::app::video::state::SwitchHint::Unavailable,
                     stream: Some(&stream),
                     voice: None,
                     row: None,
@@ -3323,23 +3331,24 @@ fn room_header_seats_an_inline_stream_above_the_messages() {
     let slot = video.inline_slot().expect("inline");
     assert_eq!(slot.body(), Rect::new(0, 2, 120, 22));
     assert_eq!(remaining, Rect::new(0, 25, 120, 15));
-    assert!(!video.inline_left_the_screen());
+    assert_eq!(
+        drawn.get(),
+        Some(stream.room_id),
+        "where a stream may start"
+    );
 
     let buf = terminal.backend().buffer();
-    let header = row_text(buf, 0, 120);
-    assert!(header.contains(super::STREAM_STOP_BUTTON), "{header:?}");
-    assert!(!header.contains(super::STREAM_WATCH_BUTTON), "{header:?}");
     assert!(row_text(buf, 13, 120).contains("connecting…"));
     assert!(row_text(buf, 24, 120).starts_with('\u{2500}'));
 }
 
-/// A pane too short for a picture worth drawing gives the stream no rows,
-/// and the chat keeps them all, but the watch is still on the screen: it
-/// must not end because the terminal got small.
+/// A pane too short for a picture worth drawing gives the stream no rows
+/// and the chat keeps them all: the stream plays on with nothing to show.
 #[test]
-fn room_header_keeps_a_stream_alive_in_a_pane_too_short_for_it() {
+fn room_header_gives_a_stream_no_rows_in_a_pane_too_short_for_it() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
     let video = watching_inline();
+    let drawn = std::cell::Cell::new(None);
     let stream = live_stream_view("https://late.sh/live/abc123");
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("term");
     let area = Rect::new(0, 0, 80, 12);
@@ -3350,8 +3359,9 @@ fn room_header_keeps_a_stream_alive_in_a_pane_too_short_for_it() {
                 f,
                 area,
                 super::RoomHeader {
-                    watch_hit: None,
+                    drawn: Some(&drawn),
                     video: video.inline_slot(),
+                    switch: crate::app::video::state::SwitchHint::Unavailable,
                     stream: Some(&stream),
                     voice: None,
                     row: None,
@@ -3363,7 +3373,6 @@ fn room_header_keeps_a_stream_alive_in_a_pane_too_short_for_it() {
 
     assert_eq!(remaining, Rect::new(0, 2, 80, 10), "the header only");
     assert!(video.inline_slot().expect("inline").body().is_empty());
-    assert!(!video.inline_left_the_screen());
 }
 
 #[test]
@@ -3378,8 +3387,9 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 f,
                 area,
                 super::RoomHeader {
-                    watch_hit: None,
+                    drawn: None,
                     video: None,
+                    switch: crate::app::video::state::SwitchHint::Unavailable,
                     stream: None,
                     voice: None,
                     row: super::room_topic(&room).map(|text| super::TopicRow {
@@ -3419,17 +3429,32 @@ fn stream_rail_label_is_the_username_and_a_bracketed_watcher_count() {
     // The 24-column rail leaves a label 17 cells with jump keys hidden.
     const LABEL_MAX: usize = 17;
     let mut stream = live_stream("bug hunt", "https://late.sh/live/abc");
-    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat [3]");
+    assert_eq!(
+        super::stream_rail_label(&stream, false, LABEL_MAX),
+        "▶ mat [3]"
+    );
+    // The stream this session is playing says so: it may be heard from
+    // another room, and this row is where it is named.
+    assert_eq!(
+        super::stream_rail_label(&stream, true, LABEL_MAX),
+        "♪ mat [3]"
+    );
 
     // Zero watchers still shows the bracket, so the slot never jumps around.
     stream.watching = 0;
-    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat [0]");
+    assert_eq!(
+        super::stream_rail_label(&stream, false, LABEL_MAX),
+        "▶ mat [0]"
+    );
 
     // Pending: no media yet, so no count to stand behind. The marker keeps
     // the bracket so it cannot pass for a clipped row.
     stream.live = false;
     stream.watching = 2;
-    assert_eq!(super::stream_rail_label(&stream, LABEL_MAX), "▶ mat […]");
+    assert_eq!(
+        super::stream_rail_label(&stream, false, LABEL_MAX),
+        "▶ mat […]"
+    );
 }
 
 /// A username can run 32 characters against a 17-cell label budget. The
@@ -3443,18 +3468,18 @@ fn stream_rail_label_shortens_the_username_and_keeps_the_watcher_count() {
     stream.username = "averyverylongstreamername".to_string();
     stream.watching = 12;
 
-    let label = super::stream_rail_label(&stream, LABEL_MAX);
+    let label = super::stream_rail_label(&stream, false, LABEL_MAX);
     assert_eq!(label, "▶ averyvery… [12]");
     assert_eq!(UnicodeWidthStr::width(label.as_str()), LABEL_MAX);
 
     // Two cells fewer while jump keys are shown: still the whole bracket.
-    let label = super::stream_rail_label(&stream, LABEL_MAX - 2);
+    let label = super::stream_rail_label(&stream, false, LABEL_MAX - 2);
     assert_eq!(label, "▶ averyve… [12]");
 
     // Pending with a long name still reads as pending, not as clipped.
     stream.live = false;
     assert_eq!(
-        super::stream_rail_label(&stream, LABEL_MAX),
+        super::stream_rail_label(&stream, false, LABEL_MAX),
         "▶ averyveryl… […]"
     );
 }
@@ -3474,7 +3499,11 @@ fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
         REAL_WATCH_URL,
     );
 
-    let line = super::stream_header_line(&stream, false, WIDTH).line;
+    let line = super::stream_header_line(
+        &stream,
+        crate::app::video::state::SwitchHint::Unavailable,
+        WIDTH,
+    );
     let text = line.to_string();
     assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
     assert!(text.starts_with("● LIVE "), "{text:?}");
@@ -3493,50 +3522,41 @@ fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
 
 /// Below 73 columns the watcher count goes too: a link nobody can see is
 /// worse than a count nobody misses. That floor was 83 while ids were hex.
-/// From 74 the `▶ watch here` button (the row's one action) takes its 14
-/// cells first, so the count is back for good only from 87.
 #[test]
 fn stream_header_drops_the_watcher_count_before_the_watch_url() {
     const WIDTH: usize = 70;
     let stream = live_stream("bug hunt", REAL_WATCH_URL);
 
-    let line = super::stream_header_line(&stream, false, WIDTH).line;
+    let line = super::stream_header_line(
+        &stream,
+        crate::app::video::state::SwitchHint::Unavailable,
+        WIDTH,
+    );
     let text = line.to_string();
     assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
     assert!(!text.contains("watching"), "the count yielded: {text:?}");
     assert!(line.width() <= WIDTH, "{}", line.width());
 
     // One column higher than the floor the count needs, it comes back.
-    let roomy = super::stream_header_line(&stream, false, 73)
-        .line
-        .to_string();
+    let roomy = super::stream_header_line(
+        &stream,
+        crate::app::video::state::SwitchHint::Unavailable,
+        73,
+    )
+    .to_string();
     assert!(roomy.contains("· 3 watching"), "{roomy:?}");
     assert!(roomy.contains(REAL_WATCH_URL), "{roomy:?}");
-    assert!(!roomy.contains(super::STREAM_WATCH_BUTTON), "{roomy:?}");
-
-    // The button outranks the count: at 80 it is there and the count is not.
-    let eighty = super::stream_header_line(&stream, false, 80)
-        .line
-        .to_string();
-    assert!(eighty.contains(super::STREAM_WATCH_BUTTON), "{eighty:?}");
-    assert!(!eighty.contains("watching"), "{eighty:?}");
-    assert!(eighty.contains(REAL_WATCH_URL), "{eighty:?}");
-
-    // Both, with the link, from 87.
-    let wide = super::stream_header_line(&stream, false, 87)
-        .line
-        .to_string();
-    assert!(wide.contains(super::STREAM_WATCH_BUTTON), "{wide:?}");
-    assert!(wide.contains("· 3 watching"), "{wide:?}");
-    assert!(wide.contains(REAL_WATCH_URL), "{wide:?}");
 }
 
 #[test]
 fn stream_header_keeps_a_short_title_whole() {
     let stream = live_stream("bug hunt", "https://late.sh/live/abc");
-    let text = super::stream_header_line(&stream, false, 80)
-        .line
-        .to_string();
+    let text = super::stream_header_line(
+        &stream,
+        crate::app::video::state::SwitchHint::Unavailable,
+        80,
+    )
+    .to_string();
     assert!(text.contains("bug hunt"), "{text:?}");
     assert!(!text.contains('…'), "nothing to clip: {text:?}");
     assert!(
