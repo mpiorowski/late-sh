@@ -492,6 +492,13 @@ impl App {
         // the cursor moves up inside the visible window.
         self.chat.last_chat_hit_layout.set(None);
         self.leaderboard_page.clear_hit_regions();
+        // A modal over the page would sit under the picture the CLI draws,
+        // so the pane gives the stream no seat while one is up: its picture
+        // hides and it plays on (`video::state::Seat`).
+        let stream_video = self
+            .video
+            .inline_slot()
+            .filter(|_| !foreground_overlay_open);
 
         // Init theme and layout sync — preview settings-modal draft live while open.
         let artboard_disclaimer_visible = self.artboard_disclaimer_visible();
@@ -914,13 +921,7 @@ impl App {
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
             stream_room_drawn: Some(&self.chat.last_stream_room_drawn),
-            // A modal over the page would sit under the picture the CLI
-            // draws, so the pane gives the stream no seat while one is up:
-            // its picture hides and it plays on (`video::state::Seat`).
-            stream_video: self
-                .video
-                .inline_slot()
-                .filter(|_| !foreground_overlay_open),
+            stream_video,
             stream_switch,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
@@ -1101,13 +1102,7 @@ impl App {
             work_view,
             work_state: Some(&self.chat.work),
             stream_room_drawn: Some(&self.chat.last_stream_room_drawn),
-            // A modal over the page would sit under the picture the CLI
-            // draws, so the pane gives the stream no seat while one is up:
-            // its picture hides and it plays on (`video::state::Seat`).
-            stream_video: self
-                .video
-                .inline_slot()
-                .filter(|_| !foreground_overlay_open),
+            stream_video,
             stream_switch,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),

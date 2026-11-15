@@ -240,9 +240,10 @@ Cross-domain touchpoints:
    when the viewer sits in that stream room's voice channel: they already
    hear the voices through the terminal, so the page starts with its voices
    toggle off (one audio path per sound); the toggle still works. Every
-   other watch URL (the room header's nudge, the rail) is bare. `▶ watch
-   here` applies the same rule without a page: `cli_watch` tells the CLI
-   whether to play the room's voices (`voices`).
+   other watch URL (the room header's nudge, the rail) is bare, except the
+   one a stream played in the terminal offers when its play fails:
+   `cli_watch` applies the same rule to that URL and tells the CLI whether
+   to play the room's voices (`voices`).
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -372,9 +373,10 @@ Cross-domain touchpoints:
   with no half-registered stream left behind, an expired row does not block
   (expiry is read-time only), and lifting the ban restores `/golive`; the
   watch URL carries `?voices=off` only when asked.
-- `chat/ui_test.rs::stream_header_offers_watch_here_only_once_the_stream_is_live`:
-  the button is on the row for a live stream with its recorded columns
-  covering exactly the label, and absent while pending.
+- `chat/ui_test.rs::stream_header_says_what_watch_does_for_a_session_that_can_play`:
+  a live stream's row leads its right side with `/watch to stop` or
+  `/watch to play`, keeps that switch over the link in a row too tight for
+  both, and says nothing about `/watch` while pending.
 - `chat/state_internal_test.rs::bare_watch_toggles_streams_with_the_selected_rooms_live_stream`:
   a bare `/watch` always records the toggle, carrying the selected room
   only while its stream is live, and `/watch @user` stays the browser

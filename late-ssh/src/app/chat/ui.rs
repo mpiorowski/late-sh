@@ -4874,9 +4874,6 @@ fn stream_header_line(
         )
     });
 
-    // What the rest of the row may not eat into: the hint (its own trailing
-    // cell included) plus the two cells `row_with_hint` keeps between the two
-    // sides. Nothing to reserve when there is no hint to flush right.
     let status_width = status.width();
     let width_of = |spans: &[Span<'static>]| spans.iter().map(Span::width).sum::<usize>();
     let hint = match (switch, link.is_empty()) {
@@ -4894,6 +4891,9 @@ fn stream_header_line(
             }
         }
     };
+    // What the rest of the row may not eat into: the hint (its own trailing
+    // cell included) plus the two cells `row_with_hint` keeps between the two
+    // sides. Nothing to reserve when there is no hint to flush right.
     let hint_width = width_of(&hint);
     let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
     let watching = watching.filter(|count| status_width + count.width() + reserved <= width);

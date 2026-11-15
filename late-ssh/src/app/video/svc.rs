@@ -364,24 +364,29 @@ pub(crate) fn tick(app: &mut App, now: Instant, one_hz: bool) -> bool {
     let Some(player) = app.video.player_mut() else {
         return false;
     };
-    let (source, play_id) = (player.source().clone(), player.play_id());
+    // The source is cloned only for an outcome to log and count: this runs
+    // at the world tick's rate, and a live stream's source carries its
+    // ticket.
+    let play_id = player.play_id();
     if let Some(outcome) = player.expire(now) {
+        let source = player.source().clone();
         lost(&source, play_id, LostCause::Silent);
         record(app, &source, Some(play_id), outcome);
         return true;
     }
-    match (&source, one_hz) {
+    match (player.source(), one_hz) {
         (WatchSource::LiveStream(ticket), true) => {
             let live = app
                 .stream_service
                 .watch_heartbeat(&ticket.stream_id, &ticket.watcher_id);
             let ended = match live {
                 true => None,
-                false => app.video.player_mut().and_then(|player| player.end()),
+                false => player.end(),
             };
             // A stream that is over leaves nothing to look at: the player
             // goes, inline or full screen, and one line says why.
             if let Some(outcome) = ended {
+                let source = player.source().clone();
                 record(app, &source, Some(play_id), outcome);
                 close(app);
                 app.banner = Some(Banner::info("The stream ended."));

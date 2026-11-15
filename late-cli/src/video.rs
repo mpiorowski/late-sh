@@ -1230,24 +1230,21 @@ impl VideoPlayer {
     /// waits for `poll`. A stream whose picture is hidden gets it back
     /// here: a fresh mpv in `rect`, fed by the viewer that never left.
     pub(super) async fn place(&mut self, play_id: u64, rect: VideoRect) -> PlaceOutcome {
-        let hidden = match self.current_for(play_id) {
-            None => return PlaceOutcome::Unchanged,
-            Some(playback) => match &playback.show {
-                Show::Stream { screen: None, .. } => true,
-                Show::Stream {
-                    screen: Some(_), ..
-                }
-                | Show::Url(_) => false,
-            },
+        let Some(playback) = self.current_for(play_id) else {
+            return PlaceOutcome::Unchanged;
         };
-        if hidden {
-            return match self.show_picture(rect) {
-                Ok(()) => PlaceOutcome::Shown,
-                Err(failure) => PlaceOutcome::Failed(self.fail(failure)),
-            };
-        }
-        let Some(screen) = self.current.as_mut().and_then(Playback::screen_mut) else {
-            unreachable!("a play that is not hidden has a screen");
+        let screen = match &mut playback.show {
+            Show::Url(screen)
+            | Show::Stream {
+                screen: Some(screen),
+                ..
+            } => screen,
+            Show::Stream { screen: None, .. } => {
+                return match self.show_picture(rect) {
+                    Ok(()) => PlaceOutcome::Shown,
+                    Err(failure) => PlaceOutcome::Failed(self.fail(failure)),
+                };
+            }
         };
         if screen.rect == rect {
             return PlaceOutcome::Unchanged;
@@ -1483,8 +1480,7 @@ impl VideoPlayer {
                     rect,
                     tty,
                 ));
-                let (screen, _) = self.spawn_mpv(args, Stdio::null(), rect, tty)?;
-                Ok(Show::Url(screen))
+                Ok(Show::Url(self.spawn_mpv(args, Stdio::null(), rect, tty)?))
             }
             VideoSource::Stream(ticket) => {
                 let (screen, canvas, to_mpv) = self.spawn_stream_screen(rect)?;
@@ -1508,9 +1504,10 @@ impl VideoPlayer {
             return Err(VideoFailure::RectTooSmall);
         };
         let args = mpv_args(&self.launch(MpvInput::Frames(canvas), rect, tty));
-        match self.spawn_mpv(args, Stdio::piped(), rect, tty)? {
-            (screen, Some(to_mpv)) => Ok((screen, canvas, to_mpv)),
-            (screen, None) => {
+        let mut screen = self.spawn_mpv(args, Stdio::piped(), rect, tty)?;
+        match screen.child.stdin.take() {
+            Some(to_mpv) => Ok((screen, canvas, to_mpv)),
+            None => {
                 screen.kill(&self.tools.ipc_path);
                 Err(VideoFailure::Spawn("mpv has no stdin pipe".to_string()))
             }
@@ -1536,15 +1533,15 @@ impl VideoPlayer {
     }
 
     /// Start mpv on `args`. Its stdin is `stdin` (the frame pipe for a
-    /// stream, handed back; null for a URL), its stdout the relay's pipe,
-    /// its stderr the video log.
+    /// stream, left on the child for the caller to take; null for a URL),
+    /// its stdout the relay's pipe, its stderr the video log.
     fn spawn_mpv(
         &self,
         args: Vec<OsString>,
         stdin: Stdio,
         rect: VideoRect,
         tty: TtySize,
-    ) -> Result<(Screen, Option<ChildStdin>), VideoFailure> {
+    ) -> Result<Screen, VideoFailure> {
         match fs::remove_file(&self.tools.ipc_path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -1575,20 +1572,16 @@ impl VideoPlayer {
             let _ = child.wait();
             return Err(VideoFailure::Spawn("mpv has no stdout pipe".to_string()));
         };
-        let to_mpv = child.stdin.take();
-        Ok((
-            Screen {
-                rect,
-                tty,
-                child,
-                relay: Some(spawn_relay(from_mpv)),
-                ipc: IpcLink::Waiting {
-                    since: Instant::now(),
-                },
-                pending_place: None,
+        Ok(Screen {
+            rect,
+            tty,
+            child,
+            relay: Some(spawn_relay(from_mpv)),
+            ipc: IpcLink::Waiting {
+                since: Instant::now(),
             },
-            to_mpv,
-        ))
+            pending_place: None,
+        })
     }
 
     fn take_and_kill(&mut self) -> Option<Gone> {

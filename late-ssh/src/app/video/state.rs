@@ -1,10 +1,11 @@
 //! The watch modal: a YouTube video (a News story, or a link in a chat
 //! message) or a live stream (inline in its room's pane) played inside the
 //! user's own terminal by their paired CLI's `mpv`, or, when their setup
-//! cannot play a video, the setup box naming what is missing. Pure state: the player holds the play as the CLI last reported
-//! it and the rectangle its last draw reserved; `sync` turns that into the
-//! pair messages the CLI needs, and `svc.rs` sends them. Not a frame of
-//! video passes through the server.
+//! cannot play a video, the setup box naming what is missing. Pure state:
+//! the player holds the play as the CLI last reported it and the rectangle
+//! its last draw reserved; `sync` turns that into the pair messages the CLI
+//! needs, and `svc.rs` sends them. Not a frame of video passes through the
+//! server.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -604,8 +605,9 @@ impl Player {
         self.status
     }
 
-    /// `f`: Window and Full. The next draw's body differs, and `sync`
-    /// turns that into a `video_place`.
+    /// `f`: Window and Full, or for a live stream its room and full screen.
+    /// The next draw's body differs, and `sync` turns that into a
+    /// `video_place`.
     pub(crate) fn toggle_size(&mut self) {
         match self.source {
             WatchSource::NewsArticle(_) | WatchSource::ChatLink => {

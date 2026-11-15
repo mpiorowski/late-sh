@@ -4119,9 +4119,9 @@ impl App {
 
         if let Some(request) = self.chat.take_requested_watch() {
             changed = true;
-            let viewer_voice_channel = self.voice.current_room(self.user_id);
             match request {
                 crate::app::chat::state::StreamWatchRequest::User(username) => {
+                    let viewer_voice_channel = self.voice.current_room(self.user_id);
                     match self
                         .stream_service
                         .watch_url_for_username(&username, viewer_voice_channel)

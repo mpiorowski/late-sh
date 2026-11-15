@@ -645,10 +645,11 @@ impl StreamService {
     }
 
     /// A stream room playing its stream in the terminal: what the paired
-    /// CLI needs to receive the room's stream itself and play it there. `None` unless the stream is live. The ticket is the watch
-    /// page's (`watch_grant`), under this session's `watcher_id`, and the
-    /// voices rule is `/watch @user`'s: a viewer already in the room's
-    /// voice channel gets the stream's own audio only.
+    /// CLI needs to receive the room's stream itself and play it there.
+    /// `None` unless the stream is live. The ticket is the watch page's
+    /// (`watch_grant`), under this session's `watcher_id`, and the voices
+    /// rule is `/watch @user`'s: a viewer already in the room's voice
+    /// channel gets the stream's own audio only.
     pub fn cli_watch(
         &self,
         room_id: Uuid,

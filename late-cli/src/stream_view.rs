@@ -54,11 +54,11 @@ pub(super) struct Canvas {
 
 /// Where a frame lands on the canvas: scaled to fit, centered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Placement {
-    pub(super) x: u32,
-    pub(super) y: u32,
-    pub(super) width: u32,
-    pub(super) height: u32,
+struct Placement {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 impl Canvas {
@@ -83,7 +83,7 @@ impl Canvas {
     /// Where a `src_width` by `src_height` frame goes: as large as fits with
     /// its aspect kept, centered, size and offset even so the chroma planes
     /// line up.
-    pub(super) fn fit(self, src_width: u32, src_height: u32) -> Placement {
+    fn fit(self, src_width: u32, src_height: u32) -> Placement {
         let (width, height) =
             fit_within(src_width.max(1), src_height.max(1), self.width, self.height);
         let (width, height) = ((width & !1).max(2), (height & !1).max(2));
@@ -96,7 +96,7 @@ impl Canvas {
     }
 
     /// One black frame: the Y plane, then U, then V.
-    pub(super) fn black(self) -> Vec<u8> {
+    fn black(self) -> Vec<u8> {
         let luma = (self.width * self.height) as usize;
         let mut frame = vec![BLACK_CHROMA; luma + luma / 2];
         frame[..luma].fill(BLACK_LUMA);
@@ -106,7 +106,7 @@ impl Canvas {
     /// Copy a scaled frame's three planes onto `frame` (a canvas-sized I420
     /// buffer) at `place`. Each source plane may be wider than its picture
     /// (`stride`).
-    pub(super) fn blit(
+    fn blit(
         self,
         frame: &mut [u8],
         place: Placement,
@@ -157,7 +157,7 @@ fn blit_plane(dst: &mut [u8], dst_stride: u32, place: Placement, src: &[u8], src
 
 /// Whether the viewer plays a remote audio track: the stream's own audio
 /// always, the room's voices only when the ticket asks for them.
-pub(super) fn keep_audio(voices: bool, participant_identity: &str) -> bool {
+fn keep_audio(voices: bool, participant_identity: &str) -> bool {
     voices || participant_identity.starts_with(STREAM_PUBLISHER_PREFIX)
 }
 
@@ -300,9 +300,6 @@ mod feed {
                         }
                     }
                     Some(FeedCommand::ShowPicture { canvas, to_mpv }) => {
-                        if let Some(old) = pump.take() {
-                            old.abort();
-                        }
                         let to_writer = spawn_writer(to_mpv);
                         for publication in video_publications(&room) {
                             match publication.track() {
