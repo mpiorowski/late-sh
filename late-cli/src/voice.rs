@@ -349,6 +349,7 @@ async fn connect_voice_media(
 /// OBS ingress, `stream-{user_id}`): its audio is the program, everything
 /// else is a human mic. The voice runtime drops it and the stream viewer
 /// (`stream_view.rs`) is the one that plays it.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 pub(super) const STREAM_PUBLISHER_PREFIX: &str = "stream-";
 
 /// Whether the audio-only voice runtime should stay subscribed to a remote

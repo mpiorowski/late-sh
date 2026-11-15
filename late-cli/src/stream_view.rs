@@ -16,7 +16,9 @@ const CANVAS_MAX_HEIGHT: u32 = 1080;
 /// The smallest side worth scaling a frame to.
 const CANVAS_MIN_SIDE: u32 = 16;
 /// Video black in limited-range YUV.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 const BLACK_LUMA: u8 = 16;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 const BLACK_CHROMA: u8 = 128;
 
 /// What the server hands the CLI to watch a stream.
@@ -50,6 +52,7 @@ pub(super) struct Canvas {
 }
 
 /// Where a frame lands on the canvas: scaled to fit, centered.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Placement {
     x: u32,
@@ -76,7 +79,12 @@ impl Canvas {
             false => None,
         }
     }
+}
 
+/// Composing a frame onto the canvas, for the platforms with a viewer to
+/// feed (`feed`); the rest only size the canvas.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
+impl Canvas {
     /// Where a `src_width` by `src_height` frame goes: as large as fits with
     /// its aspect kept, centered, size and offset even so the chroma planes
     /// line up.
@@ -143,6 +151,7 @@ fn fit_within(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32,
     (fit_width as u32, fit_height as u32)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 fn blit_plane(dst: &mut [u8], dst_stride: u32, place: Placement, src: &[u8], src_stride: u32) {
     let width = place.width as usize;
     for row in 0..place.height as usize {
@@ -154,6 +163,7 @@ fn blit_plane(dst: &mut [u8], dst_stride: u32, place: Placement, src: &[u8], src
 
 /// Whether the viewer plays a remote audio track: the stream's own audio
 /// always, the room's voices only when the ticket asks for them.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 fn keep_audio(voices: bool, participant_identity: &str) -> bool {
     voices || participant_identity.starts_with(super::voice::STREAM_PUBLISHER_PREFIX)
 }
@@ -491,6 +501,8 @@ mod feed {
         }
 
         pub(in super::super) fn toggle_mute(&self) {}
+
+        pub(in super::super) fn set_voices(&self, _: bool) {}
 
         pub(in super::super) fn hide_picture(&self) {}
 
