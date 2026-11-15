@@ -34,7 +34,7 @@ fn draw_player(frame: &mut Frame, area: Rect, player: &Player) {
     frame.render_widget(Clear, layout.popup);
 
     match player.size() {
-        WatchSize::Window => {
+        WatchSize::Small => {
             frame.render_widget(frame_block(" Watching "), layout.popup);
             draw_close(frame, layout.close);
             if !layout.header.is_empty() {

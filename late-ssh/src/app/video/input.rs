@@ -4,7 +4,8 @@
 //! included, is swallowed, so nothing reaches the page under the video.
 //! A live stream is only here while full screen (inline in its room it is
 //! no modal, and this module never sees a key): `f`, Esc and `[x]` send it
-//! back, still playing.
+//! back, still playing. The one thing an inline stream answers is a click
+//! on its picture (`click_inline_stream`).
 
 use ratatui::layout::Position;
 
@@ -71,6 +72,20 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         }
         _ => {}
     }
+}
+
+/// A click at 0-based `x`, `y` on a stream playing inline in its room
+/// takes it full screen (`f` or Esc there comes back). True when the click
+/// was on the picture.
+pub(crate) fn click_inline_stream(app: &mut App, x: u16, y: u16) -> bool {
+    let on_picture = app
+        .video
+        .inline_slot()
+        .is_some_and(|slot| slot.body().contains(Position::new(x, y)));
+    if on_picture && let Some(player) = app.video.player_mut() {
+        player.toggle_size();
+    }
+    on_picture
 }
 
 fn copy_link(app: &mut App) {

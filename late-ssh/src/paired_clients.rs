@@ -131,6 +131,12 @@ pub enum PairControlMessage {
     VideoHide {
         play_id: u64,
     },
+    /// Whether a playing live stream plays the room's voices changed: the
+    /// viewer joined (`false`) or left (`true`) the stream's voice channel.
+    VideoVoices {
+        play_id: u64,
+        voices: bool,
+    },
     VideoStop {
         play_id: u64,
     },

@@ -345,6 +345,12 @@ async fn connect_voice_media(
     })
 }
 
+/// A stream publisher's LiveKit identity prefix (the go-live console or the
+/// OBS ingress, `stream-{user_id}`): its audio is the program, everything
+/// else is a human mic. The voice runtime drops it and the stream viewer
+/// (`stream_view.rs`) is the one that plays it.
+pub(super) const STREAM_PUBLISHER_PREFIX: &str = "stream-";
+
 /// Whether the audio-only voice runtime should stay subscribed to a remote
 /// audio track. CLI voice plays human microphones only: program audio (the
 /// OBS ingress mix, the console's screen-share audio) belongs to the watch
@@ -355,7 +361,8 @@ async fn connect_voice_media(
 /// own `stream-{user_id}` publisher echoing back.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn keep_remote_audio(participant_identity: &str, source: TrackSource) -> bool {
-    !participant_identity.starts_with("stream-") && matches!(source, TrackSource::Microphone)
+    !participant_identity.starts_with(STREAM_PUBLISHER_PREFIX)
+        && matches!(source, TrackSource::Microphone)
 }
 
 #[cfg(all(

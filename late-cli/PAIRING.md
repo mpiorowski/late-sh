@@ -33,7 +33,6 @@ Client to server:
   "ssh_mode": "native",
   "platform": "linux",
   "capabilities": ["clipboard_image", "youtube", "voice", "open_url", "video", "video_stream"],
-  "video_blockers": ["not_kitty", "no_mpv"],
   "muted": false,
   "volume_percent": 30
 }
@@ -113,7 +112,7 @@ Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
 - `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below), and `video_stream` when nothing but `no_ytdlp` blocks it: a live stream needs everything a video does except yt-dlp (`VIDEO.md`, "Live streams"). `reconnect` is appended in native mode only, the one mode that can redial on its own.
-- `video_blockers`: present exactly when `video` is not in `capabilities`; every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
+- `video_blockers`: present exactly when `video` is not in `capabilities` (so not in the example above; a terminal without kitty graphics or mpv would send `"video_blockers": ["not_kitty", "no_mpv"]` and neither video capability); every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.

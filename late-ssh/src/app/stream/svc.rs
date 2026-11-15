@@ -665,6 +665,7 @@ impl StreamService {
         let Some(ticket) = self.watch_grant(&view.stream_id, watcher_id)? else {
             return Ok(None);
         };
+        let voices = cli_plays_voices(&view, viewer_voice_channel);
         Ok(Some(CliWatch {
             stream_id: view.stream_id,
             streamer_id: view.user_id,
@@ -673,8 +674,18 @@ impl StreamService {
             watch_url,
             livekit_url: ticket.url,
             token: ticket.token,
-            voices: viewer_voice_channel != Some(view.voice_channel_id),
+            voices,
         }))
+    }
+
+    /// Whether the CLI playing `room_id`'s stream plays the room's voices
+    /// now, for a play already running: the viewer may have joined or left
+    /// the stream's voice channel since `cli_watch`. `None` once the room
+    /// has no stream.
+    pub fn cli_voices(&self, room_id: Uuid, viewer_voice_channel: Option<Uuid>) -> Option<bool> {
+        let snapshot = self.registry.snapshot();
+        let view = snapshot.for_room(room_id)?;
+        Some(cli_plays_voices(view, viewer_voice_channel))
     }
 
     fn watch_url_for_view(
@@ -685,11 +696,7 @@ impl StreamService {
         if !view.live {
             return None;
         }
-        let voices = if viewer_voice_channel == Some(view.voice_channel_id) {
-            WatchPageVoices::Off
-        } else {
-            WatchPageVoices::On
-        };
+        let voices = watch_voices(view, viewer_voice_channel);
         Some(watch_page_url(&self.web_url, &view.stream_id, voices))
     }
 
@@ -768,6 +775,31 @@ pub struct CliWatch {
 pub(super) enum WatchPageVoices {
     On,
     Off,
+}
+
+/// The one rule for whether a stream's viewer gets the room's voices with
+/// it, on the watch page and in the CLI alike: not while they sit in the
+/// stream's voice channel, where the terminal already plays them (one audio
+/// path per sound).
+pub(super) fn watch_voices(
+    view: &super::registry::LiveStreamView,
+    viewer_voice_channel: Option<Uuid>,
+) -> WatchPageVoices {
+    match viewer_voice_channel == Some(view.voice_channel_id) {
+        true => WatchPageVoices::Off,
+        false => WatchPageVoices::On,
+    }
+}
+
+/// `watch_voices` as the flag the CLI is sent.
+pub(super) fn cli_plays_voices(
+    view: &super::registry::LiveStreamView,
+    viewer_voice_channel: Option<Uuid>,
+) -> bool {
+    match watch_voices(view, viewer_voice_channel) {
+        WatchPageVoices::On => true,
+        WatchPageVoices::Off => false,
+    }
 }
 
 pub(super) fn watch_page_url(web_url: &str, stream_id: &str, voices: WatchPageVoices) -> String {

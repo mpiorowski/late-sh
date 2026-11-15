@@ -2709,7 +2709,8 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if app.on_home() && !chat_scroll_clicks_blocked(app) {
         crate::app::zen::input::focus_home_tile_at(app, x, y);
     }
-    if !chat_scroll_clicks_blocked(app) && handle_stream_video_click(app, x, y) {
+    if !chat_scroll_clicks_blocked(app) && crate::app::video::input::click_inline_stream(app, x, y)
+    {
         return true;
     }
     if handle_chat_composer_click(app, screen, x, y) {
@@ -2759,19 +2760,6 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         }
         _ => false,
     }
-}
-
-/// A click on a stream playing inline in its room takes it full screen
-/// (`f` or Esc there comes back).
-fn handle_stream_video_click(app: &mut App, x: u16, y: u16) -> bool {
-    let on_picture = app
-        .video
-        .inline_slot()
-        .is_some_and(|slot| slot.body().contains(ratatui::layout::Position { x, y }));
-    if on_picture && let Some(player) = app.video.player_mut() {
-        player.toggle_size();
-    }
-    on_picture
 }
 
 /// Click inside the chat composer bar. A double-click enters compose mode,

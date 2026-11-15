@@ -1209,10 +1209,12 @@ impl App {
     /// paired CLI's mpv paints the watch player's rectangle whatever the
     /// TUI draws under it, and the key that drops a screensaver would never
     /// reach the player. A video outlasts the idle limit without a key, so
-    /// the screensaver waits for the modal to close; the 1Hz sync brings it
-    /// up then.
+    /// the screensaver waits for it to leave the screen (the modal closed,
+    /// or a stream's room no longer drawn); the 1Hz sync brings it up then.
+    /// A stream only heard has no picture to fight and does not hold it
+    /// back.
     fn screensaver_due(&self) -> bool {
-        self.away && !self.video.is_open()
+        self.away && !self.video.on_screen()
     }
 
     pub fn skip_splash_for_tests(&mut self) {

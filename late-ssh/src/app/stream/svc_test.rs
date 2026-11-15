@@ -174,3 +174,40 @@ fn watch_page_url_asks_for_voices_off_only_on_request() {
         "https://late.test/live/abc_-1?voices=off"
     );
 }
+
+/// One rule decides the room's voices for a stream's viewer, on the watch
+/// page and in the CLI alike: sitting in the stream's own voice channel
+/// they already hear them, anywhere else (or nowhere) the stream brings
+/// them.
+#[test]
+fn a_viewer_in_the_streams_voice_channel_gets_no_voices_with_the_stream() {
+    use crate::app::stream::registry::LiveStreamView;
+    use crate::app::stream::svc::{WatchPageVoices, cli_plays_voices, watch_voices};
+
+    let view = LiveStreamView {
+        user_id: uuid::Uuid::now_v7(),
+        username: "mat".to_string(),
+        title: "late night rust".to_string(),
+        room_id: uuid::Uuid::now_v7(),
+        voice_channel_id: uuid::Uuid::now_v7(),
+        stream_id: "abc_-1".to_string(),
+        live: true,
+        went_live_at: None,
+        watching: 0,
+        watch_url: String::new(),
+    };
+    let elsewhere = uuid::Uuid::now_v7();
+
+    assert_eq!(
+        watch_voices(&view, Some(view.voice_channel_id)),
+        WatchPageVoices::Off
+    );
+    assert!(!cli_plays_voices(&view, Some(view.voice_channel_id)));
+    for viewer_voice_channel in [None, Some(elsewhere)] {
+        assert_eq!(
+            watch_voices(&view, viewer_voice_channel),
+            WatchPageVoices::On
+        );
+        assert!(cli_plays_voices(&view, viewer_voice_channel));
+    }
+}

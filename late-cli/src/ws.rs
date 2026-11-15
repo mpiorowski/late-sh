@@ -169,6 +169,12 @@ enum PairControlMessage {
     VideoHide {
         play_id: u64,
     },
+    /// Whether a playing live stream plays the room's voices too: the
+    /// viewer left (`true`) or joined (`false`) the stream's voice channel.
+    VideoVoices {
+        play_id: u64,
+        voices: bool,
+    },
     VideoStop {
         play_id: u64,
     },
@@ -1245,7 +1251,7 @@ async fn handle_pair_control(
             };
             match video.place(play_id, rect).await {
                 PlaceOutcome::Moved => info!(play_id, ?rect, "moved video"),
-                PlaceOutcome::Shown => info!(play_id, ?rect, "showing the stream's picture again"),
+                PlaceOutcome::Shown => info!(play_id, ?rect, "drawing the stream in a fresh mpv"),
                 PlaceOutcome::Deferred => info!(play_id, ?rect, "video move waits for mpv"),
                 PlaceOutcome::Unchanged => {}
                 PlaceOutcome::Failed(update) => report_video(ws, update).await?,
@@ -1268,6 +1274,11 @@ async fn handle_pair_control(
                 }
             }
             silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoVoices { play_id, voices } => {
+            info!(play_id, voices, "stream voices changed");
+            video.set_voices(play_id, voices);
             Ok(false)
         }
         PairControlMessage::VideoStop { play_id } => {
@@ -1511,6 +1522,7 @@ fn apply_audio_pair_control(
         | PairControlMessage::VideoPlace { .. }
         | PairControlMessage::VideoControl { .. }
         | PairControlMessage::VideoHide { .. }
+        | PairControlMessage::VideoVoices { .. }
         | PairControlMessage::VideoStop { .. }
         | PairControlMessage::Reconnect { .. } => {}
     }

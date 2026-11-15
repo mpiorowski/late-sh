@@ -50,7 +50,9 @@ Owned by this domain:
 Out of scope (deliberate v1 boundaries):
 - Viewer talk-back / viewer mics, general browser voice rooms, recording,
   past-streams pages, quality settings, multi-presenter, web-side chat.
-- Routing stream media into the CLI audio path (the stream lives in a page).
+- Mixing stream media into CLI voice: the voice runtime plays human mics
+  only. A stream's picture and program audio play on the watch page, or in
+  the terminal through the paired CLI's own stream viewer (item 3 below).
 - A public `late.sh/live` index. Access is **unlisted, not public, not
   authed**: watch URLs carry a random per-stream id, shown only in-app,
   dead when the stream ends.
@@ -183,7 +185,11 @@ Cross-domain touchpoints:
   `late-cli/VIDEO.md`, "Live streams"): no browser, and no webview, since
   WebKitGTK ships without WebRTC. While the player is up `video::svc::tick`
   calls `watch_heartbeat` once a second, which keeps the viewer in the
-  watcher count and closes the player when the stream is gone. Leaving the
+  watcher count and closes the player when the stream is gone. The same
+  second asks `cli_voices` whether the room's voices still belong in the
+  stream: a viewer who joins or leaves the stream's voice channel mid-play
+  gets `PairControlMessage::VideoVoices`, so they never hear the room twice
+  or not at all. Leaving the
   room, or opening a modal over it, only hides the picture
   (`PairControlMessage::VideoHide`): the stream plays on, heard, and the
   viewer still counts as watching. A session whose CLI cannot play it (no
@@ -197,8 +203,10 @@ Cross-domain touchpoints:
   non-`stream-*` identities play. Any `stream-*` publisher (OBS ingress,
   go-live console) is program audio whatever source label it carries, since
   the ingress label may not survive transcoding-off passthrough. One audio
-  path per sound: program audio lives on the watch page; CLI voice carries
-  human voices; a streamer talks through CLI voice like everyone else.
+  path per sound: program audio lives on the watch page or in the CLI's
+  stream viewer (`late-cli/src/stream_view.rs`, which shares the
+  `stream-` prefix constant with this rule); CLI voice carries human
+  voices; a streamer talks through CLI voice like everyone else.
 - `main.rs`: service construction and the 5s sweeper task.
 
 ## 3. Lifecycle
@@ -243,7 +251,9 @@ Cross-domain touchpoints:
    other watch URL (the room header's nudge, the rail) is bare, except the
    one a stream played in the terminal offers when its play fails:
    `cli_watch` applies the same rule to that URL and tells the CLI whether
-   to play the room's voices (`voices`).
+   to play the room's voices (`voices`). The rule is written once
+   (`watch_voices`), and `cli_voices` reads it again every second of a
+   play, since the viewer can join or leave voice while watching.
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -330,8 +340,9 @@ Cross-domain touchpoints:
    open a mic.
 5. **Voice is CLI-only, zero exceptions.** The publish grant carries
    `screen_share`/`screen_share_audio` only; a streamer talks through CLI
-   voice like everyone else (macOS included). One audio path per sound: program audio lives on the watch
-   page, voices live in CLI voice; see `../voice/CONTEXT.md` §7/§10.
+   voice like everyone else (macOS included). One audio path per sound:
+   program audio lives on the watch page or in the CLI's stream viewer,
+   voices live in CLI voice; see `../voice/CONTEXT.md` §7/§10.
 
 ## 5. Testing
 
@@ -393,8 +404,10 @@ Cross-domain touchpoints:
   cell, and a short pane that draws no picture;
   `stream_rail_label_is_the_username_and_a_bracketed_watcher_count` covers
   the `♪` marker.
-- `late-cli/src/ws_test.rs`: `video_play_stream` and `video_hide`
-  deserialize from their wire names. `late-cli/src/video_test.rs`: the mpv command line for a stream,
+- `stream/svc_test.rs::a_viewer_in_the_streams_voice_channel_gets_no_voices_with_the_stream`:
+  the one voices rule, for the page and the CLI.
+- `late-cli/src/ws_test.rs`: `video_play_stream`, `video_hide` and
+  `video_voices` deserialize from their wire names. `late-cli/src/video_test.rs`: the mpv command line for a stream,
   and `video_stream` needing everything but yt-dlp.
   `late-cli/src/stream_view_test.rs`: the canvas, the fit, the composed
   frame, and the voices rule.

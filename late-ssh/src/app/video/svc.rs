@@ -358,7 +358,9 @@ pub(crate) fn apply_report(app: &mut App, play_id: u64, report: &VideoReport) {
 /// The world tick: a play the CLI went quiet on is lost, and a live
 /// stream's player heartbeats once a second, which keeps this viewer in the
 /// stream's watcher count and is how the player learns the stream is over.
-/// True while a player is up, once a second, so a status that changed
+/// The same second tells the CLI when the viewer joined or left the
+/// stream's voice channel, so the room's voices never play twice or not at
+/// all. True while a player is up, once a second, so a status that changed
 /// outside a draw (a send that reached nobody) repaints.
 pub(crate) fn tick(app: &mut App, now: Instant, one_hz: bool) -> bool {
     let Some(player) = app.video.player_mut() else {
@@ -379,17 +381,26 @@ pub(crate) fn tick(app: &mut App, now: Instant, one_hz: bool) -> bool {
             let live = app
                 .stream_service
                 .watch_heartbeat(&ticket.stream_id, &ticket.watcher_id);
-            let ended = match live {
-                true => None,
-                false => player.end(),
-            };
-            // A stream that is over leaves nothing to look at: the player
-            // goes, inline or full screen, and one line says why.
-            if let Some(outcome) = ended {
-                let source = player.source().clone();
-                record(app, &source, Some(play_id), outcome);
-                close(app);
-                app.banner = Some(Banner::info("The stream ended."));
+            let voices = app
+                .stream_service
+                .cli_voices(ticket.room_id, app.voice.current_room(app.user_id));
+            match (live, voices) {
+                (true, Some(voices)) => {
+                    if let Some(message) = player.set_voices(voices) {
+                        deliver(app, message);
+                    }
+                }
+                (true, None) => {}
+                // A stream that is over leaves nothing to look at: the
+                // player goes, inline or full screen, and one line says why.
+                (false, _) => {
+                    if let Some(outcome) = player.end() {
+                        let source = player.source().clone();
+                        record(app, &source, Some(play_id), outcome);
+                        close(app);
+                        app.banner = Some(Banner::info("The stream ended."));
+                    }
+                }
             }
         }
         (WatchSource::LiveStream(_), false)

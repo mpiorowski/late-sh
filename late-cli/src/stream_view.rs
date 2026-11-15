@@ -18,9 +18,6 @@ const CANVAS_MIN_SIDE: u32 = 16;
 /// Video black in limited-range YUV.
 const BLACK_LUMA: u8 = 16;
 const BLACK_CHROMA: u8 = 128;
-/// A stream publisher's LiveKit identity (the go-live console or the OBS
-/// ingress): its audio is the program, everything else is a human mic.
-const STREAM_PUBLISHER_PREFIX: &str = "stream-";
 
 /// What the server hands the CLI to watch a stream.
 #[derive(Clone, PartialEq, Eq)]
@@ -158,7 +155,7 @@ fn blit_plane(dst: &mut [u8], dst_stride: u32, place: Placement, src: &[u8], src
 /// Whether the viewer plays a remote audio track: the stream's own audio
 /// always, the room's voices only when the ticket asks for them.
 fn keep_audio(voices: bool, participant_identity: &str) -> bool {
-    voices || participant_identity.starts_with(STREAM_PUBLISHER_PREFIX)
+    voices || participant_identity.starts_with(super::voice::STREAM_PUBLISHER_PREFIX)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -183,6 +180,7 @@ mod feed {
 
     enum FeedCommand {
         ToggleMute,
+        SetVoices(bool),
         HidePicture,
         ShowPicture { canvas: Canvas, to_mpv: ChildStdin },
     }
@@ -207,8 +205,9 @@ mod feed {
             let failure = Arc::new(Mutex::new(None));
             let task_failure = Arc::clone(&failure);
             tokio::spawn(async move {
+                // Not logged here: `VideoPlayer::poll` reports the reason and
+                // the pair loop logs it with the play it belongs to.
                 if let Err(reason) = run(ticket, canvas, to_mpv, command_rx).await {
-                    warn!(error = %reason, "stream viewer stopped");
                     *task_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason);
                 }
             });
@@ -222,6 +221,13 @@ mod feed {
             let _ = self.commands.send(FeedCommand::ToggleMute);
         }
 
+        /// Play the room's voices too, or only the stream's own audio: the
+        /// viewer left or joined the stream's voice channel, where the voice
+        /// runtime plays them.
+        pub(in super::super) fn set_voices(&self, voices: bool) {
+            let _ = self.commands.send(FeedCommand::SetVoices(voices));
+        }
+
         /// Stop receiving the picture: the pipe to mpv closes and the video
         /// track is unsubscribed, so a stream listened to costs no video
         /// bandwidth or decoding. The sound plays on.
@@ -229,7 +235,8 @@ mod feed {
             let _ = self.commands.send(FeedCommand::HidePicture);
         }
 
-        /// Receive the picture again, onto `canvas` and into a new mpv.
+        /// Receive the picture onto `canvas` and into a new mpv: back from
+        /// hiding, or at a new size.
         pub(in super::super) fn show_picture(&self, canvas: Canvas, to_mpv: ChildStdin) {
             let _ = self
                 .commands
@@ -280,6 +287,7 @@ mod feed {
 
         // Where the picture goes; `None` while it is hidden.
         let mut picture = Some((canvas, spawn_writer(to_mpv)));
+        let mut voices = ticket.voices;
         let mut muted = false;
         let mut pump: Option<tokio::task::JoinHandle<()>> = None;
         let outcome = loop {
@@ -288,6 +296,10 @@ mod feed {
                     Some(FeedCommand::ToggleMute) => {
                         muted = !muted;
                         set_audio_enabled(&room, !muted);
+                    }
+                    Some(FeedCommand::SetVoices(now)) => {
+                        voices = now;
+                        set_voices(&room, voices);
                     }
                     Some(FeedCommand::HidePicture) => {
                         if let Some(old) = pump.take() {
@@ -303,8 +315,9 @@ mod feed {
                         let to_writer = spawn_writer(to_mpv);
                         for publication in video_publications(&room) {
                             match publication.track() {
-                                // Still subscribed (the hide had not gone
-                                // through): no event will announce it.
+                                // Still subscribed (a new size, or a hide
+                                // that had not gone through): no event will
+                                // announce it.
                                 Some(RemoteTrack::Video(video)) => {
                                     if let Some(old) = pump.take() {
                                         old.abort();
@@ -350,7 +363,7 @@ mod feed {
                         }
                         RemoteTrack::Audio(audio_track) => {
                             let identity = participant.identity().to_string();
-                            match keep_audio(ticket.voices, &identity) {
+                            match keep_audio(voices, &identity) {
                                 true if muted => audio_track.disable(),
                                 true => {}
                                 // Disable first: unsubscribing alone leaves
@@ -387,6 +400,30 @@ mod feed {
             .flat_map(|participant| participant.track_publications().into_values())
             .filter(|publication| publication.kind() == TrackKind::Video)
             .collect()
+    }
+
+    /// Play or drop the room's voices: every audio track `keep_audio`
+    /// leaves to the `voices` flag, so not the stream's own. A track taken
+    /// back arrives as a `TrackSubscribed`, which applies the mute.
+    fn set_voices(room: &Room, voices: bool) {
+        for participant in room.remote_participants().values() {
+            if keep_audio(false, participant.identity().as_str()) {
+                continue;
+            }
+            for publication in participant.track_publications().values() {
+                match (publication.kind(), voices) {
+                    (TrackKind::Audio, true) => publication.set_subscribed(true),
+                    // Disable first, as when the track first arrives.
+                    (TrackKind::Audio, false) => {
+                        if let Some(RemoteTrack::Audio(track)) = publication.track() {
+                            track.disable();
+                        }
+                        publication.set_subscribed(false);
+                    }
+                    (TrackKind::Video, _) => {}
+                }
+            }
+        }
     }
 
     fn set_audio_enabled(room: &Room, enabled: bool) {

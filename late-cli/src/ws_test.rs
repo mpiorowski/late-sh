@@ -427,6 +427,23 @@ fn video_hide_deserializes_from_its_wire_name() {
     assert!(matches!(msg, PairControlMessage::VideoHide { play_id: 4 }));
 }
 
+/// The room's voices come and go on a playing stream as the viewer leaves
+/// and joins its voice channel.
+#[test]
+fn video_voices_deserializes_from_its_wire_name() {
+    let msg = serde_json::from_str::<PairControlMessage>(
+        r#"{"event":"video_voices","play_id":4,"voices":true}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        msg,
+        PairControlMessage::VideoVoices {
+            play_id: 4,
+            voices: true
+        }
+    ));
+}
+
 /// A stream play carries a ticket, not a URL, and shares the play's later
 /// controls with a video.
 #[test]

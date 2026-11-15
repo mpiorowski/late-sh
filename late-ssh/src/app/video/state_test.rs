@@ -42,7 +42,7 @@ fn at(position_s: u64, duration_s: Option<u64>) -> WatchPosition {
 #[test]
 fn window_layout_is_a_capped_centered_box_at_two_sizes() {
     assert_eq!(
-        Player::layout(WatchSize::Window, Rect::new(0, 0, 200, 50)),
+        Player::layout(WatchSize::Small, Rect::new(0, 0, 200, 50)),
         WatchLayout {
             // 90 percent of 200 is 180, capped at 160; 90 percent of 50 is 45.
             // The 5 spare rows split 3 above, 2 below.
@@ -54,7 +54,7 @@ fn window_layout_is_a_capped_centered_box_at_two_sizes() {
         }
     );
     assert_eq!(
-        Player::layout(WatchSize::Window, Rect::new(0, 0, 100, 30)),
+        Player::layout(WatchSize::Small, Rect::new(0, 0, 100, 30)),
         WatchLayout {
             popup: Rect::new(5, 2, 90, 27),
             header: Rect::new(6, 3, 88, 2),
@@ -93,7 +93,7 @@ fn full_layout_is_every_row_but_the_footer() {
 #[test]
 fn a_tiny_terminal_has_no_body_and_wants_no_play() {
     let player = Player::new(video(), 1, Instant::now(), None);
-    player.set_drawn(Player::layout(WatchSize::Window, Rect::new(0, 0, 10, 6)));
+    player.set_drawn(Player::layout(WatchSize::Small, Rect::new(0, 0, 10, 6)));
     assert!(player.drawn().body.is_empty());
     assert_eq!(player.wanted(), None);
 }
@@ -941,15 +941,18 @@ fn a_live_stream_sits_in_its_room_until_taken_full_screen() {
     assert_eq!(state.stream_room(), Some(STREAM_ROOM));
 
     state.begin_frame();
+    assert!(!state.on_screen(), "no pane drew it: only heard");
     let slot = state.inline_slot().expect("a stream opens inline");
     assert_eq!(slot.room_id(), STREAM_ROOM);
     assert_eq!(slot.caption(), Some("connecting…".to_string()));
     slot.place(STREAM_SEAT);
     assert_eq!(slot.body(), STREAM_SEAT);
+    assert!(state.on_screen());
 
     state.player_mut().expect("player").toggle_size();
     assert!(state.modal().is_some(), "full screen takes the keys");
     assert!(state.inline_slot().is_none());
+    assert!(state.on_screen());
 
     assert!(state.player_mut().expect("player").back_inline());
     assert!(state.modal().is_none());
@@ -1017,6 +1020,49 @@ fn a_stream_off_screen_hides_its_picture_and_plays_on() {
     assert!(!state.unseen_dead_stream(), "on screen, saying why");
     state.begin_frame();
     assert!(state.unseen_dead_stream());
+}
+
+/// A viewer who joins the stream's voice channel mid-play already hears
+/// the room there, so the CLI is told to drop the voices, and told again
+/// when they leave. Nothing goes out for the flag it already has, and a
+/// play the CLI was never sent carries the new flag in its own message.
+#[test]
+fn a_playing_stream_follows_the_viewer_into_and_out_of_voice() {
+    let now = Instant::now();
+    let mut state = watching_stream(now);
+    state.cli_messages();
+    let player = state.player_mut().expect("player");
+
+    assert_eq!(player.set_voices(false), None, "the flag it started with");
+    assert_eq!(
+        player.set_voices(true),
+        Some(PairControlMessage::VideoVoices {
+            play_id: 1,
+            voices: true,
+        })
+    );
+    assert_eq!(player.set_voices(true), None);
+    assert_eq!(
+        player.set_voices(false),
+        Some(PairControlMessage::VideoVoices {
+            play_id: 1,
+            voices: false,
+        })
+    );
+
+    let mut unsent = State::default();
+    unsent.open_player(stream_request(), None, now);
+    unsent.player_mut().expect("player").set_voices(true);
+    unsent.begin_frame();
+    unsent.inline_slot().expect("inline").place(STREAM_SEAT);
+    assert!(matches!(
+        unsent.cli_messages().as_slice(),
+        [PairControlMessage::VideoPlayStream {
+            play_id: 1,
+            voices: true,
+            ..
+        }]
+    ));
 }
 
 /// The session's `/watch` switch is on until turned off. A room whose

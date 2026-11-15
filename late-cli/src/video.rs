@@ -682,7 +682,8 @@ pub(super) fn place_commands(rect: VideoRect, tty: TtySize) -> Vec<Value> {
 pub(super) enum PlaceOutcome {
     /// mpv's output is in the new rectangle; the old frame is settled.
     Moved,
-    /// A hidden stream has its picture back, in a fresh mpv.
+    /// A stream's picture comes from a fresh mpv: back from hiding, or at
+    /// a new size.
     Shown,
     /// mpv's socket is not up yet: applied once it is, from `poll`.
     Deferred,
@@ -1227,24 +1228,27 @@ impl VideoPlayer {
     /// first (the delete targets its origin cell, which the new frame may
     /// cover, so it must go before the rebuild), then the geometry and the
     /// output swap go over the socket. Before the socket is up the move
-    /// waits for `poll`. A stream whose picture is hidden gets it back
-    /// here: a fresh mpv in `rect`, fed by the viewer that never left.
+    /// waits for `poll`. A stream moves the same way only at the size it
+    /// has: back from hiding or at another size, its picture comes from a
+    /// fresh mpv in `rect`, fed by the viewer that never left.
     pub(super) async fn place(&mut self, play_id: u64, rect: VideoRect) -> PlaceOutcome {
         let Some(playback) = self.current_for(play_id) else {
             return PlaceOutcome::Unchanged;
         };
         let screen = match &mut playback.show {
-            Show::Url(screen)
-            | Show::Stream {
-                screen: Some(screen),
-                ..
-            } => screen,
-            Show::Stream { screen: None, .. } => {
-                return match self.show_picture(rect) {
-                    Ok(()) => PlaceOutcome::Shown,
-                    Err(failure) => PlaceOutcome::Failed(self.fail(failure)),
-                };
-            }
+            Show::Url(screen) => screen,
+            Show::Stream { screen: slot, .. } => match slot {
+                Some(shown) if (shown.rect.cols, shown.rect.rows) == (rect.cols, rect.rows) => {
+                    shown
+                }
+                // The canvas the frames are scaled onto was cut for the old
+                // rectangle's pixels: moved to another size, mpv would only
+                // stretch it.
+                Some(_) | None => {
+                    let old = slot.take();
+                    return self.show_picture(old, rect);
+                }
+            },
         };
         if screen.rect == rect {
             return PlaceOutcome::Unchanged;
@@ -1281,18 +1285,41 @@ impl VideoPlayer {
         }
     }
 
-    /// A fresh mpv in `rect` for the hidden stream that is current.
-    fn show_picture(&mut self, rect: VideoRect) -> Result<(), VideoFailure> {
-        let (new_screen, canvas, to_mpv) = self.spawn_stream_screen(rect)?;
+    /// A fresh mpv in `rect` for the current stream, whose screen the
+    /// caller took: `old` is the one it had (a new size), or `None` for a
+    /// picture that was hidden. The old mpv goes and its frame is settled
+    /// before the new one draws.
+    fn show_picture(&mut self, old: Option<Screen>, rect: VideoRect) -> PlaceOutcome {
+        if let Some(old) = old {
+            let left_in = old.kill(&self.tools.ipc_path);
+            if let Err(error) = settle_terminal(left_in) {
+                return PlaceOutcome::Failed(self.fail(VideoFailure::Inspect(format!(
+                    "settling the old frame: {error}"
+                ))));
+            }
+        }
+        let (new_screen, canvas, to_mpv) = match self.spawn_stream_screen(rect) {
+            Ok(spawned) => spawned,
+            Err(failure) => return PlaceOutcome::Failed(self.fail(failure)),
+        };
         match self.current.as_mut().map(|playback| &mut playback.show) {
             Some(Show::Stream { feed, screen }) => {
                 feed.show_picture(canvas, to_mpv);
                 *screen = Some(new_screen);
-                Ok(())
+                PlaceOutcome::Shown
             }
             Some(Show::Url(_)) | None => {
-                unreachable!("only a hidden stream is given its picture back")
+                unreachable!("only a stream is given a fresh picture")
             }
+        }
+    }
+
+    /// Whether a playing stream plays the room's voices too. Nothing for
+    /// another play, or a URL.
+    pub(super) fn set_voices(&mut self, play_id: u64, voices: bool) {
+        match self.current_for(play_id).map(|playback| &playback.show) {
+            Some(Show::Stream { feed, .. }) => feed.set_voices(voices),
+            Some(Show::Url(_)) | None => {}
         }
     }
 

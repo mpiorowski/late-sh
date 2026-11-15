@@ -106,10 +106,9 @@ impl State {
     /// The modal over the page, the one that takes every key and click. A
     /// live stream sitting inline in its room's pane is not one.
     pub(crate) fn modal(&self) -> Option<&WatchModal> {
-        match &self.modal {
-            Some(WatchModal::Player(player)) if player.inline => None,
-            Some(modal) => Some(modal),
-            None => None,
+        match self.inline_slot() {
+            Some(_) => None,
+            None => self.modal.as_ref(),
         }
     }
 
@@ -118,17 +117,28 @@ impl State {
         self.modal.is_some()
     }
 
-    /// The inline stream's seat, for the pane of the room it belongs to.
+    /// Whether the video has the screen: the modal, or an inline stream the
+    /// last frame drew. A stream only heard (its room off screen) does not.
+    pub(crate) fn on_screen(&self) -> bool {
+        match self.inline_slot() {
+            Some(slot) => slot.player.inline_placed.get(),
+            None => self.modal.is_some(),
+        }
+    }
+
+    /// The inline stream's seat, for the pane of the room it belongs to: a
+    /// live stream at its small size.
     pub(crate) fn inline_slot(&self) -> Option<InlineSlot<'_>> {
         match &self.modal {
-            Some(WatchModal::Player(player)) if player.inline => match &player.source {
-                WatchSource::LiveStream(ticket) => Some(InlineSlot {
+            Some(WatchModal::Player(player)) => match (&player.source, player.size) {
+                (WatchSource::LiveStream(ticket), WatchSize::Small) => Some(InlineSlot {
                     player,
                     room_id: ticket.room_id,
                 }),
-                WatchSource::NewsArticle(_) | WatchSource::ChatLink => None,
+                (WatchSource::LiveStream(_), WatchSize::Full)
+                | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => None,
             },
-            Some(WatchModal::Player(_) | WatchModal::Setup(_)) | None => None,
+            Some(WatchModal::Setup(_)) | None => None,
         }
     }
 
@@ -383,8 +393,11 @@ pub(crate) enum WatchModal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WatchSize {
-    /// A centered box over the page, the TUI visible around it.
-    Window,
+    /// Where a player opens. A video's is the window, a centered box over
+    /// the page with the TUI visible around it. A live stream's is its
+    /// room's pane (`InlineSlot`), since the room's chat is half of
+    /// watching one; it never has the window.
+    Small,
     /// The whole terminal but the footer row.
     Full,
 }
@@ -519,11 +532,6 @@ pub(crate) struct Player {
     /// The layout the last draw produced: the `[x]` hit target and the
     /// rectangle `wanted` offers the CLI.
     drawn: Cell<WatchLayout>,
-    /// Whether the player sits in its room's pane (`InlineSlot`) instead
-    /// of over the page. Only a live stream does, and it opens that way:
-    /// the room's chat is half of watching one. `f` takes it full screen
-    /// and back.
-    inline: bool,
     /// Whether the room's pane drew the inline rectangle this frame.
     inline_placed: Cell<bool>,
 }
@@ -537,19 +545,14 @@ impl Player {
         now: Instant,
         resume_from: Option<WatchPosition>,
     ) -> Self {
-        let (size, inline) = match request.source {
-            WatchSource::NewsArticle(_) | WatchSource::ChatLink => (WatchSize::Window, false),
-            WatchSource::LiveStream(_) => (WatchSize::Full, true),
-        };
         Self {
-            inline,
             inline_placed: Cell::new(false),
             source: request.source,
             url: request.url,
             title: request.title,
             author: request.author,
             shared_at: request.shared_at,
-            size,
+            size: WatchSize::Small,
             play_id,
             status: WatchStatus::Starting,
             played: false,
@@ -605,32 +608,47 @@ impl Player {
         self.status
     }
 
-    /// `f`: Window and Full, or for a live stream its room and full screen.
-    /// The next draw's body differs, and `sync` turns that into a
-    /// `video_place`.
+    /// `f`: small and full, so the window and full screen for a video, its
+    /// room and full screen for a live stream. The next draw's body
+    /// differs, and `sync` turns that into a `video_place`.
     pub(crate) fn toggle_size(&mut self) {
-        match self.source {
-            WatchSource::NewsArticle(_) | WatchSource::ChatLink => {
-                self.size = match self.size {
-                    WatchSize::Window => WatchSize::Full,
-                    WatchSize::Full => WatchSize::Window,
-                };
-            }
-            // A live stream is inline or full screen, never the window.
-            WatchSource::LiveStream(_) => self.inline = !self.inline,
-        }
+        self.size = match self.size {
+            WatchSize::Small => WatchSize::Full,
+            WatchSize::Full => WatchSize::Small,
+        };
     }
 
     /// Esc on a full-screen live stream goes back to its room instead of
     /// ending the watch. True when it did.
     pub(crate) fn back_inline(&mut self) -> bool {
-        match (&self.source, self.inline) {
-            (WatchSource::LiveStream(_), false) => {
-                self.inline = true;
+        match (&self.source, self.size) {
+            (WatchSource::LiveStream(_), WatchSize::Full) => {
+                self.size = WatchSize::Small;
                 true
             }
-            (WatchSource::LiveStream(_), true)
+            (WatchSource::LiveStream(_), WatchSize::Small)
             | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => false,
+        }
+    }
+
+    /// Whether the CLI plays the room's voices, as the viewer's voice
+    /// channel decides it now (`LiveTicket::voices`): they joined or left
+    /// the stream's channel while it plays. The message for a play that is
+    /// up; one the CLI was not told about yet carries the flag itself.
+    pub(crate) fn set_voices(&mut self, voices: bool) -> Option<PairControlMessage> {
+        match &mut self.source {
+            WatchSource::NewsArticle(_) | WatchSource::ChatLink => None,
+            WatchSource::LiveStream(ticket) => {
+                let changed = ticket.voices != voices;
+                ticket.voices = voices;
+                match changed && self.status.is_live() {
+                    true => Some(PairControlMessage::VideoVoices {
+                        play_id: self.play_id,
+                        voices,
+                    }),
+                    false => None,
+                }
+            }
         }
     }
 
@@ -647,7 +665,7 @@ impl Player {
     /// to hold one has an empty body and nothing plays.
     pub(crate) fn layout(size: WatchSize, area: Rect) -> WatchLayout {
         match size {
-            WatchSize::Window => {
+            WatchSize::Small => {
                 let width = permille(area.width, WINDOW_WIDTH_PERMILLE).min(WINDOW_MAX_WIDTH);
                 let height = permille(area.height, WINDOW_HEIGHT_PERMILLE);
                 let popup = centered_rect(width, height, area);
@@ -959,7 +977,7 @@ impl Player {
         let size = (
             "f",
             match self.size {
-                WatchSize::Window => "full",
+                WatchSize::Small => "full",
                 WatchSize::Full => "window",
             },
         );
