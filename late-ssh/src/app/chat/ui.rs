@@ -1151,9 +1151,13 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             drawn: view.stream_room_drawn,
-            video: view
-                .room
-                .and_then(|room| view.stream_video.filter(|slot| slot.room_id() == room.id)),
+            video: view.room.and_then(|room| {
+                room_stream_slot(
+                    view.stream_video,
+                    room.id,
+                    view.overlay.is_some() || view.image_modal.is_some(),
+                )
+            }),
             switch: view.stream_switch,
             voice,
             // The live strip stands in for the topic row while it is up:
@@ -4815,7 +4819,9 @@ impl RoomHeader<'_> {
 /// and flushed right what to do about it: the `/watch` switch for a
 /// session that can play the stream in its terminal (`/watch to stop`
 /// while one plays, `/watch to play` otherwise; a pending stream has
-/// nothing to switch), then the watch URL. When both do not fit, such a
+/// nothing to switch), then the watch URL. `pane` is this room's stream
+/// playing inline here: its switch opens with what F4 does to the chat
+/// under it (`F4 hide chat`, `F4 show chat`). When both do not fit, such a
 /// session keeps the switch and loses the URL: the stream is already in
 /// front of it.
 ///
@@ -4830,13 +4836,18 @@ impl RoomHeader<'_> {
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
     switch: crate::app::video::state::SwitchHint,
+    pane: Option<crate::app::video::state::StreamPane>,
     width: usize,
 ) -> Line<'static> {
-    use crate::app::video::state::SwitchHint;
-    let switch = match (switch, stream.live) {
-        (SwitchHint::Stop, true) => Some("/watch to stop"),
-        (SwitchHint::Play, true) => Some("/watch to play"),
-        (SwitchHint::Unavailable, _) | (SwitchHint::Stop | SwitchHint::Play, false) => None,
+    use crate::app::video::state::{StreamPane, SwitchHint};
+    let switch = match (switch, stream.live, pane) {
+        (SwitchHint::Stop, true, Some(StreamPane::WithChat)) => {
+            Some("F4 hide chat · /watch to stop")
+        }
+        (SwitchHint::Stop, true, Some(StreamPane::Alone)) => Some("F4 show chat · /watch to stop"),
+        (SwitchHint::Stop, true, None) => Some("/watch to stop"),
+        (SwitchHint::Play, true, _) => Some("/watch to play"),
+        (SwitchHint::Unavailable, _, _) | (SwitchHint::Stop | SwitchHint::Play, false, _) => None,
     }
     .map(|text| Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
     let link = if stream.watch_url.is_empty() {
@@ -4948,7 +4959,12 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         if let (Some(drawn), true) = (header.drawn, stream.live) {
             drawn.set(Some(stream.room_id));
         }
-        lines.push(padded(stream_header_line(stream, header.switch, width)));
+        lines.push(padded(stream_header_line(
+            stream,
+            header.switch,
+            header.video.map(|slot| slot.pane()),
+            width,
+        )));
     }
     if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
@@ -5022,16 +5038,23 @@ fn inline_stream_rows(width: u16, height: u16) -> u16 {
 
 /// The stream playing inline: its black rectangle at the top of `area`
 /// (the paired CLI draws the picture there), a rule under it, and the rest
-/// handed back for the messages. The slot hears where the rectangle landed,
-/// an empty one included, since being drawn at all is what keeps the watch
-/// alive.
+/// handed back for the messages. A stream that has the pane alone (F4)
+/// takes every row of `area`, with no rule and nothing left for them. The
+/// slot hears where the rectangle landed, an empty one included, since
+/// being drawn at all is what keeps the watch alive.
 fn draw_inline_stream(
     frame: &mut Frame,
     area: Rect,
     slot: crate::app::video::state::InlineSlot<'_>,
     rule: Line<'static>,
 ) -> Rect {
-    let rows = inline_stream_rows(area.width, area.height);
+    use crate::app::video::state::StreamPane;
+    let rows = match (slot.pane(), area.height >= INLINE_STREAM_MIN_ROWS) {
+        (StreamPane::Alone, true) => area.height,
+        (StreamPane::Alone, false) | (StreamPane::WithChat, _) => {
+            inline_stream_rows(area.width, area.height)
+        }
+    };
     let picture = Rect {
         height: rows,
         ..area
@@ -5058,19 +5081,39 @@ fn draw_inline_stream(
             },
         );
     }
-    frame.render_widget(
-        Paragraph::new(rule),
-        Rect {
-            y: picture.y + rows,
-            height: 1,
-            ..area
-        },
-    );
+    // The rule and the messages, when the picture left them rows.
+    let under = area.height - rows;
+    if under > 0 {
+        frame.render_widget(
+            Paragraph::new(rule),
+            Rect {
+                y: picture.y + rows,
+                height: 1,
+                ..area
+            },
+        );
+    }
     Rect {
-        y: area.y + rows + 1,
-        height: area.height - rows - 1,
+        y: area.y + rows + under.min(1),
+        height: under.saturating_sub(1),
         ..area
     }
+}
+
+/// `room_id`'s stream playing inline, for its header. While something is
+/// drawn over the messages (`covered`: an overlay, an image), a stream that
+/// has the pane alone gives them their rows back, so it has somewhere to
+/// draw.
+fn room_stream_slot(
+    slot: Option<crate::app::video::state::InlineSlot<'_>>,
+    room_id: Uuid,
+    covered: bool,
+) -> Option<crate::app::video::state::InlineSlot<'_>> {
+    let slot = slot.filter(|slot| slot.room_id() == room_id)?;
+    Some(match covered {
+        true => slot.with_chat(),
+        false => slot,
+    })
 }
 
 /// The room's topic, when it has a non-blank one.
@@ -5190,7 +5233,11 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     drawn: view.stream_room_drawn,
-                    video: view.stream_video.filter(|slot| slot.room_id() == room.id),
+                    video: room_stream_slot(
+                        view.stream_video,
+                        room.id,
+                        view.overlay.is_some() || view.image_modal.is_some(),
+                    ),
                     switch: view.stream_switch,
                     voice,
                     row: room_topic(room).map(|text| TopicRow {

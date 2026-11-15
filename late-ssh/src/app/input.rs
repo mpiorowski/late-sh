@@ -156,7 +156,8 @@ pub enum ParsedInput {
     Paste(Vec<u8>),
     /// F4 (SS3 `ESC O S`, CSI `ESC [ 14 ~`): show or hide the chat beside a
     /// game, Realm's board and an open watch here, and the watchable doors'
-    /// own pane (which read it off raw input, `door::spectate::input::is_f4`).
+    /// own pane (which read it off raw input, `door::spectate::input::is_f4`);
+    /// and the messages under a stream playing inline in its room.
     F4,
     PageUp,
     PageDown,
@@ -1121,11 +1122,15 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         | ParsedInput::AltDigit(_) => {}
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
-        // the composer gate, so F4 closes it from the composer too.
+        // the composer gate, so F4 closes it from the composer too. In a
+        // room whose stream plays inline it hides the messages under the
+        // picture, which then takes the whole pane.
         ParsedInput::F4 if ctx.screen == Screen::Games => {
             crate::app::door::spectate::input::toggle_watch_chat(app);
         }
-        ParsedInput::F4 => {}
+        ParsedInput::F4 => {
+            app.video.toggle_stream_pane();
+        }
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {

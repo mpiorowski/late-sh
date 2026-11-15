@@ -116,6 +116,7 @@ fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
     let line = stream_header_line(
         &live_stream_view(url),
         crate::app::video::state::SwitchHint::Unavailable,
+        None,
         width,
     );
     let text: String = line
@@ -138,7 +139,7 @@ fn stream_header_says_what_watch_does_for_a_session_that_can_play() {
     use crate::app::video::state::SwitchHint;
     let url = "https://late.sh/live/abc123";
     let text = |stream: &crate::app::stream::registry::LiveStreamView, switch, width| {
-        stream_header_line(stream, switch, width).to_string()
+        stream_header_line(stream, switch, None, width).to_string()
     };
     let stream = live_stream_view(url);
 
@@ -161,6 +162,21 @@ fn stream_header_says_what_watch_does_for_a_session_that_can_play() {
     pending.live = false;
     let waiting = text(&pending, SwitchHint::Play, 120);
     assert!(!waiting.contains("/watch"), "got {waiting:?}");
+
+    // In the room whose stream plays inline, the switch opens with what F4
+    // does to the chat under the picture.
+    use crate::app::video::state::StreamPane;
+    let here = |pane| stream_header_line(&stream, SwitchHint::Stop, Some(pane), 50).to_string();
+    let shared = here(StreamPane::WithChat);
+    assert!(
+        shared.ends_with("F4 hide chat · /watch to stop"),
+        "got {shared:?}"
+    );
+    let alone = here(StreamPane::Alone);
+    assert!(
+        alone.ends_with("F4 show chat · /watch to stop"),
+        "got {alone:?}"
+    );
 }
 
 #[test]
@@ -168,6 +184,7 @@ fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
     let line = stream_header_line(
         &live_stream_view("https://late.sh/live/abc123"),
         crate::app::video::state::SwitchHint::Unavailable,
+        None,
         30,
     );
     let text: String = line
@@ -3342,6 +3359,59 @@ fn room_header_seats_an_inline_stream_above_the_messages() {
     assert!(row_text(buf, 24, 120).starts_with('\u{2500}'));
 }
 
+/// F4 gives the stream the whole pane: the picture takes every row under
+/// the header, with no rule and no rows left for the messages, and F4 again
+/// brings them back. A frame that draws something over the messages (an
+/// overlay, an image) gets them back for as long as it is up.
+#[test]
+fn f4_gives_an_inline_stream_the_messages_rows_and_back() {
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+    let mut video = watching_inline();
+    let stream = live_stream_view("https://late.sh/live/abc123");
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("term");
+    let area = Rect::new(0, 0, 120, 40);
+    let mut draw = |video: &crate::app::video::state::State, covered: bool| {
+        video.begin_frame();
+        let mut remaining = area;
+        terminal
+            .draw(|f| {
+                remaining = super::draw_room_header(
+                    f,
+                    area,
+                    super::RoomHeader {
+                        drawn: None,
+                        video: super::room_stream_slot(
+                            video.inline_slot(),
+                            stream.room_id,
+                            covered,
+                        ),
+                        switch: crate::app::video::state::SwitchHint::Stop,
+                        stream: Some(&stream),
+                        voice: None,
+                        row: None,
+                        closing_rule: true,
+                    },
+                )
+            })
+            .unwrap();
+        (video.inline_slot().expect("inline").body(), remaining)
+    };
+
+    let shared = (Rect::new(0, 2, 120, 22), Rect::new(0, 25, 120, 15));
+    assert_eq!(draw(&video, false), shared);
+
+    assert!(video.toggle_stream_pane(), "a stream is drawn here");
+    assert_eq!(
+        draw(&video, false),
+        (Rect::new(0, 2, 120, 38), Rect::new(0, 40, 120, 0)),
+        "every row under the header, none for the messages"
+    );
+    assert_eq!(draw(&video, true), shared, "an overlay needs the rows");
+
+    assert!(video.toggle_stream_pane());
+    assert_eq!(draw(&video, false), shared);
+}
+
 /// A pane too short for a picture worth drawing gives the stream no rows
 /// and the chat keeps them all: the stream plays on with nothing to show.
 #[test]
@@ -3502,6 +3572,7 @@ fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
     let line = super::stream_header_line(
         &stream,
         crate::app::video::state::SwitchHint::Unavailable,
+        None,
         WIDTH,
     );
     let text = line.to_string();
@@ -3530,6 +3601,7 @@ fn stream_header_drops_the_watcher_count_before_the_watch_url() {
     let line = super::stream_header_line(
         &stream,
         crate::app::video::state::SwitchHint::Unavailable,
+        None,
         WIDTH,
     );
     let text = line.to_string();
@@ -3541,6 +3613,7 @@ fn stream_header_drops_the_watcher_count_before_the_watch_url() {
     let roomy = super::stream_header_line(
         &stream,
         crate::app::video::state::SwitchHint::Unavailable,
+        None,
         73,
     )
     .to_string();
@@ -3554,6 +3627,7 @@ fn stream_header_keeps_a_short_title_whole() {
     let text = super::stream_header_line(
         &stream,
         crate::app::video::state::SwitchHint::Unavailable,
+        None,
         80,
     )
     .to_string();

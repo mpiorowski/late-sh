@@ -2056,6 +2056,8 @@ fn streaming_help_lines() -> Vec<String> {
         "Watching",
         "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
         "  /watch             stream switch: live rooms play above the chat (late CLI); /watch turns it off, or back on",
+        "  F4                 while a stream plays in its room: hide the chat so the picture takes the whole pane; F4 again brings it back",
+        "  click the picture  full screen; f or Esc goes back to the room",
         "  Live streams also show under the room rail's `stream` section, and an",
         "  `is live` line hits #lounge once media flows.",
         "  Watch pages are born silent: nothing is audible until the viewer turns sound on.",

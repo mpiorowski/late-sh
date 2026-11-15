@@ -1022,6 +1022,38 @@ fn a_stream_off_screen_hides_its_picture_and_plays_on() {
     assert!(state.unseen_dead_stream());
 }
 
+/// F4 hides the chat under a stream only where that stream is drawn: with
+/// its room off screen, or nothing playing, the key changes nothing. The
+/// choice lasts for the play; the next one opens with the chat.
+#[test]
+fn f4_takes_the_pane_only_for_a_stream_drawn_in_its_room() {
+    let now = Instant::now();
+    let mut state = State::default();
+    assert!(!state.toggle_stream_pane(), "nothing is playing");
+
+    state.open_player(stream_request(), None, now);
+    state.begin_frame();
+    assert!(!state.toggle_stream_pane(), "its room is not on screen");
+    assert_eq!(
+        state.inline_slot().expect("inline").pane(),
+        StreamPane::WithChat
+    );
+
+    state.inline_slot().expect("inline").place(STREAM_SEAT);
+    assert!(state.toggle_stream_pane());
+    assert_eq!(
+        state.inline_slot().expect("inline").pane(),
+        StreamPane::Alone
+    );
+
+    state.open_player(stream_request(), None, now);
+    assert_eq!(
+        state.inline_slot().expect("inline").pane(),
+        StreamPane::WithChat,
+        "a new play opens with the chat"
+    );
+}
+
 /// A viewer who joins the stream's voice channel mid-play already hears
 /// the room there, so the CLI is told to drop the voices, and told again
 /// when they leave. Nothing goes out for the flag it already has, and a
