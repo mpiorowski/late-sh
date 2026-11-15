@@ -2666,7 +2666,7 @@ impl Sheet {
     fn put_down_rival(&mut self, fight: Fight, mut lines: Vec<String>) -> Outcome {
         let rival = fight.rival().expect("a rival fight").clone();
         lines.push(data::rival_down_line(&rival.username, rival.answer));
-        self.leave_fight(&fight, Mark::Won);
+        self.leave_fight(&fight, Mark::Crossed);
         Outcome {
             applied: Applied::Ambushed {
                 rival,

@@ -5061,6 +5061,68 @@ fn buy_posts_the_order_the_bar_rings_up() {
     );
 }
 
+/// A bare `/watch` is the stream switch: it always asks, carrying the
+/// selected room only while that room's stream is live (the video player
+/// decides what the switch does), and `/watch @user` stays the browser
+/// path whatever room is open.
+#[tokio::test]
+async fn bare_watch_toggles_streams_with_the_selected_rooms_live_stream() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "watch_here").await;
+    let mut state = counter_test_state(&test_db, user.id);
+    let submit = |state: &mut ChatState, command: &str| {
+        state.composer.insert_str(command);
+        state.submit_composer(false, ComposerCommands::Enabled)
+    };
+    let room_id = Uuid::from_u128(41);
+    let mut stream = crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(7),
+        username: "mat".to_string(),
+        title: "hacking".to_string(),
+        room_id,
+        voice_channel_id: Uuid::from_u128(9),
+        stream_id: "abc".to_string(),
+        live: false,
+        went_live_at: None,
+        watching: 0,
+        watch_url: String::new(),
+    };
+
+    // Nowhere in particular: the switch, with no stream to turn on.
+    state.live_streams = vec![stream.clone()];
+    state.selected_room_id = None;
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle { room_here: None })
+    );
+
+    // In the room, but the stream is still pending: nothing to watch yet.
+    state.selected_room_id = Some(room_id);
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle { room_here: None })
+    );
+
+    // Live: the command carries this room.
+    stream.live = true;
+    state.live_streams = vec![stream];
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle {
+            room_here: Some(room_id)
+        })
+    );
+
+    assert!(submit(&mut state, "/watch @bob").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::User("bob".to_string()))
+    );
+}
+
 #[tokio::test]
 async fn enter_reveals_a_messages_spoilers_once() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};

@@ -224,7 +224,7 @@ trade by design; here they are the strength, and size is the score.
   nobody could reach, and a settler alone on one held a quarter of the
   world), `join_max_claimed`, the protection days and `min_active_days_to_win`
   (above). Rerun it after moving anything:
-  `REALM_SIM_SEEDS=8 REALM_SIM_OUT=/tmp/realm-sim.csv make test-llm
+  `REALM_SIM_SEEDS=8 REALM_SIM_OUT=/tmp/realm-sim.csv make test
   ARGS="-p late-ssh --lib -E 'test(realm_campaign_sim)' --run-ignored
   ignored-only --no-capture"`.
 

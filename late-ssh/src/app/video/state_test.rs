@@ -42,7 +42,7 @@ fn at(position_s: u64, duration_s: Option<u64>) -> WatchPosition {
 #[test]
 fn window_layout_is_a_capped_centered_box_at_two_sizes() {
     assert_eq!(
-        Player::layout(WatchSize::Window, Rect::new(0, 0, 200, 50)),
+        Player::layout(WatchSize::Small, Rect::new(0, 0, 200, 50)),
         WatchLayout {
             // 90 percent of 200 is 180, capped at 160; 90 percent of 50 is 45.
             // The 5 spare rows split 3 above, 2 below.
@@ -54,7 +54,7 @@ fn window_layout_is_a_capped_centered_box_at_two_sizes() {
         }
     );
     assert_eq!(
-        Player::layout(WatchSize::Window, Rect::new(0, 0, 100, 30)),
+        Player::layout(WatchSize::Small, Rect::new(0, 0, 100, 30)),
         WatchLayout {
             popup: Rect::new(5, 2, 90, 27),
             header: Rect::new(6, 3, 88, 2),
@@ -93,7 +93,7 @@ fn full_layout_is_every_row_but_the_footer() {
 #[test]
 fn a_tiny_terminal_has_no_body_and_wants_no_play() {
     let player = Player::new(video(), 1, Instant::now(), None);
-    player.set_drawn(Player::layout(WatchSize::Window, Rect::new(0, 0, 10, 6)));
+    player.set_drawn(Player::layout(WatchSize::Small, Rect::new(0, 0, 10, 6)));
     assert!(player.drawn().body.is_empty());
     assert_eq!(player.wanted(), None);
 }
@@ -150,15 +150,20 @@ fn sync_plays_places_and_stops_from_what_was_drawn() {
 #[test]
 fn sync_replaces_an_older_play() {
     let rect = Rect::new(1, 1, 10, 5);
-    let mut live = Some(LivePlay { play_id: 3, rect });
+    let mut live = Some(LivePlay {
+        play_id: 3,
+        seat: Seat::At(rect),
+    });
     assert_eq!(
         sync(
             &mut live,
             Some(WantedPlay {
                 play_id: 4,
-                url: URL,
-                rect,
-                start_s: 1391,
+                media: WantedMedia::Url {
+                    url: URL,
+                    start_s: 1391,
+                },
+                seat: Seat::At(rect),
             })
         ),
         vec![
@@ -174,7 +179,13 @@ fn sync_replaces_an_older_play() {
             },
         ]
     );
-    assert_eq!(live, Some(LivePlay { play_id: 4, rect }));
+    assert_eq!(
+        live,
+        Some(LivePlay {
+            play_id: 4,
+            seat: Seat::At(rect)
+        })
+    );
 }
 
 /// The reports a play goes through, each one's status and outcome, and the
@@ -372,8 +383,11 @@ fn a_resumed_play_starts_before_the_saved_position_and_says_so() {
     let mut player = drawn_resuming_player(opened, Some(at(1394, Some(2910))));
     assert_eq!(player.status_text(opened), "resuming from 23:14…");
     assert_eq!(
-        player.wanted().map(|wanted| wanted.start_s),
-        Some(1391),
+        player.wanted().map(|wanted| wanted.media),
+        Some(WantedMedia::Url {
+            url: URL,
+            start_s: 1391
+        }),
         "the rewind lands on the sentence that was playing"
     );
 
@@ -873,4 +887,337 @@ fn setup_box_renders_its_rows_and_lines() {
             "c copy link  Esc".to_string(),
         ]
     );
+}
+
+const WATCH_PAGE: &str = "https://late.sh/live/abc_-1";
+const STREAM_ROOM: Uuid = Uuid::from_u128(0x0192_0000_0000_7000_8000_0000_0000_0001);
+
+fn ticket() -> LiveTicket {
+    LiveTicket {
+        room_id: STREAM_ROOM,
+        stream_id: "abc_-1".to_string(),
+        watcher_id: "cli-0192".to_string(),
+        livekit_url: "wss://rtc.late.sh".to_string(),
+        token: "secret-jwt".to_string(),
+        voices: false,
+    }
+}
+
+fn stream_request() -> WatchRequest {
+    WatchRequest {
+        source: WatchSource::LiveStream(ticket()),
+        url: WATCH_PAGE.to_string(),
+        title: "late night rust".to_string(),
+        author: "mat".to_string(),
+        shared_at: Utc::now(),
+    }
+}
+
+/// Where the room's pane seats the stream in these tests.
+const STREAM_SEAT: Rect = Rect::new(31, 4, 120, 33);
+
+/// A session watching a stream (play 1), drawn once by its room's pane.
+fn watching_stream(now: Instant) -> State {
+    let mut state = State::default();
+    state.open_player(stream_request(), None, now);
+    state.begin_frame();
+    state
+        .inline_slot()
+        .expect("a stream opens inline")
+        .place(STREAM_SEAT);
+    state
+}
+
+/// A live stream opens in its room's pane, not over the page: nothing
+/// takes the keys, and the pane says where the picture goes. `f` takes it
+/// full screen, a modal like any video, and Esc brings it back instead of
+/// closing it.
+#[test]
+fn a_live_stream_sits_in_its_room_until_taken_full_screen() {
+    let mut state = State::default();
+    state.open_player(stream_request(), None, Instant::now());
+    assert!(state.is_open());
+    assert!(state.modal().is_none(), "inline is not a modal");
+    assert_eq!(state.stream_room(), Some(STREAM_ROOM));
+
+    state.begin_frame();
+    assert!(!state.on_screen(), "no pane drew it: only heard");
+    let slot = state.inline_slot().expect("a stream opens inline");
+    assert_eq!(slot.room_id(), STREAM_ROOM);
+    assert_eq!(slot.caption(), Some("connecting…".to_string()));
+    slot.place(STREAM_SEAT);
+    assert_eq!(slot.body(), STREAM_SEAT);
+    assert!(state.on_screen());
+
+    state.player_mut().expect("player").toggle_size();
+    assert!(state.modal().is_some(), "full screen takes the keys");
+    assert!(state.inline_slot().is_none());
+    assert!(state.on_screen());
+
+    assert!(state.player_mut().expect("player").back_inline());
+    assert!(state.modal().is_none());
+    assert!(
+        !state.player_mut().expect("player").back_inline(),
+        "already in the room: Esc is not ours"
+    );
+}
+
+/// A stream whose room goes off screen (another room, another page, a
+/// modal over it) is not stopped: its picture is hidden and it plays on,
+/// and coming back is a move like any other. It starts only once a pane
+/// has somewhere to draw it. Once it has stopped playing, unseen, nothing
+/// is left to keep.
+#[test]
+fn a_stream_off_screen_hides_its_picture_and_plays_on() {
+    let now = Instant::now();
+    let mut state = State::default();
+    state.open_player(stream_request(), None, now);
+    state.begin_frame();
+    assert_eq!(state.cli_messages(), Vec::new(), "nowhere to draw it yet");
+
+    state.inline_slot().expect("inline").place(STREAM_SEAT);
+    assert!(matches!(
+        state.cli_messages().as_slice(),
+        [PairControlMessage::VideoPlayStream { play_id: 1, .. }]
+    ));
+    assert_eq!(state.playing_stream_room(), Some(STREAM_ROOM));
+
+    // A frame that does not draw the room.
+    state.begin_frame();
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoHide { play_id: 1 }]
+    );
+    assert!(!state.unseen_dead_stream(), "it is playing");
+    state.begin_frame();
+    assert_eq!(state.cli_messages(), Vec::new(), "hidden once");
+    assert_eq!(state.playing_stream_room(), Some(STREAM_ROOM));
+
+    // Back in the room, in a pane that moved.
+    state.begin_frame();
+    state
+        .inline_slot()
+        .expect("inline")
+        .place(Rect::new(31, 6, 100, 28));
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoPlace {
+            play_id: 1,
+            left: 31,
+            top: 6,
+            cols: 100,
+            rows: 28,
+        }]
+    );
+
+    state.player_mut().expect("player").apply(
+        &VideoReport::Failed {
+            message: "stream viewer failed".to_string(),
+        },
+        now,
+    );
+    assert_eq!(state.playing_stream_room(), None);
+    assert!(!state.unseen_dead_stream(), "on screen, saying why");
+    state.begin_frame();
+    assert!(state.unseen_dead_stream());
+}
+
+/// A viewer who joins the stream's voice channel mid-play already hears
+/// the room there, so the CLI is told to drop the voices, and told again
+/// when they leave. Nothing goes out for the flag it already has, and a
+/// play the CLI was never sent carries the new flag in its own message.
+#[test]
+fn a_playing_stream_follows_the_viewer_into_and_out_of_voice() {
+    let now = Instant::now();
+    let mut state = watching_stream(now);
+    state.cli_messages();
+    let player = state.player_mut().expect("player");
+
+    assert_eq!(player.set_voices(false), None, "the flag it started with");
+    assert_eq!(
+        player.set_voices(true),
+        Some(PairControlMessage::VideoVoices {
+            play_id: 1,
+            voices: true,
+        })
+    );
+    assert_eq!(player.set_voices(true), None);
+    assert_eq!(
+        player.set_voices(false),
+        Some(PairControlMessage::VideoVoices {
+            play_id: 1,
+            voices: false,
+        })
+    );
+
+    let mut unsent = State::default();
+    unsent.open_player(stream_request(), None, now);
+    unsent.player_mut().expect("player").set_voices(true);
+    unsent.begin_frame();
+    unsent.inline_slot().expect("inline").place(STREAM_SEAT);
+    assert!(matches!(
+        unsent.cli_messages().as_slice(),
+        [PairControlMessage::VideoPlayStream {
+            play_id: 1,
+            voices: true,
+            ..
+        }]
+    ));
+}
+
+/// The session's `/watch` switch is on until turned off. A room whose
+/// stream would not start by itself is left alone while it stays on
+/// screen, and asked again the next time it is entered.
+#[test]
+fn a_stream_room_starts_by_itself_while_the_switch_is_on() {
+    let other_room = Uuid::from_u128(2);
+    let mut state = State::default();
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), Some(STREAM_ROOM));
+    assert_eq!(state.may_auto_start(None), None, "no stream room on screen");
+
+    state.decline_auto(STREAM_ROOM);
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), None);
+    assert_eq!(state.may_auto_start(Some(other_room)), Some(other_room));
+    assert_eq!(
+        state.may_auto_start(Some(STREAM_ROOM)),
+        Some(STREAM_ROOM),
+        "entered again"
+    );
+
+    state.set_streams(StreamSwitch::Off);
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), None);
+    state.set_streams(StreamSwitch::On);
+    assert_eq!(state.may_auto_start(Some(STREAM_ROOM)), Some(STREAM_ROOM));
+}
+
+/// A live stream's play carries its ticket to the CLI, not a URL: the CLI
+/// joins the room itself. Moving and stopping it are a video's messages.
+#[test]
+fn a_live_stream_plays_from_its_ticket() {
+    let mut state = watching_stream(Instant::now());
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoPlayStream {
+            play_id: 1,
+            livekit_url: "wss://rtc.late.sh".to_string(),
+            token: "secret-jwt".to_string(),
+            voices: false,
+            left: 31,
+            top: 4,
+            cols: 120,
+            rows: 33,
+        }]
+    );
+    state.close();
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoStop { play_id: 1 }]
+    );
+}
+
+/// Live means no pause, no seek and nothing to resume: only mute reaches
+/// the CLI, the footer offers only what works, the status never shows the
+/// CLI's frame-counted position, and closing leaves nothing behind.
+#[test]
+fn a_live_stream_has_no_pause_seek_or_position() {
+    let opened = Instant::now();
+    let mut state = watching_stream(opened);
+    let player = state.player_mut().expect("player");
+    assert_eq!(player.status_text(opened), "connecting…");
+    assert_eq!(
+        player.footer_hints(),
+        vec![("m", "mute"), ("f", "back to chat")]
+    );
+
+    assert_eq!(
+        player.apply(
+            &VideoReport::Playing {
+                position_s: 75,
+                duration_s: None
+            },
+            opened
+        ),
+        Some(WatchOutcome::Played)
+    );
+    assert_eq!(player.status_text(opened), "● live");
+
+    assert_eq!(
+        player.control(VideoControl::ToggleMute),
+        Some(PairControlMessage::VideoControl {
+            play_id: 1,
+            control: VideoControl::ToggleMute
+        })
+    );
+    for control in [
+        VideoControl::TogglePause,
+        VideoControl::SeekBack,
+        VideoControl::SeekForward,
+        VideoControl::SeekBackFar,
+        VideoControl::SeekForwardFar,
+        VideoControl::Restart,
+    ] {
+        assert_eq!(player.control(control), None, "{control:?}");
+    }
+    assert_eq!(player.memory(), WatchMemory::Nothing);
+}
+
+/// The stream leaving the registry ends the play at once: the status and
+/// the body say so, the CLI is told to stop, and a late report changes
+/// nothing.
+#[test]
+fn a_stream_that_ends_settles_its_player() {
+    let now = Instant::now();
+    let mut state = watching_stream(now);
+    let player = state.player_mut().expect("player");
+    assert_eq!(player.end(), Some(WatchOutcome::Ended));
+    assert_eq!(player.status_text(now), "stream ended");
+    assert_eq!(
+        player.fallback_line(),
+        Some("The stream ended.".to_string())
+    );
+    assert_eq!(player.wanted(), None);
+    assert_eq!(player.end(), None, "ending twice counts once");
+    assert_eq!(
+        player.apply(
+            &VideoReport::Playing {
+                position_s: 3,
+                duration_s: None
+            },
+            now
+        ),
+        None
+    );
+}
+
+/// A stream the CLI could not play points at its watch page.
+#[test]
+fn a_failed_stream_offers_its_watch_page() {
+    let now = Instant::now();
+    let mut state = watching_stream(now);
+    let player = state.player_mut().expect("player");
+    player.apply(
+        &VideoReport::Failed {
+            message: "stream viewer failed".to_string(),
+        },
+        now,
+    );
+    assert_eq!(player.status_text(now), "couldn't play");
+    assert_eq!(
+        player.fallback_line(),
+        Some(format!("Watch on the web: {WATCH_PAGE}"))
+    );
+    // Inline, the same line sits where the picture would be.
+    assert_eq!(
+        state.inline_slot().expect("inline").caption(),
+        Some(format!("Watch on the web: {WATCH_PAGE}"))
+    );
+}
+
+/// The ticket's token is a credential, and every watch log line prints its
+/// source.
+#[test]
+fn a_live_source_never_prints_its_token() {
+    let shown = format!("{:?}", WatchSource::LiveStream(ticket()));
+    assert!(shown.contains("abc_-1"));
+    assert!(!shown.contains("secret-jwt"));
 }

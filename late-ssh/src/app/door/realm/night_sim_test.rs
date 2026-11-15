@@ -17,7 +17,7 @@
 //!
 //! ```text
 //! REALM_SIM_SEEDS=20 REALM_SIM_OUT=/tmp/realm-sim.csv \
-//!   make test-llm ARGS="-p late-ssh --lib -E 'test(realm_campaign_sim)' --run-ignored ignored-only --no-capture"
+//!   make test ARGS="-p late-ssh --lib -E 'test(realm_campaign_sim)' --run-ignored ignored-only --no-capture"
 //! ```
 //!
 //! Every run is seeded, so a failure here is reproducible.

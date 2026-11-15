@@ -158,7 +158,7 @@ Client knobs (profile literals in `late-ssh/src/config.rs` plus `LATE_NETHACK_SE
 
 ## 8. Tests And Verification [STABLE]
 
-Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-nethack -p late-ssh -E 'package(late-nethack) or test(nethack)'"`.
+Agents run the focused tests with `make test ARGS="-p late-nethack -p late-ssh -E 'package(late-nethack) or test(nethack)'"`.
 
 Inline pure tests cover:
 - Client `state.rs`: launcher inert when disabled; `late-core` `models::arcade_handle` covers the handle shape/reserved rules.

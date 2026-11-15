@@ -1209,10 +1209,12 @@ impl App {
     /// paired CLI's mpv paints the watch player's rectangle whatever the
     /// TUI draws under it, and the key that drops a screensaver would never
     /// reach the player. A video outlasts the idle limit without a key, so
-    /// the screensaver waits for the modal to close; the 1Hz sync brings it
-    /// up then.
+    /// the screensaver waits for it to leave the screen (the modal closed,
+    /// or a stream's room no longer drawn); the 1Hz sync brings it up then.
+    /// A stream only heard has no picture to fight and does not hold it
+    /// back.
     fn screensaver_due(&self) -> bool {
-        self.away && !self.video.is_open()
+        self.away && !self.video.on_screen()
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -4117,29 +4119,42 @@ impl App {
             }
         }
 
-        if let Some(username) = self.chat.take_requested_watch() {
+        if let Some(request) = self.chat.take_requested_watch() {
             changed = true;
-            match self.stream_service.watch_url_for_username(&username) {
-                Some(url) => {
-                    self.stream_service.note_viewer_of_username(
-                        &username,
-                        self.user_id,
-                        &self.username,
-                    );
-                    self.open_stream_url(
-                        url,
-                        "Watch Stream".to_string(),
-                        format!("@{username} is live. Open on any device or scan:"),
-                        true,
-                    );
+            match request {
+                crate::app::chat::state::StreamWatchRequest::User(username) => {
+                    let viewer_voice_channel = self.voice.current_room(self.user_id);
+                    match self
+                        .stream_service
+                        .watch_url_for_username(&username, viewer_voice_channel)
+                    {
+                        Some(url) => {
+                            self.stream_service.note_viewer_of_username(
+                                &username,
+                                self.user_id,
+                                &self.username,
+                            );
+                            self.open_stream_url(
+                                url,
+                                "Watch Stream".to_string(),
+                                format!("@{username} is live. Open on any device or scan:"),
+                                true,
+                            );
+                        }
+                        None => {
+                            self.banner = Some(Banner::error(&format!(
+                                "@{username} is not live right now."
+                            )));
+                        }
+                    }
                 }
-                None => {
-                    self.banner = Some(Banner::error(&format!(
-                        "@{username} is not live right now."
-                    )));
+                crate::app::chat::state::StreamWatchRequest::Toggle { room_here } => {
+                    crate::app::video::svc::toggle_stream(self, room_here);
                 }
             }
         }
+        // A live stream room on screen plays its stream by itself.
+        crate::app::video::svc::auto_watch(self, self.chat.last_stream_room_drawn.get());
 
         // Walking into a stream room counts as arriving at the stream. No
         // banner for the viewer: they can see where they are.

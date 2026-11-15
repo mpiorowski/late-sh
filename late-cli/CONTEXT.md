@@ -84,9 +84,10 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/pty.rs` - terminal size/PTY helpers
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding, plus `SessionModesGuard`, which turns off mouse reporting and bracketed paste, resets the themed background (OSC 111), and shows the cursor when the session ends in any mode (the server's own teardown never arrives on an idle timeout or a dropped link). It never sends `?1049l`: after a clean exit that would restore a stale cursor over the goodbye line
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
-- `src/video.rs` - News watch: the `video` capability probe (`blockers`), the `mpv` child (`VideoPlayer`), its JSON IPC socket, the relay that carries mpv's frames to the tty with mpv's terminal-mode writes filtered out (`TtyFilter`), and the kitty-placement cleanup (`settle_sequence`). Pure work that returns `VideoUpdate`s; `ws.rs` sends, logs, and silences the house audio around a play. See `VIDEO.md`
+- `src/video.rs` - Watch: the `video` and `video_stream` capability probe (`blockers`, `can_play_streams`), the `mpv` child (`VideoPlayer`) and what it plays (`VideoSource`: a URL, or a live stream's ticket), its JSON IPC socket, the relay that carries mpv's frames to the tty with mpv's terminal-mode writes filtered out (`TtyFilter`), and the kitty-placement cleanup (`settle_sequence`). Pure work that returns `VideoUpdate`s; `ws.rs` sends, logs, and silences the house audio around a play. See `VIDEO.md`
+- `src/stream_view.rs` - a live stream received by the CLI itself: the LiveKit viewer (`StreamFeed`: joins the stream's room with a subscribe-only ticket, plays its audio, decodes its video, and can drop and take back the picture while the sound plays on) and the fixed I420 canvas every frame is scaled onto before it goes to mpv's stdin (`Canvas`, pure). See `VIDEO.md`, "Live streams"
 - `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
-- `../late-webview/` - embedded YouTube webview crate (wry/tao/WebKitGTK page host, JS bridge commands, pair-WS relay, `page.html`). Ships as the standalone `late-webview` binary on Linux; compiled into `late` as a library on Windows/macOS. `late-cli` must not depend on it on Linux — that dependency edge is what keeps WebKitGTK out of the `late` binary.
+- `../late-webview/` - embedded YouTube webview crate (wry/tao/WebKitGTK page host, JS bridge commands, pair-WS relay, `page.html`). Ships as the standalone `late-webview` binary on Linux; compiled into `late` as a library on Windows/macOS. `late-cli` must not depend on it on Linux: that dependency edge is what keeps WebKitGTK out of the `late` binary.
 - `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer. `resolve_stream_url` supports Icecast-style base URLs, `/stream/...` paths, and direct `.mp3`/`.m4a`/`.aac` URLs. Pair-WS `set_playback_source` can retarget native audio to a server-provided `stream_url`; `src/ws.rs` keeps a hardcoded Chillsynth URL only as a legacy radio fallback when an old server omits `stream_url`.
 - `Cargo.toml` - crate metadata; `otel` feature currently exists but is empty and default features are empty
 - `README.md` - user-facing CLI docs
@@ -230,7 +231,7 @@ OpenSSH mode is the exception because system OpenSSH owns terminal input during 
 
 ### Video watch
 
-In `VIDEO.md`: the `video` capability, the server-to-client placement and control messages, and the `mpv` child (`src/video.rs`).
+In `VIDEO.md`: the `video` and `video_stream` capabilities, the server-to-client placement and control messages, the `mpv` child (`src/video.rs`), and live streams (`src/stream_view.rs`).
 
 ## 7. Audio Runtime [STABLE]
 
@@ -328,7 +329,7 @@ Inline unit tests in `late-cli/src/` should stay pure logic only:
 Do not put integration-flavored tests inside `#[cfg(test)]` modules if they require live SSH, WebSocket, audio devices, network, or async service orchestration.
 
 LLM command policy from root context applies here:
-- Agents run the tests targeted at their change only through `make test-llm ARGS="-p late-cli -E 'test(<filter>)'"`, never raw `cargo test`/`cargo nextest`, and never `cargo clippy`.
+- Agents run the tests targeted at their change only through `make test ARGS="-p late-cli -E 'test(<filter>)'"`, never raw `cargo test`/`cargo nextest`, and never `cargo clippy`.
 - Full suites and `make check` stay with the human owner.
 - `mix format` is irrelevant here; for Rust formatting, mention `cargo fmt --all -- --check` when handing off.
 

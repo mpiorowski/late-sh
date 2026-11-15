@@ -135,4 +135,4 @@ including unknown fields, dead and reserved handles, and truncated last lines),
 (DB-backed: replay idempotency, skipped names, the per-run payout and its
 30-day lockout, a run past the lockout paying again with no second badge,
 cursor advancement). Run them scoped:
-`make test-llm ARGS="-p late-ssh --lib -E 'test(ingest)'"`.
+`make test ARGS="-p late-ssh --lib -E 'test(ingest)'"`.

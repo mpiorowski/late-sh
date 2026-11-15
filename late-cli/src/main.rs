@@ -17,6 +17,7 @@ mod mpris;
 mod pty;
 mod raw_mode;
 mod ssh;
+mod stream_view;
 mod update;
 mod video;
 mod voice;

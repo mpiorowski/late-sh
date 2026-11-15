@@ -194,6 +194,9 @@ pub enum Mark {
     Won,
     /// A bright glyph put down.
     BrightWon,
+    /// A sleeper put down at the crossing. Running from one, or going
+    /// down to one, marks the step the way it would a glyph.
+    Crossed,
     /// Ran from it.
     Ran,
     /// The signal dropped here.
