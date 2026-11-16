@@ -171,7 +171,8 @@ Cross-domain touchpoints:
 - `app/video` (`video::svc::auto_watch`, `toggle_stream`): a live stream
   room on screen plays its stream by itself in the terminal, inline in the
   room's own pane, between the header and the messages, so the chat stays
-  usable; a click on the picture takes it full screen. A bare `/watch` is
+  usable; F4 hides the messages so the picture takes the whole pane, and a
+  click on the picture takes it full screen. A bare `/watch` is
   the session's switch: it stops the stream and keeps stream rooms quiet
   until typed again (`video/CONTEXT.md`, "Live streams"). It is the News
   video player underneath. `StreamService::cli_watch` hands it

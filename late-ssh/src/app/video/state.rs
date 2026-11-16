@@ -81,6 +81,16 @@ pub(crate) struct State {
     auto_declined: Option<Uuid>,
 }
 
+/// How a stream playing inline shares its room's pane with the messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StreamPane {
+    /// The picture on top, the room's messages under it.
+    WithChat,
+    /// The picture takes the messages' rows too: the chat is hidden until
+    /// F4 brings it back.
+    Alone,
+}
+
 /// What a bare `/watch` would do for this session right now, for the
 /// stream row's hint (`svc::switch_hint`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +149,14 @@ impl State {
                 | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => None,
             },
             Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// F4: the messages under a stream drawn inline go, or come back
+    /// (`Player::toggle_stream_pane`). With no player the key is not ours.
+    pub(crate) fn toggle_stream_pane(&mut self) {
+        if let Some(player) = self.player_mut() {
+            player.toggle_stream_pane();
         }
     }
 
@@ -303,6 +321,11 @@ pub struct InlineSlot<'a> {
 impl InlineSlot<'_> {
     pub(crate) fn room_id(&self) -> Uuid {
         self.room_id
+    }
+
+    /// Whether the picture shares the pane with the messages (F4).
+    pub(crate) fn pane(&self) -> StreamPane {
+        self.player.stream_pane
     }
 
     /// The pane drew the stream's rectangle at `body` this frame. An empty
@@ -511,6 +534,9 @@ pub(crate) struct Player {
     author: String,
     shared_at: DateTime<Utc>,
     size: WatchSize,
+    /// F4's choice for a stream playing inline: whether its room's messages
+    /// keep their rows under the picture. Every play opens with the chat.
+    stream_pane: StreamPane,
     play_id: u64,
     status: WatchStatus,
     /// Whether `Played` was already reported for this play.
@@ -553,6 +579,7 @@ impl Player {
             author: request.author,
             shared_at: request.shared_at,
             size: WatchSize::Small,
+            stream_pane: StreamPane::WithChat,
             play_id,
             status: WatchStatus::Starting,
             played: false,
@@ -616,6 +643,23 @@ impl Player {
             WatchSize::Small => WatchSize::Full,
             WatchSize::Full => WatchSize::Small,
         };
+    }
+
+    /// F4 on a stream its room's pane drew last frame: the messages under
+    /// the picture go, or come back. Anywhere else (a video, full screen,
+    /// the room off screen) nothing changes.
+    fn toggle_stream_pane(&mut self) {
+        match (&self.source, self.size, self.inline_placed.get()) {
+            (WatchSource::LiveStream(_), WatchSize::Small, true) => {
+                self.stream_pane = match self.stream_pane {
+                    StreamPane::WithChat => StreamPane::Alone,
+                    StreamPane::Alone => StreamPane::WithChat,
+                };
+            }
+            (WatchSource::LiveStream(_), WatchSize::Small, false)
+            | (WatchSource::LiveStream(_), WatchSize::Full, _)
+            | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _, _) => {}
+        }
     }
 
     /// Esc on a full-screen live stream goes back to its room instead of
