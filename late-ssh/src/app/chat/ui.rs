@@ -5039,9 +5039,11 @@ fn inline_stream_rows(width: u16, height: u16) -> u16 {
 /// The stream playing inline: its black rectangle at the top of `area`
 /// (the paired CLI draws the picture there), a rule under it, and the rest
 /// handed back for the messages. A stream that has the pane alone (F4)
-/// takes every row of `area`, with no rule and nothing left for them. The
-/// slot hears where the rectangle landed, an empty one included, since
-/// being drawn at all is what keeps the watch alive.
+/// takes every row of `area`, with no rule and nothing left for them, so
+/// it fits where a shared pane has no room for a picture; under
+/// `INLINE_STREAM_MIN_ROWS` neither does. The slot hears where the
+/// rectangle landed, an empty one included, since being drawn at all is
+/// what keeps the watch alive.
 fn draw_inline_stream(
     frame: &mut Frame,
     area: Rect,
@@ -5082,21 +5084,27 @@ fn draw_inline_stream(
         );
     }
     // The rule and the messages, when the picture left them rows.
-    let under = area.height - rows;
-    if under > 0 {
-        frame.render_widget(
-            Paragraph::new(rule),
+    match area.height - rows {
+        0 => Rect {
+            y: area.y + rows,
+            height: 0,
+            ..area
+        },
+        under => {
+            frame.render_widget(
+                Paragraph::new(rule),
+                Rect {
+                    y: area.y + rows,
+                    height: 1,
+                    ..area
+                },
+            );
             Rect {
-                y: picture.y + rows,
-                height: 1,
+                y: area.y + rows + 1,
+                height: under - 1,
                 ..area
-            },
-        );
-    }
-    Rect {
-        y: area.y + rows + under.min(1),
-        height: under.saturating_sub(1),
-        ..area
+            }
+        }
     }
 }
 
