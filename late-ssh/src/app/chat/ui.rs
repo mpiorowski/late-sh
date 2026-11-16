@@ -1151,13 +1151,13 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             drawn: view.stream_room_drawn,
-            video: view.room.and_then(|room| {
-                room_stream_slot(
-                    view.stream_video,
-                    room.id,
-                    view.overlay.is_some() || view.image_modal.is_some(),
-                )
-            }),
+            video: view
+                .room
+                .and_then(|room| view.stream_video.filter(|slot| slot.room_id() == room.id)),
+            messages_in_use: view.overlay.is_some()
+                || view.image_modal.is_some()
+                || view.mention_active
+                || view.selected_message_id.is_some(),
             switch: view.stream_switch,
             voice,
             // The live strip stands in for the topic row while it is up:
@@ -4791,6 +4791,11 @@ struct RoomHeader<'a> {
     /// This room's stream playing inline: the picture's rows go under the
     /// header block, above the messages.
     video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// Whether this frame needs the messages' rows: something is drawn
+    /// over them (an overlay, an image, the composer's suggestions) or a
+    /// message is selected. A stream that has the pane alone (F4) shares it
+    /// for as long as that lasts.
+    messages_in_use: bool,
     /// What `/watch` would do, for the stream row's hint.
     switch: crate::app::video::state::SwitchHint,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
@@ -4940,7 +4945,7 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         // No header rows (or no room for them): the stream still gets its
         // seat, straight under the pane's top.
         return match header.video {
-            Some(slot) => draw_inline_stream(frame, area, slot, rule()),
+            Some(slot) => draw_inline_stream(frame, area, slot, header.messages_in_use, rule()),
             None => area,
         };
     }
@@ -5010,7 +5015,7 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         ..area
     };
     match header.video {
-        Some(slot) => draw_inline_stream(frame, below, slot, rule()),
+        Some(slot) => draw_inline_stream(frame, below, slot, header.messages_in_use, rule()),
         None => below,
     }
 }
@@ -5041,21 +5046,25 @@ fn inline_stream_rows(width: u16, height: u16) -> u16 {
 /// handed back for the messages. A stream that has the pane alone (F4)
 /// takes every row of `area`, with no rule and nothing left for them, so
 /// it fits where a shared pane has no room for a picture; under
-/// `INLINE_STREAM_MIN_ROWS` neither does. The slot hears where the
-/// rectangle landed, an empty one included, since being drawn at all is
-/// what keeps the watch alive.
+/// `INLINE_STREAM_MIN_ROWS` neither does. It shares the pane all the same
+/// in a frame that needs the messages' rows (`messages_in_use`). The slot
+/// hears where the rectangle landed, an empty one included, since being
+/// drawn at all is what keeps the watch alive.
 fn draw_inline_stream(
     frame: &mut Frame,
     area: Rect,
     slot: crate::app::video::state::InlineSlot<'_>,
+    messages_in_use: bool,
     rule: Line<'static>,
 ) -> Rect {
     use crate::app::video::state::StreamPane;
-    let rows = match (slot.pane(), area.height >= INLINE_STREAM_MIN_ROWS) {
-        (StreamPane::Alone, true) => area.height,
-        (StreamPane::Alone, false) | (StreamPane::WithChat, _) => {
-            inline_stream_rows(area.width, area.height)
-        }
+    let alone = match (slot.pane(), messages_in_use) {
+        (StreamPane::Alone, false) => area.height >= INLINE_STREAM_MIN_ROWS,
+        (StreamPane::Alone, true) | (StreamPane::WithChat, _) => false,
+    };
+    let rows = match alone {
+        true => area.height,
+        false => inline_stream_rows(area.width, area.height),
     };
     let picture = Rect {
         height: rows,
@@ -5106,22 +5115,6 @@ fn draw_inline_stream(
             }
         }
     }
-}
-
-/// `room_id`'s stream playing inline, for its header. While something is
-/// drawn over the messages (`covered`: an overlay, an image), a stream that
-/// has the pane alone gives them their rows back, so it has somewhere to
-/// draw.
-fn room_stream_slot(
-    slot: Option<crate::app::video::state::InlineSlot<'_>>,
-    room_id: Uuid,
-    covered: bool,
-) -> Option<crate::app::video::state::InlineSlot<'_>> {
-    let slot = slot.filter(|slot| slot.room_id() == room_id)?;
-    Some(match covered {
-        true => slot.with_chat(),
-        false => slot,
-    })
 }
 
 /// The room's topic, when it has a non-blank one.
@@ -5241,11 +5234,11 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     drawn: view.stream_room_drawn,
-                    video: room_stream_slot(
-                        view.stream_video,
-                        room.id,
-                        view.overlay.is_some() || view.image_modal.is_some(),
-                    ),
+                    video: view.stream_video.filter(|slot| slot.room_id() == room.id),
+                    messages_in_use: view.overlay.is_some()
+                        || view.image_modal.is_some()
+                        || view.mention_active
+                        || view.selected_message_id.is_some(),
                     switch: view.stream_switch,
                     voice,
                     row: room_topic(room).map(|text| TopicRow {

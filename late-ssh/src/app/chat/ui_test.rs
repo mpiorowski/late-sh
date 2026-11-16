@@ -3223,6 +3223,7 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 f,
                 area,
                 super::RoomHeader {
+                    messages_in_use: false,
                     drawn: None,
                     video: None,
                     switch: crate::app::video::state::SwitchHint::Unavailable,
@@ -3268,6 +3269,7 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 f,
                 area,
                 super::RoomHeader {
+                    messages_in_use: false,
                     drawn: None,
                     video: None,
                     switch: crate::app::video::state::SwitchHint::Unavailable,
@@ -3332,6 +3334,7 @@ fn room_header_seats_an_inline_stream_above_the_messages() {
                 f,
                 area,
                 super::RoomHeader {
+                    messages_in_use: false,
                     drawn: Some(&drawn),
                     video: video.inline_slot(),
                     switch: crate::app::video::state::SwitchHint::Unavailable,
@@ -3361,8 +3364,9 @@ fn room_header_seats_an_inline_stream_above_the_messages() {
 
 /// F4 gives the stream the whole pane: the picture takes every row under
 /// the header, with no rule and no rows left for the messages, and F4 again
-/// brings them back. A frame that draws something over the messages (an
-/// overlay, an image) gets them back for as long as it is up.
+/// brings them back. A frame that needs the messages' rows (an overlay, the
+/// composer's suggestions, a selected message) gets them for as long as it
+/// does, while the header goes on saying which way F4 goes.
 #[test]
 fn f4_gives_an_inline_stream_the_messages_rows_and_back() {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
@@ -3370,7 +3374,8 @@ fn f4_gives_an_inline_stream_the_messages_rows_and_back() {
     let stream = live_stream_view("https://late.sh/live/abc123");
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("term");
     let area = Rect::new(0, 0, 120, 40);
-    let mut draw = |video: &crate::app::video::state::State, covered: bool| {
+    // The picture's rectangle, the rows the messages keep, the stream row.
+    let mut draw = |video: &crate::app::video::state::State, messages_in_use: bool| {
         video.begin_frame();
         let mut remaining = area;
         terminal
@@ -3380,11 +3385,8 @@ fn f4_gives_an_inline_stream_the_messages_rows_and_back() {
                     area,
                     super::RoomHeader {
                         drawn: None,
-                        video: super::room_stream_slot(
-                            video.inline_slot(),
-                            stream.room_id,
-                            covered,
-                        ),
+                        video: video.inline_slot(),
+                        messages_in_use,
                         switch: crate::app::video::state::SwitchHint::Stop,
                         stream: Some(&stream),
                         voice: None,
@@ -3394,22 +3396,34 @@ fn f4_gives_an_inline_stream_the_messages_rows_and_back() {
                 )
             })
             .unwrap();
-        (video.inline_slot().expect("inline").body(), remaining)
+        (
+            video.inline_slot().expect("inline").body(),
+            remaining,
+            row_text(terminal.backend().buffer(), 0, 120),
+        )
     };
 
     let shared = (Rect::new(0, 2, 120, 22), Rect::new(0, 25, 120, 15));
-    assert_eq!(draw(&video, false), shared);
+    let (picture, messages, hint) = draw(&video, false);
+    assert_eq!((picture, messages), shared);
+    assert!(hint.contains("F4 hide chat"), "{hint:?}");
 
-    assert!(video.toggle_stream_pane(), "a stream is drawn here");
+    video.toggle_stream_pane();
+    let (picture, messages, hint) = draw(&video, false);
     assert_eq!(
-        draw(&video, false),
+        (picture, messages),
         (Rect::new(0, 2, 120, 38), Rect::new(0, 40, 120, 0)),
         "every row under the header, none for the messages"
     );
-    assert_eq!(draw(&video, true), shared, "an overlay needs the rows");
+    assert!(hint.contains("F4 show chat"), "{hint:?}");
 
-    assert!(video.toggle_stream_pane());
-    assert_eq!(draw(&video, false), shared);
+    let (picture, messages, hint) = draw(&video, true);
+    assert_eq!((picture, messages), shared, "the frame needs the rows");
+    assert!(hint.contains("F4 show chat"), "the choice stands: {hint:?}");
+
+    video.toggle_stream_pane();
+    let (picture, messages, _) = draw(&video, false);
+    assert_eq!((picture, messages), shared);
 }
 
 /// A pane too short for a picture worth drawing gives the stream no rows
@@ -3429,6 +3443,7 @@ fn room_header_gives_a_stream_no_rows_in_a_pane_too_short_for_it() {
                 f,
                 area,
                 super::RoomHeader {
+                    messages_in_use: false,
                     drawn: Some(&drawn),
                     video: video.inline_slot(),
                     switch: crate::app::video::state::SwitchHint::Unavailable,
@@ -3457,6 +3472,7 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 f,
                 area,
                 super::RoomHeader {
+                    messages_in_use: false,
                     drawn: None,
                     video: None,
                     switch: crate::app::video::state::SwitchHint::Unavailable,
