@@ -8860,3 +8860,43 @@ async fn a_mention_answered_with_no_chat_tile_opens_in_history_and_clears() {
     app.handle_input(b"\x1b");
     wait_for_render_not_contains(&mut app, "mentioned you in #lounge").await;
 }
+
+/// `/` in the guide types a query (its `?` a letter, not the close key),
+/// Enter jumps to the topic holding it, and Esc takes the prompt down
+/// before it takes the guide.
+#[tokio::test]
+async fn the_guide_searches_every_topic() {
+    use crate::app::help_modal::data::HelpTopic;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "guide-search-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "guide-search-flow-it");
+    app.resize(120, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"?");
+    assert!(app.show_help);
+    assert_eq!(app.help_modal_state.selected_topic(), HelpTopic::Pair);
+    let _ = render_plain(&mut app);
+
+    app.handle_input(b"/a?");
+    assert!(app.show_help, "? inside the prompt is part of the query");
+    assert_eq!(app.help_modal_state.query(), Some("a?"));
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.help_modal_state.query().is_none(),
+        "the guide's search prompt",
+    )
+    .await;
+    assert!(app.show_help, "Esc closes the prompt first");
+
+    app.handle_input(b"/ZELLIJ\r");
+    assert_eq!(app.help_modal_state.query(), None);
+    assert_ne!(app.help_modal_state.selected_topic(), HelpTopic::Pair);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("zellij"), "the match is on screen: {frame}");
+
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.show_help, "the guide").await;
+}

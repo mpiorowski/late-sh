@@ -1,11 +1,18 @@
 //! Best-effort "a newer release is available" check shown once before the SSH
 //! session starts. Fail-open by design: any network, status, or parse error is
 //! logged at debug and ignored, so a slow or unreachable distribution host
-//! never blocks `late` from connecting.
+//! never blocks `late` from connecting. On Unix the nag also offers `u` to run
+//! the installer over this binary and restart into the new one.
 
-use std::time::Duration;
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
-use tracing::debug;
+use anyhow::{Context, Result};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use tracing::{debug, info, warn};
 
 /// Distribution host serving the published `VERSION` file and installers.
 /// Matches the installer default and its `LATE_INSTALL_BASE_URL` override, so a
@@ -38,10 +45,143 @@ pub(crate) async fn check_for_update() {
     if !is_outdated(crate::config::VERSION, &latest) {
         return;
     }
-    for line in nag_lines(crate::config::VERSION, &latest, &base) {
+    // The path is read before anything replaces the file: on Linux it comes
+    // from /proc/self/exe, which names the old, unlinked file afterwards.
+    let offer = match (self_update_script(&base), std::env::current_exe()) {
+        (Some(script), Ok(exe)) if std::io::stdin().is_terminal() => Some((script, exe)),
+        (Some(_), Err(err)) => {
+            debug!(error = %err, "update check: no path to this binary, not offering an update");
+            None
+        }
+        _ => None,
+    };
+    for line in nag_lines(crate::config::VERSION, &latest, &base, offer.is_some()) {
         eprintln!("{line}");
     }
-    tokio::time::sleep(NAG_PAUSE).await;
+    let Some((script, exe)) = offer else {
+        tokio::time::sleep(NAG_PAUSE).await;
+        return;
+    };
+    let answer = match tokio::task::spawn_blocking(|| wait_for_answer(NAG_PAUSE)).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(err)) => {
+            debug!(error = %err, "update check: could not read a key, continuing");
+            NagAnswer::Continue
+        }
+        Err(err) => {
+            debug!(error = %err, "update check: key wait task failed, continuing");
+            NagAnswer::Continue
+        }
+    };
+    match answer {
+        NagAnswer::Continue => {}
+        NagAnswer::UpdateNow => match update_and_restart(&script, &exe) {
+            // `restart` only returns on failure: success replaces this process.
+            Ok(()) => {}
+            Err(err) => {
+                warn!(error = ?err, "self update failed");
+                eprintln!("late: update failed: {err:#}");
+                eprintln!("late: run it yourself: {script}");
+                eprintln!(
+                    "late: connecting with {} for now...",
+                    crate::config::VERSION
+                );
+            }
+        },
+    }
+}
+
+/// How the wait under the nag ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NagAnswer {
+    UpdateNow,
+    Continue,
+}
+
+/// What a key pressed under the nag means: `u` updates, any other key skips
+/// the wait. Releases and repeats mean nothing (Windows reports both).
+fn answer_for(key: KeyEvent) -> Option<NagAnswer> {
+    match (key.kind, key.code) {
+        (KeyEventKind::Press, KeyCode::Char('u' | 'U')) => Some(NagAnswer::UpdateNow),
+        (KeyEventKind::Press, _) => Some(NagAnswer::Continue),
+        (KeyEventKind::Release | KeyEventKind::Repeat, _) => None,
+    }
+}
+
+/// Wait up to `timeout` for a key, in raw mode so one key answers without
+/// Enter. Raw mode is off again before this returns, whatever happened.
+fn wait_for_answer(timeout: Duration) -> Result<NagAnswer> {
+    crossterm::terminal::enable_raw_mode().context("entering raw mode")?;
+    let answer = read_answer(timeout);
+    let restored = crossterm::terminal::disable_raw_mode().context("leaving raw mode");
+    let answer = answer?;
+    restored?;
+    Ok(answer)
+}
+
+fn read_answer(timeout: Duration) -> Result<NagAnswer> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || !event::poll(left).context("polling for a key")? {
+            return Ok(NagAnswer::Continue);
+        }
+        if let Event::Key(key) = event::read().context("reading a key")?
+            && let Some(answer) = answer_for(key)
+        {
+            return Ok(answer);
+        }
+    }
+}
+
+/// The shell line that installs the latest release, for the builds that can
+/// replace their own binary while it runs. Windows cannot: a running
+/// `late.exe` is locked, so `install.ps1` would fail to copy over it.
+fn self_update_script(base: &str) -> Option<String> {
+    match cfg!(unix) {
+        true => Some(format!("curl -fsSL {base}/install.sh | bash")),
+        false => None,
+    }
+}
+
+/// Run the installer into the directory `exe` lives in, so this binary is
+/// the one replaced wherever it was installed, then restart into it.
+fn update_and_restart(script: &str, exe: &Path) -> Result<()> {
+    let dir = exe
+        .parent()
+        .context("this binary's path has no directory")?;
+    info!(dir = %dir.display(), "running the installer");
+    eprintln!();
+    let status = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .env("LATE_INSTALL_DIR", dir)
+        .status()
+        .context("starting bash for the installer")?;
+    if !status.success() {
+        anyhow::bail!("installer exited with {status}");
+    }
+    eprintln!();
+    eprintln!("late: updated, restarting...");
+    restart(exe.to_path_buf())
+}
+
+/// Replace this process with the new binary on the same arguments. The
+/// check is off in the new one: a host whose `VERSION` runs ahead of its
+/// download would otherwise offer the same update forever.
+#[cfg(unix)]
+fn restart(exe: PathBuf) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .env("LATE_NO_UPDATE_CHECK", "1")
+        .exec();
+    Err(err).with_context(|| format!("restarting {}", exe.display()))
+}
+
+#[cfg(not(unix))]
+fn restart(exe: PathBuf) -> Result<()> {
+    anyhow::bail!("restarting {} is unix-only", exe.display())
 }
 
 /// Per-platform install commands, defined in one place so the nag and any
@@ -58,7 +198,7 @@ fn install_methods(base: &str) -> [(&'static str, String); 4] {
 
 /// Build the multi-line "update available" nag with the install commands
 /// aligned in a left-justified column so they all start at the same place.
-fn nag_lines(current: &str, latest: &str, base: &str) -> Vec<String> {
+fn nag_lines(current: &str, latest: &str, base: &str, offers_update: bool) -> Vec<String> {
     let methods = install_methods(base);
     let label_width = methods
         .iter()
@@ -75,6 +215,9 @@ fn nag_lines(current: &str, latest: &str, base: &str) -> Vec<String> {
         lines.push(format!("  {label:<width$}  {command}", width = label_width));
     }
     lines.push(String::new());
+    if offers_update {
+        lines.push("press u to update now and restart, any other key to go on".to_string());
+    }
     lines.push(format!(
         "continuing in {}s (set LATE_NO_UPDATE_CHECK=1 to skip)...",
         NAG_PAUSE.as_secs()

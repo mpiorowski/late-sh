@@ -76,8 +76,8 @@ Tests sit beside each file (`state_test.rs`, `svc_test.rs`, `ui_test.rs`).
   while a spawn shows, and close after; the composer itself never
   changes. Left to right: a seat per hit the spawn needs (the hitters'
   portraits as they land, empty seats for the hits still owed), the
-  lane, the face, the words (the headline, who hit last and how many to
-  go, `/hit` lit unless the viewer already hit it, the seconds left).
+  lane, the face, the words (the headline, everyone who hit so far and how many
+  to go, `/hit` lit unless the viewer already hit it, the seconds left).
   A hit sends a strike across the lane for 5s and the face flashes
   when it lands; the wake cadence rides the half edge while it plays
   (`svc::animates`). The session's own answer (`your tire iron hits

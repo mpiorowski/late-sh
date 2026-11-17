@@ -440,6 +440,10 @@ pub(crate) enum SendRefusal {
     LinkCooldown {
         remaining: Duration,
     },
+    /// A body past `chat_message::BODY_MAX_CHARS`, with its own count.
+    TooLong {
+        chars: usize,
+    },
 }
 
 /// Which slow mode is holding a send: the room's own, or the server-wide one.
@@ -479,6 +483,10 @@ impl SendRefusal {
             Self::LinkCooldown { remaining } => format!(
                 "🔗 New accounts can only post a link occasionally — next link in {}.",
                 format_cooldown(remaining.as_secs())
+            ),
+            Self::TooLong { chars } => format!(
+                "Message too long: {chars} characters, the limit is {}.",
+                late_core::models::chat_message::BODY_MAX_CHARS
             ),
         }
     }
@@ -3603,6 +3611,10 @@ impl ChatService {
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(None);
+        }
+        let chars = body.chars().count();
+        if chars > late_core::models::chat_message::BODY_MAX_CHARS {
+            return Err(SendError::Refused(SendRefusal::TooLong { chars }));
         }
 
         if room_slug.as_deref() == Some("announcements") && !is_admin {

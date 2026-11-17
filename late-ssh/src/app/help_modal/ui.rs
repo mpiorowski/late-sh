@@ -8,7 +8,10 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-use super::{data::HelpTopic, state::HelpModalState};
+use super::{
+    data::HelpTopic,
+    state::{HelpModalState, wrapped_rows},
+};
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen_url: &str) {
     let popup = centered_percent_rect(80, 85, area);
@@ -68,10 +71,21 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
 
     let body = columns[1].inner(Margin::new(2, 0));
     state.set_body_area(body);
-    let lines: Vec<Line> = state
-        .current_lines(listen_url)
+    let source = state.current_lines(listen_url);
+    state.set_max_scroll(wrapped_rows(&source, body.width).saturating_sub(body.height));
+    let hit = state.hit_line();
+    let lines: Vec<Line> = source
         .into_iter()
-        .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::TEXT()))))
+        .enumerate()
+        .map(|(index, line)| {
+            let style = match hit == Some(index) {
+                true => Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .bg(theme::BG_HIGHLIGHT()),
+                false => Style::default().fg(theme::TEXT()),
+            };
+            Line::from(Span::styled(line, style))
+        })
         .collect();
     frame.render_widget(
         Paragraph::new(lines)
@@ -80,7 +94,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
         body,
     );
 
-    draw_footer(frame, layout[3]);
+    draw_footer(frame, layout[3], state.query());
 }
 
 fn draw_nav(frame: &mut Frame, area: Rect, state: &HelpModalState) {
@@ -121,18 +135,35 @@ fn draw_nav(frame: &mut Frame, area: Rect, state: &HelpModalState) {
     state.set_tab_rects(rects);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect) {
-    let footer = Line::from(vec![
-        Span::raw("  "),
-        Span::styled("Tab/S+Tab", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" switch section  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↑↓ j/k", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("click/wheel", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" mouse  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("?/Esc/q", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-    ]);
+/// The key row, or the `/` prompt while a search is being typed.
+fn draw_footer(frame: &mut Frame, area: Rect, query: Option<&str>) {
+    let key = Style::default().fg(theme::AMBER_DIM());
+    let label = Style::default().fg(theme::TEXT_DIM());
+    let footer = match query {
+        Some(query) => Line::from(vec![
+            Span::raw("  "),
+            Span::styled("/", key),
+            Span::styled(query.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
+            Span::styled("▏", key),
+            Span::styled("   Enter", key),
+            Span::styled(" find  ", label),
+            Span::styled("Esc", key),
+            Span::styled(" cancel", label),
+        ]),
+        None => Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Tab/S+Tab", key),
+            Span::styled(" section  ", label),
+            Span::styled("j/k g/G", key),
+            Span::styled(" scroll  ", label),
+            Span::styled("/", key),
+            Span::styled(" search  ", label),
+            Span::styled("n/N", key),
+            Span::styled(" next  ", label),
+            Span::styled("?/Esc/q", key),
+            Span::styled(" close", label),
+        ]),
+    };
     frame.render_widget(Paragraph::new(footer), area);
 }
 

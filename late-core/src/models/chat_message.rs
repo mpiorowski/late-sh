@@ -19,6 +19,11 @@ crate::model! {
     }
 }
 
+/// The most characters a message body holds: the `chat_messages.body`
+/// CHECK (migration 004, `length(body) <= 2000`, which counts characters).
+/// Senders refuse past it by name instead of letting the insert fail.
+pub const BODY_MAX_CHARS: usize = 2000;
+
 /// Which way a history page walks from its cursor: `Older` back toward the
 /// start of the room, `Newer` forward toward the tail. Both directions hand
 /// their page back oldest first.

@@ -3995,6 +3995,15 @@ impl ChatState {
             (ComposerCommands::Disabled, false) | (ComposerCommands::Enabled, _) => {}
         }
 
+        // Past the column cap the send could only fail, so it is refused
+        // here, before anything clears the draft (an edit included).
+        let chars = body.chars().count();
+        if chars > late_core::models::chat_message::BODY_MAX_CHARS {
+            return Some(Banner::error(
+                &super::svc::SendRefusal::TooLong { chars }.message(),
+            ));
+        }
+
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
             self.requested_help_topic = Some(HelpTopic::Chat);
@@ -8396,7 +8405,7 @@ fn moderation_server_toast(event: &ModerationEvent) -> Option<String> {
 }
 
 /// A parsed `/petname` command, drained by `handle_post_submit_requests`
-/// (which has the `App` access needed to update the cat).
+/// (which has the `App` access needed to update the pet).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PetnameRequest {
     /// `/petname` with no argument — show the current name.

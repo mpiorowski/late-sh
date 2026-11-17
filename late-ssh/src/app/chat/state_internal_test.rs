@@ -3086,6 +3086,40 @@ async fn submit_brb_in_room(username: &str, command: &str) -> (ChatState, String
     (state, body)
 }
 
+/// A draft past the message cap is refused in the composer with the limit
+/// named, and the draft stays: nothing is sent to fail, nothing typed is
+/// lost.
+#[tokio::test]
+async fn an_overlong_draft_is_refused_and_kept() {
+    use late_core::models::chat_message::BODY_MAX_CHARS;
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "long_draft").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "long-draft-room")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join room");
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    let draft = "x".repeat(BODY_MAX_CHARS + 1);
+    state.start_composing_in_room(room.id);
+    state.composer.insert_str(&draft);
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("a refusal banner");
+    assert_eq!(
+        banner.message,
+        "Message too long: 2001 characters, the limit is 2000."
+    );
+    assert_eq!(state.composer.lines().join("\n"), draft, "the draft stays");
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
 /// `/hit` is the lounge's only while the lounge tick says so (a runner
 /// looking at #lounge): swallowed, never posted, and asked for once.
 #[tokio::test]

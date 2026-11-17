@@ -231,10 +231,10 @@ pub(crate) fn scene_text(spawn: &Spawn, viewer: Uuid) -> SceneText {
         },
         None => {
             let left = spawn.hits_left();
-            let detail = match spawn.hits.last() {
-                None if left == 1 => "one hit puts it down.".to_string(),
-                None => format!("{left} hits put it down."),
-                Some(last) => format!("{} hit it. {left} to go.", last.username),
+            let detail = match spawn.hits.is_empty() {
+                true if left == 1 => "one hit puts it down.".to_string(),
+                true => format!("{left} hits put it down."),
+                false => format!("{} hit it. {left} to go.", names(spawn)),
             };
             SceneText {
                 headline: format!("a {kind} is in the channel."),
