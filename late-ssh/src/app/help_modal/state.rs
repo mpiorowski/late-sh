@@ -162,9 +162,9 @@ impl HelpModalState {
         }
         self.last_query = Some(query);
         let topic = self.selected_topic.index();
-        let start = match self.hit {
-            Some((hit_topic, line)) if hit_topic == self.selected_topic => line,
-            Some(_) | None => self.first_shown_line(listen_url),
+        let start = match self.hit_line() {
+            Some(line) => line,
+            None => self.first_shown_line(listen_url),
         };
         self.jump_to_match((topic, start), SearchDirection::Forward, listen_url)
     }
@@ -173,9 +173,9 @@ impl HelpModalState {
     /// shown. Returns `false` with no query or no match.
     pub(crate) fn repeat_search(&mut self, direction: SearchDirection, listen_url: &str) -> bool {
         let topic = self.selected_topic.index();
-        let line = match self.hit {
-            Some((hit_topic, line)) if hit_topic == self.selected_topic => line,
-            Some(_) | None => self.first_shown_line(listen_url),
+        let line = match self.hit_line() {
+            Some(line) => line,
+            None => self.first_shown_line(listen_url),
         };
         let start = match direction {
             SearchDirection::Forward => (topic, line + 1),
@@ -190,11 +190,11 @@ impl HelpModalState {
         direction: SearchDirection,
         listen_url: &str,
     ) -> bool {
-        let Some(query) = self.last_query.clone() else {
+        let Some(query) = self.last_query.as_deref() else {
             return false;
         };
         let keep = self.keep_composer_focused;
-        let found = find_match(&query, start, direction, |topic| {
+        let found = find_match(query, start, direction, |topic| {
             lines_for(topic, keep, listen_url)
         });
         let Some((topic, line)) = found else {
@@ -211,19 +211,24 @@ impl HelpModalState {
     }
 
     /// The source line at the top of the body, from the wrapped rows above
-    /// it.
+    /// it. Each line wraps on its own, so its rows add up line by line.
     fn first_shown_line(&self, listen_url: &str) -> usize {
         let lines = self.current_lines(listen_url);
         let width = self.body_area.get().width;
         let scroll = self.current_scroll();
-        (0..lines.len())
-            .find(|&end| wrapped_rows(&lines[..=end], width) > scroll)
-            .unwrap_or(0)
+        let mut rows: u16 = 0;
+        for (index, line) in lines.iter().enumerate() {
+            rows = rows.saturating_add(wrapped_rows(std::slice::from_ref(line), width));
+            if rows > scroll {
+                return index;
+            }
+        }
+        0
     }
 
-    /// The furthest a topic of `lines` scrolls in the current body, for a
-    /// jump into a topic the renderer has not measured yet.
-    fn max_scroll_for(&self, lines: &[String]) -> u16 {
+    /// The furthest a topic of `lines` scrolls in the current body: the
+    /// renderer's measure each frame, and a jump's into a topic not drawn yet.
+    pub(crate) fn max_scroll_for(&self, lines: &[String]) -> u16 {
         let body = self.body_area.get();
         wrapped_rows(lines, body.width).saturating_sub(body.height)
     }
@@ -287,7 +292,7 @@ pub(crate) fn find_match(
     for step in 0..=topics {
         let index = match direction {
             SearchDirection::Forward => (start_topic + step) % topics,
-            SearchDirection::Backward => (start_topic + topics * 2 - step) % topics,
+            SearchDirection::Backward => (start_topic + topics - step) % topics,
         };
         let topic = HelpTopic::ALL[index];
         let lines = lines_of(topic);
@@ -320,7 +325,7 @@ pub(crate) fn find_match(
 }
 
 /// The rows `lines` take wrapped at `width`, as the body draws them.
-pub(crate) fn wrapped_rows(lines: &[String], width: u16) -> u16 {
+fn wrapped_rows(lines: &[String], width: u16) -> u16 {
     if width == 0 {
         return lines.len() as u16;
     }

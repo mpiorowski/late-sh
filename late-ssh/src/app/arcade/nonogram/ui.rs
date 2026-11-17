@@ -229,7 +229,7 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
         spans.push(Span::styled("│", dim));
         for col in 0..num_cols {
             let cell = cell_span(state, row, col);
-            let solid = state.cursor == (row, col) || is_filled(state, row, col);
+            let solid = state.cursor == (row, col) || cell_value(state, row, col) == 1;
             let style = match solid {
                 true => cell.style,
                 false => underline(cell.style),
@@ -315,10 +315,6 @@ fn cell_value(state: &State, row: usize, col: usize) -> u8 {
         .and_then(|line| line.get(col))
         .copied()
         .unwrap_or(0)
-}
-
-fn is_filled(state: &State, row: usize, col: usize) -> bool {
-    cell_value(state, row, col) == 1
 }
 
 fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {

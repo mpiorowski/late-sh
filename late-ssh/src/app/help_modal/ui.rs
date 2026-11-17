@@ -8,10 +8,7 @@ use ratatui::{
 
 use crate::app::common::theme;
 
-use super::{
-    data::HelpTopic,
-    state::{HelpModalState, wrapped_rows},
-};
+use super::{data::HelpTopic, state::HelpModalState};
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen_url: &str) {
     let popup = centered_percent_rect(80, 85, area);
@@ -72,7 +69,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
     let body = columns[1].inner(Margin::new(2, 0));
     state.set_body_area(body);
     let source = state.current_lines(listen_url);
-    state.set_max_scroll(wrapped_rows(&source, body.width).saturating_sub(body.height));
+    state.set_max_scroll(state.max_scroll_for(&source));
     let hit = state.hit_line();
     let lines: Vec<Line> = source
         .into_iter()

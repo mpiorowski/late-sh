@@ -5,8 +5,9 @@
 //! the installer over this binary and restart into the new one.
 
 use std::{
+    convert::Infallible,
     io::IsTerminal,
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -75,19 +76,17 @@ pub(crate) async fn check_for_update() {
     };
     match answer {
         NagAnswer::Continue => {}
-        NagAnswer::UpdateNow => match update_and_restart(&script, &exe) {
-            // `restart` only returns on failure: success replaces this process.
-            Ok(()) => {}
-            Err(err) => {
-                warn!(error = ?err, "self update failed");
-                eprintln!("late: update failed: {err:#}");
-                eprintln!("late: run it yourself: {script}");
-                eprintln!(
-                    "late: connecting with {} for now...",
-                    crate::config::VERSION
-                );
-            }
-        },
+        NagAnswer::UpdateNow => {
+            // Success replaces this process, so only a failure comes back.
+            let Err(err) = update_and_restart(&script, &exe);
+            warn!(error = ?err, "self update failed");
+            eprintln!("late: update failed: {err:#}");
+            eprintln!("late: run it yourself: {script}");
+            eprintln!(
+                "late: connecting with {} for now...",
+                crate::config::VERSION
+            );
+        }
     }
 }
 
@@ -139,14 +138,14 @@ fn read_answer(timeout: Duration) -> Result<NagAnswer> {
 /// `late.exe` is locked, so `install.ps1` would fail to copy over it.
 fn self_update_script(base: &str) -> Option<String> {
     match cfg!(unix) {
-        true => Some(format!("curl -fsSL {base}/install.sh | bash")),
+        true => Some(shell_install_command(base)),
         false => None,
     }
 }
 
 /// Run the installer into the directory `exe` lives in, so this binary is
 /// the one replaced wherever it was installed, then restart into it.
-fn update_and_restart(script: &str, exe: &Path) -> Result<()> {
+fn update_and_restart(script: &str, exe: &Path) -> Result<Infallible> {
     let dir = exe
         .parent()
         .context("this binary's path has no directory")?;
@@ -163,16 +162,16 @@ fn update_and_restart(script: &str, exe: &Path) -> Result<()> {
     }
     eprintln!();
     eprintln!("late: updated, restarting...");
-    restart(exe.to_path_buf())
+    restart(exe)
 }
 
 /// Replace this process with the new binary on the same arguments. The
 /// check is off in the new one: a host whose `VERSION` runs ahead of its
 /// download would otherwise offer the same update forever.
 #[cfg(unix)]
-fn restart(exe: PathBuf) -> Result<()> {
+fn restart(exe: &Path) -> Result<Infallible> {
     use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(&exe)
+    let err = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .env("LATE_NO_UPDATE_CHECK", "1")
         .exec();
@@ -180,14 +179,20 @@ fn restart(exe: PathBuf) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn restart(exe: PathBuf) -> Result<()> {
+fn restart(exe: &Path) -> Result<Infallible> {
     anyhow::bail!("restarting {} is unix-only", exe.display())
+}
+
+/// The curl installer line for Linux and macOS: the nag prints it and the
+/// `u` self update runs it, so the two cannot drift apart.
+fn shell_install_command(base: &str) -> String {
+    format!("curl -fsSL {base}/install.sh | bash")
 }
 
 /// Per-platform install commands, defined in one place so the nag and any
 /// future help text stay in sync. `{base}` is the distribution host.
 fn install_methods(base: &str) -> [(&'static str, String); 4] {
-    let shell = format!("curl -fsSL {base}/install.sh | bash");
+    let shell = shell_install_command(base);
     [
         ("linux", shell.clone()),
         ("macos", shell),
