@@ -1223,6 +1223,7 @@ mod inner {
             SendRefusal::ReportOnly(_) => "report_only",
             SendRefusal::SlowMode { .. } => "slow_mode",
             SendRefusal::LinkCooldown { .. } => "link_cooldown",
+            SendRefusal::TooLong { .. } => "too_long",
         }
     }
 

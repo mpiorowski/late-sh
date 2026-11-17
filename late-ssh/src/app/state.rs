@@ -3072,6 +3072,7 @@ impl App {
         if let Some(reader) = self.chat.reader() {
             reader.view().invalidate();
         }
+        self.help_modal_state.invalidate_views();
         self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
         // fixed-viewport clear queries `backend.size()`, which reads the

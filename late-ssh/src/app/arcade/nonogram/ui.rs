@@ -217,7 +217,9 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
 
         // Leading border, then cells with │ separators: every fifth column
         // boundary is a heavy guide, and every fifth row is underlined, the
-        // way paper nonograms are ruled so runs can be counted by eye.
+        // way paper nonograms are ruled so runs can be counted by eye. The
+        // rule skips filled tiles and the cursor: an underline across a
+        // solid fill reads as a darker tile in terminals that paint it thick.
         let underline = |style: Style| match is_guide(row, num_rows) {
             true => style
                 .add_modifier(Modifier::UNDERLINED)
@@ -227,7 +229,12 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
         spans.push(Span::styled("│", dim));
         for col in 0..num_cols {
             let cell = cell_span(state, row, col);
-            spans.push(Span::styled(cell.content, underline(cell.style)));
+            let solid = state.cursor == (row, col) || cell_value(state, row, col) == 1;
+            let style = match solid {
+                true => cell.style,
+                false => underline(cell.style),
+            };
+            spans.push(Span::styled(cell.content, style));
             let separator = match (col + 1 < num_cols, is_guide(col, num_cols)) {
                 (true, true) => Span::styled("┃", underline(guide)),
                 (true, false) => Span::styled("│", underline(dim)),
@@ -301,14 +308,18 @@ fn clue_style(
     style
 }
 
-fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
-    let is_selected = state.cursor == (row, col);
-    let filled = state
+fn cell_value(state: &State, row: usize, col: usize) -> u8 {
+    state
         .player_grid()
         .get(row)
         .and_then(|line| line.get(col))
         .copied()
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
+    let is_selected = state.cursor == (row, col);
+    let filled = cell_value(state, row, col);
 
     let mut style = if filled == 1 {
         Style::default()

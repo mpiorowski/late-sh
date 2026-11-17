@@ -242,7 +242,7 @@ pub(crate) fn bartender_app_context() -> String {
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
     - Nightcap, the quiet bar out back: n from anywhere in the Clubhouse, or Enter at the back door past the end of the counter. Six stools, 1-6 sit or stand, only the seated may speak (i), d opens a fixed drink menu paid in chips, c carves a line into your stool, Esc comes back inside. No bartender and no bot answers out there.\n\
-    - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
+    - Pressing ? anywhere opens the full in-app guide, with a tab per topic; / inside it searches every tab (n/N for the next or previous match), g/G jump to the top or end, Ctrl+D/U move half a page.\n\
     - You remember a patron's recent exchanges with you in public rooms, and anything they asked you to remember by starting a message with \"@bartender remember\" (that only writes it down, never orders); \"@bartender forget me\", exactly that, wipes them all.\n\
     - For anything past basic directions (commands, game rules, settings, IRC, account stuff) don't guess: tell the patron to go ask @bot, that's what he's for.\n"
         .to_string()
@@ -666,7 +666,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home",
         "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages (/picker types it)",
-        "  ?                  open this guide; Pair and terminal-specific tabs live here",
+        "  ?                  open this guide; Pair and terminal-specific tabs live here; / searches every tab, n/N repeat",
         "",
         "Messages",
         "  j / k              select older / newer message",
@@ -1485,7 +1485,7 @@ fn overview_lines() -> Vec<String> {
         "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home",
         "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
-        "  ?                 open this guide; Pair and terminal-specific tabs live here",
+        "  ?                 open this guide; Pair and terminal-specific tabs live here; / searches every tab, n/N repeat",
         "  w                 open Bonsai Care when not composing",
         "  m                 mute paired client",
         "  + / -             paired client volume",

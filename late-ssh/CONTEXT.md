@@ -390,7 +390,13 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   a 3-row block top-center of the content area, under the settings overlay.
   The sponsor link `late.sh/thanks` redirects through late-web.
 - **Help modal** (`app/help_modal`, `?` or `/guide`). One overlay, topics in
-  `HelpTopic::ALL` (Pair first). `data.rs` also backs the bots' app context, so
+  `HelpTopic::ALL` (Pair first). Keys: Tab/Shift+Tab topics, j/k, g/G,
+  Home/End, PgUp/PgDn and Ctrl+D/U scroll (one shared `ScrollView`,
+  `app/common/scroll_view.rs`, per topic, clamped to the text the renderer
+  measured); `/` opens a prompt that takes every key (`?` and `q` included)
+  until Enter jumps to the first match from the top of the page, walking on
+  through every topic, or Esc drops it; `n`/`N` repeat the last query
+  either way and the matched line is highlighted. `data.rs` also backs the bots' app context, so
   stale help misleads users and bots alike. Content invariants: the OSC 52
   support list per terminal, why there is no OSC 8, Shift+drag to select past
   mouse reporting, OSC 777/9 notification support (tmux needs
