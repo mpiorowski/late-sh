@@ -87,3 +87,31 @@ fn scrolling_stops_at_the_measured_end() {
     state.scroll_to_bottom();
     assert_eq!(state.current_scroll(), 7);
 }
+
+/// `G` holds the end across a measure it was not taken against: pressed
+/// before the first frame, or before a resize that shortens the text, it
+/// reads as the new end instead of scrolling the body off the page, and one
+/// row up from it is one row up from that end.
+#[test]
+fn the_end_follows_a_later_measure() {
+    let mut state = HelpModalState::new();
+    state.scroll_to_bottom();
+    state.set_max_scroll(7);
+    assert_eq!(state.current_scroll(), 7);
+    state.set_max_scroll(3);
+    assert_eq!(state.current_scroll(), 3);
+    state.scroll(-1);
+    assert_eq!(state.current_scroll(), 2);
+}
+
+/// A scroll key that arrives with a topic switch, before the new topic's
+/// first frame, is not held to the height of the topic it left.
+#[test]
+fn a_new_topic_is_not_held_to_the_last_ones_end() {
+    let mut state = HelpModalState::new();
+    state.set_max_scroll(3);
+    state.move_topic(1);
+    state.scroll(10);
+    state.set_max_scroll(20);
+    assert_eq!(state.current_scroll(), 10);
+}

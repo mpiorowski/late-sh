@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use tracing::{debug, info, warn};
 
 /// Distribution host serving the published `VERSION` file and installers.
@@ -28,23 +28,25 @@ const NAG_PAUSE: Duration = Duration::from_secs(5);
 
 /// Probe for a newer release and, if one is published, print a short nag and
 /// pause for [`NAG_PAUSE`] before returning. Always returns; never errors.
-/// No-op on unstamped local/dev builds and when disabled via env.
-pub(crate) async fn check_for_update() {
+/// No-op on unstamped local/dev builds and when disabled via env. The
+/// answer is whether to go on: Ctrl+C under the nag is the one way to
+/// [`AfterUpdateCheck::Quit`].
+pub(crate) async fn check_for_update() -> AfterUpdateCheck {
     // Only stamped release builds carry the release tag; source/dev builds
     // embed the Cargo.toml fallback and must never nag.
     if crate::config::VERSION == env!("CARGO_PKG_VERSION") {
-        return;
+        return AfterUpdateCheck::Connect;
     }
     if disabled() {
         debug!("update check disabled via LATE_NO_UPDATE_CHECK");
-        return;
+        return AfterUpdateCheck::Connect;
     }
     let base = dist_base_url();
     let Some(latest) = fetch_latest_version(&base).await else {
-        return;
+        return AfterUpdateCheck::Connect;
     };
     if !is_outdated(crate::config::VERSION, &latest) {
-        return;
+        return AfterUpdateCheck::Connect;
     }
     // The path is read before anything replaces the file: on Linux it comes
     // from /proc/self/exe, which names the old, unlinked file afterwards.
@@ -61,7 +63,7 @@ pub(crate) async fn check_for_update() {
     }
     let Some((script, exe)) = offer else {
         tokio::time::sleep(NAG_PAUSE).await;
-        return;
+        return AfterUpdateCheck::Connect;
     };
     let answer = match tokio::task::spawn_blocking(|| wait_for_answer(NAG_PAUSE)).await {
         Ok(Ok(answer)) => answer,
@@ -75,7 +77,8 @@ pub(crate) async fn check_for_update() {
         }
     };
     match answer {
-        NagAnswer::Continue => {}
+        NagAnswer::Continue => AfterUpdateCheck::Connect,
+        NagAnswer::Quit => AfterUpdateCheck::Quit,
         NagAnswer::UpdateNow => {
             // Success replaces this process, so only a failure comes back.
             let Err(err) = update_and_restart(&script, &exe);
@@ -86,8 +89,17 @@ pub(crate) async fn check_for_update() {
                 "late: connecting with {} for now...",
                 crate::config::VERSION
             );
+            AfterUpdateCheck::Connect
         }
     }
+}
+
+/// What `main` does once the check is over.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AfterUpdateCheck {
+    Connect,
+    /// Ctrl+C under the nag: leave without connecting.
+    Quit,
 }
 
 /// How the wait under the nag ended.
@@ -95,12 +107,20 @@ pub(crate) async fn check_for_update() {
 enum NagAnswer {
     UpdateNow,
     Continue,
+    Quit,
 }
 
-/// What a key pressed under the nag means: `u` updates, any other key skips
-/// the wait. Releases and repeats mean nothing (Windows reports both).
+/// What a key pressed under the nag means: `u` updates, Ctrl+C quits, any
+/// other key skips the wait. Raw mode hands Ctrl+C over as a key instead of
+/// a signal, so it is answered here or it would connect like any other key.
+/// Releases and repeats mean nothing (Windows reports both).
 fn answer_for(key: KeyEvent) -> Option<NagAnswer> {
     match (key.kind, key.code) {
+        (KeyEventKind::Press, KeyCode::Char('c' | 'C'))
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            Some(NagAnswer::Quit)
+        }
         (KeyEventKind::Press, KeyCode::Char('u' | 'U')) => Some(NagAnswer::UpdateNow),
         (KeyEventKind::Press, _) => Some(NagAnswer::Continue),
         (KeyEventKind::Release | KeyEventKind::Repeat, _) => None,

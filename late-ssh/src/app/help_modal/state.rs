@@ -68,7 +68,15 @@ impl HelpModalState {
     }
 
     pub(crate) fn open(&mut self, topic: HelpTopic) {
+        self.show(topic);
+    }
+
+    /// Put `topic` on the page. The measured end belonged to the topic that
+    /// was there, so it is unmeasured again until the next frame: a scroll
+    /// key arriving before it is not held to the old topic's height.
+    fn show(&mut self, topic: HelpTopic) {
         self.selected_topic = topic;
+        self.max_scroll.set(u16::MAX);
     }
 
     pub(crate) fn set_keep_composer_focused(&mut self, value: bool) {
@@ -83,21 +91,25 @@ impl HelpModalState {
         lines_for(self.selected_topic, self.keep_composer_focused, listen_url)
     }
 
+    /// Where the open topic is scrolled to, never past the end the renderer
+    /// measured: an offset stored against an older measure (before the
+    /// first frame, before a resize, on the last topic's height) reads as
+    /// the end of this one.
     pub(crate) fn current_scroll(&self) -> u16 {
-        self.scroll_offsets[self.selected_topic.index()]
+        self.scroll_offsets[self.selected_topic.index()].min(self.max_scroll.get())
     }
 
     pub(crate) fn move_topic(&mut self, delta: isize) {
         let len = HelpTopic::ALL.len() as isize;
         let next = (self.selected_topic.index() as isize + delta).rem_euclid(len) as usize;
-        self.selected_topic = HelpTopic::ALL[next];
+        self.show(HelpTopic::ALL[next]);
     }
 
     pub(crate) fn scroll(&mut self, delta: i16) {
-        let idx = self.selected_topic.index();
-        let current = self.scroll_offsets[idx] as i32;
+        let current = self.current_scroll() as i32;
         let max = self.max_scroll.get() as i32;
-        self.scroll_offsets[idx] = (current + delta as i32).clamp(0, max) as u16;
+        self.scroll_offsets[self.selected_topic.index()] =
+            (current + delta as i32).clamp(0, max) as u16;
     }
 
     /// Half the body's height, the step `Ctrl+D`/`Ctrl+U` and the page keys
@@ -110,8 +122,11 @@ impl HelpModalState {
         self.scroll_offsets[self.selected_topic.index()] = 0;
     }
 
+    /// The end, whatever it measures to: stored past any real offset and
+    /// read back through `current_scroll`'s clamp, so `G` lands on the end
+    /// of the topic drawn next, not of the one measured last.
     pub(crate) fn scroll_to_bottom(&mut self) {
-        self.scroll_offsets[self.selected_topic.index()] = self.max_scroll.get();
+        self.scroll_offsets[self.selected_topic.index()] = u16::MAX;
     }
 
     /// Set by the renderer from the open topic's wrapped height.
@@ -161,12 +176,11 @@ impl HelpModalState {
             return false;
         }
         self.last_query = Some(query);
-        let topic = self.selected_topic.index();
-        let start = match self.hit_line() {
-            Some(line) => line,
-            None => self.first_shown_line(listen_url),
-        };
-        self.jump_to_match((topic, start), SearchDirection::Forward, listen_url)
+        let start = (
+            self.selected_topic.index(),
+            self.first_shown_line(listen_url),
+        );
+        self.jump_to_match(start, SearchDirection::Forward, listen_url)
     }
 
     /// `n`/`N`: the next or previous match of the last query, past the one
@@ -200,7 +214,7 @@ impl HelpModalState {
         let Some((topic, line)) = found else {
             return false;
         };
-        self.selected_topic = topic;
+        self.show(topic);
         self.hit = Some((topic, line));
         let lines = self.current_lines(listen_url);
         // The match lands a couple of rows under the top, so the line
@@ -267,7 +281,7 @@ impl HelpModalState {
             }
             None => false,
         };
-        self.selected_topic = topic;
+        self.show(topic);
         self.last_click = if is_double { None } else { Some((now, topic)) };
         is_double
     }

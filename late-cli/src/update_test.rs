@@ -108,6 +108,25 @@ fn a_key_under_the_nag_answers_it() {
     );
 }
 
+/// Raw mode turns Ctrl+C into a key, so the nag answers it as the
+/// interrupt it was meant as: quit, never connect.
+#[test]
+fn ctrl_c_under_the_nag_quits() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    let ctrl_c = KeyEvent {
+        code: KeyCode::Char('c'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    };
+    assert_eq!(answer_for(ctrl_c), Some(NagAnswer::Quit));
+    let plain_c = KeyEvent {
+        modifiers: KeyModifiers::NONE,
+        ..ctrl_c
+    };
+    assert_eq!(answer_for(plain_c), Some(NagAnswer::Continue));
+}
+
 /// Unix builds run the same installer line the nag prints, from the
 /// configured host; Windows cannot replace its running binary.
 #[test]
