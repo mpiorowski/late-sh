@@ -2,6 +2,21 @@ use super::*;
 use chrono::Duration as ChronoDuration;
 use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
 
+/// A slur can lengthen the text (a thickened `s`, a `*hic*`). Text that
+/// fit the column as typed and would not once slurred goes out as typed,
+/// so a wasted patron's long message is never lost to the insert's CHECK.
+#[test]
+fn drunk_text_that_outgrows_the_cap_goes_out_as_typed() {
+    use late_core::models::chat_message::BODY_MAX_CHARS;
+    let typed = format!("{}ab", "lasso ".repeat(333));
+    assert_eq!(typed.chars().count(), BODY_MAX_CHARS);
+    assert!(
+        slur::slur(&typed, 4, 7).chars().count() > BODY_MAX_CHARS,
+        "the slur alone outgrows the cap"
+    );
+    assert_eq!(drunk_body(&typed, 4, 7), typed);
+}
+
 /// The moon and the star stand apart when a name carries both, and each
 /// stands alone otherwise.
 #[test]

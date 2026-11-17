@@ -140,3 +140,24 @@ fn the_self_update_runs_the_printed_installer_on_unix_only() {
         false => assert_eq!(script, None),
     }
 }
+
+/// The installer writes a file named `late`, so only a binary of that name
+/// is offered the update; a renamed copy would restart unchanged.
+#[test]
+fn only_a_binary_named_late_is_replaced() {
+    use std::path::Path;
+    assert!(installer_replaces(Path::new("/usr/local/bin/late")));
+    assert!(!installer_replaces(Path::new(
+        "/home/mat/Downloads/late-x86_64"
+    )));
+}
+
+/// A failed download is a failed update: the pipe's first command decides
+/// the status too, so bash fed nothing never reads as an install.
+#[cfg(unix)]
+#[test]
+fn a_failed_download_fails_the_update() {
+    let exe = std::env::temp_dir().join("late");
+    let err = update_and_restart("false | cat", &exe).expect_err("the pipe failed");
+    assert!(format!("{err:#}").contains("installer exited"), "{err:#}");
+}

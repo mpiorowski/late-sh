@@ -7,6 +7,8 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
+use crate::app::common::scroll_view::{ScrollView, ScrollViewport};
+
 use super::data::{HelpTopic, lines_for};
 
 /// Max gap between two left-clicks (on the same topic) to count as a double-click.
@@ -14,22 +16,18 @@ pub(crate) const HELP_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
 pub(crate) struct HelpModalState {
     selected_topic: HelpTopic,
-    scroll_offsets: [u16; HelpTopic::ALL.len()],
+    /// One scrolled body per topic, so each keeps its place. `views[i]`
+    /// corresponds to `HelpTopic::ALL[i]`; the renderer publishes the open
+    /// topic's viewport each frame.
+    views: [ScrollView; HelpTopic::ALL.len()],
     /// Per-topic on-screen rectangles for the tab strip, populated by the
     /// renderer each frame. `tab_rects[i]` corresponds to `HelpTopic::ALL[i]`.
     tab_rects: Cell<[Rect; HelpTopic::ALL.len()]>,
-    /// Bounds of the body area (text body for the current topic). Used to
-    /// gate scroll-wheel events.
-    body_area: Cell<Rect>,
     last_click: Option<(Instant, HelpTopic)>,
     /// Mirrors the `keep_composer_focused` profile tweak. Drives the Chat
     /// topic's Compose section. Set by callers before opening / on each
     /// frame; the modal itself doesn't own this preference.
     keep_composer_focused: bool,
-    /// The furthest the open topic scrolls: its wrapped rows less the body's
-    /// height, measured by the renderer each frame. `u16::MAX` until the
-    /// first frame, so nothing clamps before anything was measured.
-    max_scroll: Cell<u16>,
     /// The `/` prompt while it is open: every key types into it.
     query: Option<String>,
     /// The last query searched, for `n` and `N`.
@@ -55,12 +53,10 @@ impl HelpModalState {
     pub(crate) fn new() -> Self {
         Self {
             selected_topic: HelpTopic::Pair,
-            scroll_offsets: [0; HelpTopic::ALL.len()],
+            views: std::array::from_fn(|_| ScrollView::default()),
             tab_rects: Cell::new([Rect::new(0, 0, 0, 0); HelpTopic::ALL.len()]),
-            body_area: Cell::new(Rect::new(0, 0, 0, 0)),
             last_click: None,
             keep_composer_focused: false,
-            max_scroll: Cell::new(u16::MAX),
             query: None,
             last_query: None,
             hit: None,
@@ -68,15 +64,7 @@ impl HelpModalState {
     }
 
     pub(crate) fn open(&mut self, topic: HelpTopic) {
-        self.show(topic);
-    }
-
-    /// Put `topic` on the page. The measured end belonged to the topic that
-    /// was there, so it is unmeasured again until the next frame: a scroll
-    /// key arriving before it is not held to the old topic's height.
-    fn show(&mut self, topic: HelpTopic) {
         self.selected_topic = topic;
-        self.max_scroll.set(u16::MAX);
     }
 
     pub(crate) fn set_keep_composer_focused(&mut self, value: bool) {
@@ -91,47 +79,28 @@ impl HelpModalState {
         lines_for(self.selected_topic, self.keep_composer_focused, listen_url)
     }
 
-    /// Where the open topic is scrolled to, never past the end the renderer
-    /// measured: an offset stored against an older measure (before the
-    /// first frame, before a resize, on the last topic's height) reads as
-    /// the end of this one.
-    pub(crate) fn current_scroll(&self) -> u16 {
-        self.scroll_offsets[self.selected_topic.index()].min(self.max_scroll.get())
+    /// The open topic's scrolled body.
+    pub(crate) fn view(&self) -> &ScrollView {
+        &self.views[self.selected_topic.index()]
+    }
+
+    /// Forget every topic's drawn geometry until its next draw (a resize).
+    pub(crate) fn invalidate_views(&self) {
+        for view in &self.views {
+            view.invalidate();
+        }
     }
 
     pub(crate) fn move_topic(&mut self, delta: isize) {
         let len = HelpTopic::ALL.len() as isize;
         let next = (self.selected_topic.index() as isize + delta).rem_euclid(len) as usize;
-        self.show(HelpTopic::ALL[next]);
-    }
-
-    pub(crate) fn scroll(&mut self, delta: i16) {
-        let current = self.current_scroll() as i32;
-        let max = self.max_scroll.get() as i32;
-        self.scroll_offsets[self.selected_topic.index()] =
-            (current + delta as i32).clamp(0, max) as u16;
+        self.selected_topic = HelpTopic::ALL[next];
     }
 
     /// Half the body's height, the step `Ctrl+D`/`Ctrl+U` and the page keys
     /// take; one row on a body too short to halve.
-    pub(crate) fn half_page(&self) -> i16 {
-        (self.body_area.get().height / 2).max(1) as i16
-    }
-
-    pub(crate) fn scroll_to_top(&mut self) {
-        self.scroll_offsets[self.selected_topic.index()] = 0;
-    }
-
-    /// The end, whatever it measures to: stored past any real offset and
-    /// read back through `current_scroll`'s clamp, so `G` lands on the end
-    /// of the topic drawn next, not of the one measured last.
-    pub(crate) fn scroll_to_bottom(&mut self) {
-        self.scroll_offsets[self.selected_topic.index()] = u16::MAX;
-    }
-
-    /// Set by the renderer from the open topic's wrapped height.
-    pub(crate) fn set_max_scroll(&self, max: u16) {
-        self.max_scroll.set(max);
+    pub(crate) fn half_page(&self) -> i32 {
+        i32::from((self.view().viewport().body.height / 2).max(1))
     }
 
     /// The `/` prompt's text while it is open.
@@ -207,6 +176,9 @@ impl HelpModalState {
         let Some(query) = self.last_query.as_deref() else {
             return false;
         };
+        // Every topic draws in the same body, so the one on the page
+        // measures a topic that has not been drawn yet.
+        let body = self.view().viewport().body;
         let keep = self.keep_composer_focused;
         let found = find_match(query, start, direction, |topic| {
             lines_for(topic, keep, listen_url)
@@ -214,13 +186,21 @@ impl HelpModalState {
         let Some((topic, line)) = found else {
             return false;
         };
-        self.show(topic);
+        self.selected_topic = topic;
         self.hit = Some((topic, line));
         let lines = self.current_lines(listen_url);
+        let view = self.view();
+        view.set_viewport(ScrollViewport {
+            body,
+            content_height: wrapped_rows(&lines, body.width),
+            ..ScrollViewport::default()
+        });
         // The match lands a couple of rows under the top, so the line
         // before it reads as its context.
-        let row = wrapped_rows(&lines[..line], self.body_area.get().width).saturating_sub(2);
-        self.scroll_offsets[topic.index()] = row.min(self.max_scroll_for(&lines));
+        view.scroll_to_top();
+        view.scroll(i32::from(
+            wrapped_rows(&lines[..line], body.width).saturating_sub(2),
+        ));
         true
     }
 
@@ -228,8 +208,8 @@ impl HelpModalState {
     /// it. Each line wraps on its own, so its rows add up line by line.
     fn first_shown_line(&self, listen_url: &str) -> usize {
         let lines = self.current_lines(listen_url);
-        let width = self.body_area.get().width;
-        let scroll = self.current_scroll();
+        let width = self.view().viewport().body.width;
+        let scroll = self.view().offset();
         let mut rows: u16 = 0;
         for (index, line) in lines.iter().enumerate() {
             rows = rows.saturating_add(wrapped_rows(std::slice::from_ref(line), width));
@@ -240,19 +220,8 @@ impl HelpModalState {
         0
     }
 
-    /// The furthest a topic of `lines` scrolls in the current body: the
-    /// renderer's measure each frame, and a jump's into a topic not drawn yet.
-    pub(crate) fn max_scroll_for(&self, lines: &[String]) -> u16 {
-        let body = self.body_area.get();
-        wrapped_rows(lines, body.width).saturating_sub(body.height)
-    }
-
     pub(crate) fn set_tab_rects(&self, rects: [Rect; HelpTopic::ALL.len()]) {
         self.tab_rects.set(rects);
-    }
-
-    pub(crate) fn set_body_area(&self, area: Rect) {
-        self.body_area.set(area);
     }
 
     pub(crate) fn topic_at_point(&self, x: u16, y: u16) -> Option<HelpTopic> {
@@ -267,7 +236,7 @@ impl HelpModalState {
     }
 
     pub(crate) fn body_contains(&self, x: u16, y: u16) -> bool {
-        rect_contains(self.body_area.get(), x, y)
+        rect_contains(self.view().viewport().body, x, y)
     }
 
     /// Switch to the clicked topic. Returns `true` if it chained with the
@@ -281,7 +250,7 @@ impl HelpModalState {
             }
             None => false,
         };
-        self.show(topic);
+        self.selected_topic = topic;
         self.last_click = if is_double { None } else { Some((now, topic)) };
         is_double
     }

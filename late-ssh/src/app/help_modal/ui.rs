@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::common::theme;
+use crate::app::common::{scroll_view::ScrollViewport, theme};
 
 use super::{data::HelpTopic, state::HelpModalState};
 
@@ -27,6 +27,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
     frame.render_widget(block, popup);
 
     if inner.height < 5 || inner.width < 10 {
+        state.view().set_viewport(ScrollViewport::default());
         return;
     }
 
@@ -67,11 +68,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
     draw_nav(frame, nav_inner, state);
 
     let body = columns[1].inner(Margin::new(2, 0));
-    state.set_body_area(body);
-    let source = state.current_lines(listen_url);
-    state.set_max_scroll(state.max_scroll_for(&source));
     let hit = state.hit_line();
-    let lines: Vec<Line> = source
+    let lines: Vec<Line> = state
+        .current_lines(listen_url)
         .into_iter()
         .enumerate()
         .map(|(index, line)| {
@@ -84,12 +83,14 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
             Line::from(Span::styled(line, style))
         })
         .collect();
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((state.current_scroll(), 0)),
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let view = state.view();
+    view.set_viewport(ScrollViewport {
         body,
-    );
+        content_height: u16::try_from(paragraph.line_count(body.width)).unwrap_or(u16::MAX),
+        ..ScrollViewport::default()
+    });
+    frame.render_widget(paragraph.scroll((view.offset(), 0)), body);
 
     draw_footer(frame, layout[3], state.query());
 }

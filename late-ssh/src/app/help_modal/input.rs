@@ -38,15 +38,15 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let half = app.help_modal_state.half_page();
     match event {
         ParsedInput::Char('j') | ParsedInput::Char('J') | ParsedInput::Arrow(b'B') => {
-            app.help_modal_state.scroll(1)
+            app.help_modal_state.view().scroll(1)
         }
         ParsedInput::Char('k') | ParsedInput::Char('K') | ParsedInput::Arrow(b'A') => {
-            app.help_modal_state.scroll(-1)
+            app.help_modal_state.view().scroll(-1)
         }
-        ParsedInput::Byte(0x04) | ParsedInput::PageDown => app.help_modal_state.scroll(half),
-        ParsedInput::Byte(0x15) | ParsedInput::PageUp => app.help_modal_state.scroll(-half),
-        ParsedInput::Char('g') | ParsedInput::Home => app.help_modal_state.scroll_to_top(),
-        ParsedInput::Char('G') | ParsedInput::End => app.help_modal_state.scroll_to_bottom(),
+        ParsedInput::Byte(0x04) | ParsedInput::PageDown => app.help_modal_state.view().scroll(half),
+        ParsedInput::Byte(0x15) | ParsedInput::PageUp => app.help_modal_state.view().scroll(-half),
+        ParsedInput::Char('g') | ParsedInput::Home => app.help_modal_state.view().scroll_to_top(),
+        ParsedInput::Char('G') | ParsedInput::End => app.help_modal_state.view().scroll_to_bottom(),
         ParsedInput::Char('/') => app.help_modal_state.begin_search(),
         ParsedInput::Char('n') => repeat_search(app, SearchDirection::Forward),
         ParsedInput::Char('N') => repeat_search(app, SearchDirection::Backward),
@@ -94,10 +94,10 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
             }
         }
         MouseEventKind::ScrollUp if app.help_modal_state.body_contains(x, y) => {
-            app.help_modal_state.scroll(-3);
+            app.help_modal_state.view().scroll(-3);
         }
         MouseEventKind::ScrollDown if app.help_modal_state.body_contains(x, y) => {
-            app.help_modal_state.scroll(3);
+            app.help_modal_state.view().scroll(3);
         }
         _ => {}
     }

@@ -3996,12 +3996,11 @@ impl ChatState {
         }
 
         // Past the column cap the send could only fail, so it is refused
-        // here, before anything clears the draft (an edit included).
-        let chars = body.chars().count();
-        if chars > late_core::models::chat_message::BODY_MAX_CHARS {
-            return Some(Banner::error(
-                &super::svc::SendRefusal::TooLong { chars }.message(),
-            ));
+        // here, before anything clears the draft (an edit included). The
+        // two paths that lengthen the body on its way out, a report's marker
+        // and a reply's quote, measure again where they build it.
+        if let Some(banner) = too_long_banner(&body) {
+            return Some(banner);
         }
 
         if body.trim() == "/binds" {
@@ -4627,6 +4626,11 @@ impl ChatState {
         };
 
         if let Some((kind, text)) = parse_report_command(&body) {
+            if let Some(text) = &text
+                && let Some(banner) = too_long_banner(&kind.card_body(text))
+            {
+                return Some(banner);
+            }
             self.clear_composer_after_submit();
             let Some(text) = text else {
                 return Some(Banner::error(&format!(
@@ -5138,6 +5142,9 @@ impl ChatState {
             } else {
                 body
             };
+            if let Some(banner) = too_long_banner(&body) {
+                return Some(banner);
+            }
             if let Some(message_id) = self.edited_message_id {
                 self.service.edit_message_task(
                     self.user_id,
@@ -8842,6 +8849,18 @@ pub(crate) fn buy_order_body(order: BuyOrder<'_>) -> String {
     match order {
         BuyOrder::Round => format!("@{bartender} round for everyone"),
         BuyOrder::Gift(username) => format!("@{bartender} buy @{username} a drink"),
+    }
+}
+
+/// The refusal for a body the column cap would reject, asked wherever the
+/// composer has the body in the shape it is sent in, before the draft clears.
+fn too_long_banner(body: &str) -> Option<Banner> {
+    let chars = body.chars().count();
+    match chars > late_core::models::chat_message::BODY_MAX_CHARS {
+        true => Some(Banner::error(
+            &super::svc::SendRefusal::TooLong { chars }.message(),
+        )),
+        false => None,
     }
 }
 

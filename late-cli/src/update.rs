@@ -51,7 +51,9 @@ pub(crate) async fn check_for_update() -> AfterUpdateCheck {
     // The path is read before anything replaces the file: on Linux it comes
     // from /proc/self/exe, which names the old, unlinked file afterwards.
     let offer = match (self_update_script(&base), std::env::current_exe()) {
-        (Some(script), Ok(exe)) if std::io::stdin().is_terminal() => Some((script, exe)),
+        (Some(script), Ok(exe)) if std::io::stdin().is_terminal() && installer_replaces(&exe) => {
+            Some((script, exe))
+        }
         (Some(_), Err(err)) => {
             debug!(error = %err, "update check: no path to this binary, not offering an update");
             None
@@ -163,18 +165,30 @@ fn self_update_script(base: &str) -> Option<String> {
     }
 }
 
+/// Whether the installer writes over `exe`: it always installs a file named
+/// `late`, so a copy run under another name would be left as it is, beside
+/// a new `late`, and restarted as if it had been updated.
+fn installer_replaces(exe: &Path) -> bool {
+    exe.file_name().is_some_and(|name| name == "late")
+}
+
 /// Run the installer into the directory `exe` lives in, so this binary is
-/// the one replaced wherever it was installed, then restart into it.
+/// the one replaced wherever it was installed, then restart into it. That
+/// directory was not chosen by the user for this run, so the installer is
+/// told to leave PATH and the shell startup files alone.
 fn update_and_restart(script: &str, exe: &Path) -> Result<Infallible> {
     let dir = exe
         .parent()
         .context("this binary's path has no directory")?;
     info!(dir = %dir.display(), "running the installer");
     eprintln!();
+    // `pipefail`: the line is `curl | bash`, and without it a failed
+    // download hands bash an empty script that exits 0, an "update" that
+    // installed nothing.
     let status = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(script)
+        .args(["-o", "pipefail", "-c", script])
         .env("LATE_INSTALL_DIR", dir)
+        .env("LATE_INSTALL_NO_MODIFY_PATH", "1")
         .status()
         .context("starting bash for the installer")?;
     if !status.success() {

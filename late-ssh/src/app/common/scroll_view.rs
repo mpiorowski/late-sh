@@ -1,6 +1,6 @@
 //! A long body in a modal, scrolled under a scrollbar: the offset, the
 //! geometry the last draw published, and a thumb drag. Shared by the modals
-//! that page through text (the paper, the News reader); each keeps its own
+//! that page through text (the paper, the News reader, the guide); each keeps its own
 //! content, keys, page size, and what closing means.
 //!
 //! The draw publishes the viewport through `&self`, and input reads it back
