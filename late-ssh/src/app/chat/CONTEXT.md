@@ -22,7 +22,7 @@ late-ssh/src/app/chat/
 |-- input.rs                     # Home chat input plus shared message actions used by Dashboard and embedded game chat
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache, Home's activity and friends tiles
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
-|-- list_ui.rs                   # Shared "mine only" filtered-list layout and status line for the synthetic entries
+|-- list_ui.rs                   # Shared by the synthetic entries: the "mine only" filtered-list layout and status line, and `scroll_offset`, the kept list window News and RSS scroll by
 |-- mod_modal/                   # `/mod` console modal: state/input/ui, opened by `take_requested_mod_modal`
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, `../ai/ROUND.md`, or a memory trigger, `../ai/MEMORY.md`)
 |-- special_badges.rs            # Hardcoded per-username badges in author labels (allowlist, edit and redeploy)

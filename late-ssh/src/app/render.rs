@@ -951,6 +951,7 @@ impl App {
             selected_index: self.chat.feeds.selected_index(),
             has_feeds: self.chat.feeds.has_feeds(),
             marker_read_at: self.chat.feeds.marker_read_at(),
+            scroll: self.chat.feeds.list_scroll(),
         };
         let discover_view = chat::discover::ui::DiscoverListView {
             items: self.chat.discover.visible_items(),

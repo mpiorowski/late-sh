@@ -1,3 +1,6 @@
+use std::cell::Cell;
+
+use crate::app::chat::list_ui::scroll_offset;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
@@ -16,6 +19,9 @@ pub struct FeedListView<'a> {
     pub selected_index: usize,
     pub has_feeds: bool,
     pub marker_read_at: Option<DateTime<Utc>>,
+    /// The first entry the last draw showed; this draw starts from it and
+    /// leaves its own behind.
+    pub scroll: &'a Cell<usize>,
 }
 
 const ITEM_HEIGHT: u16 = 7;
@@ -44,7 +50,17 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
     let selected_index = view
         .selected_index
         .min(view.entries.len().saturating_sub(1));
-    let start = selected_index.saturating_sub(visible_items.saturating_sub(1));
+    // Entries are drawn whole, so the window counts entries: it holds while
+    // the selection moves inside it and scrolls an entry before the edge.
+    let context = selected_index.saturating_sub(1)..(selected_index + 2).min(view.entries.len());
+    let start = scroll_offset(
+        view.scroll.get(),
+        view.entries.len(),
+        &(selected_index..selected_index + 1),
+        &context,
+        visible_items,
+    );
+    view.scroll.set(start);
     let end = (start + visible_items).min(view.entries.len());
     let constraints =
         std::iter::repeat_n(Constraint::Length(ITEM_HEIGHT), end - start).collect::<Vec<_>>();
@@ -198,3 +214,7 @@ fn display_feed_title(item: &RssEntryView) -> String {
         title.to_string()
     }
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

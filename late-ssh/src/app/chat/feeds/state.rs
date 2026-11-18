@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use chrono::{DateTime, Utc};
 use late_core::models::{article::ArticleEvent, rss_entry::RssEntryView, rss_feed::RssFeed};
 use tokio::sync::{broadcast, watch};
@@ -27,6 +29,8 @@ pub struct State {
     /// Entries have reached the list at least once: until then nothing
     /// counts as selected, so the first fill lands on the newest entry.
     entries_drawn: bool,
+    /// The list's first drawn entry, kept between draws (`list_ui::scroll_offset`).
+    list_scroll: Cell<usize>,
     snapshot_rx: watch::Receiver<FeedSnapshot>,
     event_rx: broadcast::Receiver<FeedEvent>,
     article_event_rx: broadcast::Receiver<ArticleEvent>,
@@ -54,6 +58,7 @@ impl State {
             entries: Vec::new(),
             selected: 0,
             entries_drawn: false,
+            list_scroll: Cell::new(0),
             snapshot_rx,
             event_rx,
             article_event_rx,
@@ -77,6 +82,10 @@ impl State {
 
     pub fn selected_index(&self) -> usize {
         clamp_index(self.selected, self.entries.len())
+    }
+
+    pub fn list_scroll(&self) -> &Cell<usize> {
+        &self.list_scroll
     }
 
     pub fn unread_count(&self) -> i64 {

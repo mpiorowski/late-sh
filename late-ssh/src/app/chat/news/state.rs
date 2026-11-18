@@ -190,7 +190,7 @@ pub struct State {
     selected: usize,
     /// The feed has reached the list at least once (`rebuild_display`).
     feed_drawn: bool,
-    /// The list's first drawn row, kept between draws (`news::ui::scroll_offset`).
+    /// The list's first drawn row, kept between draws (`list_ui::scroll_offset`).
     list_scroll: Cell<usize>,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,

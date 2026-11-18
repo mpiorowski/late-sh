@@ -1301,6 +1301,7 @@ fn chat_view<'a>(
             selected_index: 0,
             has_feeds: false,
             marker_read_at: None,
+            scroll: Box::leak(Box::new(std::cell::Cell::new(0))),
         },
         news_selected: false,
         news_unread_count: 0,
