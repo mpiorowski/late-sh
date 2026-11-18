@@ -1,11 +1,11 @@
 use super::scroll_offset;
 
-/// Stories of 5 rows with a rule between: story `i` is rows `6i..6i+5`.
+/// News rows: stories of 5 rows with a rule between, story `i` is rows `6i..6i+5`.
 fn story(i: usize) -> std::ops::Range<usize> {
     6 * i..6 * i + 5
 }
 
-/// The story above through the story below, as `lay_out` reports it.
+/// The story above through the story below, as `news::ui::lay_out` reports it.
 fn context(i: usize, count: usize) -> std::ops::Range<usize> {
     let start = if i == 0 {
         story(0).start
