@@ -3,7 +3,7 @@ use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::{ChatService, Wording};
 use late_core::models::{
-    article::{Article, ArticleEvent, ArticleParams},
+    article::{Article, ArticleEvent, ArticleFailure, ArticleParams, ShareRefusal},
     chat_message::ChatMessage,
     chat_room::ChatRoom,
     moderation_audit_log::ModerationAuditLog,
@@ -188,8 +188,8 @@ async fn process_url_emits_failed_event_for_duplicate_url() {
         ArticleEvent::Failed { user_id, error, .. } => {
             assert_eq!(user_id, user.id);
             assert!(
-                error.contains("exists"),
-                "error should mention duplicate: {error}"
+                matches!(error, ArticleFailure::Refused(ShareRefusal::Exists)),
+                "the refusal should name the duplicate: {error}"
             );
         }
         other => panic!("expected Failed event, got {other:?}"),
