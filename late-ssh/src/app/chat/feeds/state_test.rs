@@ -1,5 +1,8 @@
 use chrono::Utc;
+use late_core::models::article::{Article, ArticleParams};
 use late_core::models::rss_entry::{RssEntry, RssEntryView};
+use late_core::test_utils::create_test_user;
+use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 use super::State;
@@ -74,4 +77,42 @@ async fn entries_run_oldest_to_newest_and_the_cursor_holds_its_entry() {
         3,
         "a dismissed entry's row goes to the next"
     );
+}
+
+/// Sharing an entry whose link is already in News is not a failure: the
+/// entry is marked shared and the banner says so.
+#[tokio::test]
+async fn an_entry_already_in_news_reads_as_shared() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let user = create_test_user(&db, "rss-dup-user").await;
+    let client = db.get().await.expect("db client");
+    Article::create_by_user_id(
+        &client,
+        user.id,
+        ArticleParams {
+            user_id: user.id,
+            url: "https://example.com/7".to_string(),
+            title: "Already in News".to_string(),
+            summary: "Old summary".to_string(),
+            ascii_art: "...".to_string(),
+        },
+    )
+    .await
+    .expect("seed article");
+    let chat = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    let articles = ArticleService::new(db.clone(), AiService::new(false, None), chat);
+    let mut events = articles.subscribe_events();
+    let mut state = State::new(FeedService::new(db), articles, user.id);
+    state.set_entries(vec![entry(7)]);
+
+    state.share_selected();
+    timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+
+    let banner = state.tick().banner.expect("banner");
+    assert_eq!(banner.message, "Already shared.");
+    assert!(!state.processing());
 }

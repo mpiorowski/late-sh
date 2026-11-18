@@ -1,7 +1,11 @@
 use std::cell::Cell;
 
 use chrono::{DateTime, Utc};
-use late_core::models::{article::ArticleEvent, rss_entry::RssEntryView, rss_feed::RssFeed};
+use late_core::models::{
+    article::{ArticleEvent, ArticleFailure, ShareRefusal},
+    rss_entry::RssEntryView,
+    rss_feed::RssFeed,
+};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -290,15 +294,14 @@ impl State {
                 }
                 Ok(ArticleEvent::Failed {
                     user_id,
-                    error,
+                    error: ArticleFailure::Refused(ShareRefusal::Exists),
                     url: Some(url),
                 }) if user_id == self.user_id
                     && self.pending_share.is_some()
                     && self
                         .pending_share
                         .as_ref()
-                        .is_some_and(|(_, pending_url)| pending_url == &url)
-                    && error.to_ascii_lowercase().contains("exists") =>
+                        .is_some_and(|(_, pending_url)| pending_url == &url) =>
                 {
                     self.current_task = None;
                     self.processing = false;
