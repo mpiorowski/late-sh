@@ -1270,7 +1270,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Line::from(Span::styled("everyone here is a real person.", text)),
                     Line::default(),
                     Line::from(Span::styled(
-                        "this is the welcome mat. three stops, then the board is yours.",
+                        "this is the welcome mat. the chat, then the board is yours.",
                         text,
                     )),
                 ],
@@ -1459,7 +1459,7 @@ pub(crate) fn draw_tour_overlay(
             ],
             match route {
                 TourRoute::House => "the music",
-                TourRoute::Board => "one shot of pool",
+                TourRoute::Board => "today's board",
             },
         ),
         Tutorial::VisitArcade => (
@@ -1885,9 +1885,9 @@ impl TourHeader {
 /// afterwards; until then the table has to fit under its header to be
 /// played.
 pub(crate) fn table_stop(content_area: Rect, played: bool) -> TableStop {
-    // Every table header is the same height, on either route, so any of
-    // them measures.
-    let [_, table] = table_header(TableStop::Racked, TourRoute::House).split_above(content_area);
+    // The table's header is the same height whatever the stop's state, so
+    // any of them measures.
+    let [_, table] = table_header(TableStop::Racked).split_above(content_area);
     match (played, pool_ui::fits(table)) {
         (true, true | false) => TableStop::Played,
         (false, true) => TableStop::Racked,
@@ -1895,17 +1895,14 @@ pub(crate) fn table_stop(content_area: Rect, played: bool) -> TableStop {
     }
 }
 
-/// `route` names what the table leads to: the games, or today's board.
-fn table_header(table: TableStop, route: TourRoute) -> TourHeader {
+/// The practice table's header, a `House` route stop leading to the games.
+fn table_header(table: TableStop) -> TourHeader {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
     let next = |label: &'static str| vec![Span::styled("[Enter] ", key), Span::styled(label, text)];
-    let onward = match route {
-        TourRoute::House => "next: the games",
-        TourRoute::Board => "next: today's board",
-    };
+    let onward = "next: the games";
     let (line, keys) = match table {
         TableStop::TooSmall => (
             "this table needs a bigger window. the lobby has one waiting.",
@@ -2041,12 +2038,10 @@ fn board_header(board: BoardStop) -> TourHeader {
 }
 
 /// The header for the stops that live inside a real surface, `None` for
-/// every other stage. `route` names what the table leads to, `table` is
-/// where the practice table stop stands, `fight_won` whether the dungeon's
+/// every other stage. `table` is where the practice table stop stands, `fight_won` whether the dungeon's
 /// dragon is down, `board` where the board stop stands.
 pub(crate) fn tour_header(
     stage: Tutorial,
-    route: TourRoute,
     table: TableStop,
     fight_won: bool,
     board: BoardStop,
@@ -2112,7 +2107,7 @@ pub(crate) fn tour_header(
             ],
             keys: next("next: one shot of pool"),
         }),
-        Tutorial::VisitTable => Some(table_header(table, route)),
+        Tutorial::VisitTable => Some(table_header(table)),
         Tutorial::VisitBoard => Some(board_header(board)),
         Tutorial::VisitDungeon => Some(TourHeader {
             title: "✦ the tour · a taste of the dungeon",

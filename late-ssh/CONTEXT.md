@@ -476,7 +476,7 @@ a no-op twin when built without `otel`.
   `clubhouse/input.rs::tour_advance`;
   the drop between two stops is where they leave the tour. The route in
   force (`clubhouse::state::TOUR_ROUTE`) reaches `welcome`, `chat`,
-  `table`, `board`, `week`, `done`, and `board` against `week` is what
+  `board`, `week`, `done`, and `board` against `week` is what
   the board costs. A tour left
   midway starts over at the welcome box next session, a new attempt;
   `/onboard` reruns are not counted),

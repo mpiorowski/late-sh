@@ -2225,7 +2225,6 @@ impl App {
         // today's board get it drawn across the top of the page.
         let tour_header = crate::app::clubhouse::ui::tour_header(
             ctx.clubhouse_state.tutorial,
-            ctx.clubhouse_state.tour_route,
             crate::app::clubhouse::ui::table_stop(inner, ctx.daily.practice_played()),
             ctx.clubhouse_state.tour_fight.won(),
             crate::app::clubhouse::ui::board_stop(

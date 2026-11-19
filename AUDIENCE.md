@@ -237,10 +237,14 @@ reached on it, 14 days to 2026-11-06:
 Arcade page, on sessions that are 84% plain ssh with nothing to hear.
 40% of day-one sessions end with the Clubhouse on screen
 (`late_ssh_session_ends_total{tenure="day_one"}`). The route in force
-now is the `Board` one (`TOUR_ROUTE`, one line to go back), deployed
-2026-11-08 at about 17:00 UTC: five stops, welcome, chat, one shot of
+is the `Board` one (`TOUR_ROUTE`, one line to go back), deployed
+2026-11-08 at about 17:00 UTC as five stops: welcome, chat, one shot of
 pool, today's board, the week of rungs ahead, the board played for real
-and won, or skipped after a confirmation, before the week. Its full read
+and won, or skipped after a confirmation, before the week. The code now
+walks four, the pool break dropped on the interim read below; it ships
+after the 2026-11-23 read, so the cohort is read on the five stops it
+walked, and the four-stop version's first full cohort is read the same
+way two weeks after it ships. Its full read
 against the targets in section 5 is the 2026-11-09 to 2026-11-15 cohort
 through its first week, due 2026-11-23. The interim read, 2026-11-18:
 accounts created from 2026-11-09 (155) against the `House` cohorts from
@@ -425,10 +429,11 @@ Live, in order of evidence behind them:
   (section 3) say what holds them: a finished daily, a quest ticked, a
   reason named for tomorrow. Built as the tour's `Board` route, beside
   the old `House` one and one line to revert
-  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): five stops instead of
-  18 (what this is, the chat, the pool break, today's board, the week
-  ahead); today's Netwalk daily as the play, played for real and won, or
-  skipped after a confirmation, before the tour lets go, in place of the
+  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): four stops instead of
+  18 (what this is, the chat, today's board, the week ahead; a pool
+  break before the board was cut on the first read, section 3); today's
+  Netwalk daily as the play, played for real and won, or skipped after
+  a confirmation, before the tour lets go, in place of the
   scripted fight; no Stations stop on plain ssh, where there is nothing
   to hear; the solved board's header naming tomorrow (a new board at
   00:00 UTC with the hours left), the week stop as the send-off, and the
@@ -437,8 +442,8 @@ Live, in order of evidence behind them:
   from 7% to 25% or more, two-day return from 5% to 9%, tour completion
   from 46% to 80%. The read: deploy, wait seven days for a full weekly
   cohort and seven more for its first week, then run the funnel queries
-  in section 6 and the tour stops (`welcome`, `chat`, `table`, `board`,
-  `week`, `done`; `board` against `week` is the board's cost). If the
+  in section 6 and the tour stops (`welcome`, `chat`, `board`, `week`,
+  `done`; `board` against `week` is the board's cost). If the
   cohort says the board loses more than it holds, the revert is the one
   `TOUR_ROUTE` line and the `House` route's numbers are in section 3 to
   compare against. The design reasoning, every decision and the ones

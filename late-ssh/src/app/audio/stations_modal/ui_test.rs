@@ -182,7 +182,6 @@ fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
     };
     let header = crate::app::clubhouse::ui::tour_header(
         Tutorial::VisitMusic,
-        crate::app::clubhouse::state::TourRoute::House,
         crate::app::clubhouse::state::TableStop::Racked,
         false,
         crate::app::clubhouse::state::BoardStop::Open,
@@ -258,7 +257,6 @@ fn a_plain_ssh_session_reads_the_nudge_under_the_dial_unless_the_tour_holds_the_
 
     let header = crate::app::clubhouse::ui::tour_header(
         Tutorial::VisitMusic,
-        crate::app::clubhouse::state::TourRoute::House,
         crate::app::clubhouse::state::TableStop::Racked,
         false,
         crate::app::clubhouse::state::BoardStop::Open,
