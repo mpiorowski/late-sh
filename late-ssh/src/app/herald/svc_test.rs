@@ -9,10 +9,13 @@ use axum::routing::{get, post};
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
 use late_core::models::artboard::Snapshot;
+use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
 use late_core::models::herald::{
     HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPost, HeraldSlot, HeraldSwitch,
 };
 use late_core::models::showcase::{Showcase, ShowcaseParams};
+use late_core::models::user::{User, UserParams};
 use tokio::net::TcpListener;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -26,7 +29,10 @@ use super::state::{
 use super::svc::{
     CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
 };
+use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
 use crate::app::ai::svc::AiService;
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::ChatService;
 use crate::config::{BlueskyConfig, HeraldConfig, HeraldVisibility, MastodonConfig};
 use crate::test_helpers::new_test_db;
 
@@ -231,8 +237,9 @@ fn ai_off() -> AiService {
 
 fn service(db: late_core::db::Db, base: &str, ai: AiService) -> HeraldService {
     HeraldService::new(
-        db,
+        db.clone(),
         ai,
+        ChatService::new(db.clone(), NotificationService::new(db)),
         HeraldConfig {
             mastodon: Some(MastodonConfig {
                 instance: base.to_string(),
@@ -1442,6 +1449,79 @@ async fn the_weeks_project_goes_out_once_and_waits_out_its_cooldown() {
     let log = log.lock().expect("log");
     assert_eq!(log.gemini_calls, 2, "no call with nothing to draw");
     assert_eq!(log.statuses.len(), 2);
+}
+
+/// The house's own account, which the lounge feed ensures at startup and a
+/// test has to make itself.
+async fn system_user(client: &Client) -> Uuid {
+    User::create(
+        client,
+        UserParams {
+            fingerprint: SYSTEM_FINGERPRINT.to_string(),
+            username: SYSTEM_USERNAME.to_string(),
+            settings: serde_json::json!({ "bot": true, "system": true }),
+        },
+    )
+    .await
+    .expect("create system user")
+    .id
+}
+
+/// A posted project gets one line in #lounge from `system`: the member
+/// mentioned so they hear of it, the write-up and their link. Saturday's paper
+/// says nothing there.
+#[tokio::test]
+async fn a_posted_project_is_told_to_the_lounge() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let system = system_user(&client).await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let member = late_core::test_utils::create_test_user(&db, "maker").await;
+    share_project(&client, member.id, "tinyclock").await;
+    log.lock().expect("log").gemini_reply = featured();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+    let now = monday_words();
+    let day = now.date_naive();
+
+    assert!(herald.check(now, HeraldSlot::Words, &mut finished).await);
+    let saturday = day + Duration::days(5);
+    print_edition(&client, saturday).await;
+    assert!(
+        herald
+            .check(now + Duration::days(5), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        HeraldPost::posted_on(&client, saturday, HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+        HeraldKind::Paper
+    );
+
+    let lines: Vec<(Uuid, String)> = ChatMessage::list_recent(&client, lounge.id, 10)
+        .await
+        .expect("lounge lines")
+        .into_iter()
+        .map(|message| (message.user_id, message.body))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![(
+            system,
+            format!(
+                "\u{1F527} \"tinyclock\" by @{} is this week's featured project.\n\
+                 A clock for your terminal, by way of someone at https: //other.example.\n\
+                 https://example.com/tinyclock",
+                member.username
+            )
+        )]
+    );
 }
 
 /// A project the model turns down goes unposted and the next is tried, three at
