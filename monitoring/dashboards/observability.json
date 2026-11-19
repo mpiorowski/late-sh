@@ -4707,6 +4707,12 @@
           "expr": "sum by (result) (increase(late_ssh_herald_projects_total[$__range]))",
           "legendFormat": "project {{result}}",
           "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (result) (increase(late_ssh_herald_lounge_lines_total[$__range]))",
+          "legendFormat": "lounge {{result}}",
+          "instant": true
         }
       ],
       "fieldConfig": {

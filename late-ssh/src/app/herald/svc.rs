@@ -48,6 +48,7 @@ use late_core::models::paper::{
     ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, PaperEdition, PaperSectionKind,
 };
 use late_core::models::showcase::Showcase;
+use late_core::models::user::User;
 use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -59,13 +60,15 @@ use super::state::{
 };
 use super::writeup::{self, Writeup};
 use super::{bluesky, brief, look, mastodon};
+use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::ai::svc::AiService;
+use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 use crate::config::HeraldConfig;
 use crate::metrics::{
-    self, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
-    HeraldProjectResult,
+    self, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldLoungeResult,
+    HeraldPostResult, HeraldProjectResult,
 };
 
 /// How often each replica asks whether a slot's post is due and unclaimed.
@@ -101,8 +104,14 @@ const EVENT_CHANNEL_CAP: usize = 64;
 /// What a claimed slot came to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Every network has the post.
-    Posted { posted: HeraldPosted, look: Look },
+    /// Every network has the post. The picture is carried out so the one
+    /// place that logs a post can tell #lounge about a project; boxed, since
+    /// it carries every kind's candidate and would otherwise size the enum.
+    Posted {
+        posted: HeraldPosted,
+        look: Look,
+        picture: Box<Picture>,
+    },
     /// Nothing to post, or nothing clean.
     Skipped,
 }
@@ -199,6 +208,8 @@ pub struct HeraldService {
     db: Db,
     /// The look's model.
     ai: AiService,
+    /// #lounge, where a posted project gets its line.
+    chat: ChatService,
     http: reqwest::Client,
     config: HeraldConfig,
     /// The public web, for the page the post links to.
@@ -207,7 +218,13 @@ pub struct HeraldService {
 }
 
 impl HeraldService {
-    pub fn new(db: Db, ai: AiService, config: HeraldConfig, web_url: String) -> Self {
+    pub fn new(
+        db: Db,
+        ai: AiService,
+        chat: ChatService,
+        config: HeraldConfig,
+        web_url: String,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(HTTP_TIMEOUT)
@@ -217,6 +234,7 @@ impl HeraldService {
         Self {
             db,
             ai,
+            chat,
             http,
             config: HeraldConfig {
                 web_internal_url: config.web_internal_url.trim_end_matches('/').to_string(),
@@ -484,7 +502,11 @@ impl HeraldService {
             }
         };
         match self.post_claimed(day, slot, key, now).await {
-            Ok(Outcome::Posted { posted, look }) => {
+            Ok(Outcome::Posted {
+                posted,
+                look,
+                picture,
+            }) => {
                 metrics::record_herald_post(slot, HeraldPostResult::Posted);
                 tracing::info!(
                     %day,
@@ -495,6 +517,33 @@ impl HeraldService {
                     urls = ?posted.deliveries.iter().map(|d| d.url.as_str()).collect::<Vec<_>>(),
                     "the herald posted"
                 );
+                // A project is the one kind #lounge hears about, so the
+                // member finds out it was featured. The post is settled
+                // whatever the line does, so a failed line is lost, not
+                // retried: the slot never posts twice.
+                match picture.as_ref() {
+                    Picture::Project(project) => match self.tell_lounge(project).await {
+                        Ok(()) => {
+                            metrics::record_herald_lounge(HeraldLoungeResult::Posted);
+                            tracing::info!(%day, project = %project.id, "the herald told the lounge");
+                        }
+                        Err(error) => {
+                            metrics::record_herald_lounge(HeraldLoungeResult::Failed);
+                            late_core::error_span!(
+                                "herald_lounge_failed",
+                                error = ?error,
+                                %day,
+                                project = %project.id,
+                                "the herald posted a project but could not tell the lounge"
+                            );
+                        }
+                    },
+                    Picture::Board(_)
+                    | Picture::Piece(_)
+                    | Picture::Scoreboard(_)
+                    | Picture::Paper(_)
+                    | Picture::Announcement(_) => {}
+                }
                 DayWorked::Posted(posted)
             }
             Ok(Outcome::Skipped) => {
@@ -528,10 +577,10 @@ impl HeraldService {
         now: DateTime<Utc>,
     ) -> anyhow::Result<Outcome> {
         match self.post_day(day, slot, key, now).await {
-            Ok(Outcome::Posted { posted, look }) => {
+            Ok(posted @ Outcome::Posted { .. }) => {
                 let client = self.db.get().await?;
                 HeraldPost::finish_posted(&client, day, slot).await?;
-                Ok(Outcome::Posted { posted, look })
+                Ok(posted)
             }
             Ok(Outcome::Skipped) => {
                 let client = self.db.get().await?;
@@ -642,7 +691,25 @@ impl HeraldService {
                 deliveries: HeraldPost::deliveries(&client, day, slot).await?,
             },
             look,
+            picture: Box::new(picture),
         })
+    }
+
+    /// Post a project's line (`state::lounge_text`) to #lounge as the `system`
+    /// user, the author the lounge feed ensures at startup. Logs nothing: the
+    /// one caller, `work_day`, does.
+    async fn tell_lounge(&self, project: &ProjectCandidate) -> anyhow::Result<()> {
+        let system_user_id = {
+            let client = self.db.get().await?;
+            match User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT).await? {
+                Some(user) => user.id,
+                None => bail!("system user not ensured yet"),
+            }
+        };
+        self.chat
+            .send_lounge_message(system_user_id, state::lounge_text(project), true)
+            .await
+            .context("posting the project's lounge line")
     }
 
     /// Record a network's answer: the delivery row and the counter on
