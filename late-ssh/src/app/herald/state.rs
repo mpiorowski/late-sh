@@ -610,15 +610,22 @@ impl ProjectCandidate {
 /// link. It is a chat row, not a ticker line, so it carries no `· ` prefix.
 /// The member is `@name`, followed by a space so the mention takes the whole
 /// name and only the name: the line is how they hear their project was
-/// featured. The title and the words go in dead (`dead_words`), so nobody else
-/// is mentioned.
+/// featured. Chat reads the whole line for mentions
+/// (`common::mentions::extract_mentions`), so what the member typed is made
+/// safe for it: the title and the words go in dead (`dead_words`), the title
+/// loses its backticks before the cut (one left open ahead of `@name` would
+/// put the mention in a code span and the member would never hear), and an
+/// `@` in the link goes in as `%40`, the same address with nobody to ping.
 pub(crate) fn lounge_text(project: &ProjectCandidate) -> String {
     format!(
         "\u{1F527} \"{}\" by @{} is this week's featured project.\n{}\n{}",
-        cut_to(&dead_words(&project.title), PROJECT_TITLE_MAX_CHARS),
+        cut_to(
+            &dead_words(&project.title).replace('`', ""),
+            PROJECT_TITLE_MAX_CHARS
+        ),
         project.artist,
         project.text,
-        project.url
+        project.url.replace('@', "%40")
     )
 }
 
