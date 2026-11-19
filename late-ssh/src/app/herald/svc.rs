@@ -576,18 +576,10 @@ impl HeraldService {
         now: DateTime<Utc>,
     ) -> anyhow::Result<Outcome> {
         match self.post_day(day, slot, key, now).await {
-            Ok(Outcome::Posted {
-                posted,
-                look,
-                picture,
-            }) => {
+            Ok(posted @ Outcome::Posted { .. }) => {
                 let client = self.db.get().await?;
                 HeraldPost::finish_posted(&client, day, slot).await?;
-                Ok(Outcome::Posted {
-                    posted,
-                    look,
-                    picture,
-                })
+                Ok(posted)
             }
             Ok(Outcome::Skipped) => {
                 let client = self.db.get().await?;
