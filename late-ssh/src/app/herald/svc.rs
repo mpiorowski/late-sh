@@ -105,11 +105,12 @@ const EVENT_CHANNEL_CAP: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
     /// Every network has the post. The picture is carried out so the one
-    /// place that logs a post can tell #lounge about a project.
+    /// place that logs a post can tell #lounge about a project; boxed, since
+    /// it carries every kind's candidate and would otherwise size the enum.
     Posted {
         posted: HeraldPosted,
         look: Look,
-        picture: Picture,
+        picture: Box<Picture>,
     },
     /// Nothing to post, or nothing clean.
     Skipped,
@@ -520,7 +521,7 @@ impl HeraldService {
                 // member finds out it was featured. The post is settled
                 // whatever the line does, so a failed line is lost, not
                 // retried: the slot never posts twice.
-                match &picture {
+                match picture.as_ref() {
                     Picture::Project(project) => match self.tell_lounge(project).await {
                         Ok(()) => {
                             metrics::record_herald_lounge(HeraldLoungeResult::Posted);
@@ -690,7 +691,7 @@ impl HeraldService {
                 deliveries: HeraldPost::deliveries(&client, day, slot).await?,
             },
             look,
-            picture,
+            picture: Box::new(picture),
         })
     }
 
