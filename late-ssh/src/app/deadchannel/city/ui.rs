@@ -50,6 +50,7 @@ use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::guide::ui as guide_ui;
 use crate::app::deadchannel::poster::ui as poster_ui;
+use crate::app::deadchannel::ring::ui as ring_ui;
 use crate::app::deadchannel::runner::state::{Look, Tint};
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
@@ -174,6 +175,8 @@ pub(crate) struct CityView<'a> {
     pub tailor: tailor_ui::MirrorView<'a>,
     /// PRINTS's bench (`poster/session.rs`), for its panel.
     pub poster: poster_ui::PosterView<'a>,
+    /// The ring (`ring/session.rs`), for its panel.
+    pub ring: ring_ui::RingView<'a>,
     /// The guide (`guide/state.rs`): drawn over everything when open.
     pub guide: &'a GuideState,
     /// This session's user, left out of `street`: your own runner is drawn
@@ -431,12 +434,12 @@ fn landmark_neon(landmark: Landmark) -> Neon {
         Landmark::Prints => Neon::Cyan,
         Landmark::Reader => Neon::Magenta,
         Landmark::Stairs => Neon::Red,
+        Landmark::Ring => Neon::Magenta,
         Landmark::Ink
         | Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Coin
         | Landmark::Vids
         | Landmark::Pawn => Neon::White,
         Landmark::Wire => Neon::Amber,
@@ -1693,6 +1696,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     let word = match landmark {
         Landmark::Tailor => view.tailor.word,
         Landmark::Prints => view.poster.word,
+        Landmark::Ring => view.ring.word,
         Landmark::Armorer
         | Landmark::Lockers
         | Landmark::Bands
@@ -1713,7 +1717,6 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Coin
         | Landmark::Vids
         | Landmark::Pawn => view.till,
     };
@@ -1854,6 +1857,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
         }
         Landmark::Bits => lines.extend(machine_lines(view)),
         Landmark::Blades => lines.extend(cart_lines(view)),
+        Landmark::Ring => lines.extend(ring_ui::panel_lines(&view.ring)),
         Landmark::Screen
         | Landmark::Noodles
         | Landmark::Umbrellas
@@ -1865,7 +1869,6 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Coin
         | Landmark::Vids
         | Landmark::Pawn => {}
     }
@@ -2549,11 +2552,13 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 | Refusal::LoanCapped
                 | Refusal::NoDebt
                 | Refusal::NothingToLose
+                | Refusal::RingHolds
                 | Refusal::GlassPoured
                 | Refusal::PastTheWall
                 | Refusal::NobodyThere
                 | Refusal::NoAnswerOwed
-                | Refusal::NotOnTheWire,
+                | Refusal::NotOnTheWire
+                | Refusal::RingOwed,
                 line,
             )) => unreachable!("the needle refused a draft on the menu: {line}"),
         };

@@ -75,6 +75,7 @@ pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
 pub mod deadchannel_ambush;
+pub mod deadchannel_bout;
 pub mod deadchannel_name_hit;
 pub mod deadchannel_runner;
 pub mod deadchannel_spawn;

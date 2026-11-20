@@ -1012,12 +1012,12 @@ impl SharedState {
 
         // Clear the whole board first so each snake is placed against the
         // ones already down, not against stale positions from the old arena.
-        for seat_index in 0..MAX_SEATS {
-            let chips = self.players[seat_index].chips;
-            let last_chip = self.players[seat_index].last_chip;
-            self.players[seat_index] = PlayerState::empty();
-            self.players[seat_index].chips = chips;
-            self.players[seat_index].last_chip = last_chip;
+        for player in &mut self.players {
+            let chips = player.chips;
+            let last_chip = player.last_chip;
+            *player = PlayerState::empty();
+            player.chips = chips;
+            player.last_chip = last_chip;
         }
         for seat_index in 0..MAX_SEATS {
             if self.seats[seat_index].is_some() {

@@ -1443,10 +1443,11 @@ fight, spent on things gold could not buy. Both answers are in:
   Air beside them, the lockers at the wire stairs, loans toward the
   screen, the tailor out west. A shop with nothing in it yet keeps its
   sign barely on, in its own color, so the street still reads as lived
-  in (MARKET, SHRINE, PAWN, BATHS, BANDS, SLEEP, COIN, VIDS), and says
+  in (MARKET, SHRINE, PAWN, BATHS, BANDS, SLEEP, VIDS), and says
   "not open yet" at the door. They get lit one at a time, and a sign
   coming on is news; INK (which was CLINIC and read as a second patch)
-  is the first one lit, for the needle.
+  is the first one lit, for the needle, and RING, beside the blade
+  shop, the next, for the ring ("The arena pass").
   Stalls and carts stay as flavor and, later, small bonuses.
 - **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
   forest fights) and hired swords (a second attacker). More fights a day
@@ -1474,9 +1475,10 @@ to ask which steps are bright tomorrow.
 Status: **the round and the road are built**
 (2026-10-06; `fight/cards.rs`, `fight/road.rs`, `fight/policy.rs`,
 `fight/CONTEXT.md`, measured in `fight/BALANCE.md`). The level colors
-were built earlier. Ambush, the arena, and bounties are decided, not
-built. "As built" below says where the code differs from what this
-section decided, and why. A design conversation after the fight,
+were built earlier. Ambush is built ("The crossing pass"), the arena
+as the ring ("The arena pass"); bounties are decided, not built. "As
+built" below says where the code differs from what this section
+decided, and why. A design conversation after the fight,
 the armorer, and the tailor landed. Three threads: what the game must
 give people (visibility, ten times what the bonsai and the arcade give),
 what to do about PvP at forty people, and what the fight itself should
@@ -1787,8 +1789,9 @@ this pass:
    the answer in place of the revenge token, the news as a line on the
    road rather than a replay (the locker is in, so carrying bits into
    the day is already a choice).
-6. Arena and bets, then bounties. Bands as tribes when the band choice
-   ships.
+6. *Built.* The arena as the ring ("The arena pass"): live duels
+   between marked runners, bets in bits, the gate at the draft levels.
+   Bounties next. Bands as tribes when the band choice ships.
 
 Telemetry is the prerequisite for reading any of it: game wins must be
 exported per game and split so the dashboard says what people actually
@@ -1932,6 +1935,120 @@ decisions are mostly about who pays what.
 Still open: whether the sleeper's deck should play (a second mind per
 build, or a pattern chosen from the drafts), bounties on top of the
 crossing, and the scene replay.
+
+## The arena pass: the ring, two marked runners and the street's bits
+
+Status: **built** (`late-ssh/src/app/deadchannel/ring/`,
+`CONTEXT.md` §3e, `ring/CONTEXT.md`; the rows in `deadchannel_bouts`,
+`deadchannel_bout_bets` and `deadchannel_ring_decks`). After the Old
+Signal the second climb is the first one again; the ring is what a mark
+adds to it. A live card duel between two runners who hold a mark,
+called out on the wire, watched and bet on by any standing runner, and
+owed at four levels of every climb after the first. It is the arena of
+"Core design" and "PvP at forty people", and it departs from both in
+three places: bits, not chips; live slots, not stances; a bell per
+bout, not a nightly card.
+
+- **Live, not correspondence.** A marked runner on the wire calls
+  another; they accept; the bell rings five minutes later; the bout is
+  four rounds of thirty seconds at most. A fight two people play while
+  the street watches is the spectacle. The deck playing itself offline
+  ("PvP at forty people") survives only as the clock's hand: a corner
+  that lays nothing in time is played by the ring's obvious round.
+- **Marks in the ropes, anyone at the rail.** Only a runner with a mark
+  calls or is called, so the ring is what the top of the climb opens.
+  Any standing runner watches and bets, which is how a level 2 is in
+  the story on day one.
+- **Flat numbers; the deck is the build.** Level, kit, the marks bonus
+  and the day's glass stay outside: both corners fight on attack 16 and
+  defense 12 (a strike of 10, a block of 7) and 45 signal, and every
+  card keeps the share of those it prints on the road. What a runner
+  brings is the deck: the base ten, four picks chosen at the ring (one
+  card of every draft, whatever the level reached: sixteen decks), and
+  the other card of every draft inked. Ink is the one thing off the
+  road the ring keeps. Both decks are public and locked when the call
+  is taken, so bettors read decks the way the old arena meant them to
+  read plans.
+- **Live slots, not stances.** The older section's secret plan (a
+  stance in a triangle, a gambit or two) is the round's slots. Each
+  round both corners hold a hand of five, open to everyone, and three
+  energy, and lay up to four cards into slots in the order they come
+  out; nobody sees a corner's slots until the round comes out. Then the
+  slots come out one at a time, both corners at once: the guards go up,
+  a mute cancels the card across from it, both hits land together, and
+  a hit that gets through leaves static in the other deck. Block
+  carries between rounds, as on the road. A signal at zero ends it,
+  both at zero in the same beat is a draw, and after round four the
+  higher signal takes it. Reading the open hands is the skill; where a
+  mute goes is the bluff.
+- **Four slots, not three.** With three, a round runs out of slots
+  before it runs out of energy: a burn's extra energy and a free card
+  buy nothing, and the decks that feed on static win 60 to 79% on the
+  clock. One slot more than three energy buys at a card apiece makes
+  every round short of energy and never of slots, and where the empty
+  slot sits is a choice.
+- **The clock.** A call waits three minutes. The accept deals round one
+  and sets the bell five minutes out, the betting window, and the
+  fighters can lay round one in the meantime. Round one has thirty
+  seconds from the bell; every later round has six seconds to watch
+  the last one come out, then thirty. Both locked with the bell rung,
+  it comes out at once. At zero what is laid is locked and a corner
+  that laid nothing is played by the clock's hand, so a bout with bets
+  on it always finishes.
+- **One ring, a pair once a day.** One bout at a time, no calls while
+  it is taken, one open call per caller, and two runners fight each
+  other once a UTC day whichever of them calls. Unique indexes on the
+  bout's row are the rules, so any number of replicas agree.
+- **Bits, not chips.** The older section bet chips and burned the rake
+  as the site's chip sink. The ring bets bits: the stake is the money
+  the road pays, the undercity keeps to its own currency, and the burn
+  is a bits sink instead of a chip sink. Still parimutuel, never a
+  bookmaker: the book is open from the accept to the bell, a press is
+  one cache's worth of bits at the bettor's level, three presses at
+  most, one corner each, and a fighter backs only their own corner. A tenth of the pool burns, a tenth goes to the
+  winning fighter, and the rest is split among the bets on the winner by
+  their size, rounded down, the dust burned. A draw, or bets on one
+  corner only, hands every stake back. Nothing is minted.
+- **A bell per bout, not a nightly card.** At forty people a fixed hour
+  finds nobody. A call reaches the runner wherever they are: the wire's
+  line mentions them, and a session of theirs elsewhere gets a banner.
+  The five minutes before the bell are the betting window the nightly
+  card's hours were. The wire carries three lines (the call, the bout
+  set, how it ended); there is no announcer ghost, no share card for a
+  bout, and the reveal is the whole round shown at once, not a
+  slot-by-slot animation.
+- **The gate.** A runner with a mark whose level reaches 3, 6, 9 or 12
+  owes the ring a bout, and until it is fought every step of the road,
+  the crossing and the answer are refused. Win, lose or draw: one bout
+  clears every gate up to the level stood at. A mark and the ledge
+  start the count again, and a first climb never owes one. The road's
+  balance takes the bout as fought: it is another runner's to give,
+  and no part of the pace.
+- **Measured on the clock.** Every one of the sixteen decks plays the
+  field from both seats on the clock's own hand, and the contract
+  (`ring/policy_test.rs`) holds each between one third and two thirds,
+  with at least half the bouts ending in a knockout. Signal 45 is the
+  number the contract set: 34% to 63%, 72% knockouts, three rounds a
+  bout; higher, the static piles up and the decks that feed on it run
+  away.
+  The clock plays a mute and a bulwark worse than a person does, so the
+  decks built on them sit at the low end; what a read hand makes of
+  them is not measured.
+
+What the decisions cost, named so the dashboard can say whether to pay
+it: with no fallback opponent, a marked runner at a gate cannot walk
+the road until another marked runner is on the wire and accepts (the
+`ring_owed` beat counts every step turned down there); a runner past
+level 3 on a second climb owes a bout before their next step; calls
+post on the wire to reach the runner called, limited only by one open
+call per caller, the three-minute expiry, and the same runner not rung
+again until the last call's three minutes are up; and watching is at the
+RING shop only.
+
+Still open: a fallback opponent if `ring_owed` says runners sit at the
+gate for days, a spar with no gate and no book, a belt for the top of
+the record, bounties on top of the ring, a share card for a bout, and
+watching from somewhere other than the shop.
 
 ## Experiment framing
 

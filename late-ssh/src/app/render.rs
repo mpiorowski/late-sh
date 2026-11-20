@@ -255,6 +255,7 @@ struct DrawContext<'a> {
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_poster: crate::app::deadchannel::poster::ui::PosterView<'a>,
+    city_ring: crate::app::deadchannel::ring::ui::RingView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
     /// The other runners on the shared street, their marks, and (through
     /// `usernames`) their names.
@@ -1816,6 +1817,13 @@ impl App {
                             writing: self.poster.writing,
                             word: self.poster.word.as_deref(),
                         },
+                        city_ring: crate::app::deadchannel::ring::ui::RingView::new(
+                            &self.ring,
+                            &self.presence.records,
+                            &self.runner_looks,
+                            self.user_id,
+                            self.fight.sheet.as_ref(),
+                        ),
                         city_guide: &self.guide.state,
                         city_street: &self.street.view,
                         city_own_user_id: self.user_id,
@@ -2692,6 +2700,7 @@ impl App {
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     poster: ctx.city_poster,
+                    ring: ctx.city_ring,
                     guide: ctx.city_guide,
                     own_user_id: ctx.city_own_user_id,
                     street: ctx.city_street,

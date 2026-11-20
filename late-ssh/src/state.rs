@@ -214,4 +214,7 @@ pub struct State {
     /// sweeper on this replica, the live spawn every session copies, and
     /// the hit path.
     pub lounge_service: crate::app::deadchannel::lounge::svc::LoungeService,
+    /// The ring (`app/deadchannel/ring`): the sweeper on this replica,
+    /// the board every session copies, and the call, bet and round paths.
+    pub ring_service: crate::app::deadchannel::ring::svc::RingService,
 }

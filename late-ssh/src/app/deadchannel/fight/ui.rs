@@ -1805,6 +1805,37 @@ fn draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
     (lines, keys)
 }
 
+/// The ring's gate, in the three rows the node under the cursor would
+/// have: a marked runner at a draft level fights a bout before the next
+/// step (GAME.md, "The arena pass").
+fn ring_owed_lines(level: i32) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let key = lit(Neon::Amber);
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  ▸ ", key),
+            Span::styled("the ring wants you first", lit(Neon::Magenta)),
+            Span::styled(format!("   level {level}, with a mark on you"), dim_text),
+        ]),
+        Line::from(Span::styled(
+            "    one bout at RING, against a runner with a mark. win or lose, the road opens.",
+            text,
+        )),
+        Line::from(Span::styled(
+            "    no steps, no crossing and no answer until it is fought.",
+            dim_text,
+        )),
+    ];
+    let keys = vec![
+        Span::styled("    esc ", key),
+        Span::styled("back", action()),
+        Span::styled(" to the street", text),
+        Span::styled("   RING is the lit sign past the blade shop", dim_text),
+    ];
+    (lines, keys)
+}
+
 /// The road over the street: the sheet, the day's map with the run on
 /// it, what waits under the cursor (or the draft owed, ahead of any
 /// step), the keys. Fixed width like the scene;
@@ -1974,8 +2005,14 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 Some(_) => None,
                 None => sheet.node_ahead(view.picker.lane),
             };
-            match (sheet.draft(), ahead) {
-                (Some(draft), _) => {
+            // The ring's gate stands where the step would: after a draft
+            // owed, ahead of any node, and only while there is road left.
+            let gate = match (reason, sheet.draft()) {
+                (None, None) => sheet.ring_gate(),
+                (Some(_), _) | (None, Some(_)) => None,
+            };
+            match (sheet.draft(), gate, ahead) {
+                (Some(draft), _, _) => {
                     let (detail, keys) = match sheet.inked(draft.level) {
                         true => inked_draft_lines(draft),
                         false => draft_lines(draft),
@@ -1983,7 +2020,12 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                     lines.extend(detail);
                     lines.push(Line::from(keys));
                 }
-                (None, None) => {
+                (None, Some(level), _) => {
+                    let (detail, keys) = ring_owed_lines(level);
+                    lines.extend(detail);
+                    lines.push(Line::from(keys));
+                }
+                (None, None, None) => {
                     // The day's card, in words: the map above is the
                     // picture of it.
                     let glyphs = match sheet.kills_today {
@@ -2018,7 +2060,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                     ]);
                     lines.push(Line::from(keys));
                 }
-                (None, Some(node)) => {
+                (None, None, Some(node)) => {
                     let (detail, keys) = node_lines(sheet, view.picker, view.lookout, node);
                     lines.extend(detail);
                     lines.push(Line::from(keys));

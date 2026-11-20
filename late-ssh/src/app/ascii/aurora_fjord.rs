@@ -528,8 +528,8 @@ impl Land {
                 land.star[k] = (0.35 + (h - 0.986) * 45.0) as f32;
             }
         }
-        for r in WL..H {
-            land.gap[r] = hash(r as f64, 404.0) < 0.3;
+        for (r, gap) in land.gap.iter_mut().enumerate().take(H).skip(WL) {
+            *gap = hash(r as f64, 404.0) < 0.3;
         }
         land
     }
@@ -774,7 +774,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
     }
 
     let mut cells = Vec::with_capacity(W * H);
-    for r in 0..H {
+    for (r, &gap) in land.gap.iter().enumerate().take(H) {
         let rf = r as f64;
         let y = rf + 0.5;
         let dw = y - WLF;
@@ -820,7 +820,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
                 let (a0, a1, a2) = (r0 + ix, r1 + ix, r2 + ix);
                 let sky = mat[a0] == Mat::Air;
                 let mut kr = (if sky { 0.55 } else { 0.64 }) * (0.82 + 0.3 * wave) * deep;
-                if sky && land.gap[r] && wave < 0.45 {
+                if sky && gap && wave < 0.45 {
                     kr *= 0.12;
                 }
                 // the cabin's own image is soft; the lamplight road below

@@ -52,7 +52,8 @@ impl Landmark {
             | Landmark::Bits
             | Landmark::Blades
             | Landmark::Ink
-            | Landmark::Prints => Enter::Panel(self),
+            | Landmark::Prints
+            | Landmark::Ring => Enter::Panel(self),
             Landmark::Screen => Enter::Fight,
             Landmark::Noodles | Landmark::Umbrellas | Landmark::Reader | Landmark::Stairs => {
                 Enter::Line(self)
@@ -63,7 +64,6 @@ impl Landmark {
             | Landmark::Sleep
             | Landmark::Shrine
             | Landmark::Market
-            | Landmark::Coin
             | Landmark::Vids
             | Landmark::Pawn => Enter::Line(self),
             Landmark::Wire => Enter::Leave,

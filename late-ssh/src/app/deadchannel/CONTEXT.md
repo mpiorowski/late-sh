@@ -8,7 +8,8 @@
   - `city/`, `street/`, `tailor/`, `poster/`, `guide/`: the night city under the clubhouse on a second `0`, the shared street over `app/presence`, the mirror that edits the look, PRINTS (the poster on the profile), the undercity guide (`city/CONTEXT.md`).
   - `fight/`: the runner's sheet, the day's road, the round of cards, the wire's news, the shops, crystals, Dead Air (`fight/CONTEXT.md`, with `fight/MONEY.md`, `fight/BALANCE.md`, `fight/CRYSTALS.md`, `fight/CROSSING.md`).
   - `lounge/`: the spawns above #lounge's composer (`lounge/CONTEXT.md`).
-- Design sources: `GAME.md` in this directory (the game: first contact, the runner, the city, the road, the lounge); the root `AUDIENCE.md` (the diagnosis the game answers); `devdocs/FEED-BUDGET.md` (the #lounge valve the public flip waits on).
+  - `ring/`: live 1v1 card duels between marked runners at the RING shop, the street's bets in bits, the gate at the draft levels (`ring/CONTEXT.md`).
+- Design sources: `GAME.md` in this directory (the game: first contact, the runner, the city, the road, the lounge, the crossing, the ring); the root `AUDIENCE.md` (the diagnosis the game answers); `devdocs/FEED-BUDGET.md` (the #lounge valve the public flip waits on).
 - Status: Active. Parent context: `../../../../CONTEXT.md`.
 
 ## 1. Summary
@@ -18,8 +19,9 @@ The game is never announced; it arrives. What exists: **first contact**
 tutorial, `haunt/`), the **runner** a person becomes on joining
 #deadchannel (`runner/`), the **night city** under the clubhouse
 (`city/`), the **road and the round** at the end of its street (`fight/`),
-and the **lounge spawns** runners put down together above #lounge's composer
-(`lounge/`). Who is haunted (everyone sees the clock; a gate of hours,
+the **lounge spawns** runners put down together above #lounge's composer
+(`lounge/`), and the **ring**, where two runners with a mark duel card
+against card while the street bets bits on it (`ring/`). Who is haunted (everyone sees the clock; a gate of hours,
 touched settings and a screened bio picks who climbs further) and how the ladder paces itself are in
 `haunt/CONTEXT.md`.
 
@@ -37,6 +39,7 @@ pieces, like the stage-2 wire, are delivery paths, never sources of truth.
 | `city/`, `street/`, `tailor/`, `poster/`, `guide/` | The night city, the shared street over `app/presence`, the mirror that edits the look, PRINTS (the 32 by 12 poster a runner paints and hangs on the profile), the undercity guide: see `city/CONTEXT.md`. |
 | `fight/` | The sheet, the road, the round, the shops, crystals, Dead Air: see `fight/CONTEXT.md`. |
 | `lounge/` | The lounge spawns: see `lounge/CONTEXT.md`. |
+| `ring/` | The ring: live duels, bets, the gate: see `ring/CONTEXT.md`. |
 | `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). `MARK_ALPHABET` is what a runner can wear as a mark: the alphabet less the Signal's `╬`, which is the paragon count in the badge and nobody's for free. |
 
 ## 3. The four stages (behavior contract)
@@ -61,12 +64,28 @@ lands, the hit, the pay before the kill is told, the wire, the scene,
 the copy on the channel, the beats) is `lounge/CONTEXT.md`; the file
 roles and seams are there too.
 
+## 3e. The ring (live duels, bets in bits, the gate)
+
+GAME.md, "The arena pass": the RING shop on the street, where a runner
+with a mark calls another marked runner on the wire, and once the call
+is taken the two fight a live card duel on flat numbers (four rounds at
+most, four slots a round, hands open and slots hidden) while any
+standing runner bets bits on a corner until the bell. A marked runner
+owes the ring one bout at levels 3, 6, 9 and 12 of every climb after
+the first; until it is fought the road is shut. The contract (who, the
+call and its clocks, the deck, the duel, the bets and their split, the
+gate, the settle, the replica rule and the lock order, the beats, the
+known costs) is `ring/CONTEXT.md`; the sheet's side of it (the gate,
+`Stake`, `Collect`, `RingFought`, `FightService::apply_in`) is
+`fight/CONTEXT.md`, "The ring's gate".
+
 ## 4. Persistence
 
 - `deadchannel_runners` (model `late-core/src/models/deadchannel_runner.rs`): one row per runner, the look, the sheet, and the poster (`poster`, migration 249, the serialized canvas PRINTS writes); columns, triggers, the nuke and the leave stamp in `runner/CONTEXT.md`, the sheet's writer in `fight/CONTEXT.md`.
 - The first-contact chain keys on `users.settings` and the table-less stage-2 wire: `haunt/CONTEXT.md`, Persistence.
 - `deadchannel_ambushes` (model `late-core/src/models/deadchannel_ambush.rs`): one row per fight between two runners, its unique partial indexes are the caps: `fight/CROSSING.md`.
 - `deadchannel_lounge_days` and `deadchannel_spawns` (model `late-core/src/models/deadchannel_spawn.rs`): the lounge's day budget and its spawns: `lounge/CONTEXT.md`.
+- `deadchannel_bouts`, `deadchannel_bout_bets` and `deadchannel_ring_decks` (model `late-core/src/models/deadchannel_bout.rs`, migration 287): the ring's calls and bouts, the bets on them, the deck each runner brings; its unique partial indexes are the ring's rules. The same migration adds `deadchannel_runners.ring_cleared`, the highest gate this climb has cleared: `ring/CONTEXT.md`.
 - Everything else is render-only and session-local: no chat rows, no IRC
   projection (the invitation DM is the deliberate exception: stage 4 is
   where the fiction goes real, and an invitation that vanishes cannot be
@@ -99,13 +118,17 @@ The haunting's own gotchas are in `haunt/CONTEXT.md`, the runner's in `runner/CO
   (`late_ssh_deadchannel_poster_total{beat}`: saved, burned, no_runner,
   failed for the writes; read_failed and undecodable for the read when
   the panel opens), and the door, Old Signal
-  payouts, and the lounge (`late_ssh_deadchannel_lounge_total{beat}`:
+  payouts, the lounge (`late_ssh_deadchannel_lounge_total{beat}`:
   spawned, hit, slain, slipped, paid, pay_left, pay_failed, hit_refused,
-  hit_failed). The name is a log field only, never
-  a metric label: the three counters stay keyed on closed enums so the
+  hit_failed), and the ring (`late_ssh_deadchannel_ring_total{beat}`,
+  the beats in `ring/CONTEXT.md`; the gate's `ring_owed` rides the fight
+  counter). The name is a log field only, never
+  a metric label: every counter stays keyed on closed enums so the
   series count cannot grow with the player base. Grafana's "deadchannel"
-  row (`monitoring/dashboards/observability.json`) reads both: the beat and
-  gate counters as reset-safe `max_over_time` sums, and from the log
+  row (`monitoring/dashboards/observability.json`) reads both: the first
+  contact counters (beats, gate, bio screens) as reset-safe
+  `max_over_time` sums and the game's counters (fights, tailor, poster,
+  payouts, lounge, ring) as `increase` over the range, and from the log
   lines a Runners table (one row per person: ladder hits, invited and
   joined times, last seen, latest gate verdict and legs), a Recent Beats
   table, and the Haunt Log, all three filtered by the `$runner` regex
@@ -113,8 +136,9 @@ The haunting's own gotchas are in `haunt/CONTEXT.md`, the runner's in `runner/CO
   fields, because a `stats` query splits every group into its own series
   and cannot carry strings; logs keep 7 days, so older rungs show empty
   there and `users.settings` stays the truth. Counters live on the pod, so a
-  deploy zeroes the live value; every panel there sums per-instance
-  high-water marks instead. The row ships to prod with the dashboard
+  deploy zeroes the live value: the first contact panels sum per-instance
+  high-water marks, and `increase` on the game's panels reads a reset as
+  a reset. The row ships to prod with the dashboard
   ConfigMap, on a `-infra` release (`infra/monitoring.tf`), not on merge.
 - A fight action holds a pooled connection while it waits for the row
   lock, so `FightSession::request` drops a press while one is out (the

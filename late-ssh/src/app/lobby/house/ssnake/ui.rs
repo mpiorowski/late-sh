@@ -361,8 +361,7 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
     if let Some(point) = snapshot.point {
         colors[point.y as usize * level.width + point.x as usize] = food_color(snapshot);
     }
-    for seat_index in 0..MAX_SEATS {
-        let player = &snapshot.players[seat_index];
+    for (seat_index, player) in snapshot.players.iter().enumerate() {
         for segment in player.body.iter().skip(1) {
             paint(&mut colors, level, *segment, body_color(seat_index));
         }

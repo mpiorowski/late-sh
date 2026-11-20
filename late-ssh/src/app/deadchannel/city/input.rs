@@ -7,8 +7,8 @@
 //! `r`, Dead Air `s`, `d`, `t`, `f`, `u`, and `o` (a glass or a pour
 //! each), the blade shop `w` and `a`, INK up/down over the drafts and `i`
 //! to ink the picked one, the ledge `r` twice to step off; the tailor's
-//! hands every key to `tailor/input.rs`, and PRINTS every key to
-//! `poster/input.rs`.
+//! hands every key to `tailor/input.rs`, PRINTS every key to
+//! `poster/input.rs`, and the ring every key to `ring/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page but PRINTS opens it (the site guide's key,
 //! taken over down here: the street has its own; PRINTS paints it). While the road or the fight scene
@@ -91,6 +91,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                     let runner = app.runner_looks.get(&app.user_id).copied();
                     app.poster.open(runner);
                 }
+                if landmark == Landmark::Ring {
+                    app.ring.open();
+                }
             }
             Enter::Line(landmark) => {
                 let pool = data::lines(landmark);
@@ -137,6 +140,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     if app.city.panel() == Some(Landmark::Tailor) {
         return crate::app::deadchannel::tailor::input::handle_event(app, event);
+    }
+    if app.city.panel() == Some(Landmark::Ring) {
+        return crate::app::deadchannel::ring::input::handle_event(app, event);
     }
     if app.city.panel() == Some(Landmark::Armorer) {
         match event {
