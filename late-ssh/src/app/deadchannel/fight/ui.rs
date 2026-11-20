@@ -1828,7 +1828,7 @@ fn ring_owed_lines(level: i32) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
         )),
     ];
     let keys = vec![
-        Span::styled("    [Enter] ", key),
+        Span::styled("    esc ", key),
         Span::styled("back", action()),
         Span::styled(" to the street", text),
         Span::styled("   RING is the lit sign past the blade shop", dim_text),

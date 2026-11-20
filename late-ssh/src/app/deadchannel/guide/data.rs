@@ -533,7 +533,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "a call waits *three minutes*, and the wire says it with their name in it, so it finds them wherever they are. one call out at a time, none while the ring is taken, and the same two runners fight *once a day*.",
+                "a call waits *three minutes*, and the wire says it with their name in it, so it finds them wherever they are. one call out at a time, none while the ring is taken, the same runner not rung again until three minutes have passed, and the same two runners fight *once a day*.",
             ),
             Block::Rule(
                 "your deck at the ring is the ten, *four picks* of your own (one card of every draft, whatever your level), and the other card of every draft you inked. your level, your gear, your mark bonus, and the day's glass stay outside: both corners hit the same, block the same, and start at *45* signal.",
@@ -568,7 +568,7 @@ pub const SECTIONS: &[Section] = &[
                 "when the clock runs out, what you laid is locked. lay nothing and the ring plays the obvious round for you. both locked once the bell has rung, the round comes out at once.",
             ),
             Block::Rule(
-                "a press of `b` is *a cache's worth* of bits at your level, *three presses* at most, all on one corner. in the ropes you can only back yourself. not with a glyph waiting on you.",
+                "a press of `b` is *a cache's worth* of bits at your level, *three presses* at most, all on one corner. in the ropes you can only back yourself. not with a glyph waiting on you. while a bet or a bout of yours is out, the ledge will not have you.",
             ),
             Block::Rule(
                 "when it ends, *a tenth* of the pool burns, *a tenth* goes to the winner, and the rest is split among the bets on the winner by their size. a draw, or bets on one corner only, hands every stake back.",

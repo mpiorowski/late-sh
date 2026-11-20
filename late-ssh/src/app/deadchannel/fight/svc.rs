@@ -38,6 +38,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::ChipMove;
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome, NewAmbush};
+use late_core::models::deadchannel_bout::Bout;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::profile_award::{
     DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
@@ -255,6 +256,11 @@ impl FightService {
             .as_ref()
             .and_then(|fight| fight.rival().cloned());
         let mut outcome = match ask {
+            // What the ring pays, it pays onto the sheet that staked it:
+            // the fall waits while a bet or a bout of the runner's is out.
+            Ask::Command(Command::Reset) if Bout::holds(&*tx, user_id).await? => {
+                super::state::ring_holds()
+            }
             Ask::Command(command) => sheet.apply(command, &mut rand::thread_rng()),
             Ask::Cross { lane, username } => {
                 self.cross(&tx, &mut sheet, lane, &username, today, now)
@@ -1022,8 +1028,9 @@ impl FightService {
     /// together or not at all. The same lock, day roll and store as `act`,
     /// and nothing committed here: the caller commits, and locks its own
     /// row before this one, always in that order. `None` for no standing
-    /// runner. The beat is counted here, so a caller that rolls back
-    /// leaves one count too many; the ring's own beats are the ledger.
+    /// runner. Nothing is counted or logged here, since nothing has
+    /// landed yet: the caller hands the outcome to [`Self::landed`] once
+    /// its commit is through.
     pub(crate) async fn apply_in(
         &self,
         tx: &tokio_postgres::Transaction<'_>,
@@ -1042,9 +1049,14 @@ impl FightService {
         if changed {
             DeadchannelRunner::store_sheet(tx, sheet.to_write()).await?;
         }
-        metrics::record_deadchannel_fight(beat_for(&outcome.applied));
-        tracing::info!(user_id = %user_id, command = ?command, applied = ?outcome.applied, bits = sheet.bits, "sheet command applied for the ring");
         Ok(Some(outcome))
+    }
+
+    /// Count and log a command `apply_in` applied, once the transaction
+    /// it ran in has committed.
+    pub(crate) fn landed(user_id: Uuid, outcome: &Outcome) {
+        metrics::record_deadchannel_fight(beat_for(&outcome.applied));
+        tracing::info!(user_id = %user_id, applied = ?outcome.applied, "sheet command landed for the ring");
     }
 
     /// A read, but through the same lock-and-settle path as an action, so

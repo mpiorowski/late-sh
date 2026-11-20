@@ -130,6 +130,7 @@ pub(crate) fn reply_line(reply: Reply) -> Option<String> {
             CallRefusal::Offline => "they are off the wire.",
             CallRefusal::RingTaken => "the ring is taken. wait for it to clear.",
             CallRefusal::AlreadyCalling => "you have a call out already.",
+            CallRefusal::TooSoon => "you just called them. give it a few minutes.",
         }
         .to_string(),
         Reply::Accepted => format!("you are in. the bell in {} minutes.", BELL_SECS / 60),
@@ -141,7 +142,7 @@ pub(crate) fn reply_line(reply: Reply) -> Option<String> {
             AnswerRefusal::FoughtToday => "you two already fought today. the call is off.",
         }
         .to_string(),
-        Reply::Deck(_) | Reply::Laid => return None,
+        Reply::Deck(_) | Reply::DeckStored(_) | Reply::Laid | Reply::Locked => return None,
         Reply::Staked { bits } => format!("{bits} bits down."),
         Reply::BetRefused(refusal) => match refusal {
             BetRefusal::Closed => "the book is shut.".to_string(),
@@ -154,6 +155,7 @@ pub(crate) fn reply_line(reply: Reply) -> Option<String> {
         },
         Reply::ActRefused(refusal) => match refusal {
             ActRefusal::NotYours => "that is not your bout.",
+            ActRefusal::RoundGone => "that round came out already.",
             ActRefusal::Round(Refusal::Over) => "the bout is over.",
             ActRefusal::Round(Refusal::Locked) => "your round is locked.",
             ActRefusal::Round(Refusal::NoSlot | Refusal::NoCard) => "no card there.",

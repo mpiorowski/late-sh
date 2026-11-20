@@ -37,7 +37,6 @@ pub(crate) fn bout(mira: Uuid, tom: Uuid) -> Bout {
         expires_at: at(),
         accepted_at: Some(at()),
         bell_at: Some(bell),
-        round: 1,
         deadline_at: Some(bell + Duration::seconds(ROUND_SECS)),
         state: None,
         pool_caller: 0,

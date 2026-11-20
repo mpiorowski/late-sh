@@ -41,7 +41,6 @@ fn call(mira: Uuid, tom: Uuid) -> Bout {
         expires_at: at() + Duration::seconds(CALL_SECS),
         accepted_at: None,
         bell_at: None,
-        round: 0,
         deadline_at: None,
         state: None,
         pool_caller: 0,
@@ -74,7 +73,6 @@ fn set() -> Ring {
     bout.called_deck = Some(serde_json::json!(DECK));
     bout.accepted_at = Some(at());
     bout.bell_at = Some(bell);
-    bout.round = 1;
     bout.deadline_at = Some(bell + Duration::seconds(ROUND_SECS));
     ring.board.live = Some(LiveBout {
         bout,
@@ -275,6 +273,14 @@ fn the_rounds_show_both_hands_and_only_your_own_slots() {
         .expect("tom's hand");
     assert!(toms_hand.contains(&tom_second.marked()));
     assert!(!toms_hand.contains("in slot"), "tom's slots are his own");
+    // Her keys come before the pool at the foot, which is where a short
+    // screen cuts the panel.
+    let at_row = |holding: &str| {
+        rows.iter()
+            .position(|row| row.contains(holding))
+            .unwrap_or_else(|| panic!("no row holding {holding:?}"))
+    };
+    assert!(at_row("lock the round") < at_row("the pool"));
 
     // A watcher gets both hands and nobody's slots.
     let rows = panel(&ring, ring.wren, &sheet(0, 4), now);

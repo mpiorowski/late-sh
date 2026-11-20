@@ -208,7 +208,11 @@ so (`Undercity · f road · p patch · ? guide`,
   The ring applies them through `FightService::apply_in`: one command
   on the locked row inside a transaction the ring owns, so a stake and
   its bet row, a pay and its claim, a bout's end and the gate it clears
-  commit together or not at all; the ring locks its own rows first. The
+  commit together or not at all; the ring locks its own rows first, and
+  hands each outcome to `FightService::landed` after its commit, which
+  is where the beat is counted. `act` asks the ring's rows one thing
+  (`Bout::holds`) before a `Command::Reset`, and refuses the ledge with
+  `Refusal::RingHolds` while a bet or a bout of the runner's is out. The
   ring fights on flat numbers through `Powers::of`, the one constructor
   that `Sheet::powers_under` also calls, so the cards' shares stay in
   one place. `sim.rs` takes the bout as fought the day the gate stands

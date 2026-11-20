@@ -88,6 +88,10 @@ async fn is_unsettled(client: &Client, id: Uuid) -> bool {
         .any(|unsettled| unsettled.id == id)
 }
 
+async fn held(client: &Client, user: &User) -> bool {
+    Bout::holds(client, user.id).await.expect("holds")
+}
+
 #[tokio::test]
 async fn a_second_accept_while_a_bout_is_live_is_ring_taken_and_leaves_the_first_alone() {
     let test_db = test_db().await;
@@ -103,11 +107,9 @@ async fn a_second_accept_while_a_bout_is_live_is_ring_taken_and_leaves_the_first
     let first = called(client, &call(&tom, &mira, day, at)).await;
     let second = called(client, &call(&dax, &ana, day, at)).await;
     assert!(!first.is_accepted());
-    assert_eq!(first.round, 0);
 
     let live = accepted(&mut *client, first.id, at).await;
     assert!(live.is_accepted());
-    assert_eq!(live.round, 1);
     assert_eq!(live.bell_at, Some(at + Duration::seconds(30)));
     assert_eq!(live.deadline_at, Some(at + Duration::seconds(90)));
     assert_eq!(live.caller_deck, Some(json!(["caller deck"])));
@@ -370,7 +372,7 @@ async fn the_pool_takes_bits_only_until_the_bell() {
 }
 
 #[tokio::test]
-async fn settle_and_pay_claims_are_each_taken_once() {
+async fn settle_and_pay_claims_are_each_taken_once_and_the_ring_holds_a_runner_until_theirs_is() {
     let test_db = test_db().await;
     let mut pooled = test_db.db.get().await.expect("db client");
     let client: &mut Client = &mut pooled;
@@ -379,8 +381,12 @@ async fn settle_and_pay_claims_are_each_taken_once() {
     let dax = create_test_user(&test_db.db, "settle-dax").await;
     let at = now();
     let bout = called(client, &call(&tom, &mira, at.date_naive(), at)).await;
+    // An open call holds nobody.
+    assert!(!held(client, &tom).await);
     accepted(&mut *client, bout.id, at).await;
     stake(client, bout.id, &dax, Side::Caller, 20, at).await;
+    // The ring holds both fighters and the bettor from here on.
+    assert!(held(client, &tom).await && held(client, &mira).await && held(client, &dax).await);
 
     // Nothing to settle while the bout is being fought.
     assert!(
@@ -418,6 +424,7 @@ async fn settle_and_pay_claims_are_each_taken_once() {
     }
     // Both fighters settled, dax still unpaid.
     assert!(is_unsettled(client, bout.id).await);
+    assert!(!held(client, &tom).await && !held(client, &mira).await && held(client, &dax).await);
 
     let paid = BoutBet::claim_pay(&*client, bout.id, dax.id, 40, ended_at)
         .await
@@ -437,4 +444,45 @@ async fn settle_and_pay_claims_are_each_taken_once() {
             .is_empty()
     );
     assert!(!is_unsettled(client, bout.id).await);
+    assert!(!held(client, &dax).await);
+}
+
+#[tokio::test]
+async fn a_call_taken_back_cannot_ring_the_same_runner_again_until_its_time_is_up() {
+    let test_db = test_db().await;
+    let mut pooled = test_db.db.get().await.expect("db client");
+    let client: &mut Client = &mut pooled;
+    let tom = create_test_user(&test_db.db, "again-tom").await;
+    let mira = create_test_user(&test_db.db, "again-mira").await;
+    let dax = create_test_user(&test_db.db, "again-dax").await;
+    let at = now();
+    let day = at.date_naive();
+
+    let first = called(client, &call(&tom, &mira, day, at)).await;
+    Bout::end_call(&*client, first.id, BoutOutcome::Declined, at)
+        .await
+        .expect("take it back")
+        .expect("the call ends");
+
+    // The call would have waited two minutes: until then mira is not
+    // rung again, though anybody else can be.
+    let soon = at + Duration::seconds(5);
+    assert_eq!(
+        Bout::call(&*client, &call(&tom, &mira, day, soon))
+            .await
+            .expect("call again"),
+        CallResult::TooSoon
+    );
+    let other = called(client, &call(&tom, &dax, day, soon)).await;
+    Bout::end_call(&*client, other.id, BoutOutcome::Declined, soon)
+        .await
+        .expect("take it back")
+        .expect("the call ends");
+
+    let later = at + Duration::minutes(2);
+    assert!(
+        !called(client, &call(&tom, &mira, day, later))
+            .await
+            .is_accepted()
+    );
 }

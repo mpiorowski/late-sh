@@ -2041,7 +2041,8 @@ the road until another marked runner is on the wire and accepts (the
 `ring_owed` beat counts every step turned down there); a runner past
 level 3 on a second climb owes a bout before their next step; calls
 post on the wire to reach the runner called, limited only by one open
-call per caller and the three-minute expiry; and watching is at the
+call per caller, the three-minute expiry, and the same runner not rung
+again until the last call's three minutes are up; and watching is at the
 RING shop only.
 
 Still open: a fallback opponent if `ring_owed` says runners sit at the

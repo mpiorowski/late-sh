@@ -128,7 +128,10 @@ hands, no bits on hand or in the locker, no crystals, a level-1 signal.
   (`ring_cleared` to 0, as after a mark), so a marked runner owes a
   bout again at level 3.
 - Refusals: the signal down (`SignalDown`: a reset is not a way back on
-  the wire before the roll), a glyph waiting (`FightWaiting`), and a
+  the wire before the roll), a glyph waiting (`FightWaiting`), the ring
+  holding a bet unpaid or a bout unsettled (`RingHolds`, read from the
+  ring's rows by `FightService::act`: what the ring pays it pays onto
+  the sheet that staked, so "no starting bits" holds), and a
   runner the fall would take nothing from (`NothingToLose`,
   `Sheet::has_something_to_lose`: level 1, no exp, no gear, no bits on
   hand or locked up, no crystals). The last one is what keeps the wire line from

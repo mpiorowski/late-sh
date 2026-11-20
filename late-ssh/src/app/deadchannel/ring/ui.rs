@@ -583,13 +583,16 @@ fn on_lines(view: &RingView<'_>, live: &LiveBout, left: Option<i64>) -> Vec<Line
             false => lines.push(hand_line(live, side, false)),
         }
     }
+    // The keys sit under the hands, not at the foot: a screen too short
+    // for the panel cuts it there, and a round on the clock can lose the
+    // tape and the pool but never its keys.
+    if fighter.is_some() {
+        lines.push(Line::from(fighter_hints()));
+    }
     lines.push(Line::default());
     lines.extend(tape_lines(live));
     lines.push(Line::default());
     lines.push(pool_line(live));
-    if fighter.is_some() {
-        lines.push(Line::from(fighter_hints()));
-    }
     lines
 }
 

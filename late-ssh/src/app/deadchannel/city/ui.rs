@@ -2552,6 +2552,7 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 | Refusal::LoanCapped
                 | Refusal::NoDebt
                 | Refusal::NothingToLose
+                | Refusal::RingHolds
                 | Refusal::GlassPoured
                 | Refusal::PastTheWall
                 | Refusal::NobodyThere

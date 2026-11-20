@@ -8,8 +8,9 @@
 -- accepts it, either runner declines it, or `expires_at` passes (the
 -- sweeper ends it as expired). Accepting snapshots both decks into the
 -- row, rings the bell at `bell_at` (bets close then) and starts round 1,
--- due by `deadline_at`; every round after rewrites `round`, `deadline_at`
--- and `state`, the duel as JSON only the app reads. `accepted_at` and
+-- due by `deadline_at`; every round after rewrites `deadline_at` and
+-- `state`, the duel as JSON only the app reads (the round is in it, and
+-- nowhere else). `accepted_at` and
 -- `bell_at` are set together, so either one says the bout was fought.
 -- `pool_caller` and `pool_called` are the bits bet on each side, added
 -- before the bell only. `outcome` is the side that won, a draw, or a call
@@ -36,7 +37,6 @@ CREATE TABLE deadchannel_bouts (
     expires_at TIMESTAMPTZ NOT NULL,
     accepted_at TIMESTAMPTZ,
     bell_at TIMESTAMPTZ,
-    round INT NOT NULL DEFAULT 0,
     deadline_at TIMESTAMPTZ,
     state JSONB,
     pool_caller BIGINT NOT NULL DEFAULT 0 CHECK (pool_caller >= 0),
@@ -72,6 +72,19 @@ CREATE UNIQUE INDEX deadchannel_bouts_one_per_pair
 CREATE INDEX deadchannel_bouts_open
     ON deadchannel_bouts (expires_at) WHERE ended_at IS NULL;
 
+-- Every change to a bout tells every replica, from the write itself, so
+-- no write path can forget to. The payload is the bout's id.
+CREATE FUNCTION notify_deadchannel_bout_changed() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify('deadchannel_bout', NEW.id::text);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER deadchannel_bouts_changed
+    AFTER INSERT OR UPDATE ON deadchannel_bouts
+    FOR EACH ROW EXECUTE FUNCTION notify_deadchannel_bout_changed();
+
 -- One row per runner betting on a bout: one side, pressed again to add
 -- bits (`presses` counts the bets folded into the row). `paid_at` is the
 -- pay claim once the bout ends: the replica that takes it pays
@@ -89,6 +102,24 @@ CREATE TABLE deadchannel_bout_bets (
     paid_bits BIGINT,
     PRIMARY KEY (bout_id, user_id)
 );
+
+-- What the ledge asks before it lets a runner go: a bet of theirs the
+-- ring has not paid yet.
+CREATE INDEX deadchannel_bout_bets_unpaid
+    ON deadchannel_bout_bets (user_id) WHERE paid_at IS NULL;
+
+-- A bet placed or paid is a change to its bout: the same channel, the
+-- bout's id.
+CREATE FUNCTION notify_deadchannel_bout_bet_changed() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify('deadchannel_bout', NEW.bout_id::text);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER deadchannel_bout_bets_changed
+    AFTER INSERT OR UPDATE ON deadchannel_bout_bets
+    FOR EACH ROW EXECUTE FUNCTION notify_deadchannel_bout_bet_changed();
 
 -- The deck a runner brings to the ring, as JSON the app reads: set
 -- whenever they change it, copied into the bout when one is accepted.

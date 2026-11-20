@@ -27,7 +27,6 @@ use chrono::{DateTime, Utc};
 use late_core::db::Db;
 use late_core::models::deadchannel_bout::{
     AcceptResult, Bout, BoutBet, BoutOutcome, CallResult, NewCall, RingDeck, Side, StakeResult,
-    notify_bout,
 };
 use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
@@ -97,6 +96,8 @@ pub(crate) enum CallRefusal {
     Offline,
     RingTaken,
     AlreadyCalling,
+    /// The caller's last call to this runner has not run out its time.
+    TooSoon,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +130,9 @@ pub(crate) enum BetRefusal {
 pub(crate) enum ActRefusal {
     /// No bout on under that id, or this runner is not in it.
     NotYours,
+    /// The round the runner was looking at came out before the key
+    /// landed: nothing is laid or locked on a hand they have not seen.
+    RoundGone,
     Round(state::Refusal),
 }
 
@@ -142,13 +146,18 @@ pub(crate) enum Reply {
     /// A call declined by the runner called, or taken back by its caller.
     Declined,
     AnswerRefused(AnswerRefusal),
-    /// The deck this runner brings, read or just stored.
+    /// The deck this runner brings, as the row holds it.
     Deck(Picks),
+    /// The deck this runner just chose, stored.
+    DeckStored(Picks),
     Staked {
         bits: i64,
     },
     BetRefused(BetRefusal),
+    /// A card laid or taken back.
     Laid,
+    /// The round locked.
+    Locked,
     ActRefused(ActRefusal),
     Failed,
 }
@@ -332,7 +341,6 @@ impl RingService {
         for call in Bout::expire_calls(&**client, now).await? {
             metrics::record_deadchannel_ring(RingBeat::Expired);
             tracing::info!(bout_id = %call.id, caller = %call.caller_username, called = %call.called_username, "ring call lapsed unanswered");
-            announce(&client, call.id).await;
         }
         Ok(())
     }
@@ -352,20 +360,13 @@ impl RingService {
         let mut duel = duel_of(&bout)?;
         let advance = advance_in(&tx, &bout, &mut duel, now).await?;
         tx.commit().await?;
-        self.landed(&client, bout_id, &duel, advance, now).await;
+        self.landed(bout_id, &duel, advance, now).await;
         Ok(())
     }
 
-    /// What follows a committed write on a bout: the count, the notify,
-    /// and for a bout that ended the wire's line and the pay.
-    async fn landed(
-        &self,
-        client: &tokio_postgres::Client,
-        bout_id: Uuid,
-        duel: &Duel,
-        advance: Advance,
-        now: DateTime<Utc>,
-    ) {
+    /// What follows a committed write on a bout: the count, and for a
+    /// bout that ended the wire's line and the pay.
+    async fn landed(&self, bout_id: Uuid, duel: &Duel, advance: Advance, now: DateTime<Utc>) {
         if advance.timed_out {
             metrics::record_deadchannel_ring(RingBeat::TimedOut);
             tracing::info!(bout_id = %bout_id, round = duel.round, "ring round called on the clock");
@@ -384,13 +385,9 @@ impl RingService {
                 tracing::info!(bout_id = %bout_id, ending = ?ending, rounds = duel.round, pool = bout.pool_caller + bout.pool_called, "ring bout ended");
                 self.chat
                     .post_wire_line_task(data::result_line(&bout, duel, ending));
-                // The sessions hear the ending before the pay: the pay's
-                // own notify tells them to read their sheets.
-                announce(client, bout_id).await;
                 self.settle(&bout, ending, now).await;
             }
         }
-        announce(client, bout_id).await;
     }
 
     async fn settle_the_unsettled(&self, now: DateTime<Utc>) -> Result<()> {
@@ -408,8 +405,6 @@ impl RingService {
                 .ending
                 .context("an ended bout holds a duel with no ending")?;
             self.settle(&bout, ending, now).await;
-            let client = self.db.get().await?;
-            announce(&client, bout.id).await;
         }
         Ok(())
     }
@@ -496,20 +491,28 @@ impl RingService {
             return Ok(None);
         }
         let user_id = bout.user(side);
-        let mut standing = self
+        let Some(fought) = self
             .fight
             .apply_in(&tx, user_id, Command::RingFought)
             .await?
-            .is_some();
-        if standing && purse > 0 {
-            standing = self
-                .fight
-                .apply_in(&tx, user_id, Command::Collect { bits: purse })
-                .await?
-                .is_some();
-        }
+        else {
+            tx.commit().await?;
+            return Ok(Some(false));
+        };
+        let collected = match purse {
+            0 => None,
+            bits => {
+                self.fight
+                    .apply_in(&tx, user_id, Command::Collect { bits })
+                    .await?
+            }
+        };
         tx.commit().await?;
-        Ok(Some(standing))
+        FightService::landed(user_id, &fought);
+        if let Some(collected) = &collected {
+            FightService::landed(user_id, collected);
+        }
+        Ok(Some(true))
     }
 
     /// One bet's pay, in the transaction that takes its claim. `None`
@@ -524,16 +527,25 @@ impl RingService {
         {
             return Ok(None);
         }
-        let standing = match bits {
-            0 => true,
-            bits => self
-                .fight
-                .apply_in(&tx, bet.user_id, Command::Collect { bits })
-                .await?
-                .is_some(),
+        let collected = match bits {
+            0 => None,
+            bits => {
+                let Some(collected) = self
+                    .fight
+                    .apply_in(&tx, bet.user_id, Command::Collect { bits })
+                    .await?
+                else {
+                    tx.commit().await?;
+                    return Ok(Some(false));
+                };
+                Some(collected)
+            }
         };
         tx.commit().await?;
-        Ok(Some(standing))
+        if let Some(collected) = &collected {
+            FightService::landed(bet.user_id, collected);
+        }
+        Ok(Some(true))
     }
 
     /// Call `called` to the ring for a session and answer on `reply`.
@@ -584,8 +596,7 @@ impl RingService {
             match picks {
                 Some(picks) => {
                     RingDeck::set(&**client, user_id, &picks.to_json(), Utc::now()).await?;
-                    metrics::record_deadchannel_ring(RingBeat::DeckSet);
-                    Ok(Reply::Deck(picks))
+                    Ok(Reply::DeckStored(picks))
                 }
                 None => Ok(Reply::Deck(picks_of(&client, user_id).await?)),
             }
@@ -613,13 +624,14 @@ impl RingService {
         &self,
         user_id: Uuid,
         bout_id: Uuid,
+        round: u8,
         act: Act,
         reply: mpsc::UnboundedSender<Reply>,
     ) {
         let svc = self.clone();
-        let span = info_span!("deadchannel.ring.act_task", user_id = %user_id, bout_id = %bout_id, act = ?act);
+        let span = info_span!("deadchannel.ring.act_task", user_id = %user_id, bout_id = %bout_id, round, act = ?act);
         self.run(span, reply, async move {
-            svc.act(user_id, bout_id, act, Utc::now()).await
+            svc.act(user_id, bout_id, round, act, Utc::now()).await
         });
     }
 
@@ -646,14 +658,14 @@ impl RingService {
                     Reply::Accepted => Some(RingBeat::Accepted),
                     Reply::Declined => Some(RingBeat::Declined),
                     Reply::AnswerRefused(_) => Some(RingBeat::AcceptRefused),
-                    // A read is not a beat; a stored deck is counted
-                    // where it is stored.
+                    // A read is not a beat.
                     Reply::Deck(_) => None,
+                    Reply::DeckStored(_) => Some(RingBeat::DeckSet),
                     Reply::Staked { .. } => Some(RingBeat::Bet),
                     Reply::BetRefused(_) => Some(RingBeat::BetRefused),
-                    // A lock is counted where it lands; laying a card
-                    // is not a beat.
+                    // Laying a card is not a beat.
                     Reply::Laid | Reply::ActRefused(_) => None,
+                    Reply::Locked => Some(RingBeat::Locked),
                     Reply::Failed => Some(RingBeat::Failed),
                 };
                 if let Some(beat) = beat {
@@ -668,7 +680,9 @@ impl RingService {
                     | Reply::BetRefused(_)
                     | Reply::ActRefused(_)
                     | Reply::Deck(_)
-                    | Reply::Laid => {
+                    | Reply::DeckStored(_)
+                    | Reply::Laid
+                    | Reply::Locked => {
                         tracing::debug!(answer = ?answer, "ring request answered");
                     }
                     Reply::Failed => {}
@@ -721,12 +735,12 @@ impl RingService {
         };
         match Bout::call(&**client, &new).await? {
             CallResult::Called(bout) => {
-                announce(&client, bout.id).await;
                 self.chat.post_wire_line_task(data::call_line(&bout));
                 Ok(Reply::Called)
             }
             CallResult::RingTaken => Ok(Reply::CallRefused(CallRefusal::RingTaken)),
             CallResult::AlreadyCalling => Ok(Reply::CallRefused(CallRefusal::AlreadyCalling)),
+            CallResult::TooSoon => Ok(Reply::CallRefused(CallRefusal::TooSoon)),
         }
     }
 
@@ -756,12 +770,7 @@ impl RingService {
             // A runner who walked off the ledge since the call has no
             // sheet: there is nobody to fight.
             let Some(sheet) = self.fight.settled_sheet(fighter).await? else {
-                if Bout::end_call(&**client, bout_id, BoutOutcome::Declined, now)
-                    .await?
-                    .is_some()
-                {
-                    announce(&client, bout_id).await;
-                }
+                Bout::end_call(&**client, bout_id, BoutOutcome::Declined, now).await?;
                 return Ok(Reply::AnswerRefused(AnswerRefusal::Gone));
             };
             decks.push(picks_of(&client, fighter).await?.deck(&sheet.inks));
@@ -781,19 +790,13 @@ impl RingService {
         .await?;
         match accepted {
             AcceptResult::Accepted(bout) => {
-                announce(&client, bout.id).await;
                 self.chat.post_wire_line_task(data::set_line(&bout));
                 Ok(Reply::Accepted)
             }
             AcceptResult::Gone => Ok(Reply::AnswerRefused(AnswerRefusal::Gone)),
             AcceptResult::RingTaken => Ok(Reply::AnswerRefused(AnswerRefusal::RingTaken)),
             AcceptResult::FoughtToday => {
-                if Bout::end_call(&**client, bout_id, BoutOutcome::Declined, now)
-                    .await?
-                    .is_some()
-                {
-                    announce(&client, bout_id).await;
-                }
+                Bout::end_call(&**client, bout_id, BoutOutcome::Declined, now).await?;
                 Ok(Reply::AnswerRefused(AnswerRefusal::FoughtToday))
             }
         }
@@ -815,10 +818,7 @@ impl RingService {
             return Ok(Reply::AnswerRefused(AnswerRefusal::NotYours));
         }
         match Bout::end_call(&**client, bout_id, BoutOutcome::Declined, now).await? {
-            Some(_) => {
-                announce(&client, bout_id).await;
-                Ok(Reply::Declined)
-            }
+            Some(_) => Ok(Reply::Declined),
             None => Ok(Reply::AnswerRefused(AnswerRefusal::Gone)),
         }
     }
@@ -883,7 +883,7 @@ impl RingService {
         match outcome.applied {
             Applied::Staked { bits } => {
                 tx.commit().await?;
-                announce(&client, bout_id).await;
+                FightService::landed(user_id, &outcome);
                 Ok(Reply::Staked { bits })
             }
             Applied::Refused(Refusal::Short { by }) => {
@@ -896,13 +896,15 @@ impl RingService {
         }
     }
 
-    /// One change to a corner's round, under the bout's lock. A lock that
-    /// finds both corners in and the bell rung resolves the round on the
-    /// spot.
+    /// One change to a corner's round, under the bout's lock. `round` is
+    /// the round the runner was looking at: a key that lands after it
+    /// came out is refused. A lock that finds both corners in and the
+    /// bell rung resolves the round on the spot.
     pub(crate) async fn act(
         &self,
         user_id: Uuid,
         bout_id: Uuid,
+        round: u8,
         act: Act,
         now: DateTime<Utc>,
     ) -> Result<Reply> {
@@ -918,6 +920,9 @@ impl RingService {
             return Ok(Reply::ActRefused(ActRefusal::Round(state::Refusal::Over)));
         }
         let mut duel = duel_of(&bout)?;
+        if duel.round != round {
+            return Ok(Reply::ActRefused(ActRefusal::RoundGone));
+        }
         let moved = match act {
             Act::Place { slot, hand } => duel.place(side, slot, hand),
             Act::Clear { slot } => duel.clear(side, slot),
@@ -931,19 +936,17 @@ impl RingService {
             Bout::store_round(
                 &*tx,
                 bout_id,
-                i32::from(duel.round),
                 bout.deadline_at,
                 &serde_json::to_value(&duel).context("writing the duel")?,
             )
             .await?;
         }
         tx.commit().await?;
+        self.landed(bout_id, &duel, advance, now).await;
         match act {
-            Act::Lock => metrics::record_deadchannel_ring(RingBeat::Locked),
-            Act::Place { .. } | Act::Clear { .. } => {}
+            Act::Lock => Ok(Reply::Locked),
+            Act::Place { .. } | Act::Clear { .. } => Ok(Reply::Laid),
         }
-        self.landed(&client, bout_id, &duel, advance, now).await;
-        Ok(Reply::Laid)
     }
 }
 
@@ -992,7 +995,7 @@ async fn advance_in(
         }
         None => {
             let deadline = now + chrono::Duration::seconds(REVEAL_SECS + ROUND_SECS);
-            Bout::store_round(tx, bout.id, i32::from(duel.round), Some(deadline), &state).await?;
+            Bout::store_round(tx, bout.id, Some(deadline), &state).await?;
             Step::Resolved
         }
     };
@@ -1015,17 +1018,6 @@ async fn picks_of(client: &tokio_postgres::Client, user_id: Uuid) -> Result<Pick
         Some(cards) => Picks::parse(&cards)
             .with_context(|| format!("runner {user_id} holds a ring deck that is not four picks")),
         None => Ok(Picks::opening()),
-    }
-}
-
-/// Tell every replica the bout moved. The row is the truth and has
-/// landed; a notify that fails costs the copies their freshness until
-/// the next one or the sweeper's slow tick, never the bout. Logged and
-/// counted here.
-async fn announce(client: &tokio_postgres::Client, bout_id: Uuid) {
-    if let Err(error) = notify_bout(client, bout_id).await {
-        metrics::record_deadchannel_ring(RingBeat::NotifyFailed);
-        tracing::error!(error = ?error, bout_id = %bout_id, "failed to notify the ring's board");
     }
 }
 

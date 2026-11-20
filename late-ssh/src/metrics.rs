@@ -465,7 +465,6 @@ pub enum RingBeat {
     PayLeft,
     SettleFailed,
     DeckSet,
-    NotifyFailed,
     Failed,
 }
 
@@ -2450,7 +2449,6 @@ mod inner {
             RingBeat::PayLeft => "pay_left",
             RingBeat::SettleFailed => "settle_failed",
             RingBeat::DeckSet => "deck_set",
-            RingBeat::NotifyFailed => "notify_failed",
             RingBeat::Failed => "failed",
         }
     }

@@ -796,6 +796,10 @@ pub enum Refusal {
     NoDebt,
     /// A step off the ledge by a runner the fall would take nothing from.
     NothingToLose,
+    /// A step off the ledge by a runner the ring still holds a bet or a
+    /// bout of. The sheet cannot know: `FightService::act` reads the
+    /// ring's rows and refuses with [`ring_holds`].
+    RingHolds,
     /// A second glass in one day.
     GlassPoured,
     /// Crystals short of the price, by this many.
@@ -3009,6 +3013,7 @@ fn refused(refusal: Refusal) -> Outcome {
         | Refusal::LoanCapped
         | Refusal::NoDebt
         | Refusal::NothingToLose
+        | Refusal::RingHolds
         | Refusal::GlassPoured
         | Refusal::ShortCrystals { .. }
         | Refusal::PastTheWall
@@ -3022,6 +3027,19 @@ fn refused(refusal: Refusal) -> Outcome {
     Outcome {
         applied: Applied::Refused(refusal),
         lines: vec![line.to_string()],
+    }
+}
+
+/// The ledge with the ring still holding a bet or a bout of the runner's:
+/// what the ring pays, it pays onto the sheet that staked it, so the fall
+/// waits for the bout.
+pub(super) fn ring_holds() -> Outcome {
+    Outcome {
+        applied: Applied::Refused(Refusal::RingHolds),
+        lines: vec![
+            "the ring still holds something of yours. see the bout out, then come back."
+                .to_string(),
+        ],
     }
 }
 

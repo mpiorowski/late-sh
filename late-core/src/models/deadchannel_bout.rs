@@ -21,11 +21,12 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, GenericClient, Row};
+use tokio_postgres::{GenericClient, Row};
 use uuid::Uuid;
 
-/// Cross-process channel for every change to a bout or its bets. The
-/// payload is the bout's id; the listener re-reads the whole board.
+/// Cross-process channel for every change to a bout or its bets, fired
+/// by the tables' own triggers (migration 287). The payload is the bout's
+/// id; the listener re-reads the whole board.
 pub const DEADCHANNEL_BOUT_CHANNEL: &str = "deadchannel_bout";
 
 /// The unique index that keeps one bout in the ring.
@@ -141,8 +142,6 @@ pub struct Bout {
     pub accepted_at: Option<DateTime<Utc>>,
     /// When the fight starts and the bets close; set with `accepted_at`.
     pub bell_at: Option<DateTime<Utc>>,
-    /// The round being fought; 0 before the accept.
-    pub round: i32,
     /// When the current round is forced.
     pub deadline_at: Option<DateTime<Utc>>,
     /// The duel, as the app wrote it.
@@ -181,6 +180,10 @@ pub enum CallResult {
     RingTaken,
     /// The caller already has a call or a bout open.
     AlreadyCalling,
+    /// The caller's last call to this runner has not run out its time,
+    /// however it ended: a call taken back is not a way to ring the same
+    /// runner over and over.
+    TooSoon,
 }
 
 /// What an accept came back with. The bout is boxed: it dwarfs the
@@ -213,7 +216,6 @@ impl Bout {
             expires_at: row.get("expires_at"),
             accepted_at: row.get("accepted_at"),
             bell_at: row.get("bell_at"),
-            round: row.get("round"),
             deadline_at: row.get("deadline_at"),
             state: row.get("state"),
             pool_caller: row.get("pool_caller"),
@@ -254,9 +256,11 @@ impl Bout {
     }
 
     /// Put a call on the row. Refused while a bout is being fought (the
-    /// insert finds one) or while the caller has a call or a bout open
-    /// (the one-call index); when nothing went in, a second read of the
-    /// caller's open rows tells the two apart.
+    /// insert finds one), while the caller has a call or a bout open (the
+    /// one-call index), or while an earlier call of theirs to the same
+    /// runner would still be waiting had it not ended (its `expires_at`
+    /// is ahead of this call's `called_at`); when nothing went in, a
+    /// second read tells the three apart.
     pub async fn call(client: &impl GenericClient, new: &NewCall) -> Result<CallResult> {
         let row = client
             .query_opt(
@@ -267,6 +271,11 @@ impl Bout {
                  WHERE NOT EXISTS (
                      SELECT 1 FROM deadchannel_bouts
                      WHERE accepted_at IS NOT NULL AND ended_at IS NULL
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM deadchannel_bouts
+                     WHERE caller_user_id = $3 AND called_user_id = $4
+                       AND expires_at > $7
                  )
                  ON CONFLICT (caller_user_id) WHERE ended_at IS NULL DO NOTHING
                  RETURNING *",
@@ -290,22 +299,51 @@ impl Bout {
     }
 
     /// Why a call went nowhere: the caller's own open row if they have
-    /// one, the bout in the ring otherwise.
+    /// one, the bout in the ring if there is one, and otherwise the call
+    /// they made to the same runner a moment ago.
     async fn call_refusal(client: &impl GenericClient, caller_user_id: Uuid) -> Result<CallResult> {
         let row = client
             .query_one(
                 "SELECT EXISTS (
                      SELECT 1 FROM deadchannel_bouts
                      WHERE caller_user_id = $1 AND ended_at IS NULL
-                 ) AS calling",
+                 ) AS calling,
+                 EXISTS (
+                     SELECT 1 FROM deadchannel_bouts
+                     WHERE accepted_at IS NOT NULL AND ended_at IS NULL
+                 ) AS taken",
                 &[&caller_user_id],
             )
             .await
-            .context("reading the caller's open call")?;
-        match row.get("calling") {
-            true => Ok(CallResult::AlreadyCalling),
-            false => Ok(CallResult::RingTaken),
+            .context("reading why the call went nowhere")?;
+        match (row.get("calling"), row.get("taken")) {
+            (true, _) => Ok(CallResult::AlreadyCalling),
+            (false, true) => Ok(CallResult::RingTaken),
+            (false, false) => Ok(CallResult::TooSoon),
         }
+    }
+
+    /// Whether the ring still holds something of this runner's: a bet it
+    /// has not paid, or a fought bout that has not settled them. The
+    /// ledge asks before it lets a runner go, so nothing staked before
+    /// the fall is paid onto the sheet after it.
+    pub async fn holds(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM deadchannel_bout_bets
+                     WHERE user_id = $1 AND paid_at IS NULL
+                 ) OR EXISTS (
+                     SELECT 1 FROM deadchannel_bouts
+                     WHERE accepted_at IS NOT NULL
+                       AND ((caller_user_id = $1 AND caller_settled_at IS NULL)
+                            OR (called_user_id = $1 AND called_settled_at IS NULL))
+                 ) AS held",
+                &[&user_id],
+            )
+            .await
+            .context("reading what the ring holds of the runner")?;
+        Ok(row.get("held"))
     }
 
     /// The row, locked for the caller's transaction: every change a round
@@ -363,7 +401,7 @@ impl Bout {
         let updated = savepoint
             .query_opt(
                 "UPDATE deadchannel_bouts
-                 SET accepted_at = $2, bell_at = $3, round = 1, deadline_at = $4,
+                 SET accepted_at = $2, bell_at = $3, deadline_at = $4,
                      caller_deck = $5, called_deck = $6, state = $7
                  WHERE id = $1 AND accepted_at IS NULL AND ended_at IS NULL
                    AND expires_at > $2
@@ -453,16 +491,15 @@ impl Bout {
     pub async fn store_round(
         client: &impl GenericClient,
         id: Uuid,
-        round: i32,
         deadline_at: Option<DateTime<Utc>>,
         state: &Value,
     ) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE deadchannel_bouts
-                 SET round = $2, deadline_at = $3, state = $4
+                 SET deadline_at = $2, state = $3
                  WHERE id = $1",
-                &[&id, &round, &deadline_at, state],
+                &[&id, &deadline_at, state],
             )
             .await
             .context("storing the bout's round")?;
@@ -621,21 +658,6 @@ fn ring_refusal(error: &tokio_postgres::Error) -> Option<AcceptResult> {
         }
         _ => None,
     }
-}
-
-/// Fire a bout's change at every replica, this one included: the
-/// publisher's pooled connection is not the listener's, so the local
-/// sessions hear it over the same wire everyone else does. The payload is
-/// the id; the listener re-reads the whole board.
-pub async fn notify_bout(client: &Client, id: Uuid) -> Result<()> {
-    client
-        .execute(
-            "SELECT pg_notify($1, $2)",
-            &[&DEADCHANNEL_BOUT_CHANNEL, &id.to_string()],
-        )
-        .await
-        .context("notifying deadchannel bout")?;
-    Ok(())
 }
 
 /// One runner's bet on a bout: one side, pressed again to add bits.

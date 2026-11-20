@@ -13,8 +13,8 @@ runner watches and bets bits on a corner, and owed at levels 3, 6, 9 and
 |---|---|
 | `data.rs` | The flat numbers: `ATTACK` 16 and `DEFENSE` 12 (`powers()`, through `Powers::of`, is a strike of 10 and a block of 7, no glyph hit and no noise), `SIGNAL` 45, `ROUNDS` 4, `SLOTS` 4, `CALL_SECS` 180, `BELL_SECS` 300, `ROUND_SECS` 30, `REVEAL_SECS` 6, `AFTERMATH_SECS` 60, `MAX_PRESSES` 3, `RAKE_PERCENT` and `PURSE_PERCENT` 10 each. The copy: the wire's `call_line`, `set_line` and `result_line`, `called_banner` for a runner called while somewhere else, and `reply_line`, the ring's word for every answer and refusal. |
 | `state.rs` | Pure: `Duel` (the round, two `Corner`s in seat order, caller first, the `tape` of every resolved round as `Beat`s, the `Ending`: `Knockout`, `Points`, `Draw`), `place` / `clear` / `lock` (refused with a `Refusal`: over, locked, no slot, no card, laid already, no energy; the energy is walked through the slots in order, so a burn paying for a surge behind it counts), `call_time` (the clock ran out: what is laid locks, a corner that laid nothing gets `policy::auto`), `resolve` (the slots one at a time, both corners at once), `view_for` (every hand open, a corner's slots blank for everyone but that corner until the round comes out), `Picks` (one option of every draft: `opening`, `parse`, `flipped`, and `deck` with the runner's inks), `Pool`, `settle` and `pay` (the payout arithmetic). The shuffle's dice are handed in, and the whole duel is one serde value that lives on the row. |
-| `policy.rs` | Pure: `obvious` (a burn first, the biggest guard when nothing stands and the other hand holds a heavy hit, then every hit the energy covers, the free ones first and the best rate after, then guards and static) and `auto` (the obvious round, with a mute laid across from the slot of the other corner's heaviest obvious hit). Every card goes through `Duel::place`, so the machine decides what the energy covers. It is the floor: a person reading the open hands beats it. |
-| `svc.rs` | `RingService`, the one ring layer touching the database, logs and metrics: the requests (`call_task`, `answer_task` (accept or decline), `deck_task` (read or store the picks), `bet_task`, `act_task` (place, clear, lock)), all through `run`, the one place a request's outcome is counted and logged (a stored deck and a lock are counted where they land); the sweeper (`start_sweeper_task`, `sweep`, `advance`, `settle_the_unsettled`); the settle after a bout (`settle`, `settle_fighter`, `pay_bet`); the notify worker into a process-shared `watch<RingBoard>` (`start_notify_worker`, `refresh`); `announce` (a `pg_notify` that fails is logged and counted, never the write). `Board` is the open calls, the bout in the ring or the last one out of it as a `LiveBout` (the row, the whole duel, the bets), and every runner's record. |
+| `policy.rs` | Pure: `obvious` (a burn first, the biggest guard when nothing stands and the other hand holds a heavy hit, then every hit the energy covers, the free ones first and the best rate after, then guards and static) and `auto` (the obvious round, with a mute laid across from the slot of the other corner's heaviest obvious hit, guessed from their open hand on `Duel::unlaid`, never from what they laid). Every card goes through `Duel::place`, so the machine decides what the energy covers. It is the floor: a person reading the open hands beats it. |
+| `svc.rs` | `RingService`, the one ring layer touching the database, logs and metrics: the requests (`call_task`, `answer_task` (accept or decline), `deck_task` (read or store the picks), `bet_task`, `act_task` (place, clear, lock)), all through `run`, the one place a request's outcome is counted and logged; the sweeper (`start_sweeper_task`, `sweep`, `advance`, `settle_the_unsettled`); the settle after a bout (`settle`, `settle_fighter`, `pay_bet`); the notify worker into a process-shared `watch<RingBoard>` (`start_notify_worker`, `refresh`), fed by the tables' own triggers (migration 287): no write here notifies by hand. `Board` is the open calls, the bout in the ring or the last one out of it as a `LiveBout` (the row, the whole duel, the bets), and every runner's record. |
 | `session.rs` | `RingSession`: the session's copy of the board cut by `seen_by` (other corners' slots blank), the picks it brings, the cursor over `roster` (the presence records joined with the runner directory, marks one or more, by name), the corner picked for a bet, the ring's last word, one request in flight, and the countdown's last painted second. `phase` reads the board at a moment: `Empty`, `Set` (accepted, before the bell), `On`, `Over` (ended, still on the board). `tick(app)` copies the board, drains the answer, re-reads the sheet when this runner's bits moved or their gate opened, and raises the banner for a call that lands while the panel is shut. Decides nothing. |
 | `input.rs` | Keys while the panel is open (`city/input.rs` hands it every key): with the ring empty, ↑↓ (`k` `j`) walk the roster, `c` calls, `a` takes a call, `x` declines one or takes your own back, `1` to `4` flip a draft pick (marked runners only); with a bout set, ←→ (`h` `l`) pick a corner and `b` puts one press on it (a fighter's goes on their own); for a fighter from the accept on, `1` to `5` lay that hand card in the next empty slot or take it back, `e` or space locks the round. Enter leaves; `0`, Tab and `q` stay global, and so do the digits but a fighter's during a bout and a marked runner's at an empty ring; `?` is the guide's (taken in `city/input.rs` first); everything else is swallowed. |
 | `ui.rs` | `RingView` and `panel_lines`, one function per phase: the empty ring (the gate owed in red, the deck you bring with the four picks and their keys, the marked runners on the wire with their records, the open calls, the keys), a bout set (both corners with their records and what they drafted, the pool by corner, your bet, the split, the bell's clock, a fighter's own round), the rounds on (both signal bars and blocks, locked or laying, both hands open, your own slots and energy, the round that last came out slot by slot, the clock), and the aftermath (the result, the pool's split, what your bet paid, the gate opened). Pure; `city/ui.rs::draw_panel` frames it and puts the ring's word at its foot. |
@@ -132,7 +132,11 @@ change to it is made under its row lock (`Bout::lock`: a round, a bet,
 the sweeper's advance) or is one conditional statement (the call, the
 accept, a decline, a lapse, the end); a fighter's settle and a bet's pay
 are claims on rows taken in the same transaction as the bits they move,
-through `FightService::apply_in`. The board each replica holds is a copy
+through `FightService::apply_in`. A fighter's key carries the round it
+was pressed on, and `act` refuses it (`ActRefusal::RoundGone`) when the
+row has moved to the next: nothing is laid or locked on a hand its
+runner has not seen. Every write to a bout or a bet notifies from its
+table's trigger, the bout's id on `deadchannel_bout`. The board each replica holds is a copy
 for drawing and for the sweeper's clock, and what the sweeper does it
 does again under the lock.
 
@@ -173,15 +177,15 @@ The fight never takes a bout's row, so the two cannot cross.
 `bet_refused`, `locked`, `timed_out` (a round the clock called on a
 corner that had not locked), `resolved`, `ended`, `settled` (a fighter's
 end on their sheet), `paid` (a bet), `pay_left` (no standing runner to
-pay), `settle_failed`, `deck_set`, `notify_failed` (a row that moved but
-could not be announced), `failed` (a request that erred, or an advance).
+pay), `settle_failed`, `deck_set`, `failed` (a request that erred, or an
+advance).
 The fight counter sees the ring's sheet commands on its own side:
 `staked`, `collected`, `ring_fought`, and `ring_owed` (a step, the
 crossing or the answer turned down at the gate, counted by itself
 because there is no fallback opponent: how often the road is found shut
-is the cost of the gate). `apply_in` counts its beat before the caller
-commits, so a rolled-back caller leaves one count too many; the ring's
-own beats are the ledger. Spans: `deadchannel.ring.sweep`,
+is the cost of the gate). `apply_in` counts nothing; the ring hands
+each outcome to `FightService::landed` once its own commit is through,
+so a beat is a write that landed. Spans: `deadchannel.ring.sweep`,
 `deadchannel.ring.call_task`, `answer_task`, `deck_task`, `bet_task`,
 `act_task`. Every log line about a bout carries its id; the Grafana
 panel is "Ring Bouts" on the deadchannel row.
@@ -197,7 +201,11 @@ its own `FightService`, the notify worker on `RingService::CHANNELS`
 and the sweeper started there), `Channel::DeadchannelBout` and
 `Refresh::RingBoard` in `pg_listener.rs`, the sheet's side
 (`Command::Stake`, `Collect`, `RingFought`, `Sheet::ring_gate`,
-`Refusal::RingOwed`, `FightService::settled_sheet` and `apply_in`), and
+`Refusal::RingOwed`, `FightService::settled_sheet`, `apply_in` and
+`landed`; and `Bout::holds`, which the fight asks before the ledge: a
+runner with a bet unpaid or a bout unsettled is refused the fall,
+`Refusal::RingHolds`, so the ring never pays onto a sheet that started
+over), and
 the rows in `late-core/src/models/deadchannel_bout.rs` (migration 287:
 `deadchannel_bouts`, `deadchannel_bout_bets`, `deadchannel_ring_decks`,
 and `deadchannel_runners.ring_cleared`). The nuke
@@ -215,7 +223,13 @@ deck a runner brings stays.
 - **A runner already past level 3 on a second climb** owes a bout
   before their next step on the road.
 - **Calls post on the wire** to reach the runner called. One open call
-  per caller and the 180 s expiry are the only limits on that.
+  per caller, the 180 s expiry, and `CallResult::TooSoon` (the same
+  runner is not rung again until the last call to them would have run
+  out, however it ended) are the limits on that.
+- **A mark is not held the way the ledge is.** A runner who bets and
+  then puts the Old Signal down inside the same bout wakes on a fresh
+  sheet and is still paid the bet: the kill cannot be refused the way
+  the fall is.
 - **Watching is at the RING shop only.** The wire carries the call, the
   bell and the result.
 

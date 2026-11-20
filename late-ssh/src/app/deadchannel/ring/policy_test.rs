@@ -107,6 +107,42 @@ fn a_mute_goes_across_from_the_other_corner_s_obvious_heavy_hit() {
     );
 }
 
+#[test]
+fn the_mute_is_aimed_by_the_open_hand_and_never_by_what_the_other_corner_laid() {
+    let mut duel = duel(
+        [
+            Card::Mute,
+            Card::Strike,
+            Card::Strike,
+            Card::Strike,
+            Card::Strike,
+        ],
+        [
+            Card::Jab,
+            Card::Surge,
+            Card::Strike,
+            Card::Block,
+            Card::Block,
+        ],
+    );
+    let open_hand = auto(&duel, Side::Caller);
+
+    // The other corner hides its surge in the first slot and locks: the
+    // clock's hand lays the round it would have laid without knowing.
+    let surge = (0..5u8)
+        .find(|at| duel.corner(Side::Called).piles.card(usize::from(*at)) == Some(Card::Surge))
+        .expect("a surge in the hand");
+    duel.place(Side::Called, 0, surge)
+        .expect("the surge is laid");
+    duel.lock(Side::Called).expect("locked");
+
+    assert_eq!(auto(&duel, Side::Caller), open_hand);
+    assert_eq!(
+        cards(&duel, Side::Caller, open_hand),
+        [(0, Card::Strike), (1, Card::Mute)]
+    );
+}
+
 /// Every deck the four drafts make, in draft order.
 fn decks() -> Vec<Vec<Card>> {
     (0..16)

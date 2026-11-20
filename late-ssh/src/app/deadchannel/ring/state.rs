@@ -424,6 +424,16 @@ impl Duel {
         ]
     }
 
+    /// The table with nothing laid by `side` and their round open: what
+    /// anyone but that corner knows of it before it comes out.
+    pub(crate) fn unlaid(&self, side: Side) -> Duel {
+        let mut table = self.clone();
+        let corner = &mut table.corners[seat(side)];
+        corner.slots = [None; SLOTS];
+        corner.locked = false;
+        table
+    }
+
     /// The bout as `viewer` may see it: every hand is open, but the slots
     /// a corner has laid are its own until the round resolves. A watcher
     /// (`None`) sees neither corner's.

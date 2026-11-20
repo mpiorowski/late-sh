@@ -13,8 +13,8 @@
 //! - [`auto`]: the obvious round, except that a mute in the hand goes
 //!   into the slot where the other corner's obvious round puts its
 //!   heaviest hit. It reads the other corner as if they were the ring's
-//!   own hand, so it is right about a runner who went quiet and wrong
-//!   about one who did not.
+//!   own hand, and never what they laid, so it is right about a runner
+//!   who went quiet and wrong about one who did not.
 //!
 //! Every card is laid through `Duel::place`, so the machine and never
 //! this file decides what the energy covers.
@@ -146,7 +146,9 @@ pub(crate) fn auto(duel: &Duel, side: Side) -> [Option<u8>; SLOTS] {
         .into_iter()
         .find(|(_, card)| *card == Card::Mute)
         .map(|(at, _)| at);
-    let theirs = obvious(duel, other);
+    // Their slots are theirs until the round comes out: the guess is
+    // made from the open hand, on a table where they have laid nothing.
+    let theirs = obvious(&duel.unlaid(other), other);
     let heaviest = theirs
         .iter()
         .enumerate()

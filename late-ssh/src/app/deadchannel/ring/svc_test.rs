@@ -9,12 +9,14 @@ use late_core::models::presence::{ClubhouseStand, PresenceRecord, Spot};
 use late_core::test_utils::{TestDb, create_test_user};
 use uuid::Uuid;
 
-use super::{Act, AnswerRefusal, BetRefusal, CallRefusal, LiveBout, Reply, RingService};
+use super::{
+    Act, ActRefusal, AnswerRefusal, BetRefusal, CallRefusal, LiveBout, Reply, RingService,
+};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RULES;
-use crate::app::deadchannel::fight::state::Sheet;
-use crate::app::deadchannel::fight::svc::FightService;
+use crate::app::deadchannel::fight::state::{Applied, Command, Refusal, Sheet};
+use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::ring::data::{
     BELL_SECS, CALL_SECS, PURSE_PERCENT, RAKE_PERCENT, ROUND_SECS,
 };
@@ -127,6 +129,17 @@ async fn bits_of(test_db: &TestDb, runners: [&Runner; 4]) -> [i64; 4] {
         bits[at] = sheet_of(test_db, runner).await.bits;
     }
     bits
+}
+
+/// What the ledge answers `runner` who steps off it.
+async fn ledge(svc: &RingService, runner: &Runner) -> Applied {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    svc.fight
+        .act_task(runner.user_id, runner.username.clone(), Command::Reset, tx);
+    let FightOutcome::Acted { outcome, .. } = rx.recv().await.expect("the ledge answers") else {
+        panic!("the ledge answers with the sheet");
+    };
+    outcome.applied
 }
 
 /// The board as the rows have it right now.
@@ -251,7 +264,13 @@ async fn one_bout_holds_the_ring_and_a_pair_fights_once_a_day() {
         Reply::AnswerRefused(AnswerRefusal::FoughtToday)
     );
     assert_eq!(board(&svc).await.calls, vec![]);
-    assert_eq!(call(ash, tom).await, Reply::Called);
+    // The ring is free again. Ash took a call to tom back a moment ago,
+    // so tom is not rung again yet; mira is.
+    assert_eq!(
+        call(ash, tom).await,
+        Reply::CallRefused(CallRefusal::TooSoon)
+    );
+    assert_eq!(call(ash, mira).await, Reply::Called);
 }
 
 #[tokio::test]
@@ -298,10 +317,10 @@ async fn a_round_waits_for_the_bell_and_the_clock_plays_a_corner_that_laid_nothi
     // out before the bell.
     for runner in [mira, tom] {
         assert_eq!(
-            svc.act(runner.user_id, bout, Act::Lock, at)
+            svc.act(runner.user_id, bout, 1, Act::Lock, at)
                 .await
                 .expect("lock"),
-            Reply::Laid
+            Reply::Locked
         );
     }
     let _ = board(&svc).await;
@@ -313,6 +332,14 @@ async fn a_round_waits_for_the_bell_and_the_clock_plays_a_corner_that_laid_nothi
     svc.sweep(bell, false).await;
     let after_one = live(&svc).await;
     assert_eq!((after_one.duel.round, after_one.duel.tape.len()), (2, 1));
+    // A key pressed on round 1 that lands now is refused: round 2's hand
+    // is not locked before its runner has seen it.
+    assert_eq!(
+        svc.act(mira.user_id, bout, 1, Act::Lock, bell)
+            .await
+            .expect("a late lock"),
+        Reply::ActRefused(ActRefusal::RoundGone)
+    );
     assert!(
         after_one.duel.tape[0]
             .iter()
@@ -524,4 +551,39 @@ async fn the_nuke_leaves_the_ring_nothing_to_pay() {
     svc.sweep(at + Duration::hours(1), true).await;
     assert_eq!(bits_of(&test_db, [mira, tom, ash, wren]).await, fresh);
     assert_eq!(fresh, [50; 4]);
+}
+
+#[tokio::test]
+async fn the_ledge_waits_for_the_ring_so_no_stake_is_paid_past_the_fall() {
+    let (test_db, runners, svc) = ring_with(&["mira", "tom"], &["wren", "ash"]).await;
+    let [mira, tom, wren, ash] = &runners[..] else {
+        panic!("four runners");
+    };
+    let at = Utc::now();
+    let bout = set(&svc, mira, tom, at).await;
+    let stake = RULES.cache(LEVEL);
+    for (bettor, side) in [(wren, Side::Caller), (ash, Side::Called)] {
+        assert_eq!(
+            svc.bet(bettor.user_id, &bettor.username, bout, side, at)
+                .await
+                .expect("bet"),
+            Reply::Staked { bits: stake }
+        );
+    }
+
+    // A bet out, or a bout being fought: the fall is refused and takes
+    // nothing, so the ring never pays onto a sheet that started over.
+    for held in [wren, mira] {
+        assert_eq!(
+            ledge(&svc, held).await,
+            Applied::Refused(Refusal::RingHolds)
+        );
+    }
+    assert_eq!(sheet_of(&test_db, wren).await.bits, BITS - stake);
+
+    // The bout ends and everything on it is paid: the ledge is the ledge
+    // again, and it leaves nothing.
+    fight_out(&svc, at).await;
+    assert_eq!(ledge(&svc, wren).await, Applied::Reset);
+    assert_eq!(sheet_of(&test_db, wren).await.bits, 0);
 }

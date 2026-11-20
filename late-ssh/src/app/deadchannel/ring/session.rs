@@ -205,8 +205,11 @@ impl RingSession {
     pub(crate) fn open(&mut self) {
         self.word = None;
         if self.picks.is_none() {
-            self.svc
-                .deck_task(self.user_id, None, self.reply_tx.clone());
+            self.request(|session| {
+                session
+                    .svc
+                    .deck_task(session.user_id, None, session.reply_tx.clone());
+            });
         }
     }
 
@@ -342,11 +345,16 @@ impl RingSession {
         }
     }
 
+    /// The round goes with the key: it is the one on this runner's
+    /// screen, and the ring refuses a key for a round that came out.
     fn act(&mut self, bout: Uuid, act: Act) {
+        let Some(round) = self.board.live.as_ref().map(|live| live.duel.round) else {
+            return;
+        };
         self.request(|session| {
             session
                 .svc
-                .act_task(session.user_id, bout, act, session.reply_tx.clone());
+                .act_task(session.user_id, bout, round, act, session.reply_tx.clone());
         });
     }
 
@@ -372,7 +380,7 @@ impl RingSession {
             self.in_flight = false;
             tick.changed = true;
             match reply {
-                Reply::Deck(picks) => self.picks = Some(picks),
+                Reply::Deck(picks) | Reply::DeckStored(picks) => self.picks = Some(picks),
                 Reply::Staked { .. } => tick.reload_sheet = true,
                 Reply::Called
                 | Reply::CallRefused(_)
@@ -381,6 +389,7 @@ impl RingSession {
                 | Reply::AnswerRefused(_)
                 | Reply::BetRefused(_)
                 | Reply::Laid
+                | Reply::Locked
                 | Reply::ActRefused(_)
                 | Reply::Failed => {}
             }
