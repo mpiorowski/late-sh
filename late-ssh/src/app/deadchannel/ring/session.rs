@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::data::{self, AFTERMATH_SECS};
-use super::state::{Picks, SIDES};
+use super::state::Picks;
 use super::svc::{Act, Board, LiveBout, Reply, RingBoard, RingService};
 use crate::app::common::primitives::{Banner, Screen};
 use crate::app::deadchannel::city::map::Landmark;
@@ -37,8 +37,10 @@ pub(crate) fn roster(records: &[PresenceRecord], looks: &RunnerLooks, me: Uuid) 
         let Some(entry) = looks.get(&record.user_id) else {
             continue;
         };
-        let listed = roster.iter().any(|other| other.user_id == record.user_id);
-        if record.user_id == me || entry.marks < 1 || listed {
+        if record.user_id == me
+            || entry.marks < 1
+            || roster.iter().any(|other| other.user_id == record.user_id)
+        {
             continue;
         }
         roster.push(Contender {
@@ -135,14 +137,14 @@ pub(crate) fn phase(live: Option<&LiveBout>, now: DateTime<Utc>) -> Phase<'_> {
 
 /// What one tick of the session found.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct RingTick {
+struct RingTick {
     /// The board, the word or a clock moved.
-    pub changed: bool,
+    changed: bool,
     /// Bits moved on this runner's sheet (a stake, a pay, a purse) or
     /// their gate opened: the sheet mirror should re-read.
-    pub reload_sheet: bool,
+    reload_sheet: bool,
     /// A call to this runner just landed, from this name.
-    pub called_by: Option<String>,
+    called_by: Option<String>,
 }
 
 pub(crate) struct RingSession {
@@ -294,8 +296,7 @@ impl RingSession {
     /// One press of a bet on the bout that is set: a fighter's goes on
     /// their own corner, anybody else's on the corner picked.
     pub(crate) fn bet(&mut self, now: DateTime<Utc>) {
-        let board = self.board.clone();
-        let Phase::Set { live, .. } = phase(board.live.as_ref(), now) else {
+        let Phase::Set { live, .. } = phase(self.board.live.as_ref(), now) else {
             return;
         };
         let side = live.bout.side_of(self.user_id).unwrap_or(self.corner);
@@ -317,8 +318,7 @@ impl RingSession {
         let Some((bout, side)) = self.my_corner() else {
             return;
         };
-        let board = self.board.clone();
-        let Some(live) = board.live.as_ref() else {
+        let Some(live) = self.board.live.as_ref() else {
             return;
         };
         let slots = live.duel.corner(side).slots;
@@ -362,7 +362,7 @@ impl RingSession {
     /// Copy the board if it moved, drain the answer, and say what the
     /// rest of the session has to do about it. `open` is whether the
     /// panel is up: only then does a moving clock owe a frame.
-    pub(crate) fn tick(&mut self, now: DateTime<Utc>, open: bool) -> RingTick {
+    fn tick(&mut self, now: DateTime<Utc>, open: bool) -> RingTick {
         let mut tick = RingTick::default();
         if self.board_rx.has_changed().unwrap_or(false) {
             self.board = seen_by(&self.board_rx.borrow_and_update(), self.user_id);
@@ -386,14 +386,12 @@ impl RingSession {
             }
             self.word = data::reply_line(reply);
         }
-        let board = self.board.clone();
-        let calling =
-            call_to(&board, self.user_id).map(|call| (call.id, call.caller_username.clone()));
-        if let Some((call, caller)) = calling
-            && self.rung_for != Some(call)
+        let board = &self.board;
+        if let Some(call) = call_to(board, self.user_id)
+            && self.rung_for != Some(call.id)
         {
-            self.rung_for = Some(call);
-            tick.called_by = Some(caller);
+            self.rung_for = Some(call.id);
+            tick.called_by = Some(call.caller_username.clone());
         }
         // A bout this runner fought or bet on, once it ends and again
         // once everything of theirs on it is settled: the purse, the pay
@@ -403,15 +401,12 @@ impl RingSession {
         {
             let fighter = live.bout.side_of(self.user_id);
             let bet = bet_of(live, self.user_id);
-            let settled =
-                SIDES
-                    .iter()
-                    .filter(|side| fighter == Some(**side))
-                    .all(|side| match side {
-                        Side::Caller => live.bout.caller_settled_at.is_some(),
-                        Side::Called => live.bout.called_settled_at.is_some(),
-                    })
-                    && bet.is_none_or(|bet| bet.paid_at.is_some());
+            let fighter_settled = match fighter {
+                Some(Side::Caller) => live.bout.caller_settled_at.is_some(),
+                Some(Side::Called) => live.bout.called_settled_at.is_some(),
+                None => true,
+            };
+            let settled = fighter_settled && bet.is_none_or(|bet| bet.paid_at.is_some());
             let mine = fighter.is_some() || bet.is_some();
             if mine && self.reloaded_for != Some((live.bout.id, settled)) {
                 self.reloaded_for = Some((live.bout.id, settled));

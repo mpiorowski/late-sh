@@ -197,6 +197,16 @@ impl Corner {
     fn laid(&self) -> bool {
         self.slots.iter().any(Option::is_some)
     }
+
+    /// The table as this corner's card reads it, against `foe`.
+    pub(crate) fn board(&self, foe: &Corner) -> Board {
+        Board {
+            block: self.block,
+            foe_signal: foe.signal,
+            foe_max_signal: SIGNAL,
+            statics_in_hand: self.piles.statics_in_hand(),
+        }
+    }
 }
 
 impl Duel {
@@ -441,18 +451,7 @@ fn answer(
         (Drawn::Empty, _) => (Move::Empty, Effect::default()),
         (Drawn::Fizzled(card), _) => (Move::Fizzled(card), Effect::default()),
         (Drawn::Card(card), true) => (Move::Muted(card), Effect::default()),
-        (Drawn::Card(card), false) => (
-            Move::Played(card),
-            card.effect(
-                powers,
-                &Board {
-                    block: own.block,
-                    foe_signal: other.signal,
-                    foe_max_signal: SIGNAL,
-                    statics_in_hand: own.piles.statics_in_hand(),
-                },
-            ),
-        ),
+        (Drawn::Card(card), false) => (Move::Played(card), card.effect(powers, &own.board(other))),
     }
 }
 

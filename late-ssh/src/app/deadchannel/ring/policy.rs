@@ -21,9 +21,9 @@
 
 use late_core::models::deadchannel_bout::Side;
 
-use super::data::{self, SIGNAL, SLOTS};
+use super::data::{self, SLOTS};
 use super::state::Duel;
-use crate::app::deadchannel::fight::cards::{Board, Card, Effect};
+use crate::app::deadchannel::fight::cards::{Card, Effect};
 use crate::app::deadchannel::fight::state::Powers;
 
 /// A hit worth a mute, or a guard put up ahead of it: two strikes or
@@ -34,17 +34,7 @@ fn heavy(powers: &Powers, damage: i32) -> bool {
 
 /// What `card` would do from `side`'s hand as the table stands.
 fn effect_of(duel: &Duel, side: Side, powers: &Powers, card: Card) -> Effect {
-    let own = duel.corner(side);
-    let other = duel.corner(side.other());
-    card.effect(
-        powers,
-        &Board {
-            block: own.block,
-            foe_signal: other.signal,
-            foe_max_signal: SIGNAL,
-            statics_in_hand: own.piles.statics_in_hand(),
-        },
-    )
+    card.effect(powers, &duel.corner(side).board(duel.corner(side.other())))
 }
 
 /// The hand as `(hand slot, card)`, in hand order.

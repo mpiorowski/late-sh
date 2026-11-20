@@ -5,18 +5,18 @@
 -- runner brings to the ring, and one column on the runner.
 --
 -- One row per call to the ring. A call is open until the called runner
--- accepts it, declines it, or lets `expires_at` pass (the sweeper ends it
--- as expired). Accepting snapshots both decks into the row, rings the
--- bell at `bell_at` (bets close then) and starts round 1, due by
--- `deadline_at`; every round after rewrites `round`, `deadline_at` and
--- `state`, the duel as JSON only the app reads. `accepted_at` and
+-- accepts it, either runner declines it, or `expires_at` passes (the
+-- sweeper ends it as expired). Accepting snapshots both decks into the
+-- row, rings the bell at `bell_at` (bets close then) and starts round 1,
+-- due by `deadline_at`; every round after rewrites `round`, `deadline_at`
+-- and `state`, the duel as JSON only the app reads. `accepted_at` and
 -- `bell_at` are set together, so either one says the bout was fought.
 -- `pool_caller` and `pool_called` are the bits bet on each side, added
--- before the bell only. `outcome` is the side that won, a draw, or a
--- call declined or left to expire. Once a fought bout ends,
--- `caller_settled_at` and `called_settled_at` are each fighter's settle
--- claim: the replica that takes one pays that fighter, and one left
--- untaken by a replica that died is picked up by any sweeper.
+-- before the bell only. `outcome` is the side that won, a draw, or a call
+-- declined or left to expire. Once a fought bout ends, `caller_settled_at`
+-- and `called_settled_at` are each fighter's settle claim: the replica
+-- that takes one pays that fighter, and one left untaken by a replica that
+-- died is picked up by any sweeper.
 --
 -- The three unique indexes are the rules: one fought bout in the ring at
 -- a time, one open call or bout per caller, and two runners fight once a

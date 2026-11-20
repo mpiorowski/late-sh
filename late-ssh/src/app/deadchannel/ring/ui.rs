@@ -16,11 +16,12 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use serde::Deserialize;
 use uuid::Uuid;
 
 use super::data::{MAX_PRESSES, PURSE_PERCENT, RAKE_PERCENT, ROUNDS, SIGNAL, SLOTS};
 use super::session::{Contender, Phase, RingSession, bet_of, call_from, call_to, phase, roster};
-use super::state::{self, Duel, Ending, Move, Picks, Pool, SIDES, Settlement};
+use super::state::{self, Ending, Move, Picks, Pool, SIDES, Settlement};
 use super::svc::{Board, LiveBout};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{INK, INK_BRIGHT, INK_DIM, INK_MUTED, action, ink, lit};
@@ -211,11 +212,9 @@ fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
     let calls = &view.board.calls;
     if !calls.is_empty() {
         lines.push(Line::from(Span::styled("calls", p.head)));
-    }
-    for call in calls {
-        lines.push(call_line(view, call));
-    }
-    if !calls.is_empty() {
+        for call in calls {
+            lines.push(call_line(view, call));
+        }
         lines.push(Line::default());
     }
 
@@ -279,8 +278,8 @@ fn deck_spans(bout: &Bout, side: Side) -> Vec<Span<'static>> {
         Side::Called => &bout.called_deck,
     };
     let cards: Vec<Card> = deck
-        .clone()
-        .and_then(|deck| serde_json::from_value(deck).ok())
+        .as_ref()
+        .and_then(|deck| Vec::<Card>::deserialize(deck).ok())
         .unwrap_or_default();
     let mut spans = Vec::new();
     for card in cards {
@@ -401,7 +400,7 @@ fn fighter_hints() -> Vec<Span<'static>> {
 /// A signal as a bar and a number.
 fn signal_spans(signal: i32, block: i32) -> Vec<Span<'static>> {
     let p = palette();
-    let full = (usize::try_from(signal.max(0)).unwrap_or(0) * BAR).div_ceil(SIGNAL as usize);
+    let full = (signal.max(0) as usize * BAR).div_ceil(SIGNAL as usize);
     let full = full.min(BAR);
     vec![
         Span::styled("█".repeat(full), lit(Neon::Green)),
@@ -511,7 +510,7 @@ fn move_spans(mv: Move) -> Vec<Span<'static>> {
     let width = card.marked().chars().count() + note.chars().count();
     vec![
         card_mark(card),
-        Span::styled(note.to_string(), p.muted),
+        Span::styled(note, p.muted),
         Span::styled(" ".repeat(TAPE_COLUMN.saturating_sub(width)), p.text),
     ]
 }
@@ -595,8 +594,9 @@ fn on_lines(view: &RingView<'_>, live: &LiveBout, left: Option<i64>) -> Vec<Line
 }
 
 /// How the bout ended, in the panel's own words.
-fn ending_text(live: &LiveBout, duel: &Duel, ending: Ending) -> String {
+fn ending_text(live: &LiveBout, ending: Ending) -> String {
     let name = |side: Side| live.bout.username(side);
+    let duel = &live.duel;
     match ending {
         Ending::Knockout(winner) => format!(
             "{} put {} down in round {}.",
@@ -621,7 +621,7 @@ fn over_lines(view: &RingView<'_>, live: &LiveBout, clears_in: i64) -> Vec<Line<
         return Vec::new();
     };
     let mut lines = vec![Line::from(Span::styled(
-        ending_text(live, &live.duel, ending),
+        ending_text(live, ending),
         lit(Neon::Magenta).add_modifier(Modifier::BOLD),
     ))];
     lines.push(Line::default());
@@ -666,10 +666,8 @@ fn over_lines(view: &RingView<'_>, live: &LiveBout, clears_in: i64) -> Vec<Line<
                 p.text,
             ),
             match (paid, settlement) {
-                (_, Settlement::Refund) => Span::styled("comes back.".to_string(), p.text),
-                (0, Settlement::Paid { .. }) => {
-                    Span::styled("is gone.".to_string(), lit(Neon::Red))
-                }
+                (_, Settlement::Refund) => Span::styled("comes back.", p.text),
+                (0, Settlement::Paid { .. }) => Span::styled("is gone.", lit(Neon::Red)),
                 (paid, Settlement::Paid { .. }) => {
                     Span::styled(format!("pays {paid}."), lit(Neon::Green))
                 }

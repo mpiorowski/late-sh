@@ -281,7 +281,7 @@ impl RingService {
                 }
                 ticks = ticks.wrapping_add(1);
                 service
-                    .sweep(Utc::now(), ticks % SLOW_EVERY == 0)
+                    .sweep(Utc::now(), ticks.is_multiple_of(SLOW_EVERY))
                     .instrument(info_span!("deadchannel.ring.sweep"))
                     .await;
             }
@@ -873,7 +873,7 @@ impl RingService {
             StakeResult::OtherSide => return Ok(Reply::BetRefused(BetRefusal::OtherSide)),
             StakeResult::Capped => return Ok(Reply::BetRefused(BetRefusal::Capped)),
         }
-        let Some((_, outcome)) = self
+        let Some(outcome) = self
             .fight
             .apply_in(&tx, user_id, Command::Stake { bits })
             .await?

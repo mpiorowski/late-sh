@@ -1029,7 +1029,7 @@ impl FightService {
         tx: &tokio_postgres::Transaction<'_>,
         user_id: Uuid,
         command: Command,
-    ) -> Result<Option<(Sheet, Outcome)>> {
+    ) -> Result<Option<Outcome>> {
         let today = Self::today();
         let now = Utc::now();
         let Some(row) = DeadchannelRunner::lock_standing(tx, user_id).await? else {
@@ -1044,7 +1044,7 @@ impl FightService {
         }
         metrics::record_deadchannel_fight(beat_for(&outcome.applied));
         tracing::info!(user_id = %user_id, command = ?command, applied = ?outcome.applied, bits = sheet.bits, "sheet command applied for the ring");
-        Ok(Some((sheet, outcome)))
+        Ok(Some(outcome))
     }
 
     /// A read, but through the same lock-and-settle path as an action, so

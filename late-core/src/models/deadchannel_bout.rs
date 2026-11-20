@@ -7,9 +7,10 @@
 //!
 //! A bout is truth: who fought, who won and who bet decide who is paid, so
 //! it is a row, and every change to it is one conditional statement that
-//! returns what it changed, so the caller knows whether it won. The three
-//! unique indexes of migration 287 are the ring's rules (one bout in the
-//! ring, one open call per caller, a pair once a day), so a write that
+//! says whether it landed, so the caller knows whether it won; a stored
+//! round, decided under the row lock (`lock`), is the one exception. The
+//! three unique indexes of migration 287 are the ring's rules (one bout in
+//! the ring, one open call per caller, a pair once a day), so a write that
 //! loses one is the rule refusing, not a bug. The duel itself is `state`,
 //! JSON this module stores and never reads.
 
@@ -23,9 +24,8 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, GenericClient, Row};
 use uuid::Uuid;
 
-/// Cross-process channel for a bout's every change: called, accepted, a
-/// round stored, a bet placed, ended. The payload is the bout's id; the
-/// listener re-reads the row.
+/// Cross-process channel for every change to a bout or its bets. The
+/// payload is the bout's id; the listener re-reads the whole board.
 pub const DEADCHANNEL_BOUT_CHANNEL: &str = "deadchannel_bout";
 
 /// The unique index that keeps one bout in the ring.
@@ -91,7 +91,8 @@ pub enum BoutOutcome {
     Called,
     /// The fight ended level.
     Draw,
-    /// The called runner turned the call down.
+    /// The call ended unaccepted: turned down, taken back by the caller,
+    /// or refused at the accept.
     Declined,
     /// Nobody answered the call before it lapsed.
     Expired,
@@ -250,14 +251,6 @@ impl Bout {
     /// Whether the call became a bout.
     pub fn is_accepted(&self) -> bool {
         self.accepted_at.is_some()
-    }
-
-    /// Bits bet on `side`.
-    pub fn pool(&self, side: Side) -> i64 {
-        match side {
-            Side::Caller => self.pool_caller,
-            Side::Called => self.pool_called,
-        }
     }
 
     /// Put a call on the row. Refused while a bout is being fought (the
@@ -633,7 +626,7 @@ fn ring_refusal(error: &tokio_postgres::Error) -> Option<AcceptResult> {
 /// Fire a bout's change at every replica, this one included: the
 /// publisher's pooled connection is not the listener's, so the local
 /// sessions hear it over the same wire everyone else does. The payload is
-/// the id; the listener re-reads the row.
+/// the id; the listener re-reads the whole board.
 pub async fn notify_bout(client: &Client, id: Uuid) -> Result<()> {
     client
         .execute(
@@ -643,12 +636,6 @@ pub async fn notify_bout(client: &Client, id: Uuid) -> Result<()> {
         .await
         .context("notifying deadchannel bout")?;
     Ok(())
-}
-
-/// The bout id carried by a [`DEADCHANNEL_BOUT_CHANNEL`] payload. `None`
-/// for anything this module did not write.
-pub fn parse_bout_payload(payload: &str) -> Option<Uuid> {
-    Uuid::parse_str(payload).ok()
 }
 
 /// One runner's bet on a bout: one side, pressed again to add bits.

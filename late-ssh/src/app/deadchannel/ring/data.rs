@@ -13,8 +13,8 @@ use crate::app::deadchannel::fight::state::Powers;
 
 /// The attack and the defense both corners fight with: a strike of 10
 /// against a block of 7.
-pub(crate) const ATTACK: u32 = 16;
-pub(crate) const DEFENSE: u32 = 12;
+const ATTACK: u32 = 16;
+const DEFENSE: u32 = 12;
 /// The signal both corners start with, and the most a siphon mends to.
 /// Set by the balance contract (`policy_test.rs`): at 45 a bout on the
 /// clock runs three rounds and seven in ten end in a knockout; higher,

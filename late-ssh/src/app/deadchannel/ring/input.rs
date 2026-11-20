@@ -5,9 +5,11 @@
 //! right pick a corner and `b` puts one press on it (a fighter's goes on
 //! their own). For a fighter, from the accept on: `1` to `5` lay that
 //! hand card in the next empty slot or take it back, and `e` or space
-//! locks the round. Enter leaves. Everything else is swallowed so the
-//! runner does not walk under the panel; a lone Esc never arrives here
-//! (the root's `dispatch_escape` closes the panel).
+//! locks the round. Enter leaves. A digit stays the page key it always
+//! is but for a fighter during a bout and a marked runner at an empty
+//! ring; everything else is swallowed so the runner does not walk under
+//! the panel. A lone Esc never arrives here (the root's `dispatch_escape`
+//! closes the panel).
 
 use chrono::Utc;
 

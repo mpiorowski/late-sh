@@ -366,7 +366,7 @@ async fn the_pool_takes_bits_only_until_the_bell() {
         .await
         .expect("read")
         .expect("the bout");
-    assert_eq!((read.pool(Side::Caller), read.pool(Side::Called)), (40, 15));
+    assert_eq!((read.pool_caller, read.pool_called), (40, 15));
 }
 
 #[tokio::test]
