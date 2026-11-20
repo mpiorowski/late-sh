@@ -5,6 +5,7 @@ pub mod guide;
 pub(crate) mod haunt;
 pub mod lounge;
 pub mod poster;
+pub mod ring;
 pub mod runner;
 pub mod street;
 pub mod tailor;

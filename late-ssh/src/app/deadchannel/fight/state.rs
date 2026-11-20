@@ -320,6 +320,31 @@ pub struct Powers {
     pub sever: i32,
 }
 
+impl Powers {
+    /// Every card's number off one strike and one block: the shares the
+    /// cards print, worked out in one place for the road
+    /// ([`Sheet::powers_under`]) and for the ring, where both corners
+    /// fight on flat numbers (`deadchannel/ring`). `hit` and `noise` are
+    /// the glyph's; a table with no glyph hands in zeroes.
+    pub fn of(rules: &Rules, strike: i32, block: i32, hit: i32, noise: usize) -> Self {
+        Self {
+            strike,
+            surge: rules.surge(strike),
+            block,
+            hit,
+            noise,
+            jab: rules.share(strike, rules.jab_percent),
+            brace: rules.share(block, rules.brace_percent),
+            mend: rules.share(strike, rules.siphon_mend_percent),
+            riposte: rules.share(block, rules.riposte_percent),
+            bulwark: rules.share(block, rules.bulwark_percent),
+            burn: rules.burn_energy,
+            ground: rules.share(strike, rules.ground_percent),
+            sever: rules.share(strike, rules.sever_percent),
+        }
+    }
+}
+
 impl Fight {
     fn new<R: Rng>(
         quarry: Quarry,
@@ -499,6 +524,9 @@ pub struct Sheet {
     /// draft's level on. Kept through a mark and the ledge; only the nuke
     /// clears them.
     pub inks: Vec<i32>,
+    /// The highest level whose ring gate this climb has cleared
+    /// ([`Sheet::ring_gate`]); 0 with none. A mark and the ledge zero it.
+    pub ring_cleared: i32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -694,6 +722,17 @@ pub enum Command {
     /// Costs nothing and is never refused: the hit that earned it was
     /// already judged.
     Pocket(Leavings),
+    /// A bet at the ring (`deadchannel/ring`): `bits` off the hand, into
+    /// a bout's pool. The ring holds that `bits` is more than nothing.
+    Stake { bits: i64 },
+    /// What the ring pays back (`deadchannel/ring`): winnings, a refund,
+    /// the winning fighter's purse. Straight onto the hand, the machine's
+    /// garnish left out: most of it is the runner's own stake coming
+    /// back. Never refused.
+    Collect { bits: i64 },
+    /// A bout at the ring is over with this runner in it: the gate
+    /// standing in the road, if one is, is cleared. Never refused.
+    RingFought,
 }
 
 /// What one lounge kill leaves each hitter (`deadchannel/lounge`): the
@@ -783,6 +822,9 @@ pub enum Refusal {
     /// An answer to a runner who cannot be reached: gone dark, signal
     /// down, or in a fight of their own. The answer keeps.
     NotOnTheWire,
+    /// A step, a crossing, or an answer with a ring gate standing in the
+    /// road ([`Sheet::ring_gate`]): the bout comes first.
+    RingOwed,
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
@@ -912,6 +954,19 @@ pub enum Applied {
         garnished: i64,
         crystals: i32,
     },
+    /// `bits` off the hand and into a bout's pool.
+    Staked {
+        bits: i64,
+    },
+    /// `bits` from the ring onto the hand.
+    Collected {
+        bits: i64,
+    },
+    /// A bout fought: the gate at `cleared` no longer stands in the road,
+    /// `None` when none did.
+    RingFought {
+        cleared: Option<i32>,
+    },
 }
 
 /// One command's result: what settled, and the lines to show for it.
@@ -990,6 +1045,7 @@ impl Sheet {
             road: RoadRun::default(),
             cards: Vec::new(),
             inks: Vec::new(),
+            ring_cleared: 0,
         }
     }
 
@@ -1086,6 +1142,7 @@ impl Sheet {
             road,
             cards,
             inks,
+            ring_cleared: row.ring_cleared,
         })
     }
 
@@ -1126,7 +1183,24 @@ impl Sheet {
                 true => None,
                 false => Some(serde_json::to_value(&self.inks).expect("inks serialize")),
             },
+            ring_cleared: self.ring_cleared,
         }
+    }
+
+    /// The ring gate standing in the road (GAME.md, "The arena pass"): a
+    /// runner with a mark owes the ring one bout at every draft's level,
+    /// and until one is fought the road does not open. The level of the
+    /// gate owed, `None` for a first climb or a gate already cleared. One
+    /// bout clears every gate up to the level stood at.
+    pub fn ring_gate(&self) -> Option<i32> {
+        if self.marks == 0 {
+            return None;
+        }
+        cards::DRAFTS
+            .iter()
+            .map(|draft| draft.level)
+            .filter(|gate| *gate <= self.level && *gate > self.ring_cleared)
+            .max()
     }
 
     /// The deck this runner carries into a fight, before the day's static:
@@ -1240,23 +1314,13 @@ impl Sheet {
     }
 
     pub fn powers_under(&self, rules: &Rules, fight: &Fight) -> Powers {
-        let strike = rules.strike(self.attack(), fight.foe_defense);
-        let block = rules.block(self.defense());
-        Powers {
-            strike,
-            surge: rules.surge(strike),
-            block,
-            hit: rules.hit(fight.foe_attack, self.defense(), self.level),
-            noise: rules.noise_cards(self.level),
-            jab: rules.share(strike, rules.jab_percent),
-            brace: rules.share(block, rules.brace_percent),
-            mend: rules.share(strike, rules.siphon_mend_percent),
-            riposte: rules.share(block, rules.riposte_percent),
-            bulwark: rules.share(block, rules.bulwark_percent),
-            burn: rules.burn_energy,
-            ground: rules.share(strike, rules.ground_percent),
-            sever: rules.share(strike, rules.sever_percent),
-        }
+        Powers::of(
+            rules,
+            rules.strike(self.attack(), fight.foe_defense),
+            rules.block(self.defense()),
+            rules.hit(fight.foe_attack, self.defense(), self.level),
+            rules.noise_cards(self.level),
+        )
     }
 
     /// Why a step down the road would start nothing, read off the sheet
@@ -1569,7 +1633,10 @@ impl Sheet {
             | Applied::Drank { .. }
             | Applied::Carted { .. }
             | Applied::Inked { .. }
-            | Applied::Pocketed { .. } => return news,
+            | Applied::Pocketed { .. }
+            | Applied::Staked { .. }
+            | Applied::Collected { .. }
+            | Applied::RingFought { .. } => return news,
         }
         if self.rations_left == 0 {
             news.push(News::RoadWalked {
@@ -1646,6 +1713,9 @@ impl Sheet {
         if self.draft().is_some() {
             return Some(Refusal::CardWaiting);
         }
+        if self.ring_gate().is_some() {
+            return Some(Refusal::RingOwed);
+        }
         if !self.road.reaches(lane) {
             return Some(Refusal::NotThatWay);
         }
@@ -1688,6 +1758,9 @@ impl Sheet {
         }
         if self.is_down() {
             return refused(Refusal::SignalDown);
+        }
+        if self.ring_gate().is_some() {
+            return refused(Refusal::RingOwed);
         }
         let prey = match answer {
             Answer::Nobody => return refused(Refusal::NoAnswerOwed),
@@ -1748,6 +1821,9 @@ impl Sheet {
             Command::Deposit => self.deposit(),
             Command::Withdraw => self.withdraw(),
             Command::Pocket(leavings) => self.pocket(rules, leavings),
+            Command::Stake { bits } => self.stake(bits),
+            Command::Collect { bits } => self.collect(bits),
+            Command::RingFought => self.ring_fought(),
             Command::Borrow => self.borrow(rules),
             Command::Repay => self.repay(),
             Command::Reset => self.reset(),
@@ -1887,6 +1963,53 @@ impl Sheet {
         }
     }
 
+    /// A bet at the ring: `bits` off the hand, or nothing moves. Not with
+    /// a glyph waiting: the bits carried into a fight are the bits risked
+    /// in it.
+    fn stake(&mut self, bits: i64) -> Outcome {
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. the ring can wait.");
+        }
+        if bits > self.bits {
+            let by = bits - self.bits;
+            return Outcome {
+                applied: Applied::Refused(Refusal::Short { by }),
+                lines: vec![format!("{by} bits short of the stake.")],
+            };
+        }
+        self.bits -= bits;
+        Outcome {
+            applied: Applied::Staked { bits },
+            lines: vec![format!("{bits} bits on the ring.")],
+        }
+    }
+
+    /// What the ring pays back, onto the hand.
+    fn collect(&mut self, bits: i64) -> Outcome {
+        self.bits += bits;
+        Outcome {
+            applied: Applied::Collected { bits },
+            lines: vec![format!("the ring pays you {bits} bits.")],
+        }
+    }
+
+    /// A bout fought: whatever gate stood in the road is cleared, up to
+    /// the level stood at.
+    fn ring_fought(&mut self) -> Outcome {
+        let cleared = self.ring_gate();
+        let lines = match cleared {
+            Some(gate) => {
+                self.ring_cleared = gate;
+                vec!["the ring has seen you. the road is open.".to_string()]
+            }
+            None => Vec::new(),
+        };
+        Outcome {
+            applied: Applied::RingFought { cleared },
+            lines,
+        }
+    }
+
     /// The machine lends up to the level's cap, a piece at the level, all
     /// the room at once, and adds its fee to the debt then and never
     /// again.
@@ -1982,6 +2105,7 @@ impl Sheet {
         self.stash = 0;
         self.crystals = 0;
         self.cards.clear();
+        self.ring_cleared = 0;
         self.signal = self.max_signal();
         let mut lines = vec![
             "you step off the ledge. the fall is longer than the city.".to_string(),
@@ -2247,6 +2371,9 @@ impl Sheet {
         }
         if self.draft().is_some() {
             return refused(Refusal::CardWaiting);
+        }
+        if self.ring_gate().is_some() {
+            return refused(Refusal::RingOwed);
         }
         if !self.road.reaches(lane) {
             return refused(Refusal::NotThatWay);
@@ -2695,6 +2822,7 @@ impl Sheet {
         self.bits = START_BITS;
         self.crystals = 0;
         self.cards.clear();
+        self.ring_cleared = 0;
         self.signal = self.max_signal();
         self.road.static_cards = 0;
         self.road.settle_fight(Mark::Won);
@@ -2869,6 +2997,7 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::NobodyThere => "nobody is at the crossing tonight. the street is yours.",
         Refusal::NoAnswerOwed => "nobody crossed you. there is nothing to answer.",
         Refusal::NotOnTheWire => "they have gone dark. the answer keeps.",
+        Refusal::RingOwed => "the ring wants you first. fight a bout at RING and the road opens.",
         Refusal::NotAnUpgrade
         | Refusal::Short { .. }
         | Refusal::NothingToPatch

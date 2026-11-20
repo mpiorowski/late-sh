@@ -4,7 +4,7 @@ Parent: `CONTEXT.md` (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The money pass". This
 file is the contract of the five things that keep a runner from locking:
 the road's warning, the step down, the lockers, the bits machine, and the
-ledge.
+ledge; and of where bits leave the sheet and come back at the ring.
 All of them are commands on the same sheet under the same row lock
 (`fight/state.rs`, `fight/svc.rs`); none has a writer of its own.
 
@@ -124,7 +124,9 @@ hands, no bits on hand or in the locker, no crystals, a level-1 signal.
 - What stays is what was earned or owed: the marks and their bonus, the
   peak (the tailor's rack), the kills, the look, today's rations and
   road (the steps taken, the static in the deck), and the debt (else the ledge is loan forgiveness). No starting bits (else a
-  broke runner farms them).
+  broke runner farms them). The ring's gates come back with the levels
+  (`ring_cleared` to 0, as after a mark), so a marked runner owes a
+  bout again at level 3.
 - Refusals: the signal down (`SignalDown`: a reset is not a way back on
   the wire before the roll), a glyph waiting (`FightWaiting`), and a
   runner the fall would take nothing from (`NothingToLose`,
@@ -138,3 +140,31 @@ hands, no bits on hand or in the locker, no crystals, a level-1 signal.
   the row's answer.
 - The wire hears it (`News::SteppedOff`: "<name> stepped off the ledge.
   level 1, bare hands, starting over.").
+
+## The ring
+
+`../ring/CONTEXT.md`, and ../GAME.md, "The arena pass". The ring moves
+bits through two commands on the sheet, each applied by
+`FightService::apply_in` inside the ring's own transaction, so the bits
+and the ring's row they answer to commit together. It mints nothing:
+every bit it pays out was staked into a pool first.
+
+- **Out: `Command::Stake { bits }`.** One press of a bet: a cache's
+  worth at the bettor's level (`Rules::cache`; the bet's row holds it
+  to three presses), off the hand whole or not at all (`Refusal::Short { by }`), and not
+  with a glyph waiting (`FightWaiting`: the bits carried into a fight
+  are the bits risked in it). The locker is not touched. Committed with
+  the bout's pool and the bet's row, before the bell only.
+- **In: `Command::Collect { bits }`.** What the pool pays back once the
+  bout ends: a winning bet's share, every stake on a draw or a
+  one-sided pool, and the winning fighter's purse. Straight onto the
+  hand, never refused, and the bits machine's garnish left out: most of
+  it is the runner's own stake coming back. Committed with the bet's
+  pay claim (`paid_at`) or the fighter's settle claim, so nobody is
+  paid twice.
+- **Burned.** A tenth of every pool that pays out, and the dust the pro
+  rata split rounds down. That is the ring's sink: the pool less the
+  rake is the purse (a tenth) and the split among the bets on the
+  winner, and nothing else.
+- **Not money.** `Command::RingFought` clears the gate and moves no
+  bits; it rides the fighter's settle with the purse.

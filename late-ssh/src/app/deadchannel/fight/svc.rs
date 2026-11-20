@@ -1016,6 +1016,37 @@ impl FightService {
         }))
     }
 
+    /// One command on a runner's sheet inside a transaction the caller
+    /// owns, for the ring (`deadchannel/ring`): a stake and its bet row, a
+    /// pay and its claim, a bout's end and the gate it clears land
+    /// together or not at all. The same lock, day roll and store as `act`,
+    /// and nothing committed here: the caller commits, and locks its own
+    /// row before this one, always in that order. `None` for no standing
+    /// runner. The beat is counted here, so a caller that rolls back
+    /// leaves one count too many; the ring's own beats are the ledger.
+    pub(crate) async fn apply_in(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        command: Command,
+    ) -> Result<Option<(Sheet, Outcome)>> {
+        let today = Self::today();
+        let now = Utc::now();
+        let Some(row) = DeadchannelRunner::lock_standing(tx, user_id).await? else {
+            return Ok(None);
+        };
+        let mut sheet = Sheet::from_row(&row).context("reading the runner's sheet")?;
+        let rolled = settle_day(tx, &mut sheet, today, now).await?;
+        let outcome = sheet.apply(command, &mut rand::thread_rng());
+        let changed = rolled || !matches!(outcome.applied, Applied::Refused(_) | Applied::Resumed);
+        if changed {
+            DeadchannelRunner::store_sheet(tx, sheet.to_write()).await?;
+        }
+        metrics::record_deadchannel_fight(beat_for(&outcome.applied));
+        tracing::info!(user_id = %user_id, command = ?command, applied = ?outcome.applied, bits = sheet.bits, "sheet command applied for the ring");
+        Ok(Some((sheet, outcome)))
+    }
+
     /// A read, but through the same lock-and-settle path as an action, so
     /// the mirror never shows yesterday's bars: the day roll happens on
     /// the first touch, and the descent is a touch. A rival fight the roll
@@ -1108,6 +1139,9 @@ fn can_be_crossed(theirs: &Sheet, mine: &Sheet) -> bool {
 
 fn beat_for(applied: &Applied) -> FightBeat {
     match applied {
+        // The ring's gate is counted by itself: how often the road is
+        // found shut is the cost of having no fallback opponent.
+        Applied::Refused(super::state::Refusal::RingOwed) => FightBeat::RingOwed,
         Applied::Refused(_) => FightBeat::Refused,
         Applied::Started { pick: Pick::Fair } => FightBeat::Started,
         Applied::Started { pick: Pick::Lower } => FightBeat::SteppedDown,
@@ -1139,6 +1173,9 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Carted { .. } => FightBeat::Carted,
         Applied::Inked { .. } => FightBeat::Inked,
         Applied::Pocketed { .. } => FightBeat::Pocketed,
+        Applied::Staked { .. } => FightBeat::Staked,
+        Applied::Collected { .. } => FightBeat::Collected,
+        Applied::RingFought { .. } => FightBeat::RingFought,
     }
 }
 

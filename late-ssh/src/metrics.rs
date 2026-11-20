@@ -397,6 +397,15 @@ pub enum FightBeat {
     Inked,
     /// A lounge glyph's leavings onto the sheet (`deadchannel/lounge`).
     Pocketed,
+    /// A bet at the ring off the hand (`deadchannel/ring`).
+    Staked,
+    /// The ring's pay onto the hand: winnings, a refund, a purse.
+    Collected,
+    /// A bout fought: the sheet told, the gate cleared if one stood.
+    RingFought,
+    /// A step, a crossing or an answer turned down at the ring's gate: a
+    /// marked runner at a draft level who has not fought their bout.
+    RingOwed,
     /// A step onto the crossing: a sleeper on the row.
     Crossed,
     /// The sleeper's answer: the one who crossed them on the row.
@@ -429,6 +438,35 @@ pub enum LoungeBeat {
     HitRefused,
     HitFailed,
     NotifyFailed,
+}
+
+/// One beat of the ring (`deadchannel/ring`): a call made, turned down by
+/// the row, accepted, declined, lapsed; a bet taken or turned down; a
+/// round locked, a round the clock forced, a round resolved, a bout
+/// ended; a fighter's end settled on their sheet, a bet paid, one whose
+/// runner had left, a settle or a pay that erred; a deck set; a row that
+/// moved but could not be announced; an ask that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RingBeat {
+    Called,
+    CallRefused,
+    Accepted,
+    AcceptRefused,
+    Declined,
+    Expired,
+    Bet,
+    BetRefused,
+    Locked,
+    TimedOut,
+    Resolved,
+    Ended,
+    Settled,
+    Paid,
+    PayLeft,
+    SettleFailed,
+    DeckSet,
+    NotifyFailed,
+    Failed,
 }
 
 /// The Old Signal's chips after a kill (`fight/svc.rs::pay_mark`): `Paid`
@@ -859,8 +897,8 @@ mod inner {
         PayoutTimersRead, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
         PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
         RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        Refresh, RefreshOutcome, RenderReason, RingBeat, RollCallResult, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
     };
@@ -2215,6 +2253,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_ring_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_ring_total")
+                .with_description("deadchannel ring calls, bets, rounds, and pay, by beat")
+                .build()
+        })
+    }
+
     fn runner_door_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2322,6 +2370,10 @@ mod inner {
             FightBeat::Carted => "carted",
             FightBeat::Inked => "inked",
             FightBeat::Pocketed => "pocketed",
+            FightBeat::Staked => "staked",
+            FightBeat::Collected => "collected",
+            FightBeat::RingFought => "ring_fought",
+            FightBeat::RingOwed => "ring_owed",
             FightBeat::Crossed => "crossed",
             FightBeat::Answered => "answered",
             FightBeat::Ambushed => "ambushed",
@@ -2377,6 +2429,34 @@ mod inner {
 
     pub fn record_deadchannel_lounge(beat: LoungeBeat) {
         deadchannel_lounge_total().add(1, &[KeyValue::new("beat", lounge_beat_label(beat))]);
+    }
+
+    fn ring_beat_label(beat: RingBeat) -> &'static str {
+        match beat {
+            RingBeat::Called => "called",
+            RingBeat::CallRefused => "call_refused",
+            RingBeat::Accepted => "accepted",
+            RingBeat::AcceptRefused => "accept_refused",
+            RingBeat::Declined => "declined",
+            RingBeat::Expired => "expired",
+            RingBeat::Bet => "bet",
+            RingBeat::BetRefused => "bet_refused",
+            RingBeat::Locked => "locked",
+            RingBeat::TimedOut => "timed_out",
+            RingBeat::Resolved => "resolved",
+            RingBeat::Ended => "ended",
+            RingBeat::Settled => "settled",
+            RingBeat::Paid => "paid",
+            RingBeat::PayLeft => "pay_left",
+            RingBeat::SettleFailed => "settle_failed",
+            RingBeat::DeckSet => "deck_set",
+            RingBeat::NotifyFailed => "notify_failed",
+            RingBeat::Failed => "failed",
+        }
+    }
+
+    pub fn record_deadchannel_ring(beat: RingBeat) {
+        deadchannel_ring_total().add(1, &[KeyValue::new("beat", ring_beat_label(beat))]);
     }
 
     fn presence_wire_label(beat: PresenceWire) -> &'static str {
@@ -2709,6 +2789,7 @@ mod inner {
         match refresh {
             Refresh::RunnerLooks => "runner_looks",
             Refresh::LoungeSpawn => "lounge_spawn",
+            Refresh::RingBoard => "ring_board",
             Refresh::DailyMatches => "daily_matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
@@ -4730,8 +4811,8 @@ mod inner {
         PayoutTimersRead, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
         PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
         RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        Refresh, RefreshOutcome, RenderReason, RingBeat, RollCallResult, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
     };
@@ -4761,6 +4842,7 @@ mod inner {
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
     pub fn record_deadchannel_poster(_beat: PosterBeat) {}
     pub fn record_deadchannel_lounge(_beat: LoungeBeat) {}
+    pub fn record_deadchannel_ring(_beat: RingBeat) {}
     pub fn record_presence(_beat: PresenceWire) {}
     pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
     pub fn record_runner_door(_door: RunnerDoor) {}

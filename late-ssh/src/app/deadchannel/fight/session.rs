@@ -658,6 +658,9 @@ impl FightSession {
             | Applied::Carted { .. }
             | Applied::Inked { .. }
             | Applied::Pocketed { .. }
+            | Applied::Staked { .. }
+            | Applied::Collected { .. }
+            | Applied::RingFought { .. }
             | Applied::Cleared { .. }
             | Applied::Cached { .. } => scene.lines.extend(lines),
         }

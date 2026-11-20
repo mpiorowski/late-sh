@@ -485,13 +485,7 @@ fn the_board_route_names_the_board_as_what_comes_after_the_chat() {
 fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
     let header = |board: BoardStop| {
         header_rows(
-            &tour_header(
-                Tutorial::VisitBoard,
-                TableStop::Played,
-                false,
-                board,
-            )
-            .unwrap(),
+            &tour_header(Tutorial::VisitBoard, TableStop::Played, false, board).unwrap(),
             100,
         )
     };

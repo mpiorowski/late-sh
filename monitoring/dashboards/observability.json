@@ -4142,7 +4142,7 @@
     {
       "type": "bargauge",
       "title": "Fights by Beat",
-      "description": "The fight at the screen over the range, by what happened (exchanges inside a fight, beat=round, are left out so the outcomes stay readable): started or resumed, won, slain, lost, escaped, and the armorer's outfitted and patch's patched, with refused and failed.",
+      "description": "The fight at the screen over the range, by what happened (exchanges inside a fight, beat=round, are left out so the outcomes stay readable): started or resumed, won, slain, lost, escaped, and the armorer's outfitted and patch's patched; the ring's staked, collected and ring_fought, and ring_owed (a step, crossing or answer turned down at the ring's gate, the cost of having no fallback opponent); with refused and failed.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4380,6 +4380,63 @@
       }
     },
     {
+      "type": "bargauge",
+      "title": "Ring Bouts",
+      "description": "The ring (deadchannel/ring) over the range, by beat: calls made (called), turned down by the row (call_refused), taken (accepted) or turned down (accept_refused), declined or taken back (declined), lapsed unanswered (expired); bets taken (bet) or refused (bet_refused); rounds locked by a fighter (locked), called by the clock on a corner that had not locked (timed_out), resolved, bouts ended; fighters settled on their sheets (settled), bets paid (paid), a fighter or bettor with no standing runner (pay_left), a settle or pay that erred (settle_failed); decks set (deck_set); a row that moved but could not be announced (notify_failed); a request or advance that erred (failed). The gate's cost is on Fights by Beat: ring_owed counts every step, crossing or answer turned down because a marked runner owes the ring a bout, beside staked, collected and ring_fought.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_ring_total[$__range]))",
+          "legendFormat": "{{beat}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 349
+      }
+    },
+    {
       "type": "row",
       "title": "Newcomers",
       "collapsed": false,
@@ -4392,7 +4449,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 349
+        "y": 359
       }
     },
     {
@@ -4449,7 +4506,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 350
+        "y": 360
       }
     },
     {
@@ -4506,7 +4563,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 350
+        "y": 360
       }
     },
     {
@@ -4563,7 +4620,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 350
+        "y": 360
       }
     },
     {
@@ -4605,7 +4662,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 358
+        "y": 368
       }
     },
     {
@@ -4621,7 +4678,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 366
+        "y": 376
       }
     },
     {
@@ -4684,7 +4741,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 367
+        "y": 377
       }
     },
     {
@@ -4753,7 +4810,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 367
+        "y": 377
       }
     }
   ]

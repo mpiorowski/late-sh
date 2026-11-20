@@ -7,8 +7,25 @@ use crate::app::deadchannel::fight::state::{Lookout, Sheet};
 use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::poster::session::Bench;
 use crate::app::deadchannel::poster::ui as poster_ui;
+use crate::app::deadchannel::ring::svc::Board as RingBoard;
+use crate::app::deadchannel::ring::ui as ring_ui;
 use crate::app::deadchannel::street::state::StreetRunner;
 use crate::app::deadchannel::tailor::ui as tailor_ui;
+
+/// The ring with nobody at it, for every frame that is not about it.
+fn no_ring(board: &RingBoard) -> ring_ui::RingView<'_> {
+    ring_ui::RingView {
+        board,
+        picks: None,
+        cursor: 0,
+        corner: late_core::models::deadchannel_bout::Side::Caller,
+        roster: Vec::new(),
+        me: Uuid::nil(),
+        sheet: None,
+        now: chrono::Utc::now(),
+        word: None,
+    }
+}
 
 fn render(state: &State, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -40,6 +57,7 @@ fn render(state: &State, width: u16, height: u16) -> String {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -132,6 +150,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -220,6 +239,7 @@ fn render_panel(
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -603,6 +623,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                             writing: None,
                             word: None,
                         },
+                        ring: no_ring(&RingBoard::default()),
                         guide: &GuideState::new(),
                         own_user_id: Uuid::nil(),
                         street: &StreetView::new(),
@@ -780,6 +801,7 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -957,6 +979,7 @@ fn other_runners_stand_on_the_street_with_their_names_and_you_are_not_twice() {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: mira,
                     street: &street,
@@ -1023,6 +1046,7 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
         let names = HashMap::new();
         let usernames = UsernameLookup::new(&names, None);
         let looks = HashMap::new();
+        let ring_board = RingBoard::default();
         let view = CityView {
             state: &state,
             own_username: "mira",
@@ -1044,6 +1068,7 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
                 writing: None,
                 word: None,
             },
+            ring: no_ring(&ring_board),
             guide: &guide,
             own_user_id: Uuid::nil(),
             street: &street,
@@ -1093,6 +1118,7 @@ fn render_prints(width: u16, height: u16, state: &State, bench: &Bench, word: &s
                         writing: None,
                         word: Some(word),
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
