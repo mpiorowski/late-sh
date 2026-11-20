@@ -169,15 +169,18 @@ resource "kubernetes_deployment_v1" "vintagestory" {
           }
 
           # Measured on agent-2: about 1.2 GiB with the spawn area loaded and
-          # nobody on. The official estimate adds about 300 MiB per player.
+          # nobody on, about 2.6 GiB after two weeks up with players on. .NET
+          # caps its heap at 75% of the limit, and a join builds the whole
+          # asset payload in memory: at 3Gi that cap threw OutOfMemoryException
+          # on joins while Kubernetes saw nothing wrong.
           resources {
             limits = {
               cpu    = "3000m"
-              memory = "3Gi"
+              memory = "5Gi"
             }
             requests = {
               cpu    = "500m"
-              memory = "1536Mi"
+              memory = "2560Mi"
             }
           }
 
