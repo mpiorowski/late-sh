@@ -134,7 +134,11 @@ async fn run_bridge(
         HOME_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = fs::create_dir_all(&home);
-    let mut table = crate::scorelog::SessionTable::new(&home);
+    let mut runs = SessionRuns {
+        table: crate::scorelog::SessionTable::new(&home),
+        runs_log: cfg.runs_log,
+        playname: cfg.playname,
+    };
 
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Single-player (`-n`), curses text client (`-t`), black-and-white (`-b`),
@@ -156,9 +160,9 @@ async fn run_bridge(
         .arg("-n")
         .arg("-b")
         .arg("-f")
-        .arg(table.score_file())
+        .arg(runs.table.score_file())
         .arg("-P")
-        .arg(&cfg.playname)
+        .arg(&runs.playname)
         .env("TERM", &cfg.term)
         .env("HOME", &home)
         .env("LANG", "C.UTF-8")
@@ -229,8 +233,7 @@ async fn run_bridge(
         &mut child,
         &handle,
         channel,
-        &mut table,
-        &cfg,
+        &mut runs,
     )
     .await;
 
@@ -248,25 +251,33 @@ async fn run_bridge(
 
     // The child may have just written its table; fold what the timer has not
     // logged yet into the run log before the table goes with the HOME.
-    sync_table(&mut table, &cfg.runs_log, &cfg.playname);
+    runs.sync();
     // Best-effort cleanup of the per-session scratch HOME.
     let _ = fs::remove_dir_all(&home);
     Ok(())
 }
 
-/// Fold the session's table into the run log. A failure is logged here and
-/// retried by the next sync: the table keeps what was not logged.
-fn sync_table(
-    table: &mut crate::scorelog::SessionTable,
-    runs_log: &std::path::Path,
-    playname: &str,
-) {
-    let now_epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    if let Err(e) = table.sync(runs_log, now_epoch) {
-        tracing::warn!(error = ?e, playname = %playname, "failed to sync dopewars session table into the run log");
+/// A session's table with what folding it into the run log takes.
+struct SessionRuns {
+    table: crate::scorelog::SessionTable,
+    /// The shared run log the session's finished games are appended to.
+    runs_log: PathBuf,
+    /// Whose session it is, for the failure log.
+    playname: String,
+}
+
+impl SessionRuns {
+    /// Fold the session's table into the run log. A failure is logged here.
+    /// The table keeps what was not logged, so the next timer sync retries
+    /// it; a failure of the last sync, at teardown, loses those runs.
+    fn sync(&mut self) {
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Err(e) = self.table.sync(&self.runs_log, now_epoch) {
+            tracing::warn!(error = ?e, playname = %self.playname, "failed to sync dopewars session table into the run log");
+        }
     }
 }
 
@@ -277,8 +288,7 @@ async fn bridge_loop(
     child: &mut tokio::process::Child,
     handle: &Handle,
     channel: ChannelId,
-    table: &mut crate::scorelog::SessionTable,
-    cfg: &HostConfig,
+    runs: &mut SessionRuns,
 ) {
     use std::io::Write;
 
@@ -288,7 +298,7 @@ async fn bridge_loop(
     let mut sync_tick = tokio::time::interval_at(start, SCORE_SYNC_INTERVAL);
     loop {
         tokio::select! {
-            _ = sync_tick.tick() => sync_table(table, &cfg.runs_log, &cfg.playname),
+            _ = sync_tick.tick() => runs.sync(),
             cmd = cmd_rx.recv() => match cmd {
                 Some(Command::Input(bytes)) => {
                     let mut sink: &std::fs::File = master;

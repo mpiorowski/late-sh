@@ -37,8 +37,7 @@ pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
 /// `LATE1`). The score is the month's online time in milliseconds.
 pub const LATE_TIME_AWARD_CATEGORY: &str = "late_time";
 /// The retired Top Drinkers board's monthly winner: whoever took the most
-/// buzz that month. The board is gone and the snapshot grants it no more (it
-/// turned the bartender into a leaderboard grind), but the badges already
+/// buzz that month. The snapshot does not grant it, but the badges already
 /// granted stay on profiles and chat labels, so the category keeps its code,
 /// label and priority. First place only and no chips, like Late Time. The
 /// score is the month's buzz points.
@@ -90,9 +89,10 @@ pub fn is_milestone_award(category: &str) -> bool {
     MILESTONE_AWARD_CATEGORIES.contains(&category)
 }
 
-/// The monthly awards with a single holder: earned again every month and
-/// shown only for the month after, like the ranked boards, but a `#1` on the
-/// badge would be noise. The badge legends are tested against this list
+/// The monthly awards with a single holder: shown only for the month after,
+/// like the ranked boards, but a `#1` on the badge would be noise. Late Time
+/// is earned again every month; the retired Top Drinkers keeps only the
+/// badges already granted. The badge legends are tested against this list
 /// alongside [`MILESTONE_AWARD_CATEGORIES`].
 pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 2] =
     [LATE_TIME_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY];

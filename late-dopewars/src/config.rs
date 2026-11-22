@@ -8,10 +8,10 @@ pub(crate) struct Config {
     /// Path to the dopewars binary.
     pub(crate) bin: String,
     /// Names where the run log lives: `<score_file>.runs.log`, on the host's
-    /// PVC so the leaderboard's history survives pod restarts. The file itself
-    /// was the shared table every game wrote, and nothing writes it now: each
-    /// game session plays on its own table in its scratch `HOME` (`scorelog`).
-    /// The name stays so the run log keeps its path and the ingest cursor.
+    /// PVC so the leaderboard's history survives pod restarts. Nothing writes
+    /// the file itself: each game session plays on its own table in its
+    /// scratch `HOME` (`scorelog`). The name keeps the run log's path, and so
+    /// the ingest cursor, stable on the deployed volume.
     pub(crate) score_file: String,
     /// Shared secret. The single authorized client key is derived from this; it
     /// must match late-ssh's `LATE_DOPEWARS_SECRET`.

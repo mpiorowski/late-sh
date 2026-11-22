@@ -13,12 +13,12 @@
 // plays finds an empty slot, until a session past 18 games pushes its own
 // lowest off. The host syncs the table on a timer and at the session's end,
 // appending to `<score_file>.runs.log` (one TAB-separated line per run) the
-// entries this session has not logged yet. The shared `score_file` itself is
-// no longer written; only the run log beside it is.
+// entries this session has not logged yet. Nothing writes the configured
+// `score_file` itself; it only names the run log.
 //
 // File format, from `HighScoreTypeWrite` (dopewars 1.6.2, src/serverside.c:
 // 1770): the NUL-terminated header "DOPEWARS SCORES V.1", then two arrays of
-// 18 entries (antique mode first — always empty here — then the regular
+// 18 entries (antique mode first, always empty here, then the regular
 // table). Each entry is a NUL-terminated name, a NUL-terminated date
 // ("%d-%m-%Y", UTC), a NUL-terminated price (`pricetostr`: ASCII digits with
 // an optional leading '-', "" for zero), and one byte `dead` (non-zero =
@@ -107,15 +107,13 @@ pub(crate) fn runs_log_path(score_file: &str) -> PathBuf {
     PathBuf::from(format!("{score_file}.{RUNS_FILE}.log"))
 }
 
-type LoggedKey = (String, i64, bool, String);
-
 /// One game session's own high-score table, and the entries of it already
 /// appended to the run log (see the header).
 pub(crate) struct SessionTable {
     score_file: PathBuf,
     /// Counted, not a set: two games of one session can end on the same
     /// money the same day, and both are runs.
-    logged: HashMap<LoggedKey, usize>,
+    logged: HashMap<ScoEntry, usize>,
 }
 
 impl SessionTable {
@@ -150,13 +148,7 @@ impl SessionTable {
         let mut out = String::new();
         let mut fresh = Vec::new();
         for entry in entries {
-            let key = (
-                entry.name.clone(),
-                entry.money,
-                entry.dead,
-                entry.date.clone(),
-            );
-            match remaining.get_mut(&key) {
+            match remaining.get_mut(&entry) {
                 Some(count) if *count > 0 => *count -= 1,
                 Some(_) | None => {
                     out.push_str(&format!(
@@ -167,7 +159,7 @@ impl SessionTable {
                         ended_epoch(&entry.date, now_epoch),
                         entry.date
                     ));
-                    fresh.push(key);
+                    fresh.push(entry);
                 }
             }
         }
@@ -176,8 +168,8 @@ impl SessionTable {
         }
         append(runs_log, &out)?;
         let appended = fresh.len();
-        for key in fresh {
-            *self.logged.entry(key).or_default() += 1;
+        for entry in fresh {
+            *self.logged.entry(entry).or_default() += 1;
         }
         Ok(appended)
     }

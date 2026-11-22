@@ -85,8 +85,9 @@ fn entry(name: &str, money: i64, dead: bool, date: &str) -> ScoEntry {
 #[test]
 fn parse_reads_entries_and_skips_empty_slots() {
     let fixture = Fixture::new("parse");
+    let score = fixture.dir.join("dopewars.sco");
     write_score(
-        &fixture.dir.join("dopewars.sco"),
+        &score,
         &[
             record("Alice", "01-02-2026", "1234567", 1),
             record("Bob", "02-02-2026", "-500", 0),
@@ -94,7 +95,7 @@ fn parse_reads_entries_and_skips_empty_slots() {
         ],
     );
     assert_eq!(
-        parse_sco(&fs::read(fixture.dir.join("dopewars.sco")).unwrap()),
+        parse_sco(&fs::read(&score).unwrap()),
         vec![
             entry("Alice", 1_234_567, true, "01-02-2026"),
             entry("Bob", -500, false, "02-02-2026"),
@@ -105,9 +106,7 @@ fn parse_reads_entries_and_skips_empty_slots() {
 
 #[test]
 fn parse_rejects_a_missing_header() {
-    let fixture = Fixture::new("noheader");
-    fs::write(fixture.dir.join("dopewars.sco"), b"not a score file").unwrap();
-    assert!(parse_sco(&fs::read(fixture.dir.join("dopewars.sco")).unwrap()).is_empty());
+    assert!(parse_sco(b"not a score file").is_empty());
 }
 
 #[test]
