@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
@@ -8,22 +9,25 @@ use tokio::sync::mpsc;
 /// Per-session counter used only to give each child a unique, private `HOME`
 /// directory name. dopewars may read/write a per-user config dotfile; a shared
 /// `HOME` across concurrent sessions could race, so each gets its own scratch
-/// `HOME` (the shared state -- the leaderboard -- is the `-f` score file, not
-/// `HOME`). Not persisted; only unique within a process lifetime, which is all
-/// the temp-dir name needs.
+/// `HOME`, which also holds the session's own high-score table
+/// (`scorelog::SessionTable`). Not persisted; only unique within a process
+/// lifetime, which is all the temp-dir name needs.
 static HOME_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// How often a live session's table is folded into the run log, on top of the
+/// sync at the session's end: a game finished mid-session survives a host
+/// killed before that end.
+const SCORE_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Configuration for a single dopewars child process.
 pub(crate) struct HostConfig {
     /// Path to the dopewars binary (e.g. `/usr/games/dopewars`).
     pub(crate) bin: String,
-    /// The shared high-score file, passed as `-f`. Every session points at the
-    /// same file (on the PVC), so scores form one global leaderboard that
-    /// survives restarts. dopewars locks it during updates, so concurrent
-    /// sessions writing it is safe.
-    pub(crate) score_file: String,
+    /// The shared append-only run log on the PVC, where every session's
+    /// finished games land (`scorelog`) and the stats session streams from.
+    pub(crate) runs_log: PathBuf,
     /// The sanitized player handle, passed as `-P` so dopewars skips its startup
-    /// name prompt and records the right player in the shared high-score file.
+    /// name prompt and records the right player in the session's table.
     pub(crate) playname: String,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
@@ -122,19 +126,21 @@ async fn run_bridge(
     }
 
     // Give the child a private, writable HOME so any per-user dopewars config
-    // dotfile doesn't collide with concurrent sessions. The shared leaderboard
-    // is the `-f` score file, not HOME.
+    // dotfile doesn't collide with concurrent sessions. The session's own
+    // high-score table lives there too, empty at the start, so every game
+    // this session plays makes it and reaches the run log (`scorelog`).
     let home = std::env::temp_dir().join(format!(
         "late-dopewars-home-{}",
         HOME_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = fs::create_dir_all(&home);
+    let mut table = crate::scorelog::SessionTable::new(&home);
 
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Single-player (`-n`), curses text client (`-t`), black-and-white (`-b`),
-    // pointed at the shared high-score file (`-f`), with the player's handle as
-    // the playname (`-P`) so dopewars skips its "Hey dude, what's your name?"
-    // prompt.
+    // pointed at the session's own high-score table (`-f`), with the player's
+    // handle as the playname (`-P`) so dopewars skips its "Hey dude, what's
+    // your name?" prompt.
     //
     // `-b` is deliberate: dopewars' own color scheme hard-codes a blue-on-blue
     // window palette that assumes a black terminal and renders nearly unreadable
@@ -150,7 +156,7 @@ async fn run_bridge(
         .arg("-n")
         .arg("-b")
         .arg("-f")
-        .arg(&cfg.score_file)
+        .arg(table.score_file())
         .arg("-P")
         .arg(&cfg.playname)
         .env("TERM", &cfg.term)
@@ -223,6 +229,8 @@ async fn run_bridge(
         &mut child,
         &handle,
         channel,
+        &mut table,
+        &cfg,
     )
     .await;
 
@@ -237,24 +245,29 @@ async fn run_bridge(
     drop(master);
     // The reader exits on its own at EOF; don't block teardown joining it.
     drop(reader);
+
+    // The child may have just written its table; fold what the timer has not
+    // logged yet into the run log before the table goes with the HOME.
+    sync_table(&mut table, &cfg.runs_log, &cfg.playname);
     // Best-effort cleanup of the per-session scratch HOME.
     let _ = fs::remove_dir_all(&home);
+    Ok(())
+}
 
-    // The child may have just written the shared score file; fold any new
-    // entries into the append-only run log the leaderboard streams.
+/// Fold the session's table into the run log. A failure is logged here and
+/// retried by the next sync: the table keeps what was not logged.
+fn sync_table(
+    table: &mut crate::scorelog::SessionTable,
+    runs_log: &std::path::Path,
+    playname: &str,
+) {
     let now_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    if let Err(e) = crate::scorelog::sync_from_sco(
-        std::path::Path::new(&cfg.score_file),
-        &crate::scorelog::runs_log_path(&cfg.score_file),
-        &crate::scorelog::seen_path(&cfg.score_file),
-        now_epoch,
-    ) {
-        tracing::warn!(error = ?e, "failed to sync dopewars run log");
+    if let Err(e) = table.sync(runs_log, now_epoch) {
+        tracing::warn!(error = ?e, playname = %playname, "failed to sync dopewars session table into the run log");
     }
-    Ok(())
 }
 
 async fn bridge_loop(
@@ -264,11 +277,18 @@ async fn bridge_loop(
     child: &mut tokio::process::Child,
     handle: &Handle,
     channel: ChannelId,
+    table: &mut crate::scorelog::SessionTable,
+    cfg: &HostConfig,
 ) {
     use std::io::Write;
 
+    // "Play again?" keeps one child running across games, so the table is
+    // synced while the session lives, not only at its end.
+    let start = tokio::time::Instant::now() + SCORE_SYNC_INTERVAL;
+    let mut sync_tick = tokio::time::interval_at(start, SCORE_SYNC_INTERVAL);
     loop {
         tokio::select! {
+            _ = sync_tick.tick() => sync_table(table, &cfg.runs_log, &cfg.playname),
             cmd = cmd_rx.recv() => match cmd {
                 Some(Command::Input(bytes)) => {
                     let mut sink: &std::fs::File = master;

@@ -20,7 +20,7 @@ badges are in [`AWARDS.md`](AWARDS.md).
 
 ## Source Map
 
-- `state.rs`: `Board` (page order: Top Drinkers, Top Chips, Arcade Wins, Top Chat, Late Time, then the games and daily/score rosters), `Standings` (including the four-panel `TopChat` shape), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (page order: Top Chips, Arcade Wins, Top Chat, Late Time, then the games and daily/score rosters), `Standings` (including the four-panel `TopChat` shape), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, online-time accumulator (wall-clock spans)/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
@@ -46,8 +46,7 @@ one union query ranked with `PARTITION BY game`; the Lateania boards add two
 (both O(players) over `mud_characters`) and the roguelike-door boards two
 (one query per window over `door_runs`/`door_milestones`, all three families
 ranked `PARTITION BY (family, game)`), Late Time adds one query over its
-indexed all-time and current-month O(users) rollups, and Top Drinkers one
-over the current year of `drink_pours` (indexed on `created`), and Top Chat one
+indexed all-time and current-month O(users) rollups, and Top Chat one
 bounded current-month read over messages and News. Do not make it hot again
 without re-reading that ranking.
 
@@ -120,7 +119,7 @@ rosters).
 - `DailyPuzzle` (declared in the Arcade lobby's order, so the per-game boards on this page, the week card's Arcade section and the paper's tie-breaks follow the lobby): iterating `ALL` generates the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, per-user daily completion statuses, and the month-end `arcade_wins` profile award snapshot (`profile_award.rs::snapshot_previous_month_profile_awards` builds its union from the roster with `points_sql`, so the persisted award scores the same games as the page). The one thing the roster cannot enforce: a new game's win-insert statement must compose `bump_daily_win_total_sql`, or its all-time board stays empty. Monthly boards count win rows in the month window; all-time reads the `daily_win_totals` rollup (migration 131; the bump rides the win insert's own statement, gated to fresh inserts, so same-day replays never double-count and the refresh stays O(players)).
 - `ScoreGame` (TwentyFortyEight, Lateris, Snake, Traffic, the lobby's order too): monthly boards union `game_score_events` with legacy best-score rows whose best was set this month (`updated`); all-time boards read only the legacy tables of record. `updated` is when the best was set, not when the player last played: `HighScore::update_score_if_higher` (Lateris, 2048, Snake) moves it only when the submitted score beats the stored one, otherwise anyone who played this month would carry their all-time best onto the monthly board and into the month's awards. A best that no score event reached (one set before score events existed) has nothing to date it by, so its `updated` can be later than when it was set. Traffic is the exception: every track finish rewrites `traffic_high_scores` and records the aggregate total as the score event, so its monthly board lists the all-time total of whoever finished a track this month.
 - `DoorGame` (Dcss, Nethack, Brogue): the uniform board triple over the log-pipe fact tables — Wins (all-time count of `DoorRunResult::WINS` results, single window by design, `Standings::AllTimeOnly`), Deepest Dive, and Top Score (monthly + all-time). `WINS` is win + mastery, so a Brogue escape and a Brogue mastery both count once each on its wins board. The dive board unions end-of-run depth with the depth snapshot on every tracked milestone line, because crawl stamps the *final* place on the logfile line and a winner ends at the surface; NetHack's `maxlvl` and Brogue's `deepestLevel` are already run maximums, so their milestone rows contribute nothing to the union (Brogue writes no milestone rows at all: it logs only at end of game).
-- `dopewars` (`DOPEWARS_GAME_KEY`) is the one door off the roguelike roster, with a single board instead of the triple: Top Score only, monthly + all-time, each player's best single run (`MAX(score)`) of final net worth (Cash + Bank - Debt), rendered as cash (`$1,250,000`, `-$500`). Its runs never win and carry no depth, so the wins/depth families produce no rows for it, and `fetch_door_boards` splits the key out of the same one query (the refresh stays at sixteen queries). Its rows come from the host's append-only run log, not from the game's own top-18 table — see the pipe section.
+- `dopewars` (`DOPEWARS_GAME_KEY`) is the one door off the roguelike roster, with a single board instead of the triple: Top Score only, monthly + all-time, each player's best single run (`MAX(score)`) of final net worth (Cash + Bank - Debt), rendered as cash (`$1,250,000`, `-$500`). Its runs never win and carry no depth, so the wins/depth families produce no rows for it, and `fetch_door_boards` splits the key out of the same one query (the refresh stays at sixteen queries). Its rows come from the host's append-only run log of every finished game, not from a shared in-game table: see the pipe section.
 - `LobbyGame` (the Lobby's thirteen correspondence games, by `daily_matches.game_kind`): no board of its own; it names the Lobby's games for the week. It mirrors late-ssh's `DailyGame`, and `lobby/daily/games_test.rs` fails until the two agree on kind and name.
 - The week (`week_tallies`, `WEEK_DAYS`): outside the page, everyone's plays per game over the seven UTC days ending on a day, added up: the same query as `day_tallies` over a wider span (every daily solve by finish time, every finished score run, every finished Lobby match, every hub card opening), a game without plays in the week left off. Totals, never anyone's best and never who, since the card is public and nobody opted into being posted; `DayTally::shown_plays` prints them (`1 play`, `1,234 plays`). Read by late-web's `/games/week/{last}/image.png` card, the herald's Sunday post (`late-ssh/src/app/herald/CONTEXT.md`).
 - The day (`day_tallies`, `DayGame`, `DayTally`): one tally per game anyone played on a UTC day, plays and wins, from the same rosters counted instead of ranked: the daily puzzles' finishes, the score games' runs, the Lobby's finished matches, and the hub's doors by openings (`door_openings`, every `DoorCard`, with the roguelikes' won runs beside them; `DoorGame::card` ties the three to their cards). Beside it, `day_lobby_starts` (`LobbyStarts`): the Lobby's matches started on the day, per game, by `daily_matches.started_at` (stamped by the claim, migration 272). Both read by the paper's YESTERDAY column (`late-ssh/src/app/paper/CONTEXT.md`).
@@ -128,7 +127,7 @@ rosters).
 - `Top Chips` (monthly sum over `chip_ledger` of the moves whose `ChipMove::counts_as_earnings` is true, exclusions derived from `ChipMove::excluded_earning_reasons()`: only credits count, and of those the house tables (bets, payouts, floor restores), gifts, the starting stipend, the two referral payouts and every monthly prize (the gallery's `ArtboardPrize`, and any month-end prize added later) are out, so a colluding table cannot fold one seat to the top, nobody can be funnelled up, nobody is on the board for signing up, and no single invite or month-end win decides the board; gilds received, the pot, the bonsai drip, Super Snake winnings and every game prize count as they land; no debit ever counts, so spending cannot lower a place or push a player off the board; admin `/grant` chips never reach the ledger; the rule and its reasoning live on `counts_as_earnings` in `late-core/src/models/chips.rs`) and `Arcade Wins` are bespoke monthly-only boards. Arcade Wins weights come from `Difficulty::points` over each board's tier in `DailyPuzzle::tiers` (easy = 1, medium/draw-1 = 3, hard/draw-3 = 5; the three-tier games use all three, Le Word is a single Easy board, Rubik's a single Medium one), the same tier whose `chips()` is the daily-win payout, so points and payouts cannot drift apart. `points_sql` is generated from the tiers and pinned whole by `leaderboard_test.rs::points_sql_follows_each_puzzles_tiers`. Unknown difficulty keys score 0, never a default.
 - `Late Time` is a bespoke paired board over the current-month and all-time online-time rollups. It ranks exact milliseconds and renders the largest two useful units. Last month's first place gets the rankless `LATE` badge (see Monthly profile awards); no chips are attached.
 - The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short). Experience keeps accruing at the level cap, so past 100 the value keeps counting **paragon levels**, one per 75k xp beyond the cap's threshold (the summit's own per-level price), rendered `lvl 100 +37`; the curve numbers are restated in `leaderboard.rs` (`LATEANIA_LEVEL_CAP`, `LATEANIA_XP_AT_LEVEL_CAP`, `LATEANIA_XP_PER_PARAGON_LEVEL`) and pinned to the game's `xp_for_level` by `lateania/classes_test.rs`, so a rebalance that forgets them fails there. `lateania_pvp` ranks the blob's lifetime `pvp_kills` (rivals slain in the Wildbound Waste); characters with no kills stay off it. A reset character leaves both boards; the page shows one "right now" window (`Standings::Snapshot`).
-- `Top Drinkers` is a bespoke monthly + yearly board (`Standings::MonthlyYearly`, the one board with a yearly window) over `drink_pours`, the per-drink log written by `UserDrinks::record_pour` in the same statement as the buzz (`late-core/src/models/drinks.rs`): the sum of each drink's buzz points in the UTC month and the UTC year. What counts is the drink taken, never the chips: a paid drink, a round credit cashed and the round buyer's own drink all count their points (a tavern round's 400, a Nightcap round's 100), buying for others counts nothing, and the newcomer's welcome pour is never logged. Points are the drink's full worth before the `MAX_DRUNK_POINTS` cap. Last month's first place gets the rankless `DRNK` badge (see Monthly profile awards); no chips, and the yearly window awards nothing.
+- **There is no drinking board.** Top Drinkers ranked buzz from `drink_pours` and crowned a monthly `DRNK`; it was removed because patrons talked to the bartender only to climb it. Do not bring back a ranking of drinks or buzz: it turns the bar into a grind. The badges already granted stay (see Monthly profile awards).
 - `Top Chat` contains four UTC-month races: all public-room messages, public-room messages outside #lounge, the longest consecutive run of chat days achieved within the month (`daily streak (days)`), and News items posted. The first three exclude bot/system authors, complete case-insensitive `@bartender` mentions anywhere in the stored body, and generated News cards. A day counts once across all public rooms; gaps end a run but keep that month's best. News counts `articles`, once per item, whether its lounge card succeeds or not, independently of chip rewards. Private rooms and DMs never count. Deleting source rows changes the next refresh's totals. No badges or prizes. `TopChatBoards` carries its UTC month: the page hides a previous-month snapshot and resets scrolling at rollover. Chat first reduces to one row per user/day before finding runs; nothing scans chat history outside the month.
 - There is no Le Word win-streak board, by decision: its gaps-and-islands query was the most expensive in the pass.
 
@@ -143,12 +142,11 @@ identity, grant gates, feed gating, deploy order) and the settled badge
 decisions are in `late-ssh/src/app/door/ingest/CONTEXT.md`.
 
 The dopewars door joins the same pipe with a host-written file of its own:
-`late-dopewars` diffs the game's binary top-18 score file into an append-only
-`dopewars.sco.runs.log` (`late-dopewars/src/scorelog.rs`) at startup, after
-each session and every 30 seconds in between, and streams it as the single
-`runs` file. The table a volume
-already held before its first sync is never logged, so the board starts with
-the first game played after the deploy. Its playname is the
+`late-dopewars` gives every game session its own empty binary top-18 score
+file, so every game the session plays lands in it, folds that table into an
+append-only `dopewars.sco.runs.log` (`late-dopewars/src/scorelog.rs`) every 30
+seconds and at the session's end, and streams the log as the single `runs`
+file. Its playname is the
 account's `late.sh` username, not an arcade handle, so the pipe resolves it
 through `users` (`User::find_by_username`). dopewars runs carry no badges and
 post nothing to #lounge.
@@ -156,10 +154,10 @@ post nothing to #lounge.
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
-(Top Drinkers, Top Chips, Arcade Wins, Top Chat, Late Time), then the Games group (the Lateania boards,
+(Top Chips, Arcade Wins, Top Chat, Late Time), then the Games group (the Lateania boards,
 then each roguelike door's board triple, then dopewars Top Score), Daily Wins,
 and High Scores, in roster order.
-The first board, and the one selected when the page opens, is Top Drinkers. The detail pane shows
+The first board, and the one selected when the page opens, is Top Chips. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
 replaces the last two rows below the fold). Ctrl+J/K and the wheel scroll the
 standings through every loaded rank (see Page navigation).
@@ -173,8 +171,8 @@ the frame and rail, and to Top Chat's central rule when that grid is visible.
 `LeaderboardService::start_profile_award_snapshot_loop` freezes last UTC
 month's top 3 per awarded board into `profile_awards` (migrations 077, 081),
 and every board is settled by the first pass that writes a row for it. The
-gallery award pays chips; Late Time and Top Drinkers are
-single-holder and rankless; one-time milestone badges share the table; the roll
+gallery award pays chips; Late Time is
+single-holder and rankless, like the retired Top Drinkers; one-time milestone badges share the table; the roll
 is announced in #lounge once per month at 18:00 UTC on the 1st. **A new badge has to be added to the
 Leaderboards guide (`app/profile_modal/badges.rs::guide_lines`) and the help
 modal (`app/help_modal/data.rs`) by hand.** The full rules are in

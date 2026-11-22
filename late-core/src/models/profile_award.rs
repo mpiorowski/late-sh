@@ -36,11 +36,12 @@ pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
 /// month. First place only, so rankless (`LATE`, never
 /// `LATE1`). The score is the month's online time in milliseconds.
 pub const LATE_TIME_AWARD_CATEGORY: &str = "late_time";
-/// The Top Drinkers board's monthly winner: whoever took the most buzz
-/// last month (`drink_pours`). First place only and no chips, like Late
-/// Time: buzz is bought with chips and a gifted drink pours more than it
-/// costs, so a ranked ladder or a prize would be worth farming between
-/// friends. An exact tie shares it. The score is the month's buzz points.
+/// The retired Top Drinkers board's monthly winner: whoever took the most
+/// buzz that month. The board is gone and the snapshot grants it no more (it
+/// turned the bartender into a leaderboard grind), but the badges already
+/// granted stay on profiles and chat labels, so the category keeps its code,
+/// label and priority. First place only and no chips, like Late Time. The
+/// score is the month's buzz points.
 pub const TOP_DRINKERS_AWARD_CATEGORY: &str = "top_drinkers";
 
 /// The chip prize behind each gallery placement. Paid inside the snapshot
@@ -468,22 +469,6 @@ pub async fn snapshot_previous_month_profile_awards(
                 ) standings
                 WHERE rank = 1
              ),
-             -- Top Drinkers' first place: the month's buzz from every drink
-             -- taken. RANK, so a tie shares it.
-             top_drinker AS (
-                SELECT user_id, value, rank
-                FROM (
-                    SELECT pours.user_id,
-                           SUM(pours.points)::bigint AS value,
-                           RANK() OVER (ORDER BY SUM(pours.points) DESC) AS rank
-                    FROM drink_pours pours, bounds
-                    WHERE pours.created >= bounds.period_start
-                      AND pours.created < bounds.period_end
-                    GROUP BY pours.user_id
-                    HAVING SUM(pours.points) > 0
-                ) standings
-                WHERE rank = 1
-             ),
              ranked AS (
                 SELECT user_id,
                        'top_chips'::text AS category,
@@ -509,13 +494,6 @@ pub async fn snapshot_previous_month_profile_awards(
                        value,
                        rank
                 FROM late_time_leader
-                UNION ALL
-                -- First place only; `award_badge` prints it bare.
-                SELECT user_id,
-                       'top_drinkers'::text AS category,
-                       value,
-                       rank
-                FROM top_drinker
                 UNION ALL
                 -- ROW_NUMBER, not RANK: this is the one arm that mints
                 -- chips, and RANK would hand every hanger tied at the top

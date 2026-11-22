@@ -228,7 +228,6 @@ fn draw_detail(
     let count = match &standings {
         Standings::TopChat(_) => unreachable!("grid rendered above"),
         Standings::Paired { monthly, all_time } => monthly.len().max(all_time.len()),
-        Standings::MonthlyYearly { monthly, yearly } => monthly.len().max(yearly.len()),
         Standings::MonthlyOnly(entries)
         | Standings::AllTimeOnly(entries)
         | Standings::Snapshot(entries) => entries.len(),
@@ -263,31 +262,6 @@ fn draw_detail(
                 columns[1],
                 "all-time",
                 all_time,
-                board,
-                view.user_id,
-                scroll,
-            );
-        }
-        Standings::MonthlyYearly { monthly, yearly } => {
-            let columns = standings_columns(
-                rows[3],
-                window_natural_width("monthly", monthly, board),
-                window_natural_width("yearly", yearly, board),
-            );
-            draw_window(
-                frame,
-                columns[0],
-                "monthly",
-                monthly,
-                board,
-                view.user_id,
-                scroll,
-            );
-            draw_window(
-                frame,
-                columns[1],
-                "yearly",
-                yearly,
                 board,
                 view.user_id,
                 scroll,
@@ -713,7 +687,6 @@ fn empty_copy(board: Board) -> &'static str {
         Board::TopChips => "no chip earnings yet this month",
         Board::ArcadeWins => "no daily puzzle wins yet this month",
         Board::TimeOnline => "no connected time recorded yet",
-        Board::TopDrinkers => "nobody has taken a drink yet",
         Board::TopChat => "no activity this month",
         Board::Daily(_) => "no wins yet, be the first",
         Board::Score(_) => "no scores yet, be the first",

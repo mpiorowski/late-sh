@@ -13,7 +13,8 @@ use crate::stats::{self, StatsHost};
 /// Shared, connection-independent server state.
 struct Shared {
     bin: String,
-    /// The one shared high-score file every child gets as `-f`.
+    /// The configured score-file path; only the run log beside it is used
+    /// (`scorelog::runs_log_path`). Each game session plays on its own table.
     score_file: String,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
@@ -251,7 +252,7 @@ impl Handler for ClientHandler {
         self.host = Some(SessionHost::Game(PtyHost::spawn(
             HostConfig {
                 bin: self.shared.bin.clone(),
-                score_file: self.shared.score_file.clone(),
+                runs_log: crate::scorelog::runs_log_path(&self.shared.score_file),
                 playname,
                 cols: self.cols,
                 rows: self.rows,

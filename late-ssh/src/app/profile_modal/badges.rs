@@ -105,7 +105,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "DRNK",
             "Top Drinkers",
-            "most buzz from drinks taken last month, first place only, no chips (Top Drinkers board)",
+            "retired, no longer awarded: most buzz from drinks taken in a month, first place only, no chips",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
