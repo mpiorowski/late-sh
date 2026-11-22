@@ -288,6 +288,12 @@ async fn kill_the_old_signal(
     sheet.level = MAX_LEVEL;
     sheet.peak_level = MAX_LEVEL;
     sheet.draft_up();
+    // The road to the top went through every ring gate on the way.
+    sheet.ring_cleared = crate::app::deadchannel::fight::cards::DRAFTS
+        .iter()
+        .map(|draft| draft.level)
+        .max()
+        .expect("the drafts");
     sheet.exp = exp_to_seek();
     sheet.weapon_tier = MAX_TIER;
     sheet.armor_tier = MAX_TIER;

@@ -338,6 +338,9 @@ impl App {
         // runner's `/hit`, the word it came back with, and the scene's
         // strike and countdown frames.
         changed |= crate::app::deadchannel::lounge::svc::tick(self, anim_half);
+        // The ring (`app/deadchannel/ring`): the board copy, the answer
+        // to a request, and the sheet re-read when a bout moved bits.
+        changed |= crate::app::deadchannel::ring::session::tick(self);
         changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()

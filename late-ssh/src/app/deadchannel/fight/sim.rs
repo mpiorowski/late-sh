@@ -823,6 +823,15 @@ impl Run<'_> {
                 other => panic!("a draft of {card:?} answered {other:?}"),
             }
         }
+        // The ring's gate (GAME.md, "The arena pass") is fought the day
+        // it stands: the bout is another runner's to give and no part of
+        // the road's balance, so the sim takes it as fought.
+        if self.sheet.ring_gate().is_some() {
+            match self.act(Command::RingFought) {
+                Applied::RingFought { .. } => {}
+                other => panic!("a bout fought answered {other:?}"),
+            }
+        }
         let patch_line =
             (f64::from(self.sheet.max_signal()) * self.player.patch_under).ceil() as i32;
         if self.sheet.signal < patch_line

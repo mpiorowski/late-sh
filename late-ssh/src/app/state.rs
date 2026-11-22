@@ -274,6 +274,9 @@ pub struct SessionConfig {
     /// The lounge spawns (`app/deadchannel/lounge`): the live spawn and
     /// the hit path.
     pub lounge_service: crate::app::deadchannel::lounge::svc::LoungeService,
+    /// The ring (`app/deadchannel/ring`): the board every session copies
+    /// and the call, bet and round paths.
+    pub ring_service: crate::app::deadchannel::ring::svc::RingService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
@@ -810,6 +813,9 @@ pub struct App {
     /// The lounge spawns (`app/deadchannel/lounge`): this session's copy of
     /// the spawn, its own `/hit` and the word it came back with.
     pub(crate) lounge: crate::app::deadchannel::lounge::session::LoungeSession,
+    /// The ring (`app/deadchannel/ring`): this session's copy of the
+    /// board, the deck it brings and the answer to its last request.
+    pub(crate) ring: crate::app::deadchannel::ring::session::RingSession,
     /// The undercity guide (`app/deadchannel/guide`): the box over the
     /// street, opened by `?` and by itself on the first descent.
     pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
@@ -1510,6 +1516,11 @@ impl App {
             config.username.clone(),
             config.lounge_service.clone(),
         );
+        let ring = crate::app::deadchannel::ring::session::RingSession::new(
+            config.user_id,
+            config.username.clone(),
+            config.ring_service.clone(),
+        );
 
         let pet_state = if let Some(companion) = config.initial_pet {
             crate::app::pet::state::PetState::new(
@@ -1756,6 +1767,7 @@ impl App {
             poster,
             guide,
             lounge,
+            ring,
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,

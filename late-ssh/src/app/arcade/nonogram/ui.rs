@@ -191,11 +191,15 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
     )));
 
     // Cell rows
-    for row in 0..puzzle.height as usize {
+    for (row, row_clues) in puzzle
+        .row_clues
+        .iter()
+        .enumerate()
+        .take(puzzle.height as usize)
+    {
         let mut spans = Vec::new();
 
         // Row clues
-        let row_clues = &puzzle.row_clues[row];
         let pad = max_row_clues.saturating_sub(row_clues.len());
         let row_style = clue_style(
             row == cursor_row,

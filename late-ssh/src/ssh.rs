@@ -1095,6 +1095,7 @@ impl russh::server::Handler for ClientHandler {
                 self.state.db.clone(),
             ),
             lounge_service: self.state.lounge_service.clone(),
+            ring_service: self.state.ring_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),

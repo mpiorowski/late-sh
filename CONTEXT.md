@@ -194,7 +194,6 @@ otherwise.
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
-| `attention` | The attention guest: what waits on you, a row each, gone when the list is empty |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
 | `herald` | The herald: two posts a day on the Fediverse and Bluesky, words and art, each slot's claim and post |
@@ -204,7 +203,7 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
+| `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles, the attention guest (what waits on you, a row each, gone when the list is empty) |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
@@ -227,6 +226,7 @@ otherwise.
 | `deadchannel/city` | The night city under `0`: map, shops, panels, art |
 | `deadchannel/fight` | The day's road, the cards, the round, the crossing; money, crystals and balance in `fight/*.md` |
 | `deadchannel/lounge` | The #lounge spawns |
+| `deadchannel/ring` | The ring: live 1v1 card duels between marked runners, bets in bits, the gate at the draft levels |
 | `door` | The Games hub and the door family; each door has its own context below it |
 | `door/lateania` | Lateania, the shared world RPG (the lands and content in `WORLD.md`, combat and items in `COMBAT.md`, keys and panels in `UI.md`, land numbers and the balance audit in `PROGRESSION.md`, the maps in `WORLDMAP.md`) |
 | `door/realm` | The Realm, the standing conquest world (rules and payouts in `RULES.md`, Earth and drawn worlds in `MAPS.md`, screens in `UI.md`) |

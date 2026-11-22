@@ -154,7 +154,7 @@ pub const SECTIONS: &[Section] = &[
                 "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *300* signal, *35* attack, *22* defense, and no bits.",
             ),
             Block::Rule(
-                "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and the same ladder to climb again.",
+                "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and the same ladder to climb again. with a mark, the road waits at *3*, *6*, *9*, and *12* until you fight a bout at *the ring*.",
             ),
         ],
     },
@@ -222,6 +222,10 @@ pub const SECTIONS: &[Section] = &[
                 Figure {
                     value: "the blade shop",
                     means: "the next tier up for crystals, no bits",
+                },
+                Figure {
+                    value: "the ring",
+                    means: "marked runners duel card against card; anyone bets bits on it",
                 },
                 Figure {
                     value: "ink",
@@ -480,6 +484,97 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Rule(
                 "a kill pays *40,000 chips*, at most *once every 30 days*: the one way bits ever turn into chips. a second mark inside the month is yours all the same. your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
+            ),
+        ],
+    },
+    Section {
+        title: "the ring",
+        neon: Neon::Magenta,
+        blocks: &[
+            Block::Rule(
+                "*the ring* is the lit sign beside the blade shop. two runners who put the Old Signal down fight each other card against card, live, and the street bets bits on it. only a runner with a *mark* can call or be called; anyone standing can watch and bet, there and nowhere else.",
+            ),
+            Block::Keys(&[
+                Key {
+                    key: "↑↓",
+                    does: "{pick} a marked runner on the wire",
+                },
+                Key {
+                    key: "c",
+                    does: "{call} them to the ring",
+                },
+                Key {
+                    key: "a",
+                    does: "{take} the call to you",
+                },
+                Key {
+                    key: "x",
+                    does: "{say no}, or take your own call back",
+                },
+                Key {
+                    key: "1-4",
+                    does: "{flip} a pick of the deck you bring",
+                },
+                Key {
+                    key: "←→",
+                    does: "with a bout set: {pick} a corner",
+                },
+                Key {
+                    key: "b",
+                    does: "{bet} one press on it",
+                },
+                Key {
+                    key: "1-5",
+                    does: "in the ropes: {lay} that card in the next slot, or take it back",
+                },
+                Key {
+                    key: "e",
+                    does: "{lock} the round (space too)",
+                },
+            ]),
+            Block::Rule(
+                "a call waits *three minutes*. afterglow sends them a DM, so it finds them wherever they are, and the wire tells the street. one call out at a time, none while the ring is taken, the same runner not rung again until three minutes have passed, and the same two runners fight *once a day*.",
+            ),
+            Block::Rule(
+                "your deck at the ring is the ten, *four picks* of your own (one card of every draft, whatever your level), and the other card of every draft you inked. your level, your gear, your mark bonus, and the day's glass stay outside: both corners hit the same, block the same, and start at *45* signal.",
+            ),
+            Block::Rule(
+                "taking a call locks both decks in and sets *the bell* five minutes out. until it rings the book is open, and the two in the ropes can lay round one.",
+            ),
+            Block::Rule(
+                "*four rounds* at most. every round both hands are open to everyone: five cards and *three energy* each, laid into *four slots* in the order they come out. nobody sees your slots until the round comes out.",
+            ),
+            Block::Rule(
+                "then the slots come out one at a time, both corners at once: blocks go up, a ‹mute› cancels the card across from it, and both hits land together. a hit that gets through leaves a ‹static› in the other deck, and a block stays up until a hit eats it, round to round.",
+            ),
+            Block::Rule(
+                "signal at zero puts you down. both down in the same slot is a draw. after round four the higher signal takes it on points.",
+            ),
+            Block::Figures(&[
+                Figure {
+                    value: "3m",
+                    means: "for a call to be answered",
+                },
+                Figure {
+                    value: "5m",
+                    means: "from the accept to the bell: the book is open",
+                },
+                Figure {
+                    value: "30s",
+                    means: "to lay a round, plus six to watch the last one come out",
+                },
+            ]),
+            Block::Rule(
+                "when the clock runs out, what you laid is locked. lay nothing and the ring plays the obvious round for you. both locked once the bell has rung, the round comes out at once.",
+            ),
+            Block::Rule(
+                "a press of `b` is *a cache's worth* of bits at your level, *three presses* at most, all on one corner. in the ropes you can only back yourself. not with a glyph waiting on you. while a bet or a bout of yours is out, the ledge will not have you.",
+            ),
+            Block::Rule(
+                "when it ends, *a tenth* of the pool burns, *a tenth* goes to the winner, and the rest is split among the bets on the winner by their size. a draw, or bets on one corner only, hands every stake back.",
+            ),
+            Block::Rule(
+                "with a mark on you, the ring wants *one bout* at levels *3*, *6*, *9*, and *12*. until you fight it the road is shut: no step, no crossing, no answer. win, lose, or draw, one bout opens every gate up to your level. a first climb never owes one; a mark and the ledge start the count again.",
             ),
         ],
     },
@@ -821,7 +916,7 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Green,
         blocks: &[
             Block::Rule(
-                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a bright glyph put down, a near miss, the day's road walked, a lounge glyph put down or slipped past, a crossing and what it moved.",
+                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a bright glyph put down, a near miss, the day's road walked, a lounge glyph put down or slipped past, a crossing and what it moved, a call to the ring, a bout set, and how it ended.",
             ),
             Block::Rule(
                 "your name there wears your mark and your level in the newest tint it opened: grey to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15. marks ride behind the Signal's glyph: ▚3╬2.",

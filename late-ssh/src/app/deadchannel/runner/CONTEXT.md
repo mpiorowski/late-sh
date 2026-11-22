@@ -80,9 +80,11 @@ without runner chrome.
     `{"path": [{"lane", "mark"}], "static_cards", "patched"}`, null before
     the first step and after the roll; `patched` defaults when absent),
     `cards` (JSONB, the drafted cards in draft order, `["brace",
-    "bulwark"]`, null with none taken), and `inks` (JSONB, the draft levels
+    "bulwark"]`, null with none taken), `inks` (JSONB, the draft levels
     inked at INK in the order bought, `[3, 9]`, null with none; kept
-    through a mark and the ledge).
+    through a mark and the ledge), and `ring_cleared` (migration 287, the
+    highest ring gate this climb has cleared, 0 with none; zeroed by a
+    mark and the ledge: `../ring/CONTEXT.md`).
   - `poster` JSONB (migration 249): the runner's picture from PRINTS, a
     serialized `dartboard_core::Canvas` (`{"width": 32, "height": 12,
     "cells", "colors"}`), null with none. Written only by PRINTS
@@ -102,6 +104,9 @@ without runner chrome.
   balance test (the row, the look, and the leave and guide stamps stay),
   and first closes every crossing still being fought as dropped, since the
   fight `settle_day` would close it from is gone (`fight/CROSSING.md`).
+  It clears the ring the same way (`ring/CONTEXT.md`): every bet still
+  unpaid is void, every open call lapses, and a bout being fought ends a
+  draw with both fighters settled, so nothing is paid onto a fresh sheet.
   To nuke, ship a migration holding only `SELECT
   deadchannel_nuke_runners();`. A migration that adds a sheet column adds
   it to that function, and a column whose stored values the new code

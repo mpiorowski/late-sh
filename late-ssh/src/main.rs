@@ -432,6 +432,25 @@ async fn main() -> anyhow::Result<()> {
         pg_listener.subscribe(late_ssh::app::deadchannel::lounge::svc::LoungeService::CHANNELS),
     );
     let _lounge_spawner_task = lounge_service.start_spawner_task();
+    // The ring (`app/deadchannel/ring`): every replica runs the sweeper
+    // against the same rows, the channel names the bout that moved, and
+    // the resync re-reads the board.
+    let ring_service = late_ssh::app::deadchannel::ring::svc::RingService::new(
+        db.clone(),
+        late_ssh::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            chat_service.clone(),
+            chip_service.clone(),
+        ),
+        chat_service.clone(),
+        presence_service.clone(),
+        runner_look_service.subscribe(),
+        is_draining.clone(),
+    );
+    let _ring_notify_task = ring_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::deadchannel::ring::svc::RingService::CHANNELS),
+    );
+    let _ring_sweeper_task = ring_service.start_sweeper_task();
     // The pot's panel and its winner banner cross replicas over Postgres,
     // and the draw is settled by a status transition so exactly one replica
     // pays however many are sweeping. See `app/pot/svc.rs`.
@@ -581,6 +600,7 @@ async fn main() -> anyhow::Result<()> {
         runner_looks: runner_look_service.clone(),
         presence: presence_service,
         lounge_service,
+        ring_service,
     };
 
     let session_shutdown = CancellationToken::new();
