@@ -89,9 +89,9 @@ impl State {
 
     fn spawn_tile(&mut self) {
         let mut empty_cells = Vec::new();
-        for r in 0..4 {
-            for c in 0..4 {
-                if self.grid[r][c] == 0 {
+        for (r, row) in self.grid.iter().enumerate() {
+            for (c, &value) in row.iter().enumerate() {
+                if value == 0 {
                     empty_cells.push((r, c));
                 }
             }
@@ -115,12 +115,8 @@ impl State {
 
     fn check_game_over(&mut self) {
         // Any empty spaces?
-        for r in 0..4 {
-            for c in 0..4 {
-                if self.grid[r][c] == 0 {
-                    return;
-                }
-            }
+        if self.grid.iter().any(|row| row.contains(&0)) {
+            return;
         }
 
         // Any adjacent matching spaces?

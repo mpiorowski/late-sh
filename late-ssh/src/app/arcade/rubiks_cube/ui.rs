@@ -253,8 +253,8 @@ fn push_net_box(lines: &mut Vec<Line<'static>>, tiles: &[&NetTile], indent: usiz
             }
             let style = net_border_style(tile.slot);
             spans.push(Span::styled("│", style));
-            for col in 0..3 {
-                spans.push(sticker_span(tile.grid[row][col], MINI_STICKER_WIDTH));
+            for &sticker in &tile.grid[row] {
+                spans.push(sticker_span(sticker, MINI_STICKER_WIDTH));
             }
             spans.push(Span::styled("│", style));
         }
