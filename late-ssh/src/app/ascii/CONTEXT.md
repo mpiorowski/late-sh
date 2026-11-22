@@ -71,12 +71,14 @@ Two surfaces draw them, both through `ui::draw_piece`:
   clock (`App::last_active_at`) nor drops the screensaver, and a report a
   chunk boundary cuts in two is held (`App::presence_held`) and read whole
   with the next chunk. `/brb` syncs away at once, so the screensaver is up
-  on the frame after the Enter. It waits while the News watch modal is up
-  (`App::screensaver_due`): the paired CLI's mpv paints the player's
-  rectangle whatever the TUI draws under it, a video outlasts the idle
-  limit without a key, and the key that drops a screensaver would never
-  reach the player. The away flag itself moves as ever; the screensaver
-  comes up on the 1Hz sync after the modal closes.
+  on the frame after the Enter. It waits while a video has the screen
+  (`App::screensaver_due`: the watch modal, or a live stream drawn in its
+  room): the paired CLI's mpv paints the player's rectangle whatever the
+  TUI draws under it, a video outlasts the idle limit without a key, and
+  the key that drops a screensaver would never reach the player. A stream
+  only heard, its room off screen, does not hold it back. The away flag
+  itself moves as ever; the screensaver comes up on the 1Hz sync after the
+  video leaves the screen.
   `late_ssh_screensavers_total{trigger=idle|brb,selection=fixed|random|randomer,piece}`
   counts each one put up (`App::sync_screensaver`), labelled with the piece drawn.
 
@@ -211,7 +213,7 @@ against this table before its cadence is picked. The report is
 asserts):
 
 ```
-make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"
+make test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"
 ```
 
 It draws each piece in both styles on a 200x50 terminal at its own

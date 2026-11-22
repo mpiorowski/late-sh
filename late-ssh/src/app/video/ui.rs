@@ -14,7 +14,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::state::{Mark, Player, SetupBox, WatchModal, WatchSize, centered_rect, close_rect};
+use super::state::{
+    Mark, Player, SetupBox, WatchModal, WatchSize, WatchSource, centered_rect, close_rect,
+};
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 
@@ -33,7 +35,7 @@ fn draw_player(frame: &mut Frame, area: Rect, player: &Player) {
     frame.render_widget(Clear, layout.popup);
 
     match player.size() {
-        WatchSize::Window => {
+        WatchSize::Small => {
             frame.render_widget(frame_block(" Watching "), layout.popup);
             draw_close(frame, layout.close);
             if !layout.header.is_empty() {
@@ -87,12 +89,15 @@ fn draw_header(frame: &mut Frame, header: Rect, player: &Player) {
         title => title,
     };
     // Every video here is YouTube's, so the meta names who shared it, not
-    // the site.
-    let meta = format!(
-        "shared by @{} {}",
-        player.author(),
-        format_relative_time(player.shared_at())
-    );
+    // the site; a live stream names who is streaming.
+    let meta = match player.source() {
+        WatchSource::NewsArticle(_) | WatchSource::ChatLink => format!(
+            "shared by @{} {}",
+            player.author(),
+            format_relative_time(player.shared_at())
+        ),
+        WatchSource::LiveStream(_) => format!("@{} · live", player.author()),
+    };
     let lines = vec![
         Line::from(vec![
             Span::styled(

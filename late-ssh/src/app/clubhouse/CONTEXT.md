@@ -168,8 +168,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   the whole revert. `House` is the original walk, every bullet below
   describes it unless it says otherwise. `Board` is the second version
   (`AUDIENCE.md` section 5), the first session built around
-  today's board: `Welcome` -> `VisitChat` (Home) -> `VisitTable` (the
-  practice table, the same stop as below) -> `VisitBoard` (The Arcade:
+  today's board: `Welcome` -> `VisitChat` (Home) -> `VisitBoard` (The Arcade:
   today's Netwalk daily at its easiest difficulty, opened as the active
   Arcade game by `arcade/input.rs::open_lent_board`, the way Enter on
   its lobby card opens it, so the win is the Arcade's own: the win task
@@ -185,14 +184,16 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `TourMove::Week`), and the Enter at the week finishes the tour (`Done`
   persisted, `TourMove::FinishedAtChat`) and lands the session on Home,
   in the chat, input free. No Stations stop (84% of newcomers are on
-  plain ssh with nothing to hear), no homecoming box: the solved board's
+  plain ssh with nothing to hear), no pool break (on this route it lost
+  41% of the newcomers who reached it, `AUDIENCE.md` section 3), no
+  homecoming box: the solved board's
   header is the send-off and names tomorrow (a new board at 00:00 UTC
   with the hours left, the board kept in the Arcade under `2`, `?` the
   guide). The two
   routes share every stop, the gate and the headers; the route only
-  decides where Enter goes from the chat stop and from the table
-  (`State::tutorial_advance`), and the welcome box's and the chat and
-  table stops' "next" copy. `State::tour_route` holds it per session so
+  decides where Enter goes from the chat stop
+  (`State::tutorial_advance`), and the welcome box's and the chat stop's
+  "next" copy. `State::tour_route` holds it per session so
   a test can walk the other.
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
   (`users.settings.clubhouse_tutorial_done`, late-core). While armed the
@@ -226,7 +227,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `Homecoming`'s Enter finishes the tour in place and frees input. On a
   first visit's tour every stop reached counts once on
   `late_ssh_tour_stops_total{stop}` (on the `Board` route: `welcome`,
-  `chat`, `table`, `board`, `week`, `done`), the welcome box included (`enter_screen`
+  `chat`, `board`, `week`, `done`), the welcome box included (`enter_screen`
   returns true when it began the tour; `State::tour_start` says how the one
   in progress began, so a `/onboard` rerun counts nothing). The counting
   happens in `App::enter_clubhouse` and `input.rs::tour_advance`, never
@@ -247,8 +248,8 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `input.rs::sync_tour_modal`); both modals take the header as an
   argument and drop their own footer, because none of its keys work
   mid-tour. Nothing in a held modal moves on its own.
-- **The practice table.** Enter at the lobby stop (on the `Board`
-  route, at the chat stop) opens `VisitTable`: a
+- **The practice table** (`House` route). Enter at the lobby stop opens
+  `VisitTable`: a
   pool table that exists only in this session
   (`DailyState::open_practice_table`, see `app/lobby/daily/CONTEXT.md`),
   with the same header drawn above the board. The break is part of the
@@ -291,7 +292,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   hands the board's own keys and arrows to the Arcade
   (`arcade/input.rs::lent_board_key`, `lent_board_arrow`: moving,
   turning, locking, reset; never the keys that swap the board for
-  another), and the practice table is dropped on the way in
+  another), and any board left open is closed on the way in
   (`leave_board`). A rerun whose easy Netwalk is already solved today
   meets the board solved and Enter moves on.
 - **The week stop** (`Board` route). `VisitWeek` is a boxed stop over

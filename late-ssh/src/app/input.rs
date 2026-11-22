@@ -156,7 +156,8 @@ pub enum ParsedInput {
     Paste(Vec<u8>),
     /// F4 (SS3 `ESC O S`, CSI `ESC [ 14 ~`): show or hide the chat beside a
     /// game, Realm's board and an open watch here, and the watchable doors'
-    /// own pane (which read it off raw input, `door::spectate::input::is_f4`).
+    /// own pane (which read it off raw input, `door::spectate::input::is_f4`);
+    /// and the messages under a stream playing inline in its room.
     F4,
     PageUp,
     PageDown,
@@ -889,7 +890,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.video.is_open() {
+    if app.video.modal().is_some() {
         crate::app::video::input::handle_input(app, &event);
         return;
     }
@@ -1121,11 +1122,15 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         | ParsedInput::AltDigit(_) => {}
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
-        // the composer gate, so F4 closes it from the composer too.
+        // the composer gate, so F4 closes it from the composer too. In a
+        // room whose stream plays inline it hides the messages under the
+        // picture, which then takes the whole pane.
         ParsedInput::F4 if ctx.screen == Screen::Games => {
             crate::app::door::spectate::input::toggle_watch_chat(app);
         }
-        ParsedInput::F4 => {}
+        ParsedInput::F4 => {
+            app.video.toggle_stream_pane();
+        }
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -2005,8 +2010,8 @@ fn dispatch_escape(app: &mut App) {
         app.paper.close_modal();
         return;
     }
-    if app.video.is_open() {
-        crate::app::video::svc::close(app);
+    if app.video.modal().is_some() {
+        crate::app::video::svc::dismiss(app);
         return;
     }
     if app.chat.has_reader() {
@@ -2504,6 +2509,7 @@ fn chat_room_list_view<'a>(
         chat_rooms: &app.chat.rooms,
         away_user_ids: &app.away_user_ids,
         live_streams: &app.chat.live_streams,
+        stream_playing: app.video.playing_stream_room(),
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
@@ -2707,6 +2713,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     // its gesture and the keys stay put.
     if app.on_home() && !chat_scroll_clicks_blocked(app) {
         crate::app::zen::input::focus_home_tile_at(app, x, y);
+    }
+    if !chat_scroll_clicks_blocked(app) && crate::app::video::input::click_inline_stream(app, x, y)
+    {
+        return true;
     }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
@@ -4161,11 +4171,12 @@ pub(crate) fn close_icon_picker(app: &mut App) {
 
 /// The News reader, an open Artboard piece and the watch player
 /// (`app/video/`), for a page change or another modal opening. A closing
-/// player keeps its position.
+/// player keeps its position; a live stream is not closed, it plays on
+/// with its picture out of the way (`video::svc::dismiss`).
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
     app.gallery_cards.close();
-    crate::app::video::svc::close(app);
+    crate::app::video::svc::dismiss(app);
 }
 
 pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {

@@ -5,8 +5,8 @@ use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
 use late_core::models::article::{
-    ArticleEvent, ArticleFeedItem, ArticleSnapshot, FeedArticle, NEWS_FEED_LIMIT,
-    NEWS_LOUNGE_CARD_LIMIT,
+    ArticleEvent, ArticleFailure, ArticleFeedItem, ArticleSnapshot, FeedArticle, NEWS_FEED_LIMIT,
+    NEWS_LOUNGE_CARD_LIMIT, ShareRefusal,
 };
 use late_core::{
     db::Db,
@@ -524,7 +524,7 @@ impl ArticleService {
                         );
                         service.publish_event(ArticleEvent::Failed {
                             user_id,
-                            error: e.to_string(),
+                            error: ArticleFailure::Errored(e.to_string()),
                             url: None,
                         });
                     }
@@ -599,18 +599,24 @@ impl ArticleService {
     /// (`ShareRefusal`) is the sharer's to see and logs at WARN; anything
     /// else is ours and logs at ERROR. Either way the sharer gets the text.
     fn share_failed(&self, user_id: Uuid, url: &str, e: anyhow::Error) {
-        match e.downcast_ref::<ShareRefusal>() {
-            Some(refusal) => tracing::warn!(?refusal, url = %url, "share refused"),
-            None => late_core::error_span!(
-                "article_process_failed",
-                error = ?e,
-                url = %url,
-                "failed to process article url"
-            ),
-        }
+        let error = match e.downcast::<ShareRefusal>() {
+            Ok(refusal) => {
+                tracing::warn!(?refusal, url = %url, "share refused");
+                ArticleFailure::Refused(refusal)
+            }
+            Err(e) => {
+                late_core::error_span!(
+                    "article_process_failed",
+                    error = ?e,
+                    url = %url,
+                    "failed to process article url"
+                );
+                ArticleFailure::Errored(e.to_string())
+            }
+        };
         self.publish_event(ArticleEvent::Failed {
             user_id,
-            error: e.to_string(),
+            error,
             url: Some(url.to_string()),
         });
     }
@@ -1483,52 +1489,6 @@ fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {
 
 /// Domains whose content must never reach the AI summarizer. Currently just
 /// cyberspace.online: their API terms ban feeding their content to AI systems.
-/// Why a share was turned down: the link, or what the page behind it is.
-/// The sharer's problem to see, never ours to log as a failure; the text is
-/// the banner. Carried through `anyhow` as the typed error `share_failed`
-/// matches on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShareRefusal {
-    /// cyberspace.online's terms bar AI summaries of their content.
-    AiBlocklisted,
-    Exists,
-    /// The AI or X called the page invalid or NSFW.
-    Rejected,
-    /// X's media lookup could not answer, so the post went unscreened.
-    XUnconfirmed,
-    XUnresolved,
-    YoutubeUnresolved,
-}
-
-impl ShareRefusal {
-    pub fn message(self) -> &'static str {
-        match self {
-            ShareRefusal::AiBlocklisted => {
-                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
-            }
-            ShareRefusal::Exists => "Article exists",
-            ShareRefusal::Rejected => {
-                "Link was rejected due to content policy violations or being invalid."
-            }
-            ShareRefusal::XUnconfirmed => {
-                "X could not confirm this post is safe to share right now. Try again in a minute."
-            }
-            ShareRefusal::XUnresolved => {
-                "X could not resolve this post: it may be deleted, from a protected account, or not a post URL"
-            }
-            ShareRefusal::YoutubeUnresolved => "YouTube oEmbed could not resolve this video",
-        }
-    }
-}
-
-impl std::fmt::Display for ShareRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message())
-    }
-}
-
-impl std::error::Error for ShareRefusal {}
-
 fn is_ai_blocklisted_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;

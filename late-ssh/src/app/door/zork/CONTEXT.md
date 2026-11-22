@@ -224,7 +224,7 @@ the error.
 ```sh
 make -C vendor/frotz curses SOUND_TYPE=none ZORK_DOOR=1 -j4
 uv run --no-project vendor/frotz/src/curses/ux_door_test.py
-make test-llm ARGS="-p late-zork -p late-ssh -E 'package(late-zork) or test(door::zork)'"
+make test ARGS="-p late-zork -p late-ssh -E 'package(late-zork) or test(door::zork)'"
 docker build --platform linux/amd64 -f docker/doors/zork.Dockerfile \
   -t ghcr.io/mpiorowski/late-sh/door-zork:2.56pre-r1 .
 bash docker/doors/smoke/zork.sh ghcr.io/mpiorowski/late-sh/door-zork:2.56pre-r1

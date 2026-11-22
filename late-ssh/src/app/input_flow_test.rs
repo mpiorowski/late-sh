@@ -3961,9 +3961,9 @@ async fn forced_tour_quit_confirm_shows_over_the_held_stations_modal() {
 }
 
 /// The `Board` route, the one every session walks: the gate swallows every
-/// key the route does not take, Enter walks the door to the chat stop, the
-/// practice table's break has to be played, and today's board has to be
-/// won, for real, before the last Enter lands the session in the chat.
+/// key the route does not take, Enter walks the door to the chat stop and
+/// on to today's board, which has to be won, for real, before the last
+/// Enter lands the session in the chat.
 #[tokio::test]
 async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     use crate::app::arcade::netwalk::state::{self as netwalk, LENT_DIFFICULTY, Turn};
@@ -3975,7 +3975,7 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "tour-board-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "tour-board-flow-it");
-    // Room for the practice table under its header.
+    // Room for the board under its header.
     app.resize(160, 50).unwrap();
     assert_eq!(TOUR_ROUTE, TourRoute::Board);
     assert_eq!(app.clubhouse.tour_route, TourRoute::Board);
@@ -3987,7 +3987,7 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("three stops, then the board is yours"),
+        frame.contains("the chat, then the board is yours"),
         "frame={frame:?}"
     );
 
@@ -4009,7 +4009,7 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     assert!(!app.show_help);
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
-    // Enter walks to Home for the chat stop, which leads to the table.
+    // Enter walks to Home for the chat stop, which leads to the board.
     app.handle_input(b"\r");
     assert_eq!(app.screen, Screen::Dashboard);
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
@@ -4017,42 +4017,17 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     assert!(!app.chat.composing);
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("[Enter] next: one shot of pool"),
-        "frame={frame:?}"
-    );
-
-    // Enter leads to the practice table, where the break has to be played.
-    app.handle_input(b"\r");
-    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
-    assert_eq!(app.screen, Screen::DailyMatch);
-    assert!(!app.stations_modal_state.is_open());
-    wait_for_esc_effect(
-        &mut app,
-        |app| {
-            app.daily
-                .board
-                .as_ref()
-                .is_some_and(|board| board.detail.is_some())
-        },
-        "practice table racked",
-    )
-    .await;
-    assert!(!app.daily.practice_played());
-    app.handle_input(b"\r");
-    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
-    wait_for_esc_effect(&mut app, |app| app.daily.practice_played(), "break struck").await;
-    let frame = render_plain(&mut app);
-    assert!(
         frame.contains("[Enter] next: today's board"),
         "frame={frame:?}"
     );
 
-    // Enter leaves the table behind and opens today's board on the Arcade:
-    // the Netwalk daily at its easiest, the real one, under the tour's
-    // header.
+    // Enter opens today's board on the Arcade: the Netwalk daily at its
+    // easiest, the real one, under the tour's header. No pool table on
+    // the way.
     app.handle_input(b"\r");
     assert_eq!(app.screen, Screen::Arcade);
     assert!(app.daily.board.is_none());
+    assert!(!app.stations_modal_state.is_open());
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
     assert!(app.is_playing_game);
     assert_eq!(app.game_selection, ArcadeGame::Puzzle(DailyPuzzle::Netwalk));
@@ -4170,9 +4145,6 @@ async fn forced_tour_board_route_ends_in_the_chat_off_a_won_board() {
     assert!(app.netwalk_state.is_solved());
 }
 
-/// On the `Board` route a terminal too small for the table or the board
-/// under its header has nothing to play: each stop says so and Enter walks
-/// on, with no break struck blind.
 /// `s` at the board asks first; Esc takes the question back, Enter on it
 /// leaves the board unsolved and goes on to the week.
 #[tokio::test]
@@ -4192,21 +4164,6 @@ async fn forced_tour_board_can_be_skipped_after_a_confirmation() {
         .enter_screen(crate::app::presence::svc::now_ms());
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
-    app.handle_input(b"\r");
-    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
-    wait_for_esc_effect(
-        &mut app,
-        |app| {
-            app.daily
-                .board
-                .as_ref()
-                .is_some_and(|board| board.detail.is_some())
-        },
-        "practice table racked",
-    )
-    .await;
-    app.handle_input(b"\r");
-    wait_for_esc_effect(&mut app, |app| app.daily.practice_played(), "break struck").await;
     app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
     assert!(app.is_playing_game);
@@ -4254,6 +4211,8 @@ async fn forced_tour_board_can_be_skipped_after_a_confirmation() {
     );
 }
 
+/// On the `Board` route a terminal too small for the board under its
+/// header has nothing to play: the stop says so and Enter walks on.
 #[tokio::test]
 async fn forced_tour_board_route_walks_past_what_a_small_terminal_cannot_show() {
     use crate::app::clubhouse::state::Tutorial;
@@ -4269,30 +4228,6 @@ async fn forced_tour_board_route_walks_past_what_a_small_terminal_cannot_show() 
     app.clubhouse
         .enter_screen(crate::app::presence::svc::now_ms());
     app.handle_input(b"\r\r");
-    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitTable);
-    assert_eq!(app.screen, Screen::DailyMatch);
-    wait_for_esc_effect(
-        &mut app,
-        |app| {
-            app.daily
-                .board
-                .as_ref()
-                .is_some_and(|board| board.detail.is_some())
-        },
-        "practice table racked",
-    )
-    .await;
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("this table needs a bigger window"),
-        "frame={frame:?}"
-    );
-    assert!(
-        frame.contains("[Enter] next: today's board"),
-        "frame={frame:?}"
-    );
-
-    app.handle_input(b"\r");
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitBoard);
     assert_eq!(app.screen, Screen::Arcade);
     assert!(app.daily.board.is_none());
@@ -8861,4 +8796,44 @@ async fn a_mention_answered_with_no_chat_tile_opens_in_history_and_clears() {
 
     app.handle_input(b"\x1b");
     wait_for_render_not_contains(&mut app, "mentioned you in #lounge").await;
+}
+
+/// `/` in the guide types a query (its `?` a letter, not the close key),
+/// Enter jumps to the topic holding it, and Esc takes the prompt down
+/// before it takes the guide.
+#[tokio::test]
+async fn the_guide_searches_every_topic() {
+    use crate::app::help_modal::data::HelpTopic;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "guide-search-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "guide-search-flow-it");
+    app.resize(120, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    app.handle_input(b"?");
+    assert!(app.show_help);
+    assert_eq!(app.help_modal_state.selected_topic(), HelpTopic::Pair);
+    let _ = render_plain(&mut app);
+
+    app.handle_input(b"/a?");
+    assert!(app.show_help, "? inside the prompt is part of the query");
+    assert_eq!(app.help_modal_state.query(), Some("a?"));
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.help_modal_state.query().is_none(),
+        "the guide's search prompt",
+    )
+    .await;
+    assert!(app.show_help, "Esc closes the prompt first");
+
+    app.handle_input(b"/ZELLIJ\r");
+    assert_eq!(app.help_modal_state.query(), None);
+    assert_ne!(app.help_modal_state.selected_topic(), HelpTopic::Pair);
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("zellij"), "the match is on screen: {frame}");
+
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.show_help, "the guide").await;
 }

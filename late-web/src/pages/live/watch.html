@@ -67,9 +67,11 @@
         // we fall back to muted and the button reads "unmute". The voices
         // toggle exists for the CLI viewer who already hears the room's
         // voices through the terminal and only wants the stream audio here:
-        // one audio path per sound.
+        // one audio path per sound. `?voices=off` is that viewer arriving
+        // from `/watch` while sitting in the room's voice channel: the
+        // server puts it on the URL, and the toggle still works.
         let audioOn = true;
-        let voicesOn = true;
+        let voicesOn = new URLSearchParams(location.search).get('voices') !== 'off';
         let volume = 1;
         let ended = false;
         let room = null;
@@ -273,6 +275,9 @@
             else if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); }
         });
 
+        // The button labels reflect the starting state before any track
+        // attaches (a `voices=off` arrival must not read "voices: on").
+        applyAudio();
         poll();
         heartbeat();
         setInterval(poll, 10000);

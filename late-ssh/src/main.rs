@@ -373,6 +373,7 @@ async fn main() -> anyhow::Result<()> {
     let herald_service = late_ssh::app::herald::svc::HeraldService::new(
         db.clone(),
         ai_service.clone(),
+        chat_service.clone(),
         config.herald.clone(),
         config.web_url.clone(),
     );

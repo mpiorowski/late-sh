@@ -297,8 +297,8 @@ fn tour_advance(app: &mut App) {
             app.set_screen(Screen::DailyMatch);
         }
         // Today's board, opened on the Arcade the way its lobby card opens
-        // it (the practice table left behind is dropped on the way): a real
-        // daily, a real win.
+        // it (any board left open is closed on the way): a real daily, a
+        // real win.
         TourMove::Board => {
             crate::app::lobby::daily::board_input::leave_board(app, Screen::Arcade);
             crate::app::arcade::input::open_lent_board(app);

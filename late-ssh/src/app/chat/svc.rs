@@ -133,6 +133,12 @@ impl ReportKind {
         }
     }
 
+    /// The body a report of `text` is posted as: what `send_report` sends,
+    /// and what the composer measures against the cap before it clears.
+    pub(crate) fn card_body(self, text: &str) -> String {
+        format!("{} {}", self.marker(), text)
+    }
+
     pub(crate) const fn command(self) -> &'static str {
         match self {
             Self::Bug => "/bug",
@@ -440,6 +446,10 @@ pub(crate) enum SendRefusal {
     LinkCooldown {
         remaining: Duration,
     },
+    /// A body past `chat_message::BODY_MAX_CHARS`, with its own count.
+    TooLong {
+        chars: usize,
+    },
 }
 
 /// Which slow mode is holding a send: the room's own, or the server-wide one.
@@ -479,6 +489,10 @@ impl SendRefusal {
             Self::LinkCooldown { remaining } => format!(
                 "🔗 New accounts can only post a link occasionally — next link in {}.",
                 format_cooldown(remaining.as_secs())
+            ),
+            Self::TooLong { chars } => format!(
+                "Message too long: {chars} characters, the limit is {}.",
+                late_core::models::chat_message::BODY_MAX_CHARS
             ),
         }
     }
@@ -776,6 +790,18 @@ const LINK_TLDS: &[&str] = &[
 /// roll happens once and never has to be reproducible after the fact; only
 /// [`slur::slur`] itself takes a caller-supplied seed, which is what keeps it
 /// testable.
+/// `body` as a patron at `level` gets it into the room: slurred, unless the
+/// slur grew it past the column cap (a thickened `s`, a `*hic*`). Text that
+/// fit as typed goes out as typed then, instead of failing at the insert
+/// after the composer cleared.
+fn drunk_body(body: &str, level: u8, seed: u64) -> String {
+    let slurred = slur::slur(body, level, seed);
+    match slurred.chars().count() > late_core::models::chat_message::BODY_MAX_CHARS {
+        true => body.to_string(),
+        false => slurred,
+    }
+}
+
 fn slur_seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3092,7 +3118,7 @@ impl ChatService {
             user_id,
             room_id: room.id,
             room_slug: Some(kind.slug().to_string()),
-            body: format!("{} {}", kind.marker(), text),
+            body: kind.card_body(&text),
             reply_to_message_id: None,
             reply_to_user_id: None,
             is_admin: false,
@@ -3604,6 +3630,10 @@ impl ChatService {
         if body.is_empty() {
             return Ok(None);
         }
+        let chars = body.chars().count();
+        if chars > late_core::models::chat_message::BODY_MAX_CHARS {
+            return Err(SendError::Refused(SendRefusal::TooLong { chars }));
+        }
 
         if room_slug.as_deref() == Some("announcements") && !is_admin {
             return Err(SendError::Refused(SendRefusal::AnnouncementsAdminOnly));
@@ -3804,7 +3834,7 @@ impl ChatService {
         // Rolled once, here, and stored: the level at the moment of typing is
         // the only one that ever made sense, and it must not re-roll or sober
         // up under a reader later.
-        Ok(slur::slur(body, level, slur_seed()))
+        Ok(drunk_body(body, level, slur_seed()))
     }
 
     pub fn edit_message_task(

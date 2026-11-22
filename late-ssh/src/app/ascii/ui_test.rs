@@ -316,7 +316,7 @@ fn every_piece_a_random_draw_can_land_on_costs_a_few_kilobytes_a_second() {
 /// are the contracts); run it
 /// when porting a piece or retuning a cadence and put the numbers in
 /// `CONTEXT.md`, Cost:
-/// `make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"`.
+/// `make test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"`.
 #[test]
 #[ignore]
 fn the_cost_report() {

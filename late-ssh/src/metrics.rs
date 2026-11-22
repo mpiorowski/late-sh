@@ -192,6 +192,14 @@ pub enum HeraldProjectResult {
     Failed,
 }
 
+/// What the herald's #lounge line for a posted project came to, once per
+/// project post. `Failed` is lost: the post is settled and never retried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldLoungeResult {
+    Posted,
+    Failed,
+}
+
 /// How one roll call (`app/audio`, every `ROLL_CALL_INTERVAL` on every
 /// replica) went: `Called` wrote this replica's online radio and YouTube
 /// listeners down for the day, `Failed` stopped at the first listener it
@@ -844,14 +852,14 @@ mod inner {
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
         DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
-        HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, PayoutTimersRead,
-        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
-        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldLoungeResult,
+        HeraldPostResult, HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
+        PayoutTimersRead, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
+        RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
         SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
@@ -1223,6 +1231,7 @@ mod inner {
             SendRefusal::ReportOnly(_) => "report_only",
             SendRefusal::SlowMode { .. } => "slow_mode",
             SendRefusal::LinkCooldown { .. } => "link_cooldown",
+            SendRefusal::TooLong { .. } => "too_long",
         }
     }
 
@@ -3465,10 +3474,11 @@ mod inner {
         news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
     }
 
-    fn video_watch_source_label(source: WatchSource) -> &'static str {
+    fn video_watch_source_label(source: &WatchSource) -> &'static str {
         match source {
             WatchSource::NewsArticle(_) => "news",
             WatchSource::ChatLink => "chat",
+            WatchSource::LiveStream(_) => "stream",
         }
     }
 
@@ -3485,8 +3495,9 @@ mod inner {
 
     /// Setup against opened is how many people want to watch and cannot;
     /// a run of failed or lost is a CLI or mpv regression. `source` is the
-    /// surface that asked: a News story or a YouTube link in chat.
-    pub(crate) fn record_video_watch(source: WatchSource, outcome: WatchOutcome) {
+    /// surface that asked: a News story, a YouTube link in chat, or a live
+    /// stream's room.
+    pub(crate) fn record_video_watch(source: &WatchSource, outcome: WatchOutcome) {
         video_watches_total().add(
             1,
             &[
@@ -4097,6 +4108,30 @@ mod inner {
         );
     }
 
+    fn herald_lounge_result_label(result: HeraldLoungeResult) -> &'static str {
+        match result {
+            HeraldLoungeResult::Posted => "posted",
+            HeraldLoungeResult::Failed => "failed",
+        }
+    }
+
+    fn herald_lounge_lines_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_lounge_lines_total")
+                .with_description("The herald's #lounge line for a posted project, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_lounge(result: HeraldLoungeResult) {
+        herald_lounge_lines_total().add(
+            1,
+            &[KeyValue::new("result", herald_lounge_result_label(result))],
+        );
+    }
+
     fn jobs_fetch_result_label(result: JobsFetchResult) -> &'static str {
         match result {
             JobsFetchResult::Fetched => "fetched",
@@ -4688,14 +4723,14 @@ mod inner {
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
         DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
-        HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, PayoutTimersRead,
-        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
-        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        GildTier, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldLoungeResult,
+        HeraldPostResult, HeraldProjectResult, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
+        PayoutTimersRead, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
+        RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
         SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
@@ -4821,7 +4856,7 @@ mod inner {
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
-    pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
+    pub(crate) fn record_video_watch(_source: &WatchSource, _outcome: WatchOutcome) {}
     pub fn record_pulse_sample(_outcome: PulseSampleOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
@@ -4877,6 +4912,7 @@ mod inner {
     pub fn record_herald_look(_result: HeraldLookResult) {}
     pub fn record_herald_brief(_result: HeraldBriefResult) {}
     pub fn record_herald_project(_result: HeraldProjectResult) {}
+    pub fn record_herald_lounge(_result: HeraldLoungeResult) {}
     pub fn record_jobs_fetch(
         _source: late_core::models::job_posting::JobSource,
         _result: JobsFetchResult,

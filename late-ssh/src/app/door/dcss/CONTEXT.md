@@ -102,7 +102,7 @@ Most of the NetHack door's invariants (§7 of its CONTEXT) apply verbatim — au
 
 ## 5. Tests And Verification [STABLE]
 
-Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-dcss -p late-ssh -E 'package(late-dcss) or test(dcss)'"`.
+Agents run the focused tests with `make test ARGS="-p late-dcss -p late-ssh -E 'package(late-dcss) or test(dcss)'"`.
 
 Inline pure tests cover: `late-core` `models::arcade_handle` (shape + reserved rules), client+host `identity.rs` (derivation determinism + distinctness + the cross-crate known-answer fingerprint pinning `late.sh/dcss/v1`, mirroring nethack's), client `state.rs` (disabled connect no-op, forward without proxy no-op, mouse/paste stripping, cursor keys following the game in and out of application cursor mode, F1 both encodings, exit grace, claim-prompt byte handling/caps/validation errors), shared `door/keys.rs` (the CSI→SS3 rewrite and everything it must leave alone: plain keys, Page Up/Down, modified arrows, already-SS3 input, a sequence cut by the chunk boundary), host `playname.rs` (sanitize), host `morgue.rs` (owner parsing for both on-disk shapes and the names it must refuse, the flat carry-over, its idempotent second run, and never clobbering a dump crawl wrote in place), host `server.rs` (`effective_term` fallback), host `stats.rs` (cursor parsing, line framing), hub `state.rs` (card order incl. DCSS).
 

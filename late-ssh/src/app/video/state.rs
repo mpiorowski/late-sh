@@ -1,10 +1,11 @@
 //! The watch modal: a YouTube video (a News story, or a link in a chat
-//! message) played inside the user's own terminal by their paired CLI's
-//! `mpv`, or, when their setup cannot, the setup box naming what is
-//! missing. Pure state: the player holds the play as the CLI last reported
-//! it and the rectangle its last draw reserved; `sync` turns that into the
-//! pair messages the CLI needs, and `svc.rs` sends them. Not a frame of
-//! video passes through the server.
+//! message) or a live stream (inline in its room's pane) played inside the
+//! user's own terminal by their paired CLI's `mpv`, or, when their setup
+//! cannot play a video, the setup box naming what is missing. Pure state:
+//! the player holds the play as the CLI last reported it and the rectangle
+//! its last draw reserved; `sync` turns that into the pair messages the CLI
+//! needs, and `svc.rs` sends them. Not a frame of video passes through the
+//! server.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -71,15 +72,154 @@ pub(crate) struct State {
     /// Where each chat link was left partway through, by URL. Kept for the
     /// session only: a chat link has no row to store it on.
     link_positions: HashMap<String, WatchPosition>,
+    /// The session's `/watch` switch: whether a live stream room plays its
+    /// stream by itself.
+    streams: StreamSwitch,
+    /// The room whose stream did not start by itself (not live any more, no
+    /// ticket), so it is not asked again every tick. Forgotten once another
+    /// room, or none, is on screen.
+    auto_declined: Option<Uuid>,
+}
+
+/// How a stream playing inline shares its room's pane with the messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StreamPane {
+    /// The picture on top, the room's messages under it.
+    WithChat,
+    /// The picture takes the messages' rows too: the chat is hidden until
+    /// F4 brings it back.
+    Alone,
+}
+
+/// What a bare `/watch` would do for this session right now, for the
+/// stream row's hint (`svc::switch_hint`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchHint {
+    /// A stream is playing here, seen or only heard: `/watch` stops it.
+    Stop,
+    /// Nothing is playing and this session can play one: `/watch` does.
+    Play,
+    /// This session cannot play streams in the terminal: the watch URL is
+    /// its way in, and the row says nothing about `/watch`.
+    Unavailable,
+}
+
+/// The session's `/watch` switch. On until the user turns it off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StreamSwitch {
+    #[default]
+    On,
+    Off,
 }
 
 impl State {
+    /// The modal over the page, the one that takes every key and click. A
+    /// live stream sitting inline in its room's pane is not one.
     pub(crate) fn modal(&self) -> Option<&WatchModal> {
-        self.modal.as_ref()
+        match self.inline_slot() {
+            Some(_) => None,
+            None => self.modal.as_ref(),
+        }
     }
 
+    /// Whether anything is up: the modal, or a stream playing inline.
     pub(crate) fn is_open(&self) -> bool {
         self.modal.is_some()
+    }
+
+    /// Whether the video has the screen: the modal, or an inline stream the
+    /// last frame drew. A stream only heard (its room off screen) does not.
+    pub(crate) fn on_screen(&self) -> bool {
+        match self.inline_slot() {
+            Some(slot) => slot.player.inline_placed.get(),
+            None => self.modal.is_some(),
+        }
+    }
+
+    /// The inline stream's seat, for the pane of the room it belongs to: a
+    /// live stream at its small size.
+    pub(crate) fn inline_slot(&self) -> Option<InlineSlot<'_>> {
+        match &self.modal {
+            Some(WatchModal::Player(player)) => match (&player.source, player.size) {
+                (WatchSource::LiveStream(ticket), WatchSize::Small) => Some(InlineSlot {
+                    player,
+                    room_id: ticket.room_id,
+                }),
+                (WatchSource::LiveStream(_), WatchSize::Full)
+                | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => None,
+            },
+            Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// F4: the messages under a stream drawn inline go, or come back
+    /// (`Player::toggle_stream_pane`). With no player the key is not ours.
+    pub(crate) fn toggle_stream_pane(&mut self) {
+        if let Some(player) = self.player_mut() {
+            player.toggle_stream_pane();
+        }
+    }
+
+    pub(crate) fn set_streams(&mut self, streams: StreamSwitch) {
+        self.streams = streams;
+    }
+
+    /// Whether `room_id`'s stream may start by itself now. Remembers the
+    /// room on screen: a refusal lasts while that room stays there.
+    pub(crate) fn may_auto_start(&mut self, room_id: Option<Uuid>) -> Option<Uuid> {
+        if self.auto_declined != room_id {
+            self.auto_declined = None;
+        }
+        match (self.streams, room_id) {
+            (StreamSwitch::On, Some(room_id)) if self.auto_declined.is_none() => Some(room_id),
+            (StreamSwitch::On, Some(_) | None) | (StreamSwitch::Off, _) => None,
+        }
+    }
+
+    /// `room_id`'s stream would not start by itself: leave it be until the
+    /// room is entered again.
+    pub(crate) fn decline_auto(&mut self, room_id: Uuid) {
+        self.auto_declined = Some(room_id);
+    }
+
+    /// The room whose stream is playing here, seen or only heard.
+    pub(crate) fn playing_stream_room(&self) -> Option<Uuid> {
+        match &self.modal {
+            Some(WatchModal::Player(player)) if player.status.is_live() => match &player.source {
+                WatchSource::LiveStream(ticket) => Some(ticket.room_id),
+                WatchSource::NewsArticle(_) | WatchSource::ChatLink => None,
+            },
+            Some(WatchModal::Player(_) | WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// The room whose stream is open here, inline or full screen.
+    pub(crate) fn stream_room(&self) -> Option<Uuid> {
+        match &self.modal {
+            Some(WatchModal::Player(player)) => match &player.source {
+                WatchSource::LiveStream(ticket) => Some(ticket.room_id),
+                WatchSource::NewsArticle(_) | WatchSource::ChatLink => None,
+            },
+            Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// The start of a frame: an inline stream forgets where it was drawn,
+    /// so a frame that does not draw its room leaves it nowhere, and its
+    /// picture is hidden (`Seat::Hidden`) while the stream plays on.
+    pub(crate) fn begin_frame(&self) {
+        if let Some(slot) = self.inline_slot() {
+            slot.player.drawn.set(WatchLayout::default());
+            slot.player.inline_placed.set(false);
+        }
+    }
+
+    /// An inline stream that is over (failed, lost, ended) and that the
+    /// last frame did not draw: nothing plays and nobody is looking at why,
+    /// so it goes. One that is playing stays, heard and not seen.
+    pub(crate) fn unseen_dead_stream(&self) -> bool {
+        self.inline_slot()
+            .is_some_and(|slot| !slot.player.inline_placed.get() && !slot.player.status.is_live())
     }
 
     pub(crate) fn player_mut(&mut self) -> Option<&mut Player> {
@@ -116,8 +256,8 @@ impl State {
     pub(crate) fn close(&mut self) -> Option<ClosedPlayer> {
         match self.modal.take() {
             Some(WatchModal::Player(player)) => Some(ClosedPlayer {
-                source: player.source,
                 memory: player.memory(),
+                source: player.source,
                 url: player.url,
             }),
             Some(WatchModal::Setup(_)) | None => None,
@@ -155,7 +295,7 @@ impl State {
 }
 
 /// Who asked for a video, and so who keeps its position between watches.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WatchSource {
     /// A News story: the position lives on the reader's `article_reads` row
     /// (`news::State::watch_position`).
@@ -163,13 +303,95 @@ pub(crate) enum WatchSource {
     /// A YouTube link in a chat message: the position lives on this
     /// session's `State` and goes with it.
     ChatLink,
+    /// A live stream, playing in its room. Nothing to pause,
+    /// seek or resume; the CLI receives it itself with this ticket instead
+    /// of handing mpv a URL.
+    LiveStream(LiveTicket),
+}
+
+/// A live stream's seat in its room's pane, handed to the chat UI for one
+/// frame: the pane reserves the rows, paints them black and reports the
+/// rectangle back, which is what the CLI is then told to draw in.
+#[derive(Clone, Copy)]
+pub struct InlineSlot<'a> {
+    player: &'a Player,
+    room_id: Uuid,
+}
+
+impl InlineSlot<'_> {
+    pub(crate) fn room_id(&self) -> Uuid {
+        self.room_id
+    }
+
+    /// Whether the picture shares the pane with the messages (F4).
+    pub(crate) fn pane(&self) -> StreamPane {
+        self.player.stream_pane
+    }
+
+    /// The pane drew the stream's rectangle at `body` this frame. An empty
+    /// one (a pane too small to hold a picture) still counts as drawn.
+    pub(crate) fn place(&self, body: Rect) {
+        self.player.inline_placed.set(true);
+        self.player.drawn.set(WatchLayout {
+            body,
+            ..WatchLayout::default()
+        });
+    }
+
+    /// Where the pane last drew the stream, for the click that takes it
+    /// full screen.
+    pub(crate) fn body(&self) -> Rect {
+        self.player.drawn.get().body
+    }
+
+    /// The line the rectangle shows while there is no picture in it.
+    pub(crate) fn caption(&self) -> Option<String> {
+        match self.player.status {
+            WatchStatus::Starting => Some("connecting…".to_string()),
+            WatchStatus::Playing(_) | WatchStatus::Paused(_) => None,
+            WatchStatus::Ended | WatchStatus::Failed | WatchStatus::Lost => {
+                self.player.fallback_line()
+            }
+        }
+    }
+}
+
+/// What the paired CLI needs to watch a live stream: a subscribe-only
+/// LiveKit ticket for the stream's room, the one the web watch page gets.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LiveTicket {
+    /// The stream's chat room, whose pane the stream plays in.
+    pub room_id: Uuid,
+    /// The stream and this viewer in the stream registry: the heartbeat
+    /// that keeps the viewer in the watcher count and notices the stream
+    /// ending (`svc::tick`).
+    pub stream_id: String,
+    pub watcher_id: String,
+    pub livekit_url: String,
+    pub token: String,
+    /// Whether the CLI plays the room's voices too. False when the viewer
+    /// sits in the stream's voice channel and already hears them there.
+    pub voices: bool,
+}
+
+impl std::fmt::Debug for LiveTicket {
+    /// The token is a credential: it never reaches a log, and every watch
+    /// line carries its source.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveTicket")
+            .field("stream_id", &self.stream_id)
+            .field("voices", &self.voices)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Everything the player needs to open on a video.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WatchRequest {
     pub source: WatchSource,
-    /// What mpv is handed.
+    /// The video's web address: what mpv is handed for a video, and for a
+    /// live stream its watch page. `c` copies it and a failed play offers
+    /// it.
     pub url: String,
     pub title: String,
     /// Who shared it, for the header.
@@ -194,8 +416,11 @@ pub(crate) enum WatchModal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WatchSize {
-    /// A centered box over the page, the TUI visible around it.
-    Window,
+    /// Where a player opens. A video's is the window, a centered box over
+    /// the page with the TUI visible around it. A live stream's is its
+    /// room's pane (`InlineSlot`), since the room's chat is half of
+    /// watching one; it never has the window.
+    Small,
     /// The whole terminal but the footer row.
     Full,
 }
@@ -250,21 +475,41 @@ pub(crate) struct WatchLayout {
     pub close: Rect,
 }
 
-/// A play the CLI was told about, and the rectangle it was last given.
+/// Where a play's picture is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Seat {
+    /// Drawn in this rectangle.
+    At(Rect),
+    /// Nowhere: a live stream playing on, heard and not seen, while its
+    /// room's pane is off screen or under a modal. A video is never
+    /// hidden; with nowhere to draw it does not play at all.
+    Hidden,
+}
+
+/// A play the CLI was told about, and where it was last told to draw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LivePlay {
     pub play_id: u64,
-    pub rect: Rect,
+    pub seat: Seat,
 }
 
 /// What the open player wants the CLI to be doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WantedPlay<'a> {
     pub play_id: u64,
-    pub url: &'a str,
-    pub rect: Rect,
-    /// Where to begin: zero, or the saved position less the rewind.
-    pub start_s: u64,
+    pub media: WantedMedia<'a>,
+    pub seat: Seat,
+}
+
+/// What the CLI is told to play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WantedMedia<'a> {
+    Url {
+        url: &'a str,
+        /// Where to begin: zero, or the saved position less the rewind.
+        start_s: u64,
+    },
+    Stream(&'a LiveTicket),
 }
 
 /// What the player leaves behind for the next watch of its video, decided
@@ -289,6 +534,9 @@ pub(crate) struct Player {
     author: String,
     shared_at: DateTime<Utc>,
     size: WatchSize,
+    /// F4's choice for a stream playing inline: whether its room's messages
+    /// keep their rows under the picture. Every play opens with the chat.
+    stream_pane: StreamPane,
     play_id: u64,
     status: WatchStatus,
     /// Whether `Played` was already reported for this play.
@@ -310,6 +558,8 @@ pub(crate) struct Player {
     /// The layout the last draw produced: the `[x]` hit target and the
     /// rectangle `wanted` offers the CLI.
     drawn: Cell<WatchLayout>,
+    /// Whether the room's pane drew the inline rectangle this frame.
+    inline_placed: Cell<bool>,
 }
 
 impl Player {
@@ -322,12 +572,14 @@ impl Player {
         resume_from: Option<WatchPosition>,
     ) -> Self {
         Self {
+            inline_placed: Cell::new(false),
             source: request.source,
             url: request.url,
             title: request.title,
             author: request.author,
             shared_at: request.shared_at,
-            size: WatchSize::Window,
+            size: WatchSize::Small,
+            stream_pane: StreamPane::WithChat,
             play_id,
             status: WatchStatus::Starting,
             played: false,
@@ -341,8 +593,8 @@ impl Player {
         }
     }
 
-    pub(crate) fn source(&self) -> WatchSource {
-        self.source
+    pub(crate) fn source(&self) -> &WatchSource {
+        &self.source
     }
 
     /// Where the CLI is told to begin: the saved position less the rewind,
@@ -383,13 +635,65 @@ impl Player {
         self.status
     }
 
-    /// `f`: Window and Full. The next draw's body differs, and `sync`
-    /// turns that into a `video_place`.
+    /// `f`: small and full, so the window and full screen for a video, its
+    /// room and full screen for a live stream. The next draw's body
+    /// differs, and `sync` turns that into a `video_place`.
     pub(crate) fn toggle_size(&mut self) {
         self.size = match self.size {
-            WatchSize::Window => WatchSize::Full,
-            WatchSize::Full => WatchSize::Window,
+            WatchSize::Small => WatchSize::Full,
+            WatchSize::Full => WatchSize::Small,
         };
+    }
+
+    /// F4 on a stream its room's pane drew last frame: the messages under
+    /// the picture go, or come back. Anywhere else (a video, full screen,
+    /// the room off screen) nothing changes.
+    fn toggle_stream_pane(&mut self) {
+        match (&self.source, self.size, self.inline_placed.get()) {
+            (WatchSource::LiveStream(_), WatchSize::Small, true) => {
+                self.stream_pane = match self.stream_pane {
+                    StreamPane::WithChat => StreamPane::Alone,
+                    StreamPane::Alone => StreamPane::WithChat,
+                };
+            }
+            (WatchSource::LiveStream(_), WatchSize::Small, false)
+            | (WatchSource::LiveStream(_), WatchSize::Full, _)
+            | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _, _) => {}
+        }
+    }
+
+    /// Esc on a full-screen live stream goes back to its room instead of
+    /// ending the watch. True when it did.
+    pub(crate) fn back_inline(&mut self) -> bool {
+        match (&self.source, self.size) {
+            (WatchSource::LiveStream(_), WatchSize::Full) => {
+                self.size = WatchSize::Small;
+                true
+            }
+            (WatchSource::LiveStream(_), WatchSize::Small)
+            | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => false,
+        }
+    }
+
+    /// Whether the CLI plays the room's voices, as the viewer's voice
+    /// channel decides it now (`LiveTicket::voices`): they joined or left
+    /// the stream's channel while it plays. The message for a play that is
+    /// up; one the CLI was not told about yet carries the flag itself.
+    pub(crate) fn set_voices(&mut self, voices: bool) -> Option<PairControlMessage> {
+        match &mut self.source {
+            WatchSource::NewsArticle(_) | WatchSource::ChatLink => None,
+            WatchSource::LiveStream(ticket) => {
+                let changed = ticket.voices != voices;
+                ticket.voices = voices;
+                match changed && self.status.is_live() {
+                    true => Some(PairControlMessage::VideoVoices {
+                        play_id: self.play_id,
+                        voices,
+                    }),
+                    false => None,
+                }
+            }
+        }
     }
 
     pub(crate) fn drawn(&self) -> WatchLayout {
@@ -405,7 +709,7 @@ impl Player {
     /// to hold one has an empty body and nothing plays.
     pub(crate) fn layout(size: WatchSize, area: Rect) -> WatchLayout {
         match size {
-            WatchSize::Window => {
+            WatchSize::Small => {
                 let width = permille(area.width, WINDOW_WIDTH_PERMILLE).min(WINDOW_MAX_WIDTH);
                 let height = permille(area.height, WINDOW_HEIGHT_PERMILLE);
                 let popup = centered_rect(width, height, area);
@@ -454,20 +758,47 @@ impl Player {
     /// body, while mpv is up and there is a body to hold it.
     pub(crate) fn wanted(&self) -> Option<WantedPlay<'_>> {
         let body = self.drawn.get().body;
-        match (self.status.is_live(), body.is_empty()) {
-            (true, false) => Some(WantedPlay {
-                play_id: self.play_id,
-                url: &self.url,
-                rect: body,
-                start_s: self.start_s(),
-            }),
-            (true, true) | (false, _) => None,
+        if !self.status.is_live() {
+            return None;
         }
+        let (media, seat) = match (&self.source, body.is_empty()) {
+            (WatchSource::NewsArticle(_) | WatchSource::ChatLink, true) => return None,
+            (WatchSource::NewsArticle(_) | WatchSource::ChatLink, false) => (
+                WantedMedia::Url {
+                    url: &self.url,
+                    start_s: self.start_s(),
+                },
+                Seat::At(body),
+            ),
+            (WatchSource::LiveStream(ticket), true) => (WantedMedia::Stream(ticket), Seat::Hidden),
+            (WatchSource::LiveStream(ticket), false) => {
+                (WantedMedia::Stream(ticket), Seat::At(body))
+            }
+        };
+        Some(WantedPlay {
+            play_id: self.play_id,
+            media,
+            seat,
+        })
     }
 
-    /// The control message for a key, while mpv is up.
+    /// The control message for a key, while mpv is up. A live stream has
+    /// nothing to pause or seek: only its mute goes out.
     pub(crate) fn control(&self, control: VideoControl) -> Option<PairControlMessage> {
-        match self.status.is_live() {
+        let applies = match (&self.source, control) {
+            (WatchSource::NewsArticle(_) | WatchSource::ChatLink, _) => true,
+            (WatchSource::LiveStream(_), VideoControl::ToggleMute) => true,
+            (
+                WatchSource::LiveStream(_),
+                VideoControl::TogglePause
+                | VideoControl::SeekBack
+                | VideoControl::SeekForward
+                | VideoControl::SeekBackFar
+                | VideoControl::SeekForwardFar
+                | VideoControl::Restart,
+            ) => false,
+        };
+        match self.status.is_live() && applies {
             true => Some(PairControlMessage::VideoControl {
                 play_id: self.play_id,
                 control,
@@ -553,6 +884,18 @@ impl Player {
         }
     }
 
+    /// The stream this player shows is over (the registry no longer has
+    /// it): the play ends here, without waiting for the CLI to notice.
+    pub(crate) fn end(&mut self) -> Option<WatchOutcome> {
+        match self.status.is_live() {
+            true => {
+                self.status = WatchStatus::Ended;
+                Some(WatchOutcome::Ended)
+            }
+            false => None,
+        }
+    }
+
     /// A send that reached no paired CLI: the play is lost at once.
     pub(crate) fn lose(&mut self) -> Option<WatchOutcome> {
         match self.status.is_live() {
@@ -595,6 +938,11 @@ impl Player {
     /// nothing when no position ever came in or a play with nothing stored
     /// stopped at once.
     pub(crate) fn memory(&self) -> WatchMemory {
+        match self.source {
+            WatchSource::NewsArticle(_) | WatchSource::ChatLink => {}
+            // Live: there is no position to come back to.
+            WatchSource::LiveStream(_) => return WatchMemory::Nothing,
+        }
         if self.status == WatchStatus::Ended {
             return WatchMemory::Clear;
         }
@@ -624,6 +972,19 @@ impl Player {
             Some(until) => until > now,
             None => false,
         };
+        match &self.source {
+            WatchSource::NewsArticle(_) | WatchSource::ChatLink => {}
+            WatchSource::LiveStream(_) => {
+                return match self.status {
+                    WatchStatus::Starting => "connecting…".to_string(),
+                    // The CLI's position counts frames, not time: not shown.
+                    WatchStatus::Playing(_) | WatchStatus::Paused(_) => "● live".to_string(),
+                    WatchStatus::Ended => "stream ended".to_string(),
+                    WatchStatus::Failed => "couldn't play".to_string(),
+                    WatchStatus::Lost => "lost the CLI".to_string(),
+                };
+            }
+        }
         match self.status {
             WatchStatus::Starting => match self.resume_from {
                 Some(position) => format!("resuming from {}…", clock(position.position_s)),
@@ -642,34 +1003,39 @@ impl Player {
 
     /// The body's one line when there is nothing to watch here any more.
     pub(crate) fn fallback_line(&self) -> Option<String> {
-        match self.status {
-            WatchStatus::Failed | WatchStatus::Lost => {
+        match (&self.source, self.status) {
+            (_, WatchStatus::Failed | WatchStatus::Lost) => {
                 Some(format!("Watch on the web: {}", self.url))
             }
-            WatchStatus::Starting
-            | WatchStatus::Playing(_)
-            | WatchStatus::Paused(_)
-            | WatchStatus::Ended => None,
+            (WatchSource::LiveStream(_), WatchStatus::Ended) => {
+                Some("The stream ended.".to_string())
+            }
+            (WatchSource::NewsArticle(_) | WatchSource::ChatLink, WatchStatus::Ended)
+            | (_, WatchStatus::Starting | WatchStatus::Playing(_) | WatchStatus::Paused(_)) => None,
         }
     }
 
     /// `key hint` pairs in the order they drop off when the width runs
     /// short: the last one goes first. `Esc` is drawn after them.
     pub(crate) fn footer_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("Space", "pause"),
-            ("←/→", "seek 10s"),
-            ("⇧←/→", "60s"),
-            ("0", "restart"),
-            ("m", "mute"),
-            (
-                "f",
-                match self.size {
-                    WatchSize::Window => "full",
-                    WatchSize::Full => "window",
-                },
-            ),
-        ]
+        let size = (
+            "f",
+            match self.size {
+                WatchSize::Small => "full",
+                WatchSize::Full => "window",
+            },
+        );
+        match self.source {
+            WatchSource::NewsArticle(_) | WatchSource::ChatLink => vec![
+                ("Space", "pause"),
+                ("←/→", "seek 10s"),
+                ("⇧←/→", "60s"),
+                ("0", "restart"),
+                ("m", "mute"),
+                size,
+            ],
+            WatchSource::LiveStream(_) => vec![("m", "mute"), ("f", "back to chat")],
+        }
     }
 }
 
@@ -682,63 +1048,77 @@ pub(crate) fn sync(
     live: &mut Option<LivePlay>,
     wanted: Option<WantedPlay<'_>>,
 ) -> Vec<PairControlMessage> {
-    match (*live, wanted) {
-        (None, None) => Vec::new(),
-        (None, Some(wanted)) => {
-            *live = Some(LivePlay {
-                play_id: wanted.play_id,
-                rect: wanted.rect,
-            });
-            vec![play_message(wanted)]
-        }
-        (Some(current), None) => {
-            *live = None;
-            vec![PairControlMessage::VideoStop {
+    let Some(wanted) = wanted else {
+        return match live.take() {
+            Some(current) => vec![PairControlMessage::VideoStop {
                 play_id: current.play_id,
-            }]
+            }],
+            None => Vec::new(),
+        };
+    };
+    // The play the CLI already has, when it is the wanted one.
+    let (stop, seated) = match *live {
+        Some(current) if current.play_id == wanted.play_id => (None, Some(current.seat)),
+        Some(current) => (
+            Some(PairControlMessage::VideoStop {
+                play_id: current.play_id,
+            }),
+            None,
+        ),
+        None => (None, None),
+    };
+    let message = match (seated, wanted.seat) {
+        // A play starts where it can be drawn: a stream wanted before its
+        // room is on screen waits for the pane.
+        (None, Seat::Hidden) => {
+            *live = None;
+            return stop.into_iter().collect();
         }
-        (Some(current), Some(wanted)) if current.play_id == wanted.play_id => {
-            match current.rect == wanted.rect {
-                true => Vec::new(),
-                false => {
-                    *live = Some(LivePlay {
-                        play_id: wanted.play_id,
-                        rect: wanted.rect,
-                    });
-                    vec![PairControlMessage::VideoPlace {
-                        play_id: wanted.play_id,
-                        left: wanted.rect.x,
-                        top: wanted.rect.y,
-                        cols: wanted.rect.width,
-                        rows: wanted.rect.height,
-                    }]
-                }
-            }
-        }
-        (Some(current), Some(wanted)) => {
-            *live = Some(LivePlay {
+        (None, Seat::At(rect)) => Some(play_message(wanted, rect)),
+        (Some(Seat::Hidden), Seat::Hidden) => None,
+        (Some(Seat::At(old)), Seat::At(rect)) if old == rect => None,
+        // Out of hiding is a move like any other: the CLI draws again.
+        (Some(Seat::At(_) | Seat::Hidden), Seat::At(rect)) => {
+            Some(PairControlMessage::VideoPlace {
                 play_id: wanted.play_id,
-                rect: wanted.rect,
-            });
-            vec![
-                PairControlMessage::VideoStop {
-                    play_id: current.play_id,
-                },
-                play_message(wanted),
-            ]
+                left: rect.x,
+                top: rect.y,
+                cols: rect.width,
+                rows: rect.height,
+            })
         }
-    }
+        (Some(Seat::At(_)), Seat::Hidden) => Some(PairControlMessage::VideoHide {
+            play_id: wanted.play_id,
+        }),
+    };
+    *live = Some(LivePlay {
+        play_id: wanted.play_id,
+        seat: wanted.seat,
+    });
+    stop.into_iter().chain(message).collect()
 }
 
-fn play_message(wanted: WantedPlay<'_>) -> PairControlMessage {
-    PairControlMessage::VideoPlay {
-        play_id: wanted.play_id,
-        url: wanted.url.to_string(),
-        left: wanted.rect.x,
-        top: wanted.rect.y,
-        cols: wanted.rect.width,
-        rows: wanted.rect.height,
-        start_s: wanted.start_s,
+fn play_message(wanted: WantedPlay<'_>, rect: Rect) -> PairControlMessage {
+    match wanted.media {
+        WantedMedia::Url { url, start_s } => PairControlMessage::VideoPlay {
+            play_id: wanted.play_id,
+            url: url.to_string(),
+            left: rect.x,
+            top: rect.y,
+            cols: rect.width,
+            rows: rect.height,
+            start_s,
+        },
+        WantedMedia::Stream(ticket) => PairControlMessage::VideoPlayStream {
+            play_id: wanted.play_id,
+            livekit_url: ticket.livekit_url.clone(),
+            token: ticket.token.clone(),
+            voices: ticket.voices,
+            left: rect.x,
+            top: rect.y,
+            cols: rect.width,
+            rows: rect.height,
+        },
     }
 }
 

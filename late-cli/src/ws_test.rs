@@ -418,3 +418,51 @@ fn video_controls_deserialize_from_wire_names() {
         .unwrap();
     assert!(matches!(stop, PairControlMessage::VideoStop { play_id: 7 }));
 }
+
+/// Hiding a stream's picture is its own message: the stream plays on.
+#[test]
+fn video_hide_deserializes_from_its_wire_name() {
+    let msg = serde_json::from_str::<PairControlMessage>(r#"{"event":"video_hide","play_id":4}"#)
+        .unwrap();
+    assert!(matches!(msg, PairControlMessage::VideoHide { play_id: 4 }));
+}
+
+/// The room's voices come and go on a playing stream as the viewer leaves
+/// and joins its voice channel.
+#[test]
+fn video_voices_deserializes_from_its_wire_name() {
+    let msg = serde_json::from_str::<PairControlMessage>(
+        r#"{"event":"video_voices","play_id":4,"voices":true}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        msg,
+        PairControlMessage::VideoVoices {
+            play_id: 4,
+            voices: true
+        }
+    ));
+}
+
+/// A stream play carries a ticket, not a URL, and shares the play's later
+/// controls with a video.
+#[test]
+fn video_play_stream_deserializes_from_its_wire_name() {
+    let msg = serde_json::from_str::<PairControlMessage>(
+        r#"{"event":"video_play_stream","play_id":4,"livekit_url":"wss://rtc.late.sh","token":"jwt","voices":false,"left":10,"top":3,"cols":100,"rows":28}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        msg,
+        PairControlMessage::VideoPlayStream {
+            play_id: 4,
+            ref livekit_url,
+            ref token,
+            voices: false,
+            left: 10,
+            top: 3,
+            cols: 100,
+            rows: 28,
+        } if livekit_url == "wss://rtc.late.sh" && token == "jwt"
+    ));
+}

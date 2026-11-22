@@ -187,7 +187,7 @@ today, a crowded day), a few "I'm in"s and a private event for `cal_user`.
 Connect with `ssh -o IdentitiesOnly=yes -i tmp/calendar-seed-keys/cal_user -p
 2222 localhost`; `1` shows the banner, `7` the board. Rerun to reset the fixture's deterministic events.
 
-`make test-llm ARGS="-p late-core -p late-ssh --lib -E 'test(calendar)'"`. Model
+`make test ARGS="-p late-core -p late-ssh --lib -E 'test(calendar)'"`. Model
 rules and the claim in `late-core/src/models/calendar_test.rs`; the lines,
 refusals and the listener in `svc_test.rs`; the mirror in `state_test.rs`;
 selection and menus in `navigation_test.rs`; keys in `input_test.rs`; the form

@@ -177,7 +177,6 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     let music = header_rows(
         &tour_header(
             Tutorial::VisitMusic,
-            TourRoute::House,
             TableStop::Racked,
             false,
             BoardStop::Open,
@@ -201,7 +200,6 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     let lobby = header_rows(
         &tour_header(
             Tutorial::VisitLobby,
-            TourRoute::House,
             TableStop::Racked,
             false,
             BoardStop::Open,
@@ -221,7 +219,6 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     let table = header_rows(
         &tour_header(
             Tutorial::VisitTable,
-            TourRoute::House,
             TableStop::Racked,
             false,
             BoardStop::Open,
@@ -236,7 +233,6 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     let struck = header_rows(
         &tour_header(
             Tutorial::VisitTable,
-            TourRoute::House,
             TableStop::Played,
             false,
             BoardStop::Open,
@@ -256,7 +252,6 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     let small = header_rows(
         &tour_header(
             Tutorial::VisitTable,
-            TourRoute::House,
             TableStop::TooSmall,
             false,
             BoardStop::Open,
@@ -273,7 +268,6 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     assert!(
         tour_header(
             Tutorial::VisitGames,
-            TourRoute::House,
             TableStop::Racked,
             false,
             BoardStop::Open
@@ -409,7 +403,6 @@ fn the_dungeon_stop_fills_the_page_under_its_header() {
             .draw(|frame| {
                 let header = tour_header(
                     Tutorial::VisitDungeon,
-                    TourRoute::House,
                     TableStop::Racked,
                     fight.won(),
                     BoardStop::Open,
@@ -454,10 +447,10 @@ fn the_dungeon_stop_fills_the_page_under_its_header() {
     );
 }
 
-/// On the `Board` route the chat stop and the table lead to the board, not
-/// the music and the games.
+/// On the `Board` route the chat stop leads to today's board, not the
+/// music.
 #[test]
-fn the_board_route_names_the_table_and_the_board_as_what_comes_next() {
+fn the_board_route_names_the_board_as_what_comes_after_the_chat() {
     let backend = ratatui::backend::TestBackend::new(80, 24);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
     terminal
@@ -479,30 +472,9 @@ fn the_board_route_names_the_table_and_the_board_as_what_comes_next() {
         .collect();
     assert!(
         rows.iter()
-            .any(|row| row.contains("[Enter] next: one shot of pool")),
+            .any(|row| row.contains("[Enter] next: today's board")),
         "{rows:#?}"
     );
-
-    for table in [TableStop::Played, TableStop::TooSmall] {
-        let header = header_rows(
-            &tour_header(
-                Tutorial::VisitTable,
-                TourRoute::Board,
-                table,
-                false,
-                BoardStop::Open,
-            )
-            .unwrap(),
-            72,
-        );
-        assert!(
-            header
-                .last()
-                .unwrap()
-                .contains("[Enter] next: today's board ──"),
-            "{table:?} {header:#?}"
-        );
-    }
 }
 
 /// The board stop writes its pitch across the top of the Arcade: it asks
@@ -513,14 +485,7 @@ fn the_board_route_names_the_table_and_the_board_as_what_comes_next() {
 fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
     let header = |board: BoardStop| {
         header_rows(
-            &tour_header(
-                Tutorial::VisitBoard,
-                TourRoute::Board,
-                TableStop::Played,
-                false,
-                board,
-            )
-            .unwrap(),
+            &tour_header(Tutorial::VisitBoard, TableStop::Played, false, board).unwrap(),
             100,
         )
     };

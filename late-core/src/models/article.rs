@@ -312,6 +312,70 @@ pub struct ArticleFeedItem {
     pub body: BodyStatus,
 }
 
+/// Why a share was turned down: the link, or what the page behind it is.
+/// The sharer's problem to see, never ours to log as a failure; the text is
+/// the banner. Carried through `anyhow` as the typed error late-ssh's
+/// `share_failed` matches on, then on the event as `ArticleFailure::Refused`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareRefusal {
+    /// cyberspace.online's terms bar AI summaries of their content.
+    AiBlocklisted,
+    Exists,
+    /// The AI or X called the page invalid or NSFW.
+    Rejected,
+    /// X's media lookup could not answer, so the post went unscreened.
+    XUnconfirmed,
+    XUnresolved,
+    YoutubeUnresolved,
+}
+
+impl ShareRefusal {
+    pub fn message(self) -> &'static str {
+        match self {
+            ShareRefusal::AiBlocklisted => {
+                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
+            }
+            ShareRefusal::Exists => "Article exists",
+            ShareRefusal::Rejected => {
+                "Link was rejected due to content policy violations or being invalid."
+            }
+            ShareRefusal::XUnconfirmed => {
+                "X could not confirm this post is safe to share right now. Try again in a minute."
+            }
+            ShareRefusal::XUnresolved => {
+                "X could not resolve this post: it may be deleted, from a protected account, or not a post URL"
+            }
+            ShareRefusal::YoutubeUnresolved => "YouTube oEmbed could not resolve this video",
+        }
+    }
+}
+
+impl std::fmt::Display for ShareRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for ShareRefusal {}
+
+/// Why an article event failed: a share turned down by name, so a listener
+/// can act on which (an RSS entry whose link is already in News), or
+/// anything else as its text. Its `Display` is the banner either way.
+#[derive(Clone, Debug)]
+pub enum ArticleFailure {
+    Refused(ShareRefusal),
+    Errored(String),
+}
+
+impl std::fmt::Display for ArticleFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArticleFailure::Refused(refusal) => f.write_str(refusal.message()),
+            ArticleFailure::Errored(error) => f.write_str(error),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ArticleEvent {
     Created {
@@ -321,7 +385,7 @@ pub enum ArticleEvent {
     },
     Failed {
         user_id: Uuid,
-        error: String,
+        error: ArticleFailure,
         url: Option<String>,
     },
     Deleted {

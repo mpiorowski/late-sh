@@ -14,7 +14,7 @@
 - `ui.rs`: the reef and tank renderer, Home's reef and tank tiles (`draw_reef_tile`, `draw_tank_tile`, `TankView`; `reef_form`: the reef needs a tile wider than the rail and taller than the mini tank, else the tile points at the tank tile), and the care bar on the water (`care_bar_spans`, fourteen dots, green for the streak or red for the days unfed). `ui_test.rs`.
 - `config.rs`, `creature.rs`, `world.rs`, `kdl_parse.rs`: embedded KDL config/art parsing and creature/world model.
 
-Tests: `state_test.rs`, `svc_test.rs`, `ui_test.rs`, `creature_test.rs`, and `late-core`'s `aquarium_care_test.rs` / `marketplace_test.rs`. Run them scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(aquarium)'"`.
+Tests: `state_test.rs`, `svc_test.rs`, `ui_test.rs`, `creature_test.rs`, and `late-core`'s `aquarium_care_test.rs` / `marketplace_test.rs`. Run them scoped: `make test ARGS="-p late-ssh --lib -E 'test(aquarium)'"`.
 
 ## The tank
 

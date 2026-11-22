@@ -274,11 +274,11 @@ fn tutorial_tours_every_page_then_comes_home() {
 }
 
 /// The `Board` route, the one every session walks (`TOUR_ROUTE`): Enter
-/// from the door walks the chat, the practice table, today's board and
-/// the week ahead, and ends there. The whole tour state is asserted at
+/// from the door walks the chat, today's board and the week ahead, and
+/// ends there. The whole tour state is asserted at
 /// each step, since nothing but `tutorial_advance` moves it.
 #[test]
-fn the_board_route_is_five_stops_and_ends_on_the_week() {
+fn the_board_route_is_four_stops_and_ends_on_the_week() {
     let mut state = state_with_lobby(true);
     assert_eq!(state.tour_route, TOUR_ROUTE);
     assert_eq!(state.tour_route, TourRoute::Board);
@@ -296,7 +296,6 @@ fn the_board_route_is_five_stops_and_ends_on_the_week() {
             Tutorial::VisitChat,
             Some(TourStep::Enter),
         ),
-        (TourMove::Table, Tutorial::VisitTable, Some(TourStep::Table)),
         (TourMove::Board, Tutorial::VisitBoard, Some(TourStep::Board)),
         (TourMove::Week, Tutorial::VisitWeek, Some(TourStep::Enter)),
         (TourMove::FinishedAtChat, Tutorial::Done, None),

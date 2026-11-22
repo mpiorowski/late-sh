@@ -238,8 +238,6 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
     true
 }
 
-/// Lateania landing, used both by the standalone screen fallback and the Games
-/// hub when Lateania is the selected card.
 pub struct LandingView<'a> {
     pub delete_confirm: bool,
     pub online: usize,
@@ -247,10 +245,6 @@ pub struct LandingView<'a> {
     pub slot_cursor: usize,
     pub cooldowns: Option<CooldownView<'a>>,
     pub scroll: u16,
-}
-
-pub fn draw_landing(frame: &mut Frame, area: Rect, view: LandingView<'_>) -> u16 {
-    draw_launch_copy(frame, area, view)
 }
 
 /// One row of the character-select list: the highlighted slot gets a `>`
@@ -316,7 +310,9 @@ fn slot_rows(slots: &SlotList, slot_cursor: usize) -> Vec<Line<'static>> {
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, view: LandingView<'_>) -> u16 {
+/// Lateania landing, used both by the standalone screen fallback and the Games
+/// hub when Lateania is the selected card.
+pub fn draw_landing(frame: &mut Frame, area: Rect, view: LandingView<'_>) -> u16 {
     let LandingView {
         delete_confirm,
         online,

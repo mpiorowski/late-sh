@@ -3086,6 +3086,98 @@ async fn submit_brb_in_room(username: &str, command: &str) -> (ChatState, String
     (state, body)
 }
 
+/// A draft past the message cap is refused in the composer with the limit
+/// named, and the draft stays: nothing is sent to fail, nothing typed is
+/// lost.
+#[tokio::test]
+async fn an_overlong_draft_is_refused_and_kept() {
+    use late_core::models::chat_message::BODY_MAX_CHARS;
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "long_draft").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "long-draft-room")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join room");
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    let draft = "x".repeat(BODY_MAX_CHARS + 1);
+    state.start_composing_in_room(room.id);
+    state.composer.insert_str(&draft);
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("a refusal banner");
+    assert_eq!(
+        banner.message,
+        "Message too long: 2001 characters, the limit is 2000."
+    );
+    assert_eq!(state.composer.lines().join("\n"), draft, "the draft stays");
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
+/// A draft that fits as typed but not as sent is refused the same way: a
+/// reply's quote line and a report's marker are counted before the composer
+/// clears, so the send never fails after the draft is gone.
+#[tokio::test]
+async fn a_body_that_grows_past_the_cap_on_its_way_out_keeps_its_draft() {
+    use late_core::models::chat_message::BODY_MAX_CHARS;
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "long_reply").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "long-reply-room")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join room");
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    // "> @mat: hello there\n" is 20 characters on top of the typed 1995.
+    let reply = "x".repeat(BODY_MAX_CHARS - 5);
+    state.start_composing_in_room(room.id);
+    state.reply_target = Some(ReplyTarget {
+        to: ReplyTo::Message(Uuid::now_v7()),
+        author: "mat".to_string(),
+        preview: "hello there".to_string(),
+    });
+    state.composer.insert_str(&reply);
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("a refusal banner");
+    assert_eq!(
+        banner.message,
+        "Message too long: 2015 characters, the limit is 2000."
+    );
+    assert_eq!(state.composer.lines().join("\n"), reply, "the reply stays");
+
+    // "/bug " is swapped for "---BUG--- ", 10 characters ahead of 1994.
+    let report = format!("/bug {}", "x".repeat(BODY_MAX_CHARS - 6));
+    state.reply_target = None;
+    state.composer_clear();
+    state.composer.insert_str(&report);
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("a refusal banner");
+    assert_eq!(
+        banner.message,
+        "Message too long: 2004 characters, the limit is 2000."
+    );
+    assert_eq!(
+        state.composer.lines().join("\n"),
+        report,
+        "the report stays"
+    );
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
 /// `/hit` is the lounge's only while the lounge tick says so (a runner
 /// looking at #lounge): swallowed, never posted, and asked for once.
 #[tokio::test]
@@ -5058,6 +5150,68 @@ fn buy_posts_the_order_the_bar_rings_up() {
         bar_order(&gift, "bartender"),
         BarOrder::Gift("mossy"),
         "{gift}"
+    );
+}
+
+/// A bare `/watch` is the stream switch: it always asks, carrying the
+/// selected room only while that room's stream is live (the video player
+/// decides what the switch does), and `/watch @user` stays the browser
+/// path whatever room is open.
+#[tokio::test]
+async fn bare_watch_toggles_streams_with_the_selected_rooms_live_stream() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "watch_here").await;
+    let mut state = counter_test_state(&test_db, user.id);
+    let submit = |state: &mut ChatState, command: &str| {
+        state.composer.insert_str(command);
+        state.submit_composer(false, ComposerCommands::Enabled)
+    };
+    let room_id = Uuid::from_u128(41);
+    let mut stream = crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(7),
+        username: "mat".to_string(),
+        title: "hacking".to_string(),
+        room_id,
+        voice_channel_id: Uuid::from_u128(9),
+        stream_id: "abc".to_string(),
+        live: false,
+        went_live_at: None,
+        watching: 0,
+        watch_url: String::new(),
+    };
+
+    // Nowhere in particular: the switch, with no stream to turn on.
+    state.live_streams = vec![stream.clone()];
+    state.selected_room_id = None;
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle { room_here: None })
+    );
+
+    // In the room, but the stream is still pending: nothing to watch yet.
+    state.selected_room_id = Some(room_id);
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle { room_here: None })
+    );
+
+    // Live: the command carries this room.
+    stream.live = true;
+    state.live_streams = vec![stream];
+    assert!(submit(&mut state, "/watch").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::Toggle {
+            room_here: Some(room_id)
+        })
+    );
+
+    assert!(submit(&mut state, "/watch @bob").is_none());
+    assert_eq!(
+        state.take_requested_watch(),
+        Some(StreamWatchRequest::User("bob".to_string()))
     );
 }
 

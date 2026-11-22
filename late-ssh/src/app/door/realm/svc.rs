@@ -50,7 +50,7 @@ use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use super::map::{
     EARTH_MAP_ID, GENERATED_MAP_ID, TerritoryId, WorldMap, map_handle, territory_total,
 };
-use super::mapgen::{self, GeneratedMapSpec};
+use super::mapgen::{self, GeneratedMapSpec, Generator};
 use super::night;
 use super::resolver::{
     self, ActionRejected, DayBoard, DayResult, LogEntry, Order, OrderRejected, PALETTE_SLOTS,
@@ -755,6 +755,7 @@ impl RealmService {
                     continents,
                     islands,
                     territories,
+                    generator: Generator::Relief,
                     names: Vec::new(),
                 }
                 .normalized();

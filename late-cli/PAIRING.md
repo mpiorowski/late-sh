@@ -32,8 +32,7 @@ Client to server:
   "client_kind": "cli",
   "ssh_mode": "native",
   "platform": "linux",
-  "capabilities": ["clipboard_image", "youtube", "voice", "open_url"],
-  "video_blockers": ["not_kitty", "no_mpv"],
+  "capabilities": ["clipboard_image", "youtube", "voice", "open_url", "video", "video_stream"],
   "muted": false,
   "volume_percent": 30
 }
@@ -112,8 +111,8 @@ Client to server, native mode only (see "Latency samples"):
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
-- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below). `reconnect` is appended in native mode only, the one mode that can redial on its own.
-- `video_blockers`: present exactly when `video` is not in `capabilities`; every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
+- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below), and `video_stream` when nothing but `no_ytdlp` blocks it: a live stream needs everything a video does except yt-dlp (`VIDEO.md`, "Live streams"). `reconnect` is appended in native mode only, the one mode that can redial on its own.
+- `video_blockers`: present exactly when `video` is not in `capabilities` (so not in the example above; a terminal without kitty graphics or mpv would send `"video_blockers": ["not_kitty", "no_mpv"]` and neither video capability); every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.
@@ -131,7 +130,7 @@ Pairing behavior:
 ## Embedded YouTube helper window
 
 - The helper opens a minimal 200x200 non-resizable, undecorated webview window while the user source is YouTube. On Linux the helper is the standalone `late-webview` binary installed next to `late` (`LATE_WEBVIEW_BIN` overrides, `$PATH` is the last fallback); on Windows/macOS it is `late webview-pair`, the `late` binary re-executed with the webview compiled in. `late webview-pair`/`late webview-spike` on Linux just forward to the external binary.
-- Linux invariant: `late` itself must never link WebKitGTK/GTK. A machine without the webview libraries has to run the full CLI; only embedded YouTube playback may degrade. Missing helper binary or missing WebKitGTK/GStreamer libraries fail the helper spawn/startup and land in the crash-loop backoff below — installing the distro packages later fixes playback with no CLI reinstall. The helper page gives the YouTube iframe the full viewport, disables YouTube's visible controls, and does not draw app UI over the player.
+- Linux invariant: `late` itself must never link WebKitGTK/GTK. A machine without the webview libraries has to run the full CLI; only embedded YouTube playback may degrade. Missing helper binary or missing WebKitGTK/GStreamer libraries fail the helper spawn/startup and land in the crash-loop backoff below; installing the distro packages later fixes playback with no CLI reinstall. The helper page gives the YouTube iframe the full viewport, disables YouTube's visible controls, and does not draw app UI over the player.
 - The helper page is served from a loopback listener but loaded as `http://localhost:<port>/`, sends `Referrer-Policy: strict-origin-when-cross-origin`, and passes `window.location.origin` as the YouTube IFrame `origin`.
 - By default the parent redirects helper stderr to the webview log path. For a single combined debug capture, run `LATE_WEBVIEW_DEBUG_STDERR=1 late -v 2>late-debug.log`; this captures both parent CLI tracing and helper GTK/WebKit/GStreamer output.
 - The normal helper spawn sets `NO_AT_BRIDGE=1` and, on Linux, sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already set it. If `late webview-spike ...` is run directly during debugging and crashes in `libatk-bridge-2.0.so` after `dbind-WARNING`, retry as `NO_AT_BRIDGE=1 late webview-spike <video_id>` or restart stale `at-spi-bus-launcher` processes.

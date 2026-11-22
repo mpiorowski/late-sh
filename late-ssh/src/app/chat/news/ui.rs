@@ -3,15 +3,14 @@
 //! row is laid out first (`lay_out`, pure) and the draw paints the window
 //! of rows that keeps the selected story in view.
 
-use crate::app::common::text_layout;
-
-use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
+use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas, scroll_offset};
 use crate::app::chat::news::reader::state::domain_label;
 use crate::app::chat::news::state::is_unread;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::markdown::wrap_plain_line;
 use crate::app::common::primitives::format_relative_time_short;
 use crate::app::common::primitives::{clip_spans, truncate_cells};
+use crate::app::common::text_layout;
 use crate::app::common::theme;
 use crate::app::video::state::{is_watchable, position_label};
 use ratatui::{
@@ -126,42 +125,6 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             );
         }
     }
-}
-
-/// The first row drawn, given the one the last draw started at. The window
-/// stays put while the selection moves inside it and scrolls only when the
-/// selected story, or the neighbour story past it (`context`), would leave
-/// it, so there is always a story's worth of list ahead of the selection.
-/// When the selected story and both neighbours do not fit, each neighbour
-/// gets an even share of the rows the selected story leaves, and a story
-/// taller than the window shows its first rows.
-pub(crate) fn scroll_offset(
-    previous: usize,
-    total_rows: usize,
-    selected: &Range<usize>,
-    context: &Range<usize>,
-    height: usize,
-) -> usize {
-    let max_offset = total_rows.saturating_sub(height);
-    let spare = height.saturating_sub(selected.len());
-    let above = selected.start.saturating_sub(context.start);
-    let below = context.end.saturating_sub(selected.end);
-    let (above, below) = if above + below <= spare {
-        (above, below)
-    } else {
-        let above = above.min(spare / 2);
-        (above, below.min(spare - above))
-    };
-    let top = selected.start - above;
-    let bottom = selected.end + below;
-    let mut offset = previous.min(max_offset);
-    if bottom > offset + height {
-        offset = bottom.saturating_sub(height);
-    }
-    if top < offset {
-        offset = top;
-    }
-    offset.min(max_offset)
 }
 
 /// Every row of the list for `width` columns: a rule over the feed and

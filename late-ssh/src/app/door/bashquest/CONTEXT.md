@@ -143,7 +143,7 @@ Env knobs on both halves, the script sourcing (fetched by pinned commit and SHA-
 
 ## 8. Tests And Verification [STABLE]
 
-Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-bashquest -p late-ssh -E 'package(late-bashquest) or test(bashquest)'"`.
+Agents run the focused tests with `make test ARGS="-p late-bashquest -p late-ssh -E 'package(late-bashquest) or test(bashquest)'"`.
 
 Inline pure tests cover:
 - Client `identity.rs` / host `identity.rs`: derivation determinism + a cross-crate known-answer fingerprint test (`SHA256:9NHbIJzzfj+WQ4YoYYlgWtjvH7N+FE2m1KYAp3X/73c` for secret `late-bashquest-kat-v1`), pinning the cross-crate contract.

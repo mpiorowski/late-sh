@@ -10,11 +10,12 @@ use super::state::{
     ALT_MAX_CHARS, ANNOUNCEMENT_MAX_CHARS, AnnouncementCandidate, AnnouncementFound, ArtDay,
     ArtFound, BOARD_MIN_INK, BoardCandidate, BoardFound, BoardInk, Brief, Choice, Crop, Found,
     HeraldCommand, Image, LinkCard, Look, PROJECT_MIN_WORDS, PROJECT_POST_MAX_CHARS,
-    PaperCandidate, Picture, PieceCandidate, ProjectCandidate, ProjectFound, ScoreLine,
-    ScoreboardCandidate, Shape, Warning, WordsAlone, WordsFound, WordsKind, art_day, drawn_area,
-    ink_cells, parse_herald_command, post_due_day, project_exclusions, scoreboard_week, shown_day,
-    status_text, words_schedule,
+    PROJECT_TITLE_MAX_CHARS, PaperCandidate, Picture, PieceCandidate, ProjectCandidate,
+    ProjectFound, ScoreLine, ScoreboardCandidate, Shape, Warning, WordsAlone, WordsFound,
+    WordsKind, art_day, drawn_area, ink_cells, lounge_text, parse_herald_command, post_due_day,
+    project_exclusions, scoreboard_week, shown_day, status_text, words_schedule,
 };
+use crate::app::common::mentions::extract_mentions;
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
 /// (Mastodon allows 500). Every network gets the same words, so every kind
@@ -357,6 +358,45 @@ fn a_projects_words_are_plain_dead_and_fit_the_post() {
         super::bluesky::facets(&text).len(),
         1 + tags.split(' ').count(),
         "the link and the tags: {text}"
+    );
+}
+
+/// The #lounge line reads as the title and the member, the write-up, the link,
+/// and chat's own mention reader finds the member and nobody else in it,
+/// whatever the member typed: a backtick in the title (theirs, or half of a
+/// pair the cut split) would hide `@member` in a code span, and an `@` in the
+/// link would ping whoever it names.
+#[test]
+fn the_lounge_line_mentions_the_member_alone() {
+    assert_eq!(
+        lounge_text(&project()),
+        "\u{1F527} \"tinyclock\" by @maker is this week's featured project.\n\
+         A clock for your terminal that fits in one line.\n\
+         https://example.com/tinyclock"
+    );
+
+    let cut_through_a_pair = format!("{}`x`", "t".repeat(PROJECT_TITLE_MAX_CHARS - 2));
+    for (title, url) in [
+        ("tiny`clock", "https://example.com/tinyclock"),
+        (cut_through_a_pair.as_str(), "https://example.com/tinyclock"),
+        ("tinyclock", "https://mastodon.example/@other"),
+        ("tinyclock", "https://example.com/@other/tool?by=@third"),
+    ] {
+        let line = lounge_text(&ProjectCandidate {
+            title: title.to_string(),
+            url: url.to_string(),
+            ..project()
+        });
+        assert_eq!(extract_mentions(&line), vec!["maker"], "{line}");
+    }
+
+    let line = lounge_text(&ProjectCandidate {
+        url: "https://mastodon.example/@other".to_string(),
+        ..project()
+    });
+    assert!(
+        line.ends_with("\nhttps://mastodon.example/%40other"),
+        "the same address, with nobody to ping: {line}"
     );
 }
 

@@ -315,28 +315,51 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
 }
 
-/// Apply a parsed `/petname` command to the user's cat and produce the
+/// Apply a parsed `/petname` command to the user's pet and produce the
 /// banner to show.
 fn apply_petname_request(
     app: &mut App,
     request: crate::app::chat::state::PetnameRequest,
 ) -> Banner {
     use crate::app::chat::state::PetnameRequest;
-    match request {
-        PetnameRequest::Show => match app.pet_state.name.as_deref() {
-            Some(name) => Banner::success(&format!("🐈 your cat is named {name}")),
-            None => {
-                Banner::error("your cat doesn't have a name yet — use /petname <name> to set one")
-            }
-        },
-        PetnameRequest::Set(name) => {
-            app.pet_state.set_name(Some(name.clone()));
-            Banner::success(&format!("🐈 named your cat {name}"))
+    match &request {
+        PetnameRequest::Show => {}
+        PetnameRequest::Set(name) => app.pet_state.set_name(Some(name.clone())),
+        PetnameRequest::Clear => app.pet_state.set_name(None),
+    }
+    petname_banner(
+        app.pet_state.species,
+        app.pet_state.name.as_deref(),
+        &request,
+    )
+}
+
+/// The banner for a `/petname` request, worded for the pet's species.
+/// `name` is the pet's name after the request applied.
+pub(super) fn petname_banner(
+    species: late_core::models::pet::PetSpecies,
+    name: Option<&str>,
+    request: &crate::app::chat::state::PetnameRequest,
+) -> Banner {
+    use crate::app::chat::state::PetnameRequest;
+    use late_core::models::pet::PetSpecies;
+    let glyph = match species {
+        PetSpecies::Cat => "🐈",
+        PetSpecies::Dog => "🐕",
+        PetSpecies::Bird => "🐦",
+    };
+    let kind = species.as_str();
+    match (request, name) {
+        (PetnameRequest::Show, Some(name)) => {
+            Banner::success(&format!("{glyph} your {kind} is named {name}"))
         }
-        PetnameRequest::Clear => {
-            app.pet_state.set_name(None);
-            Banner::success("cleared your cat's name")
+        (PetnameRequest::Show, None) => Banner::error(&format!(
+            "your {kind} doesn't have a name yet: use /petname <name> to set one"
+        )),
+        (PetnameRequest::Set(name), _) => {
+            Banner::success(&format!("{glyph} named your {kind} {name}"))
         }
+        (PetnameRequest::Clear, _) => Banner::success(&format!("cleared your {kind}'s name")),
     }
 }
 

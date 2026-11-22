@@ -237,12 +237,45 @@ reached on it, 14 days to 2026-11-06:
 Arcade page, on sessions that are 84% plain ssh with nothing to hear.
 40% of day-one sessions end with the Clubhouse on screen
 (`late_ssh_session_ends_total{tenure="day_one"}`). The route in force
-now is the `Board` one (`TOUR_ROUTE`, one line to go back): five stops,
-welcome, chat, one shot of pool, today's board, the week of rungs ahead,
-the board played for real and won, or skipped after a confirmation,
-before the week; its funnel is
-`welcome`, `chat`, `table`, `board`, `week`, `done`, read against the
-targets in section 5 on the first cohort that meets it.
+is the `Board` one (`TOUR_ROUTE`, one line to go back), deployed
+2026-11-08 at about 17:00 UTC as five stops: welcome, chat, one shot of
+pool, today's board, the week of rungs ahead, the board played for real
+and won, or skipped after a confirmation, before the week. The code now
+walks four, the pool break dropped on the interim read below; it ships
+after the 2026-11-23 read, so the cohort is read on the five stops it
+walked, and the four-stop version's first full cohort is read the same
+way two weeks after it ships. Its full read
+against the targets in section 5 is the 2026-11-09 to 2026-11-15 cohort
+through its first week, due 2026-11-23. The interim read, 2026-11-18:
+accounts created from 2026-11-09 (155) against the `House` cohorts from
+2026-10-02 (769).
+
+| | House | Board |
+|---|---|---|
+| Won a daily on day one | 7.2% | 36.8% |
+| 5 or more active minutes on day one | 53% | 61% |
+| 20 or more | 15% | 23% |
+| Typed again the next day (joined by 2026-11-16) | 10.0% | 14.8% of 128 |
+| Typed again within 3 days (joined by 2026-11-14) | 12.9% | 18.8% of 101 |
+| Tour finished, per account, in any session (`clubhouse_tutorial_done`) | 72% (joined from 2026-10-25) | 72% |
+| Tour finished, per tour start (`welcome` against `done`) | 46% | 37% |
+
+Both returns move the right way at z about 1.7: suggestive, not settled.
+Stops on the `Board` route, 2026-11-08 22:00 to 2026-11-18 (the counter
+counts tour starts, and a newcomer who drops before the end walks it
+again next session): welcome 422, chat 375, table 365, board 216, week
+157, done 157, with 84 boards skipped. The pool break is the leak: 41%
+of those who reach it never reach the board, against 15% on `House`, and
+day-one sessions ending on the table's screen went from 16 to 41 in the
+nine days either side of the switch. On `House` the table was the sixth
+stop and 42% were gone before it; here 49% are gone by the fourth, so
+the break may only be where the attention runs out. Of the 216 who reach
+the board, 27% leave there, 39% skip it and 34% walk on solved (or on a
+terminal it does not fit). The ladder beside it: 117 distinct daily
+winners in the week of 2026-11-09 against 82 to 93 in the four before,
+the whole rise from newcomers (older accounts 77, flat); 63 live streaks
+on 2026-11-18 against 35; 5 newcomers have starred a rung after their
+first day.
 
 **deadchannel**, switched on 2026-10-21, read 16 days later (2026-11-06):
 16 runners, 13 of them touched the game that day and 15 in the week,
@@ -396,20 +429,21 @@ Live, in order of evidence behind them:
   (section 3) say what holds them: a finished daily, a quest ticked, a
   reason named for tomorrow. Built as the tour's `Board` route, beside
   the old `House` one and one line to revert
-  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): five stops instead of
-  18 (what this is, the chat, the pool break, today's board, the week
-  ahead); today's Netwalk daily as the play, played for real and won, or
-  skipped after a confirmation, before the tour lets go, in place of the
+  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): four stops instead of
+  18 (what this is, the chat, today's board, the week ahead; a pool
+  break before the board was cut on the first read, section 3); today's
+  Netwalk daily as the play, played for real and won, or skipped after
+  a confirmation, before the tour lets go, in place of the
   scripted fight; no Stations stop on plain ssh, where there is nothing
   to hear; the solved board's header naming tomorrow (a new board at
   00:00 UTC with the hours left), the week stop as the send-off, and the
-  chat as where the tour lands. Built with the ladder below, not yet
-  deployed or measured. Targets: newcomers who win a daily on day one
+  chat as where the tour lands. Built with the ladder below and
+  deployed 2026-11-08; the interim read is in section 3. Targets: newcomers who win a daily on day one
   from 7% to 25% or more, two-day return from 5% to 9%, tour completion
   from 46% to 80%. The read: deploy, wait seven days for a full weekly
   cohort and seven more for its first week, then run the funnel queries
-  in section 6 and the tour stops (`welcome`, `chat`, `table`, `board`,
-  `week`, `done`; `board` against `week` is the board's cost). If the
+  in section 6 and the tour stops (`welcome`, `chat`, `board`, `week`,
+  `done`; `board` against `week` is the board's cost). If the
   cohort says the board loses more than it holds, the revert is the one
   `TOUR_ROUTE` line and the `House` route's numbers are in section 3 to
   compare against. The design reasoning, every decision and the ones
@@ -547,7 +581,10 @@ Live, in order of evidence behind them:
     goes out that day: a member's words never reach the official account
     unchecked. Sharing a project is a public act the way hanging a piece
     is, so it earns its `~name`, with its own link the one address the
-    herald carries that is not late.sh's.
+    herald carries that is not late.sh's. Once it is out, `system` says
+    so in #lounge with the member `@`mentioned, the write-up and the
+    project's link, so the member hears of it. That is the herald's only
+    line in chat.
   - **The tags.** Four at most, two that bring readers and two that
     bring members, chosen per kind so a tag never sits on a post its
     followers did not come for (a mismatched tag is how an account gets

@@ -24,7 +24,7 @@ helpers; flag text fallbacks and the list/detail spacer remain in place.
 - `input.rs`: Shop-only item/category/buy input. `h`/`l` switch Shop categories/subtabs; `[`/`]` remain aliases. `PageUp`/`PageDown` jump eight items in the current list and stop at either end. Mouse left-click on a category sub-tab or item row selects it; scroll wheel moves item selection. The custom-title prompt is checked first and swallows the whole event stream while open, because in a text field every printable key is content rather than a binding.
 - `ui.rs`: Shop tab rendering; the item list and detail pane reserve a one-cell gap so row actions and detail labels stay separate.
 
-Tests: `state_test.rs`, `svc_test.rs`, `ui_test.rs`, and `late-core`'s `marketplace_test.rs`. Run them scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(shop)'"`.
+Tests: `state_test.rs`, `svc_test.rs`, `ui_test.rs`, and `late-core`'s `marketplace_test.rs`. Run them scoped: `make test ARGS="-p late-ssh --lib -E 'test(shop)'"`.
 
 ## Marketplace
 
