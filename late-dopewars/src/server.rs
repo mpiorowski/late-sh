@@ -13,12 +13,15 @@ use crate::stats::{self, StatsHost};
 /// Shared, connection-independent server state.
 struct Shared {
     bin: String,
-    /// The one shared high-score file every child gets as `-f`.
-    score_file: String,
+    /// The shared append-only run log (`scorelog::runs_log_path` of the
+    /// configured score file): every game session appends to it, the stats
+    /// session streams it.
+    runs_log: std::path::PathBuf,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
-    /// Flips to `true` on host SIGTERM/SIGINT; each live stats stream watches
-    /// it and closes so the client reconnects to the new pod.
+    /// Flips to `true` on host SIGTERM/SIGINT. Each live stats stream watches
+    /// it and closes so the client reconnects to the new pod; each game
+    /// session watches it and ends, logging its finished games first.
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -33,7 +36,7 @@ impl Server {
         Self {
             shared: Arc::new(Shared {
                 bin: config.bin.clone(),
-                score_file: config.score_file.clone(),
+                runs_log: crate::scorelog::runs_log_path(&config.score_file),
                 authorized_key,
                 shutdown_rx,
             }),
@@ -225,9 +228,7 @@ impl Handler for ClientHandler {
         if playname == stats::STATS_USERNAME {
             self.host = Some(SessionHost::Stats {
                 _host: StatsHost::spawn(
-                    crate::scorelog::runs_log_path(&self.shared.score_file)
-                        .to_string_lossy()
-                        .into_owned(),
+                    self.shared.runs_log.to_string_lossy().into_owned(),
                     self.stats_cursors.take(),
                     session.handle(),
                     channel,
@@ -251,7 +252,7 @@ impl Handler for ClientHandler {
         self.host = Some(SessionHost::Game(PtyHost::spawn(
             HostConfig {
                 bin: self.shared.bin.clone(),
-                score_file: self.shared.score_file.clone(),
+                runs_log: self.shared.runs_log.clone(),
                 playname,
                 cols: self.cols,
                 rows: self.rows,
@@ -259,6 +260,7 @@ impl Handler for ClientHandler {
             },
             session.handle(),
             channel,
+            self.shared.shutdown_rx.clone(),
         )));
         Ok(())
     }

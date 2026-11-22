@@ -10,8 +10,9 @@ use late_core::models::profile_award::{
 };
 
 /// Every badge granted outside the ranked monthly boards. The milestones are
-/// one list already; the single-holder monthly awards (Late Time, Top Drinkers)
-/// are documented in the same two places, so they are checked alongside them.
+/// one list already; the single-holder monthly awards (Late Time, and the
+/// retired Top Drinkers its holders keep) are documented in the same two
+/// places, so they are checked alongside them.
 fn undocumentable_badges() -> Vec<String> {
     MILESTONE_AWARD_CATEGORIES
         .iter()
