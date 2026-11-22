@@ -133,9 +133,9 @@ async fn run_bridge(
         "late-dopewars-home-{}",
         HOME_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let _ = fs::create_dir_all(&home);
     let mut runs = SessionRuns {
-        table: crate::scorelog::SessionTable::new(&home),
+        table: crate::scorelog::SessionTable::create(&home)
+            .context("starting the dopewars session table")?,
         runs_log: cfg.runs_log,
         playname: cfg.playname,
     };

@@ -36,6 +36,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use anyhow::Context;
+
 /// `HighScoreWriteHeader`: "DOPEWARS SCORES V." + version 1, NUL-terminated.
 const SCORE_HEADER: &[u8] = b"DOPEWARS SCORES V.1\0";
 
@@ -117,13 +119,25 @@ pub(crate) struct SessionTable {
 }
 
 impl SessionTable {
-    /// The table in the session's scratch `HOME`. The game creates the file
-    /// on launch (`OpenHighScoreFile`, serverside.c:1982), so it starts empty.
-    pub(crate) fn new(home: &Path) -> Self {
-        Self {
+    /// Start a session's table in `home`, the session's scratch `HOME`, which
+    /// this creates empty. The game creates the file on launch
+    /// (`OpenHighScoreFile`, serverside.c:1982), so the table starts empty.
+    ///
+    /// A `home` that already exists is cleared first. The host names homes by
+    /// a counter that restarts with the process, so a host killed mid-session
+    /// leaves a directory a later session is handed again, and the table in
+    /// it would be logged a second time as that session's games.
+    pub(crate) fn create(home: &Path) -> anyhow::Result<Self> {
+        match fs::remove_dir_all(home) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(anyhow::Error::new(e).context("clearing a leftover session home")),
+        }
+        fs::create_dir_all(home).context("creating the session home")?;
+        Ok(Self {
             score_file: home.join("dopewars.sco"),
             logged: HashMap::new(),
-        }
+        })
     }
 
     /// The path the game gets as `-f`.
