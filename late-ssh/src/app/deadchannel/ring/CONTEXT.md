@@ -37,9 +37,12 @@ pay claim taken once).
 - **The call.** `c` calls the marked runner under the cursor, who must
   be on the wire (a presence record). A call lasts `CALL_SECS` (180 s);
   one open call or bout per caller, and none while a bout is accepted
-  and unfinished: one conditional insert decides both. The wire gets a
-  line that mentions the runner called, and a session of theirs that is
-  not looking at the ring gets a banner. `a` takes the call, `x` says no
+  and unfinished: one conditional insert decides both. The runner called
+  gets a DM from the `afterglow` voice (`data::call_dm` through
+  `ChatService::post_voice_dm_task`: unread until read, in the DM the
+  first contact invitation opened), a session of theirs that is not
+  looking at the ring gets a banner, and the wire gets a line for the
+  street that names them without a mention, so they are rung once. `a` takes the call, `x` says no
   or takes your own back; a call nobody answers lapses (the sweeper
   ends it as expired, no wire line). The call, answer and pick keys
   work only while the ring is empty: no bout set or on, and the last
@@ -120,7 +123,7 @@ pay claim taken once).
   runner's failure costs nobody else theirs. A runner who no longer
   stands is logged and counted as `pay_left`, the claim taken.
 - **The wire.** Three lines from the `afterglow` voice: the call
-  (mentions the runner called), the bout set (the bell's minutes, bits
+  (names both runners, mentions neither; the DM is what rings), the bout set (the bell's minutes, bits
   down at RING), and the result (who put whom down in which round, or
   took it on points, or a draw, and how many bits rode on it). Declines
   and lapsed calls say nothing.
@@ -222,7 +225,8 @@ deck a runner brings stays.
   is how that cost is watched.
 - **A runner already past level 3 on a second climb** owes a bout
   before their next step on the road.
-- **Calls post on the wire** to reach the runner called. One open call
+- **A call is a DM and a wire line.** The DM stays in the runner's
+  inbox after the call lapses, saying three minutes that are over. One open call
   per caller, the 180 s expiry, and `CallResult::TooSoon` (the same
   runner is not rung again until the last call to them would have run
   out, however it ended) are the limits on that.

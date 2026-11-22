@@ -3,9 +3,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use chrono::{DateTime, Duration, Utc};
+use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
 use late_core::models::deadchannel_bout::{Bout, BoutOutcome, Side};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::presence::{ClubhouseStand, PresenceRecord, Spot};
+use late_core::models::user::User;
 use late_core::test_utils::{TestDb, create_test_user};
 use uuid::Uuid;
 
@@ -17,6 +20,7 @@ use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RULES;
 use crate::app::deadchannel::fight::state::{Applied, Command, Refusal, Sheet};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
+use crate::app::deadchannel::haunt::state::VOICE_FINGERPRINT;
 use crate::app::deadchannel::ring::data::{
     BELL_SECS, CALL_SECS, PURSE_PERCENT, RAKE_PERCENT, ROUND_SECS,
 };
@@ -25,7 +29,7 @@ use crate::app::deadchannel::runner::state::Look;
 use crate::app::deadchannel::runner::svc::{RunnerEntry, fixed_looks_rx};
 use crate::app::games::chips::svc::ChipService;
 use crate::app::presence::svc::PresenceService;
-use crate::test_helpers::new_test_db;
+use crate::test_helpers::{new_test_db, wait_until};
 
 /// The level every runner here stands at: a draft level, so a marked one
 /// owes the ring a bout.
@@ -274,8 +278,8 @@ async fn one_bout_holds_the_ring_and_a_pair_fights_once_a_day() {
 }
 
 #[tokio::test]
-async fn a_call_nobody_answers_lapses() {
-    let (_db, runners, svc) = ring_with(&["mira", "tom"], &[]).await;
+async fn a_call_reaches_the_runner_as_a_dm_and_lapses_unanswered() {
+    let (test_db, runners, svc) = ring_with(&["mira", "tom"], &[]).await;
     let [mira, tom] = &runners[..] else {
         panic!("two runners");
     };
@@ -287,6 +291,29 @@ async fn a_call_nobody_answers_lapses() {
         Reply::Called
     );
     let call = board(&svc).await.calls[0].id;
+
+    // The call reaches tom as a DM from the voice, naming who called.
+    let dm = || async {
+        let client = test_db.db.get().await.expect("db client");
+        let voice = User::find_by_fingerprint(&client, VOICE_FINGERPRINT)
+            .await
+            .expect("find the voice")?;
+        let room = ChatRoom::get_or_create_dm(&client, voice.id, tom.user_id)
+            .await
+            .expect("the dm");
+        ChatMessage::list_recent(&client, room.id, 5)
+            .await
+            .expect("list the dm")
+            .into_iter()
+            .find(|message| message.user_id == voice.id)
+    };
+    wait_until(|| async { dm().await.is_some() }, "the call's dm").await;
+    assert!(
+        dm().await
+            .expect("the dm landed")
+            .body
+            .starts_with(&format!("{} calls you to the ring.", mira.username))
+    );
 
     // A second short of its time, the call stands.
     svc.sweep(at + Duration::seconds(CALL_SECS - 1), false)

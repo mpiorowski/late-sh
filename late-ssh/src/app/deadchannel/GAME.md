@@ -2010,8 +2010,10 @@ bout, not a nightly card.
   their size, rounded down, the dust burned. A draw, or bets on one
   corner only, hands every stake back. Nothing is minted.
 - **A bell per bout, not a nightly card.** At forty people a fixed hour
-  finds nobody. A call reaches the runner wherever they are: the wire's
-  line mentions them, and a session of theirs elsewhere gets a banner.
+  finds nobody. A call reaches the runner wherever they are: the voice
+  sends them a DM, which is hard to miss the way a line on the wire is
+  not, and a session of theirs elsewhere gets a banner. The wire's line
+  is the street's news of it and mentions nobody.
   The five minutes before the bell are the betting window the nightly
   card's hours were. The wire carries three lines (the call, the bout
   set, how it ended); there is no announcer ghost, no share card for a
@@ -2039,8 +2041,8 @@ What the decisions cost, named so the dashboard can say whether to pay
 it: with no fallback opponent, a marked runner at a gate cannot walk
 the road until another marked runner is on the wire and accepts (the
 `ring_owed` beat counts every step turned down there); a runner past
-level 3 on a second climb owes a bout before their next step; calls
-post on the wire to reach the runner called, limited only by one open
+level 3 on a second climb owes a bout before their next step; a call
+is a DM to the runner called and a line on the wire, limited only by one open
 call per caller, the three-minute expiry, and the same runner not rung
 again until the last call's three minutes are up; and watching is at the
 RING shop only.

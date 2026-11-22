@@ -60,13 +60,24 @@ pub(crate) fn powers() -> Powers {
     )
 }
 
-/// The wire's line for a call: it mentions the runner called, which is
-/// how the call reaches them wherever they are.
+/// The wire's line for a call: the street's news of it. It names the
+/// runner called without mentioning them; [`call_dm`] is what reaches
+/// them.
 pub(crate) fn call_line(bout: &Bout) -> String {
     format!(
-        "{} calls @{} to the ring. {} minutes to answer, at RING.",
+        "{} calls {} to the ring. {} minutes to answer, at RING.",
         bout.caller_username,
         bout.called_username,
+        CALL_SECS / 60
+    )
+}
+
+/// The voice's DM to the runner called: the one line of the ring's that
+/// must not be missed, so it goes to them and not past them.
+pub(crate) fn call_dm(bout: &Bout) -> String {
+    format!(
+        "{} calls you to the ring. you have {} minutes. go down to the city, find the RING sign: `a` takes it, `x` says no.",
+        bout.caller_username,
         CALL_SECS / 60
     )
 }

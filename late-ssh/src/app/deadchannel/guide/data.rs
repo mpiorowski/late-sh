@@ -533,7 +533,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "a call waits *three minutes*, and the wire says it with their name in it, so it finds them wherever they are. one call out at a time, none while the ring is taken, the same runner not rung again until three minutes have passed, and the same two runners fight *once a day*.",
+                "a call waits *three minutes*. afterglow sends them a DM, so it finds them wherever they are, and the wire tells the street. one call out at a time, none while the ring is taken, the same runner not rung again until three minutes have passed, and the same two runners fight *once a day*.",
             ),
             Block::Rule(
                 "your deck at the ring is the ten, *four picks* of your own (one card of every draft, whatever your level), and the other card of every draft you inked. your level, your gear, your mark bonus, and the day's glass stay outside: both corners hit the same, block the same, and start at *45* signal.",

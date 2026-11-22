@@ -736,6 +736,8 @@ impl RingService {
         match Bout::call(&**client, &new).await? {
             CallResult::Called(bout) => {
                 self.chat.post_wire_line_task(data::call_line(&bout));
+                self.chat
+                    .post_voice_dm_task(bout.called_user_id, data::call_dm(&bout));
                 Ok(Reply::Called)
             }
             CallResult::RingTaken => Ok(Reply::CallRefused(CallRefusal::RingTaken)),
