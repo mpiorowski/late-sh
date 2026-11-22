@@ -2,7 +2,8 @@
 -- grants its DRNK award. Its last month, November 2026, goes to veritas1A4 by
 -- hand: the badge shows through December like any single-holder award, and the
 -- December rollover announces it if this lands before that roll is claimed.
--- The score is the month's buzz as the board summed it.
+-- The score is November's buzz as the board summed it, taken when this runs
+-- and never recomputed: applied before December it holds the month so far.
 --
 -- A database without the account (dev, tests) inserts nothing.
 INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)

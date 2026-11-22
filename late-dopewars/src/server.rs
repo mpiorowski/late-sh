@@ -19,8 +19,9 @@ struct Shared {
     runs_log: std::path::PathBuf,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
-    /// Flips to `true` on host SIGTERM/SIGINT; each live stats stream watches
-    /// it and closes so the client reconnects to the new pod.
+    /// Flips to `true` on host SIGTERM/SIGINT. Each live stats stream watches
+    /// it and closes so the client reconnects to the new pod; each game
+    /// session watches it and ends, logging its finished games first.
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -259,6 +260,7 @@ impl Handler for ClientHandler {
             },
             session.handle(),
             channel,
+            self.shared.shutdown_rx.clone(),
         )));
         Ok(())
     }

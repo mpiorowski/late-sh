@@ -1,17 +1,18 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
 use russh::ChannelId;
 use russh::server::Handle;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 /// Per-session counter used only to give each child a unique, private `HOME`
 /// directory name. dopewars may read/write a per-user config dotfile; a shared
 /// `HOME` across concurrent sessions could race, so each gets its own scratch
 /// `HOME`, which also holds the session's own high-score table
-/// (`scorelog::SessionTable`). Not persisted; only unique within a process
-/// lifetime, which is all the temp-dir name needs.
+/// (`scorelog::SessionTable`). Not persisted and only unique within a process
+/// lifetime: the count restarts with the process, so [`fresh_home`] clears a
+/// directory an earlier process left under the same name.
 static HOME_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// How often a live session's table is folded into the run log, on top of the
@@ -53,7 +54,15 @@ pub(crate) struct PtyHost {
 }
 
 impl PtyHost {
-    pub(crate) fn spawn(cfg: HostConfig, handle: Handle, channel: ChannelId) -> Self {
+    /// `shutdown_rx` flips to `true` on host SIGTERM: the bridge then ends
+    /// the session as a disconnect would, so its finished games still reach
+    /// the run log before the process exits.
+    pub(crate) fn spawn(
+        cfg: HostConfig,
+        handle: Handle,
+        channel: ChannelId,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
         // Detached: the JoinHandle drops here, but the task runs to completion.
         // Keep a clone of the handle so we can guarantee the channel is closed
@@ -67,7 +76,7 @@ impl PtyHost {
         // fail, so an Err here always means the channel was never closed.
         let cleanup = handle.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel).await {
+            if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel, shutdown_rx).await {
                 tracing::warn!(error = ?e, "dopewars host bridge ended with error");
                 let _ = cleanup.eof(channel).await;
                 let _ = cleanup.close(channel).await;
@@ -90,6 +99,7 @@ async fn run_bridge(
     mut cmd_rx: mpsc::Receiver<Command>,
     handle: Handle,
     channel: ChannelId,
+    mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<()> {
     use std::os::fd::AsRawFd;
     use std::process::Stdio;
@@ -133,9 +143,9 @@ async fn run_bridge(
         "late-dopewars-home-{}",
         HOME_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
+    fresh_home(&home)?;
     let mut runs = SessionRuns {
-        table: crate::scorelog::SessionTable::create(&home)
-            .context("starting the dopewars session table")?,
+        table: crate::scorelog::SessionTable::new(&home),
         runs_log: cfg.runs_log,
         playname: cfg.playname,
     };
@@ -226,16 +236,21 @@ async fn run_bridge(
         }
     });
 
-    bridge_loop(
-        &mut cmd_rx,
-        &mut out_rx,
-        &master,
-        &mut child,
-        &handle,
-        channel,
-        &mut runs,
-    )
-    .await;
+    // A host shutdown ends the session the way a disconnect does, so the
+    // teardown below still folds the table into the run log. A dropped
+    // sender is the process going away too.
+    tokio::select! {
+        () = bridge_loop(
+            &mut cmd_rx,
+            &mut out_rx,
+            &master,
+            &mut child,
+            &handle,
+            channel,
+            &mut runs,
+        ) => {}
+        _ = shutdown_rx.wait_for(|stopping| *stopping) => {}
+    }
 
     // Close the SSH channel first so the late-ssh client returns to its launcher
     // immediately.
@@ -255,6 +270,22 @@ async fn run_bridge(
     // Best-effort cleanup of the per-session scratch HOME.
     let _ = fs::remove_dir_all(&home);
     Ok(())
+}
+
+/// Make `home` an empty directory for one session. A directory already there
+/// was left by a host killed mid-session ([`HOME_SEQ`] restarts with the
+/// process): the high-score table in it would be logged a second time, as
+/// this session's games, so it is cleared first. A home that cannot be made
+/// fails the session, since the game could record nothing in it.
+fn fresh_home(home: &Path) -> Result<()> {
+    use anyhow::Context;
+
+    match std::fs::remove_dir_all(home) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).context("clearing a leftover dopewars session home"),
+    }
+    std::fs::create_dir_all(home).context("creating the dopewars session home")
 }
 
 /// A session's table with what folding it into the run log takes.
@@ -342,3 +373,7 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
         libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
     }
 }
+
+#[cfg(test)]
+#[path = "host_test.rs"]
+mod host_test;

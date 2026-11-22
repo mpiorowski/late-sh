@@ -25,7 +25,9 @@ impl Fixture {
 
     /// A game session's own table, in its own scratch `HOME`.
     fn session(&self, home: &str) -> SessionTable {
-        SessionTable::create(&self.dir.join(home)).unwrap()
+        let home = self.dir.join(home);
+        fs::create_dir_all(&home).unwrap();
+        SessionTable::new(&home)
     }
 
     fn sync(&self, table: &mut SessionTable, now_epoch: i64) -> usize {
@@ -215,21 +217,41 @@ fn a_run_found_on_a_later_day_keeps_the_day_it_was_played() {
     assert_eq!(ended, [NOW, date_noon_epoch("31-10-2023").unwrap()]);
 }
 
-/// A host killed mid-session leaves its scratch home behind, and the next
-/// process hands the same home out again. The new session starts on an empty
-/// table: the old one's games are not logged a second time.
+/// A run-log write that fails partway (a full volume) has still landed its
+/// first lines. Those count as logged, so the retry appends only the rest
+/// and no game is on the board twice.
 #[test]
-fn a_session_does_not_log_the_table_an_earlier_host_left_in_its_home() {
-    let fixture = Fixture::new("leftover");
-    let killed = fixture.session("home");
+fn a_sync_cut_short_retries_only_the_runs_that_did_not_land() {
+    let fixture = Fixture::new("short");
+    let mut table = fixture.session("home");
     write_score(
-        killed.score_file(),
-        &[record("Alice", "14-11-2023", "1000", 0)],
+        table.score_file(),
+        &[
+            record("Alice", "14-11-2023", "2000", 0),
+            record("Alice", "14-11-2023", "1000", 1),
+        ],
     );
 
-    let mut table = fixture.session("home");
-    assert_eq!(fixture.sync(&mut table, NOW), 0);
-    assert!(!fixture.runs().exists());
+    let runs = fixture.runs();
+    let cut_short = table.sync_with(NOW, |lines| {
+        append(&runs, &lines[..1])
+            .map_err(|short| short.error)
+            .unwrap();
+        Err(ShortAppend {
+            landed: 1,
+            error: anyhow::anyhow!("no space left on device"),
+        })
+    });
+    assert!(cut_short.is_err());
+
+    assert_eq!(fixture.sync(&mut table, NOW), 1);
+    assert_eq!(
+        log_lines(&fixture.runs()),
+        [
+            format!("Alice\t2000\t0\t{NOW}\t14-11-2023"),
+            format!("Alice\t1000\t1\t{NOW}\t14-11-2023"),
+        ]
+    );
 }
 
 /// A session that never finished a game leaves no table and logs nothing.

@@ -27,8 +27,9 @@
 // `runs.log` line: `<name>\t<money>\t<dead:0|1>\t<ended_epoch>\t<sco_date>`.
 //
 // shortcut: a session past 18 games can push its own lowest off before a
-// sync sees it, and a host killed mid-session loses what finished since the
-// last timer tick. Logging every game exactly needs an upstream per-run log.
+// sync sees it, and a host killed without its shutdown signal (SIGKILL, a
+// crash) loses what finished since the last timer tick. Logging every game
+// exactly needs an upstream per-run log.
 
 use std::collections::HashMap;
 use std::fs;
@@ -119,25 +120,14 @@ pub(crate) struct SessionTable {
 }
 
 impl SessionTable {
-    /// Start a session's table in `home`, the session's scratch `HOME`, which
-    /// this creates empty. The game creates the file on launch
-    /// (`OpenHighScoreFile`, serverside.c:1982), so the table starts empty.
-    ///
-    /// A `home` that already exists is cleared first. The host names homes by
-    /// a counter that restarts with the process, so a host killed mid-session
-    /// leaves a directory a later session is handed again, and the table in
-    /// it would be logged a second time as that session's games.
-    pub(crate) fn create(home: &Path) -> anyhow::Result<Self> {
-        match fs::remove_dir_all(home) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(anyhow::Error::new(e).context("clearing a leftover session home")),
-        }
-        fs::create_dir_all(home).context("creating the session home")?;
-        Ok(Self {
+    /// The table in the session's scratch `HOME`, which the host hands over
+    /// empty. The game creates the file on launch (`OpenHighScoreFile`,
+    /// serverside.c:1982), so the table starts empty.
+    pub(crate) fn new(home: &Path) -> Self {
+        Self {
             score_file: home.join("dopewars.sco"),
             logged: HashMap::new(),
-        })
+        }
     }
 
     /// The path the game gets as `-f`.
@@ -146,9 +136,19 @@ impl SessionTable {
     }
 
     /// Append the table's entries this session has not logged yet to
-    /// `runs_log`. Returns how many lines were appended. A failed append
-    /// logs nothing as done, so the next sync retries it.
+    /// `runs_log`. Returns how many lines were appended. An append that
+    /// fails partway counts the lines that landed as logged and returns the
+    /// error: the next sync retries only the rest.
     pub(crate) fn sync(&mut self, runs_log: &Path, now_epoch: i64) -> anyhow::Result<usize> {
+        self.sync_with(now_epoch, |lines| append(runs_log, lines))
+    }
+
+    /// [`Self::sync`] with the append passed in, so a test can stop one short.
+    fn sync_with(
+        &mut self,
+        now_epoch: i64,
+        append: impl FnOnce(&[String]) -> Result<(), ShortAppend>,
+    ) -> anyhow::Result<usize> {
         let entries = match fs::read(&self.score_file) {
             Ok(bytes) => parse_sco(&bytes),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -159,13 +159,13 @@ impl SessionTable {
         // already logged must not be appended twice, however many times the
         // table is rewritten.
         let mut remaining = self.logged.clone();
-        let mut out = String::new();
+        let mut lines = Vec::new();
         let mut fresh = Vec::new();
         for entry in entries {
             match remaining.get_mut(&entry) {
                 Some(count) if *count > 0 => *count -= 1,
                 Some(_) | None => {
-                    out.push_str(&format!(
+                    lines.push(format!(
                         "{}\t{}\t{}\t{}\t{}\n",
                         entry.name,
                         entry.money,
@@ -180,25 +180,67 @@ impl SessionTable {
         if fresh.is_empty() {
             return Ok(0);
         }
-        append(runs_log, &out)?;
-        let appended = fresh.len();
-        for entry in fresh {
+        let (landed, outcome) = match append(&lines) {
+            Ok(()) => (fresh.len(), Ok(fresh.len())),
+            Err(short) => (short.landed, Err(short.error)),
+        };
+        for entry in fresh.into_iter().take(landed) {
             *self.logged.entry(entry).or_default() += 1;
         }
-        Ok(appended)
+        outcome
     }
 }
 
-fn append(path: &Path, lines: &str) -> anyhow::Result<()> {
+/// An append that stopped before its last line: the first `landed` lines are
+/// in the log, whole, and the rest are not.
+struct ShortAppend {
+    landed: usize,
+    error: anyhow::Error,
+}
+
+/// Append `lines`, each ending in its newline, to the run log at `path`.
+fn append(path: &Path, lines: &[String]) -> Result<(), ShortAppend> {
     let _guard = APPEND
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    file.write_all(lines.as_bytes())?;
+    let opened = fs::OpenOptions::new().create(true).append(true).open(path);
+    let mut file = match opened {
+        Ok(file) => file,
+        Err(e) => {
+            return Err(ShortAppend {
+                landed: 0,
+                error: anyhow::Error::new(e).context("opening the dopewars run log"),
+            });
+        }
+    };
+    for (landed, line) in lines.iter().enumerate() {
+        if let Err(error) = append_line(&mut file, line) {
+            return Err(ShortAppend { landed, error });
+        }
+    }
     Ok(())
+}
+
+/// Append one line whole, or none of it. A write that fails partway (a full
+/// volume) leaves the start of a line behind, and the next append would run
+/// into it and spoil both, so the log is cut back to where the line began.
+/// The stats stream ships whole lines only, so it has read nothing past the
+/// cut.
+fn append_line(file: &mut fs::File, line: &str) -> anyhow::Result<()> {
+    let start = file
+        .metadata()
+        .context("reading the dopewars run log's length")?
+        .len();
+    let written = match file.write_all(line.as_bytes()) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    match file.set_len(start) {
+        Ok(()) => Err(anyhow::Error::new(written).context("appending a run to the dopewars log")),
+        Err(cut) => Err(anyhow::Error::new(written).context(format!(
+            "appending a run to the dopewars log, and its partial line stays: {cut}"
+        ))),
+    }
 }
 
 /// When a newly seen run ended: now, the game having just finished, unless
