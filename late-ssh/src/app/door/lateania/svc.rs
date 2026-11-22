@@ -4436,9 +4436,9 @@ impl WorldState {
                 .filter(|&(i, ..)| i < super::world::WILDLIFE.len());
             p.pet_meals = saved.pet_meals;
             // Restore the appearance/bio choices (clamped to valid options).
-            for i in 0..appearance::N_FIELDS {
+            for (i, field) in p.appearance.iter_mut().enumerate() {
                 let v = saved.appearance.get(i).copied().unwrap_or(0);
-                p.appearance[i] = v % appearance::option_count(i).max(1) as u8;
+                *field = v % appearance::option_count(i).max(1) as u8;
             }
             // Restore vitals last so equipment and CON max-hp are already in effect.
             let max = p.max_hp();

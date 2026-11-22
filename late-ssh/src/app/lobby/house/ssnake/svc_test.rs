@@ -217,9 +217,9 @@ fn last_food_pays_the_clear_bonus_and_reshuffles_the_arena() {
     assert!(!Arc::ptr_eq(&before, &after), "a new arena is drawn");
     assert_eq!(state.points_left, after.points_needed);
     assert!(state.point.is_some(), "the new arena is stocked");
-    for seat in 0..2 {
-        assert_eq!(state.players[seat].body.len(), 1, "everyone is re-seeded");
-        assert_eq!(state.players[seat].motion, Motion::Idle);
+    for player in state.players.iter().take(2) {
+        assert_eq!(player.body.len(), 1, "everyone is re-seeded");
+        assert_eq!(player.motion, Motion::Idle);
     }
     assert!(
         outcome.next_millis.is_some(),
@@ -686,12 +686,8 @@ fn the_house_table_seats_five_distinct_snakes() {
         .map(|seat| SsnakeColor::for_seat(seat).label())
         .collect();
     assert_eq!(labels, ["Green", "Red", "Blue", "Purple", "Cyan"]);
-    for seat in 0..5 {
-        assert_eq!(
-            state.players[seat].body.len(),
-            1,
-            "seat {seat} should be on the board"
-        );
+    for (seat, player) in state.players.iter().enumerate().take(5) {
+        assert_eq!(player.body.len(), 1, "seat {seat} should be on the board");
     }
 }
 

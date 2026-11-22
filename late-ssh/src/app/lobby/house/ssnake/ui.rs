@@ -359,16 +359,14 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
     if let Some(point) = snapshot.point {
         colors[point.y as usize * level.width + point.x as usize] = food_color(snapshot);
     }
-    for seat_index in 0..MAX_SEATS {
-        let player = &snapshot.players[seat_index];
+    for (seat_index, player) in snapshot.players.iter().enumerate() {
         for segment in player.body.iter().skip(1) {
             paint(&mut colors, level, *segment, body_color(seat_index));
         }
     }
     // Heads last so they stay visible over walls and the other body while a
     // fresh collision plays out its death shrink.
-    for seat_index in 0..MAX_SEATS {
-        let player = &snapshot.players[seat_index];
+    for (seat_index, player) in snapshot.players.iter().enumerate() {
         if let Some(head) = player.body.first().copied() {
             let color = match player.motion {
                 Motion::Dying => body_color(seat_index),

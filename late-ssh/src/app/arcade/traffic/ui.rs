@@ -764,13 +764,12 @@ fn draw_road(
                 .set_bg(Color::Rgb(0, 0, 0));
         }
 
-        for lane_idx in 0..geom.total_lanes {
+        for (lane_idx, &lane_x_start) in geom.lane_starts.iter().enumerate() {
             let lane_cfg = match lanes.get(lane_idx) {
                 Some(l) => l,
                 None => continue,
             };
             let bg = (lane_cfg.style.bg)(theme_id);
-            let lane_x_start = geom.lane_starts[lane_idx];
             let car_hit = state.ai_cars.iter().find(|c| {
                 c.lane_idx == lane_idx
                     && ri >= car_top_row(state, c, anchor)
@@ -1069,13 +1068,12 @@ fn draw_lane_speed_labels(frame: &mut Frame, area: Rect, stage: &Stage, geom: &S
         return;
     }
     let buf = frame.buffer_mut();
-    for lane_idx in 0..geom.total_lanes {
+    for (lane_idx, &lane_x) in geom.lane_starts.iter().enumerate() {
         let Some(lane) = stage.road.lanes.get(lane_idx) else {
             continue;
         };
         let speed = lane.own_max_speed as u16;
         let label = format!("{:>3}", speed);
-        let lane_x = geom.lane_starts[lane_idx];
         for (i, ch) in label.chars().enumerate() {
             if let Some(cell) = buf.cell_mut((lane_x + 1 + i as u16, screen_y)) {
                 let mut tmp = [0u8; 4];

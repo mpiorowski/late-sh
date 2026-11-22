@@ -1760,10 +1760,7 @@ fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
         chat::input::handle_compose_char(app, ch);
         return true;
     }
-    if ctx.screen == Screen::Dashboard && ctx.feeds_processing {
-        return true;
-    }
-    false
+    ctx.screen == Screen::Dashboard && ctx.feeds_processing
 }
 
 fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {

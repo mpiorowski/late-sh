@@ -494,9 +494,8 @@ impl State {
 
     fn check_win(&mut self) {
         let mut s = String::with_capacity(81);
-        for r in 0..9 {
-            for c in 0..9 {
-                let val = self.grid[r][c];
+        for row in &self.grid {
+            for &val in row {
                 if val == 0 {
                     return;
                 }
