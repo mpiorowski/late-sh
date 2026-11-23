@@ -40,10 +40,12 @@ impl Default for DbConfig {
 
 /// How long a pooled connection lives before the pool replaces it.
 ///
-/// A Postgres backend keeps its catalog and plan caches for as long as its
-/// connection lives, so a pool that never retires connections grows the
-/// server's memory with the age of the process: week-old backends held
-/// over 100 MiB each and pushed the primary into its memory limit.
+/// A Postgres backend's heap only grows: the allocator keeps what the
+/// backend frees wherever something longer-lived was allocated above it,
+/// so a pool that never retires connections grows the server's memory
+/// with the age of the process. Week-old backends held over 100 MiB each,
+/// about 7 MiB of it caches, and pushed the primary into its memory
+/// limit (infra/RUNBOOK.md, 2026-11-14).
 const MAX_CONNECTION_AGE: Duration = Duration::from_secs(30 * 60);
 
 /// Create a connection pool from configuration.
