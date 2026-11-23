@@ -11,13 +11,13 @@ runner watches and bets bits on a corner, and owed at levels 3, 6, 9 and
 
 | File | Owns |
 |---|---|
-| `data.rs` | The flat numbers: `ATTACK` 16 and `DEFENSE` 12 (`powers()`, through `Powers::of`, is a strike of 10 and a block of 7, no glyph hit and no noise), `SIGNAL` 45, `ROUNDS` 4, `SLOTS` 4, `CALL_SECS` 180, `BELL_SECS` 300, `ROUND_SECS` 30, `REVEAL_SECS` 6, `AFTERMATH_SECS` 60, `MAX_PRESSES` 3, `RAKE_PERCENT` and `PURSE_PERCENT` 10 each. The copy: the wire's `call_line`, `set_line` and `result_line`, `called_banner` for a runner called while somewhere else, and `reply_line`, the ring's word for every answer and refusal. |
-| `state.rs` | Pure: `Duel` (the round, two `Corner`s in seat order, caller first, the `tape` of every resolved round as `Beat`s, the `Ending`: `Knockout`, `Points`, `Draw`), `place` / `clear` / `lock` (refused with a `Refusal`: over, locked, no slot, no card, laid already, no energy; the energy is walked through the slots in order, so a burn paying for a surge behind it counts), `call_time` (the clock ran out: what is laid locks, a corner that laid nothing gets `policy::auto`), `resolve` (the slots one at a time, both corners at once), `view_for` (every hand open, a corner's slots blank for everyone but that corner until the round comes out), `Picks` (one option of every draft: `opening`, `parse`, `flipped`, and `deck` with the runner's inks), `Pool`, `settle` and `pay` (the payout arithmetic). The shuffle's dice are handed in, and the whole duel is one serde value that lives on the row. |
+| `data.rs` | The flat numbers: `ATTACK` 16 and `DEFENSE` 12 (`powers()`, through `Powers::of`, is a strike of 10 and a block of 7, no glyph hit and no noise), `SIGNAL` 45, `ROUNDS` 4, `SLOTS` 4, `CALL_SECS` 600, `BELL_SECS` 300, `ROUND_SECS` 30, `REVEAL_SECS` 6, `AFTERMATH_SECS` 60, `MAX_PRESSES` 3, `RAKE_PERCENT` and `PURSE_PERCENT` 10 each. The copy: the wire's `call_line`, `set_line` and `result_line`, `called_banner` for a runner called while somewhere else, and `reply_line`, the ring's word for every answer and refusal. |
+| `state.rs` | Pure: `Duel` (the round, two `Corner`s in seat order, caller first, the `tape` of every resolved round as `Beat`s (each corner's `Half`: the move, what the card threw before any block as `hit`, what landed on them as `took`, their signal and block after), the `Ending`: `Knockout`, `Points`, `Draw`), `place` / `clear` / `lock` (refused with a `Refusal`: over, locked, no slot, no card, laid already, no energy; the energy is walked through the slots in order, so a burn paying for a surge behind it counts), `call_time` (the clock ran out: what is laid locks, a corner that laid nothing gets `policy::auto`), `resolve` (the slots one at a time, both corners at once), `view_for` (every hand open, a corner's slots blank for everyone but that corner until the round comes out), `Picks` (one option of every draft: `opening`, `parse`, `flipped`, and `deck` with the runner's inks), `Pool`, `settle` and `pay` (the payout arithmetic). The shuffle's dice are handed in, and the whole duel is one serde value that lives on the row. |
 | `policy.rs` | Pure: `obvious` (a burn first, the biggest guard when nothing stands and the other hand holds a heavy hit, then every hit the energy covers, the free ones first and the best rate after, then guards and static) and `auto` (the obvious round, with a mute laid across from the slot of the other corner's heaviest obvious hit, guessed from their open hand on `Duel::unlaid`, never from what they laid). Every card goes through `Duel::place`, so the machine decides what the energy covers. It is the floor: a person reading the open hands beats it. |
 | `svc.rs` | `RingService`, the one ring layer touching the database, logs and metrics: the requests (`call_task`, `answer_task` (accept or decline), `deck_task` (read or store the picks), `bet_task`, `act_task` (place, clear, lock)), all through `run`, the one place a request's outcome is counted and logged; the sweeper (`start_sweeper_task`, `sweep`, `advance`, `settle_the_unsettled`); the settle after a bout (`settle`, `settle_fighter`, `pay_bet`); the notify worker into a process-shared `watch<RingBoard>` (`start_notify_worker`, `refresh`), fed by the tables' own triggers (migration 287): no write here notifies by hand. `Board` is the open calls, the bout in the ring or the last one out of it as a `LiveBout` (the row, the whole duel, the bets), and every runner's record. |
-| `session.rs` | `RingSession`: the session's copy of the board cut by `seen_by` (other corners' slots blank), the picks it brings, the cursor over `roster` (the presence records joined with the runner directory, marks one or more, by name), the corner picked for a bet, the ring's last word, one request in flight, and the countdown's last painted second. `phase` reads the board at a moment: `Empty`, `Set` (accepted, before the bell), `On`, `Over` (ended, still on the board). `tick(app)` copies the board, drains the answer, re-reads the sheet when this runner's bits moved or their gate opened, and raises the banner for a call that lands while the panel is shut. Decides nothing. |
-| `input.rs` | Keys while the panel is open (`city/input.rs` hands it every key): with the ring empty, ↑↓ (`k` `j`) walk the roster, `c` calls, `a` takes a call, `x` declines one or takes your own back, `1` to `4` flip a draft pick (marked runners only); with a bout set, ←→ (`h` `l`) pick a corner and `b` puts one press on it (a fighter's goes on their own); for a fighter from the accept on, `1` to `5` lay that hand card in the next empty slot or take it back, `e` or space locks the round. Enter leaves; `0`, Tab and `q` stay global, and so do the digits but a fighter's during a bout and a marked runner's at an empty ring; `?` is the guide's (taken in `city/input.rs` first); everything else is swallowed. |
-| `ui.rs` | `RingView` and `panel_lines`, one function per phase: the empty ring (the gate owed in red, the deck you bring with the four picks and their keys, the marked runners on the wire with their records, the open calls, the keys), a bout set (both corners with their records and what they drafted, the pool by corner, your bet, the split, the bell's clock, a fighter's own round), the rounds on (both signal bars and blocks, locked or laying, both hands open, your own slots and energy, the round that last came out slot by slot, the clock), and the aftermath (the result, the pool's split, what your bet paid, the gate opened). Pure; `city/ui.rs::draw_panel` frames it and puts the ring's word at its foot. |
+| `session.rs` | `RingSession`: the session's copy of the board cut by `seen_by` (other corners' slots blank), the picks it brings, the cursor over `roster` (the presence records joined with the runner directory, marks one or more, by name), the corner picked for a bet, the ring's last word, one request in flight, and the countdown's last painted second (a frame a second is owed while the city is on screen: the panel and the street's notice both count down). `phase` reads the board at a moment: `Empty`, `Set` (accepted, before the bell), `On`, `Over` (ended, still on the board). `tick(app)` copies the board, drains the answer, re-reads the sheet when this runner's bits moved or their gate opened, and raises the banner for a call that lands while the panel is shut. Decides nothing. |
+| `input.rs` | Keys while the panel is open (`city/input.rs` hands it every key): with the ring empty, ↑↓ (`k` `j`) walk the roster, `c` calls, `a` takes a call, `x` declines one or takes your own back, `1` to `4` flip a draft pick (marked runners only); with a bout set, ←→ (`h` `l`) pick a corner and `b` puts one press on it (a fighter's goes on their own); for a fighter from the accept on, `1` to `5` lay that hand card in the next empty slot or take it back, `e` or space locks the round. Enter leaves; `0`, Tab and `q` stay global, and so do the digits but a fighter's from the accept until the ring clears (once the bout has ended they do nothing, so a card key pressed as the last round comes out never turns the page) and a marked runner's at an empty ring; `?` is the guide's (taken in `city/input.rs` first); everything else is swallowed. |
+| `ui.rs` | `RingView`, `panel_lines(view, short_by)` and `notice`. One function per phase: the empty ring (the gate owed in red, the deck you bring as a row per pick with its key, the card it was taken over and what it does at the ring (`ring_rule`: the road's `Card::rule` but for the two cards that name the glyph), the marked runners on the wire with their records, the open calls, the keys); a bout set (the bell's clock, both corners with their records and under each what they drafted, a fighter's round 1 over the book so a short screen cuts the book first, the book: the pool by corner, your bet, the press, the split); the rounds on (both signal bars and blocks, locked or laying, a fighter's round or for a watcher both hands as chips, the tape, the pool); the aftermath (the result, the tape, the pool's split, what your bet paid, the gate opened). A fighter's round (`round_lines`) is the same rows whatever is laid: the energy as pips, the hand as five framed cards (`hand_cards`: the key, the name, two rows of what it does at the ring's numbers through `Card::effect` on the table as it stands, in the road's words (`fight/ui.rs::card_text`) but for the mute, and on the bottom edge the cost or, once laid, `slot N` with the frame lit; a card the energy left or a locked round cannot take is dark), the slots in the order they come out, the other corner's open hand as chips, and the keys or what a locked round waits for. The tape (`tape_lines`, `deed`) tells the round that last came out slot by slot: for each corner the card, what it held, what it threw and how much of that the block ate, what it mended, a cancelled or fizzled card said so, and both signals after the slot, red where it fell and green where it rose; a deed longer than its column is cut. Every phase but the aftermath closes with `rules_lines`, dropped whole on a screen `short_by` rows short: how a round goes in six lines (the order, the open hands and hidden slots, slot against slot with guards before hits, a block against a strike in the ring's own numbers, block and static carrying on, how it ends) while a bout is set or on, and at an empty ring, where a call's minutes are the time to read it, the bell and the rounds ahead of those as how a bout goes. An empty ring still short with that gone folds the deck to one row of picks, so a call and the keys that answer it stay on a 24 row screen. No row is wider than the panel's 94 cells (names in sentences are cut at 20, a name is up to 32): a wrapped row lands at the frame's edge and reads as a new one. The rows that are columns (the hand's cards, the slots, a hand as chips, the tape) and how the game goes fit 74 cells, the inside of the panel on an 80 column terminal; a sentence wider than that wraps there. `notice` is the ring's news for the street: a call to this runner, their own call out, a bout set or on (theirs said as theirs), the result while it stands, and the verb for the city's key; `None` when nothing concerns them. Pure; `city/ui.rs::draw_panel` frames the panel and puts the ring's word at its foot, `draw_ring_notice` frames the notice. |
 
 Tests sit beside each file. The rows' own test is
 `late-core/src/models/deadchannel_bout_test.rs` (the three unique
@@ -31,18 +31,24 @@ pay claim taken once).
   directory, and the roster lists only marked runners on the wire. Any
   standing runner can watch and bet.
 - **Where.** The RING shop (`Landmark::Ring`, the magenta sign beside
-  the blade shop). Enter opens its panel (`RingSession::open` reads the
-  deck the first time), and the ring takes every key until Enter or Esc
-  closes it. Watching is there and nowhere else.
+  the blade shop). Enter at the sign, or `r` from anywhere on the
+  street, opens its panel (`RingSession::open` reads the deck the first
+  time), and the ring takes every key until Enter or Esc closes it.
+  Watching is there and nowhere else. The street carries the ring's
+  notice (`ui::notice`, drawn bottom-left by
+  `city/ui.rs::draw_ring_notice`): a call to this runner, their own call
+  out, a bout set or on, the result while it stands, with the `r` that
+  steps in. Nobody is walked to the ring.
 - **The call.** `c` calls the marked runner under the cursor, who must
-  be on the wire (a presence record). A call lasts `CALL_SECS` (180 s);
+  be on the wire (a presence record). A call lasts `CALL_SECS` (600 s);
   one open call or bout per caller, and none while a bout is accepted
   and unfinished: one conditional insert decides both. The runner called
   gets a DM from the `afterglow` voice (`data::call_dm` through
   `ChatService::post_voice_dm_task`: unread until read, in the DM the
   first contact invitation opened), a session of theirs that is not
   looking at the ring gets a banner, and the wire gets a line for the
-  street that names them without a mention, so they are rung once. `a` takes the call, `x` says no
+  street that mentions them, so the call rings in the room as well as in
+  the DM. `a` takes the call, `x` says no
   or takes your own back; a call nobody answers lapses (the sweeper
   ends it as expired, no wire line). The call, answer and pick keys
   work only while the ring is empty: no bout set or on, and the last
@@ -123,8 +129,9 @@ pay claim taken once).
   runner's failure costs nobody else theirs. A runner who no longer
   stands is logged and counted as `pay_left`, the claim taken.
 - **The wire.** Three lines from the `afterglow` voice: the call
-  (names both runners, mentions neither; the DM is what rings), the bout set (the bell's minutes, bits
-  down at RING), and the result (who put whom down in which round, or
+  (mentions the runner called), the bout set (mentions the caller, who
+  may be anywhere by then; the bell's minutes, bits down at RING), and
+  the result (who put whom down in which round, or
   took it on points, or a draw, and how many bits rode on it). Declines
   and lapsed calls say nothing.
 
@@ -168,7 +175,8 @@ The fight never takes a bout's row, so the two cannot cross.
   `read_until_ok(Refresh::RingBoard, ..)`. A finished bout stays on the
   board `AFTERMATH_SECS` (60 s).
 - **The session.** A countdown owes one frame a second, and only while
-  the panel is up. A session re-reads its sheet after its own stake,
+  the city is on screen: the panel and the street's notice both show
+  one. A session re-reads its sheet after its own stake,
   and for a bout it fought or bet on once the bout ends and again once
   everything of theirs on it is settled.
 
@@ -196,9 +204,10 @@ panel is "Ring Bouts" on the deadchannel row.
 ## Seams
 
 `App.ring` (the session), one tick line in `tick.rs`
-(`ring::session::tick`), the panel in `city/ui.rs` (`RingView` built in
-`render.rs`, drawn through `ring_ui::panel_lines`), the key hand-off and
-`RingSession::open` in `city/input.rs`, `Landmark::Ring` and its
+(`ring::session::tick`), the panel and the street's notice in
+`city/ui.rs` (`RingView` built in `render.rs`, drawn through
+`ring_ui::panel_lines` and `ring_ui::notice`), the key hand-off, the `r`
+key and `RingSession::open` in `city/input.rs`, `Landmark::Ring` and its
 `Enter::Panel` in `city/`, `State.ring_service` (built in `main.rs` with
 its own `FightService`, the notify worker on `RingService::CHANNELS`
 and the sweeper started there), `Channel::DeadchannelBout` and
@@ -226,8 +235,9 @@ deck a runner brings stays.
 - **A runner already past level 3 on a second climb** owes a bout
   before their next step on the road.
 - **A call is a DM and a wire line.** The DM stays in the runner's
-  inbox after the call lapses, saying three minutes that are over. One open call
-  per caller, the 180 s expiry, and `CallResult::TooSoon` (the same
+  inbox after the call lapses, saying ten minutes that are over, and the
+  wire's line is a mention on top of it. One open call
+  per caller, the 600 s expiry, and `CallResult::TooSoon` (the same
   runner is not rung again until the last call to them would have run
   out, however it ended) are the limits on that.
 - **A mark is not held the way the ledge is.** A runner who bets and
@@ -235,7 +245,8 @@ deck a runner brings stays.
   sheet and is still paid the bet: the kill cannot be refused the way
   the fall is.
 - **Watching is at the RING shop only.** The wire carries the call, the
-  bell and the result.
+  bell and the result; the street's notice says a bout is on and how to
+  get there, and shows none of it.
 
 ## Testing
 

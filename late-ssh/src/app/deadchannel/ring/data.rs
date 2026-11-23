@@ -29,7 +29,7 @@ pub(crate) const ROUNDS: u8 = 4;
 pub(crate) const SLOTS: usize = 4;
 
 /// How long a call waits for its answer.
-pub(crate) const CALL_SECS: i64 = 180;
+pub(crate) const CALL_SECS: i64 = 600;
 /// From the accept to the bell: the time the street has to bet.
 pub(crate) const BELL_SECS: i64 = 300;
 /// What a round gets on the clock, from the bell or from the last reveal.
@@ -60,12 +60,12 @@ pub(crate) fn powers() -> Powers {
     )
 }
 
-/// The wire's line for a call: the street's news of it. It names the
-/// runner called without mentioning them; [`call_dm`] is what reaches
-/// them.
+/// The wire's line for a call: the street's news of it, and a mention of
+/// the runner called, so it rings them in the room as well as in the DM
+/// ([`call_dm`]).
 pub(crate) fn call_line(bout: &Bout) -> String {
     format!(
-        "{} calls {} to the ring. {} minutes to answer, at RING.",
+        "{} calls @{} to the ring. {} minutes to answer, at RING.",
         bout.caller_username,
         bout.called_username,
         CALL_SECS / 60
@@ -76,16 +76,19 @@ pub(crate) fn call_line(bout: &Bout) -> String {
 /// must not be missed, so it goes to them and not past them.
 pub(crate) fn call_dm(bout: &Bout) -> String {
     format!(
-        "{} calls you to the ring. you have {} minutes. go down to the city, find the RING sign: `a` takes it, `x` says no.",
+        "{} calls you to the ring. you have {} minutes. go down to the city and press `r`: `a` takes it, `x` says no.",
         bout.caller_username,
         CALL_SECS / 60
     )
 }
 
-/// The wire's line for an accepted call.
+/// The wire's line for an accepted call. It mentions the caller, the one
+/// of the two who may be anywhere by now: the runner called is at the
+/// ropes, having just taken it.
 pub(crate) fn set_line(bout: &Bout) -> String {
     format!(
-        "{} and {} step into the ring. the bell in {} minutes. bits down at RING.",
+        "{} takes the call: @{} and {} step into the ring. the bell in {} minutes. bits down at RING.",
+        bout.called_username,
         bout.caller_username,
         bout.called_username,
         BELL_SECS / 60
@@ -126,7 +129,7 @@ pub(crate) const SLOTS_FULL_LINE: &str = "every slot is laid. take a card back f
 
 /// The banner for a runner called while they are somewhere else.
 pub(crate) fn called_banner(caller: &str) -> String {
-    format!("{caller} calls you to the ring. Answer at RING, down in the city.")
+    format!("{caller} calls you to the ring. Press r down in the city to answer.")
 }
 
 /// The ring's word for an answer. `None` for an answer the board shows

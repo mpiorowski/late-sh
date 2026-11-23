@@ -28,6 +28,11 @@ fn no_ring(board: &RingBoard) -> ring_ui::RingView<'_> {
 }
 
 fn render(state: &State, width: u16, height: u16) -> String {
+    render_ringed(state, width, height, no_ring(&RingBoard::default()))
+}
+
+/// [`render`] with `ring` as the session's copy of the ring.
+fn render_ringed(state: &State, width: u16, height: u16, ring: ring_ui::RingView<'_>) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -57,7 +62,7 @@ fn render(state: &State, width: u16, height: u16) -> String {
                         writing: None,
                         word: None,
                     },
-                    ring: no_ring(&RingBoard::default()),
+                    ring,
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -90,6 +95,77 @@ fn the_runner_and_the_wire_popover_render_at_the_spawn() {
         screen.contains("back up the wire"),
         "the popover verb\n{screen}"
     );
+}
+
+#[test]
+fn the_street_shows_a_call_to_the_runner_with_the_key_that_steps_in() {
+    use chrono::{Duration, Utc};
+    use late_core::models::deadchannel_bout::Bout;
+
+    let me = Uuid::now_v7();
+    let now = Utc::now();
+    let board = RingBoard {
+        calls: vec![Bout {
+            id: Uuid::now_v7(),
+            day: now.date_naive(),
+            caller_user_id: Uuid::now_v7(),
+            called_user_id: me,
+            caller_username: "tom".to_string(),
+            called_username: "mira".to_string(),
+            caller_deck: None,
+            called_deck: None,
+            called_at: now,
+            expires_at: now + Duration::seconds(600),
+            accepted_at: None,
+            bell_at: None,
+            deadline_at: None,
+            state: None,
+            pool_caller: 0,
+            pool_called: 0,
+            ended_at: None,
+            outcome: None,
+            caller_settled_at: None,
+            called_settled_at: None,
+        }],
+        live: None,
+        records: HashMap::new(),
+    };
+    let ringed = |state: &State| {
+        render_ringed(
+            state,
+            100,
+            30,
+            ring_ui::RingView {
+                me,
+                now,
+                ..no_ring(&board)
+            },
+        )
+    };
+
+    // On the street: the news and the key, in the ring's box, and the
+    // runner is still where they stood.
+    let state = State::new();
+    let screen = ringed(&state);
+    assert!(screen.contains("the ring"), "the notice's title\n{screen}");
+    assert!(
+        screen.contains("tom calls you to the ring. 10:00 to answer."),
+        "{screen}"
+    );
+    assert!(screen.contains("[r] answer"), "{screen}");
+    assert!(
+        screen.contains("back up the wire"),
+        "the popover stays\n{screen}"
+    );
+
+    // A shop's panel is its own business: the notice waits under it.
+    let mut state = State::new();
+    state.open_panel(Landmark::Board);
+    assert!(!ringed(&state).contains("[r] answer"));
+
+    // A ring with nothing for this runner says nothing.
+    let screen = render(&State::new(), 100, 30);
+    assert!(!screen.contains("[r] "), "{screen}");
 }
 
 #[test]

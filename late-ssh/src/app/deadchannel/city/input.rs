@@ -1,7 +1,8 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
 //! run), Enter at a landmark (a shop panel, a street line, the road at
-//! the screen, or the wire out), `f` to walk up to the static and `p` to
-//! open patch from anywhere on the street, Enter to close a panel. The
+//! the screen, or the wire out), `f` to walk up to the static, `p` to
+//! open patch and `r` to step up to the ring from anywhere on the
+//! street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
 //! `Command::Outfit`), the lockers `d` and `w`, the bits machine `b` and
 //! `r`, Dead Air `s`, `d`, `t`, `f`, `u`, and `o` (a glass or a pour
@@ -126,6 +127,18 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         app.music_prefix_armed = false;
         app.city.open_panel(Landmark::Repairs);
         app.fight.clear_till();
+        return true;
+    }
+
+    // `r` steps up to the ring from anywhere on the street, the same
+    // panel Enter at its sign opens: a call has minutes on it and a round
+    // has seconds, and the street's notice (`ui.rs::draw_ring_notice`)
+    // names this key.
+    if let Some(b'r' | b'R') = event_byte(event) {
+        app.music_prefix_armed = false;
+        app.city.open_panel(Landmark::Ring);
+        app.fight.clear_till();
+        app.ring.open();
         return true;
     }
 
@@ -335,3 +348,7 @@ fn event_byte(event: &ParsedInput) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

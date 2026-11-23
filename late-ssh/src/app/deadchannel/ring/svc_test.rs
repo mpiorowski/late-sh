@@ -17,6 +17,7 @@ use super::{
 };
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
+use crate::app::common::mentions::extract_mentions;
 use crate::app::deadchannel::fight::data::RULES;
 use crate::app::deadchannel::fight::state::{Applied, Command, Refusal, Sheet};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
@@ -275,6 +276,61 @@ async fn one_bout_holds_the_ring_and_a_pair_fights_once_a_day() {
         Reply::CallRefused(CallRefusal::TooSoon)
     );
     assert_eq!(call(ash, mira).await, Reply::Called);
+}
+
+#[tokio::test]
+async fn the_wire_mentions_the_runner_called_and_then_the_caller() {
+    let (test_db, runners, svc) = ring_with(&["mira", "tom"], &[]).await;
+    let [mira, tom] = &runners[..] else {
+        panic!("two runners");
+    };
+    set(&svc, mira, tom, Utc::now()).await;
+
+    // The voice's lines on the wire, each with who it mentions: the same
+    // parser the notifications use.
+    let wire = || async {
+        let client = test_db.db.get().await.expect("db client");
+        let room = ChatRoom::get_or_create_deadchannel_room(&client)
+            .await
+            .expect("the wire's room");
+        ChatMessage::list_recent(&client, room.id, 10)
+            .await
+            .expect("list the wire")
+            .into_iter()
+            .map(|message| (extract_mentions(&message.body), message.body))
+            .collect::<Vec<_>>()
+    };
+    let mentioning = |name: &str, lines: &[(Vec<String>, String)]| {
+        lines
+            .iter()
+            .find(|(mentions, _)| mentions == &[name.to_string()])
+            .map(|(_, body)| body.clone())
+    };
+    wait_until(
+        || async {
+            let lines = wire().await;
+            mentioning(&tom.username, &lines).is_some()
+                && mentioning(&mira.username, &lines).is_some()
+        },
+        "the call and the accept on the wire",
+    )
+    .await;
+    let lines = wire().await;
+    // The call rings the runner called; the accept rings the caller,
+    // who may be anywhere by then.
+    assert!(
+        mentioning(&tom.username, &lines)
+            .expect("the call's line")
+            .starts_with(&format!(
+                "{} calls @{} to the ring.",
+                mira.username, tom.username
+            ))
+    );
+    assert!(
+        mentioning(&mira.username, &lines)
+            .expect("the accept's line")
+            .starts_with(&format!("{} takes the call:", tom.username))
+    );
 }
 
 #[tokio::test]
