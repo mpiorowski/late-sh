@@ -17,8 +17,10 @@
 //! the ring's last word at its foot; its `draw_ring_notice` frames the
 //! notice.
 //!
-//! No row is wider than the panel, so nothing wraps: a row that wraps
-//! lands at the frame's edge and reads as a new row. The hand's cards fit
+//! No row is wider than the panel's 94 cells, so nothing wraps: a row
+//! that wraps lands at the frame's edge and reads as a new row. The rows
+//! that are columns (the hand's cards, the slots, the other hand, the
+//! tape) and how the game goes fit 74 cells, the inside of the panel on
 //! an 80 column terminal.
 
 use chrono::{DateTime, Utc};
@@ -51,16 +53,20 @@ use crate::app::deadchannel::runner::svc::RunnerLooks;
 const BAR: usize = 20;
 /// The width a corner's name is cut or padded to beside its signal.
 const NAME: usize = 20;
-/// The width of one card of the hand: five side by side, a cell between
-/// them and the indent, are 76 cells, the inside of the panel on an 80
-/// column terminal.
-const CARD: usize = 14;
+/// The width of one card of the hand, the road's own (`fight/ui.rs`):
+/// five side by side, a cell between them and the indent, are 71 cells.
+/// On an 80 column terminal the panel is 74 inside (the app's frame takes
+/// two cells, the panel's margin two and its own frame two), and the
+/// widths below are cut so the rows that are columns fit that.
+const CARD: usize = 13;
 /// The width of the label ahead of a row of the other hand or the slots.
-const LABEL: usize = 14;
+/// The widest hand there is, five cards and their numbers a cell apart,
+/// lands on 74 cells behind it.
+const LABEL: usize = 10;
 /// The width of a slot's number in the tape, and of what each corner did
-/// in it.
+/// in it: the two columns and both signals after them are 74 cells.
 const TAPE_SLOT: usize = 5;
-const TAPE_COLUMN: usize = 32;
+const TAPE_COLUMN: usize = 31;
 /// The width of a laid card's name in the row of slots.
 const SLOT_CELL: usize = 12;
 /// The width of a pick and the card it was taken over, ahead of what the
@@ -152,17 +158,21 @@ fn clock(secs: i64) -> String {
 /// The panel's rows. `short_by` is how many the screen is short of all
 /// of them (`city/ui.rs::draw_panel`): the panel then gives up how the
 /// game goes, whole, since half an explanation is worse than none and
-/// the guide has all of it; what is still too tall is cut at its foot.
+/// the guide has all of it. An empty ring still short with that gone
+/// folds the deck to one row, so a call and its keys stay on the screen;
+/// what is still too tall is cut at its foot.
 pub(crate) fn panel_lines(view: &RingView<'_>, short_by: usize) -> Vec<Line<'static>> {
-    let (mut lines, whole_bout) = match phase(view.board.live.as_ref(), view.now) {
-        Phase::Empty => (empty_lines(view), true),
-        Phase::Set { live, bell_in } => (set_lines(view, live, bell_in), false),
-        Phase::On { live, clock } => (on_lines(view, live, clock), false),
+    let (mut lines, rules) = match phase(view.board.live.as_ref(), view.now) {
+        Phase::Empty => {
+            let rules = rules_lines(true);
+            (empty_lines(view, short_by > rules.len()), rules)
+        }
+        Phase::Set { live, bell_in } => (set_lines(view, live, bell_in), rules_lines(false)),
+        Phase::On { live, clock } => (on_lines(view, live, clock), rules_lines(false)),
         Phase::Over { live, clears_in } => return over_lines(view, live, clears_in),
     };
     if short_by == 0 {
-        lines.push(Line::default());
-        lines.extend(rules_lines(whole_bout));
+        lines.extend(rules);
     }
     lines
 }
@@ -231,7 +241,8 @@ fn ring_rule(card: Card) -> &'static str {
 }
 
 /// How the card game goes, at the foot of the panel on a screen with the
-/// room for it. With a bout set or on it is the round, for whoever is
+/// room for it, a blank row ahead of it. With a bout set or on it is the
+/// round, for whoever is
 /// looking at one. At an empty ring it is the whole bout, the bell and
 /// the rounds first: the minutes a call waits are when there is time to
 /// read it. The example's numbers are the ring's own.
@@ -242,7 +253,7 @@ fn rules_lines(whole_bout: bool) -> Vec<Line<'static>> {
     let head = match whole_bout {
         true => {
             rules.push(format!(
-                "taking a call sets the bell {} minutes out. until it rings the street bets.",
+                "taking a call sets the bell {} minutes out. the street bets until then.",
                 BELL_SECS / 60
             ));
             rules.push(format!(
@@ -256,7 +267,7 @@ fn rules_lines(whole_bout: bool) -> Vec<Line<'static>> {
         format!(
             "each corner lays up to {SLOTS} cards for {ENERGY} energy, in the order they come out."
         ),
-        "hands are open. slots stay hidden until both lock, or the clock runs out.".to_string(),
+        "hands are open. slots stay hidden until both lock or the clock runs out.".to_string(),
         "then slot 1 meets slot 1, 2 meets 2: guards go up, then both hits land.".to_string(),
         format!(
             "a ‹block› holding {} meets a ‹strike› hitting {}: {} gets through.",
@@ -264,16 +275,18 @@ fn rules_lines(whole_bout: bool) -> Vec<Line<'static>> {
             powers.strike,
             powers.strike - powers.block
         ),
-        "block left over stays up. a hit that lands leaves a ‹static› in your deck.".to_string(),
+        "block left over stays up. a hit that lands puts a ‹static› in your deck.".to_string(),
         format!("a signal at 0 is down. past round {ROUNDS} the higher signal takes it."),
     ]);
-    let mut lines = vec![Line::from(Span::styled(head, p.head))];
+    let mut lines = vec![Line::default(), Line::from(Span::styled(head, p.head))];
     lines.extend(rules.iter().map(|rule| prose(rule, p.dim)));
     lines
 }
 
-/// Nobody in the ring: the deck, the wire, the calls.
-fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
+/// Nobody in the ring: the deck, the wire, the calls. `folded` is the
+/// deck on a screen too short for it: the four picks on one row, what
+/// each does left to the guide.
+fn empty_lines(view: &RingView<'_>, folded: bool) -> Vec<Line<'static>> {
     let p = palette();
     let mut lines: Vec<Line<'static>> = Vec::new();
     let marked = view.sheet.is_some_and(|sheet| sheet.marks >= 1);
@@ -305,8 +318,16 @@ fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
 
     if marked {
         lines.push(Line::from(Span::styled("the deck you bring", p.head)));
-        match view.picks {
-            Some(picks) => {
+        match (view.picks, folded) {
+            (Some(picks), true) => {
+                let mut row = vec![Span::styled(" ", p.text)];
+                for (index, pick) in picks.cards().iter().enumerate() {
+                    row.push(Span::styled(format!(" [{}] ", index + 1), p.key));
+                    row.push(card_mark(*pick));
+                }
+                lines.push(Line::from(row));
+            }
+            (Some(picks), false) => {
                 for (index, (draft, pick)) in DRAFTS.iter().zip(picks.cards()).enumerate() {
                     let other = format!(" not {}", draft.other(*pick).name());
                     let name = pick.marked().chars().count() + other.chars().count();
@@ -324,7 +345,9 @@ fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
                 ));
                 lines.push(prose("level and kit stay outside.", p.dim));
             }
-            None => lines.push(Line::from(Span::styled("  reading it...", p.muted))),
+            (None, true | false) => {
+                lines.push(Line::from(Span::styled("  reading it...", p.muted)))
+            }
         }
         lines.push(Line::default());
 
@@ -600,26 +623,25 @@ fn effect_now(live: &LiveBout, side: Side, card: Card) -> Effect {
     )
 }
 
-/// What a card does, in the two rows under its name: the number it
-/// would land for played now, then the rule nobody would guess. The
-/// road's words (`fight/ui.rs`), but for the mute: here it cancels a
-/// card, not a glyph's move.
+/// What a card does, in the two rows under its name: the road's words
+/// (`fight/ui.rs::card_text`) for every card but the mute, which here
+/// cancels the card across from it and not a glyph's move.
 fn card_text(card: Card, effect: &Effect) -> [String; 2] {
-    let hit = format!("hit {}", effect.damage);
-    let hold = format!("hold {}", effect.block);
     match card {
-        Card::Strike | Card::Surge => [hit, String::new()],
-        Card::Block | Card::Bulwark => [hold, "till hit".to_string()],
-        Card::Wipe => [hold, "-static".to_string()],
-        Card::Jab => [hit, "free".to_string()],
-        Card::Brace => [hold, "free".to_string()],
-        Card::Siphon => [hit, format!("mend {}", effect.mend)],
-        Card::Riposte => [hit, "+block up".to_string()],
-        Card::Burn => [format!("+{} energy", effect.energy), "-static".to_string()],
-        Card::Ground => [hit, "x static".to_string()],
-        Card::Sever => [hit, "x2.5<half".to_string()],
-        Card::Mute => ["cancels".to_string(), "their slot".to_string()],
-        Card::Static => ["dead card".to_string(), "play=gone".to_string()],
+        Card::Mute => ["cancels".to_string(), "across".to_string()],
+        Card::Strike
+        | Card::Block
+        | Card::Surge
+        | Card::Wipe
+        | Card::Jab
+        | Card::Brace
+        | Card::Siphon
+        | Card::Riposte
+        | Card::Bulwark
+        | Card::Burn
+        | Card::Ground
+        | Card::Sever
+        | Card::Static => crate::app::deadchannel::fight::ui::card_text(card, effect),
     }
 }
 
@@ -635,21 +657,22 @@ fn chip_number(effect: &Effect) -> String {
 }
 
 /// A corner's hand as one row of chips, open to everybody: each card
-/// with its number, under `label`.
+/// with its number, a cell apart, under `label`.
 fn hand_chips(live: &LiveBout, side: Side, label: &str) -> Line<'static> {
     let p = palette();
     let corner = live.duel.corner(side);
-    let mut spans = vec![Span::styled(format!("  {} ", fit(label, LABEL - 1)), p.dim)];
+    let mut spans = vec![Span::styled(format!("  {}", fit(label, LABEL)), p.dim)];
     for hand in 0..HAND {
+        spans.push(Span::styled(" ", p.text));
         match corner.piles.card(hand) {
             Some(card) => {
                 spans.push(card_mark(card));
                 spans.push(Span::styled(
-                    format!("{}  ", chip_number(&effect_now(live, side, card))),
+                    chip_number(&effect_now(live, side, card)),
                     p.text,
                 ));
             }
-            None => spans.push(Span::styled("·  ", p.muted)),
+            None => spans.push(Span::styled("·", p.muted)),
         }
     }
     Line::from(spans)
@@ -777,7 +800,7 @@ fn round_lines(live: &LiveBout, side: Side, head: &str) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(top)];
     lines.extend(hand_cards(live, side));
 
-    let mut slots = vec![Span::styled(format!("  {:<LABEL$}", "comes out"), p.dim)];
+    let mut slots = vec![Span::styled(format!("  {:<LABEL$} ", "comes out"), p.dim)];
     for slot in 0..SLOTS {
         let card = corner.slots[slot].and_then(|hand| corner.piles.card(usize::from(hand)));
         slots.push(Span::styled(format!("{} ", slot + 1), p.key));
@@ -813,7 +836,9 @@ fn round_lines(live: &LiveBout, side: Side, head: &str) -> Vec<Line<'static>> {
 /// what it threw and how much of that the other block ate, what it
 /// mended. `before` is the corner's signal and block going into the
 /// beat. The block put up is read off the tape: what stands after, less
-/// what stood before, plus what the other's hit ate of it.
+/// what stood before, plus what the other's hit ate of it. The tape cuts
+/// a deed longer than its column, which only one that hits into a block
+/// and mends is.
 fn deed(half: Half, other: Half, (signal_before, block_before): (i32, i32)) -> String {
     let card = match half.mv {
         Move::Empty => return "nothing laid".to_string(),
@@ -830,7 +855,7 @@ fn deed(half: Half, other: Half, (signal_before, block_before): (i32, i32)) -> S
     if half.hit > 0 {
         did.push(match (other.took, half.hit - other.took) {
             (_, 0) => format!("hits {}", half.hit),
-            (0, _) => format!("hits {}, all blocked", half.hit),
+            (0, _) => format!("hits {}, blocked", half.hit),
             (_, blocked) => format!("hits {}, {blocked} blocked", half.hit),
         });
     }
@@ -918,12 +943,12 @@ fn tape_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
         )];
         for seat in 0..2 {
             let half = beat[seat];
-            let text = deed(half, beat[1 - seat], before[seat]);
+            let text = cut(&deed(half, beat[1 - seat], before[seat]), TAPE_COLUMN - 2);
             let style = match half.mv {
                 Move::Played(_) => p.text,
                 Move::Empty | Move::Fizzled(_) | Move::Muted(_) => p.muted,
             };
-            let pad = TAPE_COLUMN.saturating_sub(text.chars().count()).max(2);
+            let pad = TAPE_COLUMN - text.chars().count();
             spans.extend(card_marked(&text, style));
             spans.push(Span::styled(" ".repeat(pad), p.text));
         }

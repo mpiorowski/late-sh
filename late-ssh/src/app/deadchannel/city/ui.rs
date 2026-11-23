@@ -1737,7 +1737,8 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
 /// word lands in rows already there, so nothing a key does moves the
 /// frame. On a screen too short for all of it the blank row goes first,
 /// then the panel gives up the rows it is short by (the armorer from its
-/// wall, the ring its explanation, `panel_lines`), so the keys and the
+/// wall, the ring its explanation and then its deck's detail,
+/// `panel_lines`), so the keys and the
 /// word stay on the screen.
 fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     let Some(landmark) = view.state.panel() else {
@@ -1852,8 +1853,8 @@ pub(super) fn draw_framed(
 
 /// What a shop's panel says. `short_by` is how many rows the screen is
 /// short of all of it: the armorer gives them up from its wall, the ring
-/// gives up how the game goes; every other panel says everything and is
-/// cut at its foot.
+/// gives up how the game goes and then its deck's detail; every other
+/// panel says everything and is cut at its foot.
 fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);

@@ -226,7 +226,7 @@ fn an_empty_ring_shows_a_marked_runner_the_deck_the_wire_and_the_calls() {
     assert!(holds(&rows, "how a bout goes"));
     assert!(holds(
         &rows,
-        "  taking a call sets the bell 5 minutes out. until it rings the street bets."
+        "  taking a call sets the bell 5 minutes out. the street bets until then."
     ));
     assert!(holds(
         &rows,
@@ -241,6 +241,7 @@ fn an_empty_ring_shows_a_marked_runner_the_deck_the_wire_and_the_calls() {
     let short = panel_short_by(&ring, ring.mira, &sheet(1, 6), now, 3);
     assert!(!holds(&short, "how a bout goes"));
     assert_eq!(short.last().map(String::as_str), Some(row(&rows, "[c]")));
+    assert_eq!(short[..], rows[..short.len()], "nothing else gives");
 
     // Tom reads the same call as his to answer.
     let rows = panel(&ring, ring.tom, &sheet(1, 2), now);
@@ -262,6 +263,49 @@ fn an_empty_ring_shows_a_marked_runner_the_deck_the_wire_and_the_calls() {
             "{marked_only} is for the marked"
         );
     }
+}
+
+#[test]
+fn a_screen_too_short_for_the_empty_ring_folds_the_deck_and_keeps_the_call() {
+    let mut ring = ring();
+    ring.board.calls = vec![call(ring.mira, ring.tom)];
+    let now = at() + Duration::seconds(19);
+    // Tom, called, owing a gate: the tallest the empty ring gets for him.
+    let whole = panel(&ring, ring.tom, &sheet(1, 6), now);
+    let explained = whole
+        .iter()
+        .rev()
+        .position(|row| row == "how a bout goes")
+        .expect("how a bout goes")
+        + 2;
+    let unexplained = &whole[..whole.len() - explained];
+
+    // Short by the explanation or less: only the explanation goes.
+    let short = panel_short_by(&ring, ring.tom, &sheet(1, 6), now, explained);
+    assert_eq!(short[..], *unexplained);
+    assert!(holds(&short, "level and kit stay outside."));
+
+    // Still short with that gone: the four picks take one row and what
+    // they do is left to the guide, so the call and the keys that answer
+    // it are still on the screen.
+    let folded = panel_short_by(&ring, ring.tom, &sheet(1, 6), now, explained + 1);
+    assert_eq!(
+        row(&folded, "[1]"),
+        "  [1] ‹jab› [2] ‹bulwark› [3] ‹burn› [4] ‹sever›"
+    );
+    assert!(!holds(&folded, "level and kit stay outside."));
+    assert_eq!(folded.len(), unexplained.len() - 5);
+    assert_eq!(
+        row(&folded, "calls you"),
+        "  mira calls you. 9:41 to answer."
+    );
+    assert!(
+        folded
+            .last()
+            .expect("a row")
+            .contains("[a] take the call   [x] not tonight")
+    );
+    assert!(holds(&folded, "you owe the ring a bout at level 6"));
 }
 
 #[test]
@@ -362,7 +406,7 @@ fn the_rounds_show_both_hands_and_only_your_own_slots() {
     let rows = panel(&ring, ring.mira, &sheet(1, 4), now);
     assert!(row(&rows, "round 1 of 4").ends_with("the clock 0:21"));
     assert!(
-        row(&rows, "comes out").starts_with(&format!("  comes out     1 {}", mira_first.marked()))
+        row(&rows, "comes out").starts_with(&format!("  comes out  1 {}", mira_first.marked()))
     );
     assert!(row(&rows, "╭").starts_with(&format!("  ╭ 1 {} ", mira_first.name())));
     assert!(row(&rows, "╰").starts_with("  ╰ slot 1 "));
@@ -431,7 +475,7 @@ fn the_round_that_came_out_is_told_slot_by_slot() {
     assert_eq!(row(&rows, "came out"), "round 1 came out, slot by slot");
     assert_eq!(
         row(&rows, "signal").trim_end(),
-        format!("     {:<32}{:<32}signal", "mira", "tom")
+        format!("     {:<31}{:<31}signal", "mira", "tom")
     );
     // What was thrown, what the block ate, and where both signals stood
     // once the slot was over.
@@ -439,7 +483,7 @@ fn the_round_that_came_out_is_told_slot_by_slot() {
     assert_eq!(
         tape_row(&rows, 1),
         format!(
-            "  1  {:<32}{:<32}{SIGNAL} · {}",
+            "  1  {:<31}{:<31}{SIGNAL} · {}",
             format!("‹strike› hits {}, {} blocked", p.strike, p.block),
             format!("‹block› holds {}", p.block),
             SIGNAL - through
@@ -449,7 +493,7 @@ fn the_round_that_came_out_is_told_slot_by_slot() {
     assert_eq!(
         tape_row(&rows, 2),
         format!(
-            "  2  {:<32}{:<32}{SIGNAL} · {}",
+            "  2  {:<31}{:<31}{SIGNAL} · {}",
             format!("‹siphon› hits {}", p.strike),
             "nothing laid",
             SIGNAL - through - p.strike
@@ -523,10 +567,41 @@ fn no_row_is_wider_than_the_panel_whoever_fights() {
                 "{phase}: a row of {} cells wraps in the panel: {wide}",
                 wide.chars().count()
             );
-            // The hand's cards fit an 80 column terminal.
-            for card_row in rows.iter().filter(|row| row.starts_with("  ╭")) {
-                assert!(card_row.trim_end().chars().count() <= 76, "{card_row}");
+            // The rows that are columns fit the panel on an 80 column
+            // terminal, 74 cells inside: the hand's cards, the slots, a
+            // hand as chips, the tape under its two names.
+            let columns = [
+                "  ╭",
+                "  │",
+                "  ╰",
+                "  comes out",
+                "  their hand",
+                "     ",
+                "  1  ",
+                "  2  ",
+                "  3  ",
+                "  4  ",
+            ];
+            for column_row in rows.iter().filter(|row| {
+                columns.iter().any(|start| row.starts_with(start))
+                    || (row.contains('‹')
+                        && (row.starts_with("  mira") || row.starts_with("  tom")))
+            }) {
+                assert!(
+                    column_row.chars().count() <= 74,
+                    "{phase}: a row of {} cells wraps at 80 columns: {column_row}",
+                    column_row.chars().count()
+                );
             }
+            // How the game goes reads whole there too.
+            let rules = rows
+                .iter()
+                .skip_while(|row| !row.starts_with("how a "))
+                .max_by_key(|row| row.chars().count());
+            assert!(
+                rules.is_none_or(|row| row.chars().count() <= 74),
+                "{phase}: {rules:?}"
+            );
         }
     };
     check(&ring, "set", at() + Duration::seconds(48));

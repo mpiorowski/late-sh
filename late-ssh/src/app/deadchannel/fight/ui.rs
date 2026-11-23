@@ -39,7 +39,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::cards::{Board, Card, DRAFTS, Draft, ENERGY, HAND};
+use super::cards::{Board, Card, DRAFTS, Draft, ENERGY, Effect, HAND};
 use super::data::{self, FOES, FoeKind, FoeTier, Intent, OLD_SIGNAL, RATIONS_PER_DAY};
 use super::road::{LANES, Mark, Node, STEPS};
 use super::session::{Picker, Scene};
@@ -597,9 +597,9 @@ pub(crate) fn intent_named(word: &str) -> Option<Intent> {
 /// What a card does, in the two rows under its name: the number it would
 /// land for played now, then the rule nobody would guess. The numbers are
 /// `Card::effect`'s, so the card never prints one the machine would not
-/// play.
-fn card_text(card: Card, powers: &Powers, board: &Board) -> [String; 2] {
-    let effect = card.effect(powers, board);
+/// play. The ring's cards read the same but for the mute
+/// (`ring/ui.rs::card_text`).
+pub(crate) fn card_text(card: Card, effect: &Effect) -> [String; 2] {
     let hit = format!("hit {}", effect.damage);
     let hold = format!("hold {}", effect.block);
     match card {
@@ -700,7 +700,7 @@ fn hand_cards(sheet: &Sheet, fight: &Fight) -> Vec<Line<'static>> {
                     (Some(_), false) | (None, false) => (muted, muted, muted, muted),
                     (None, true) => (ink(INK_DIM), ink(INK_DIM), muted, lit(Neon::Amber)),
                 };
-                let [first, second] = card_text(card, &powers, &board);
+                let [first, second] = card_text(card, &card.effect(&powers, &board));
                 let label = card.name();
                 rows[0].extend([
                     Span::styled("╭ ", frame),
