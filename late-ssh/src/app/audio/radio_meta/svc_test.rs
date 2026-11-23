@@ -27,6 +27,32 @@ fn parse_meta_line_ignores_non_data_lines() {
 }
 
 #[test]
+fn parse_meta_line_ignores_keepalive_without_logging() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    let events = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&events);
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            std::io::sink()
+        })
+        .finish();
+
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(parse_meta_line("data: \tkeepalive ").is_none());
+        assert_eq!(events.load(Ordering::Relaxed), 0);
+
+        assert!(parse_meta_line("data: keepalive extra").is_none());
+        assert_eq!(events.load(Ordering::Relaxed), 1);
+    });
+}
+
+#[test]
 fn parse_meta_line_ignores_invalid_json() {
     assert!(parse_meta_line("data: not json").is_none());
     assert!(parse_meta_line(r#"data: {"station":"chillsynth"}"#).is_none());

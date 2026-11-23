@@ -256,11 +256,11 @@ async fn stream_events(
 }
 
 /// One SSE line. Metadata events are a single `data:` line carrying a JSON
-/// array of station records. Anything else (comments, empty keep-alives,
+/// array of station records. Anything else (comments, keep-alives,
 /// unparsable payloads, records missing artist/title) yields `None`.
 fn parse_meta_line(line: &str) -> Option<HashMap<String, ArtistTitle>> {
     let payload = line.strip_prefix("data:")?.trim();
-    if payload.is_empty() {
+    if payload.is_empty() || payload == "keepalive" {
         return None;
     }
     let records: Vec<StationRecord> = match serde_json::from_str(payload) {
