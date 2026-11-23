@@ -15,7 +15,7 @@ async fn backend_pid(pool: &deadpool_postgres::Pool) -> i32 {
 #[tokio::test]
 async fn pool_reuses_a_connection_younger_than_max_age() {
     let test_db = test_db().await;
-    let pool = create_pool_with_max_age(test_db.db.config(), Duration::from_secs(3600)).unwrap();
+    let pool = create_pool(test_db.db.config()).unwrap();
 
     let first = backend_pid(&pool).await;
     let second = backend_pid(&pool).await;

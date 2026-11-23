@@ -253,7 +253,9 @@ fn rules_lines(whole_bout: bool) -> Vec<Line<'static>> {
         false => "how a round goes",
     };
     rules.extend([
-        format!("each corner lays up to {SLOTS} cards for {ENERGY} energy, in the order they come out."),
+        format!(
+            "each corner lays up to {SLOTS} cards for {ENERGY} energy, in the order they come out."
+        ),
         "hands are open. slots stay hidden until both lock, or the clock runs out.".to_string(),
         "then slot 1 meets slot 1, 2 meets 2: guards go up, then both hits land.".to_string(),
         format!(
@@ -536,7 +538,11 @@ fn set_lines(view: &RingView<'_>, live: &LiveBout, bell_in: i64) -> Vec<Line<'st
     // panel cuts it at its foot, and the keys of a round on the clock are
     // the last thing to lose.
     if let Some(side) = live.bout.side_of(view.me) {
-        lines.extend(round_lines(live, side, "round 1, yours to lay before the bell"));
+        lines.extend(round_lines(
+            live,
+            side,
+            "round 1, yours to lay before the bell",
+        ));
         lines.push(Line::default());
     }
     lines.extend(book_lines(view, live));
@@ -588,7 +594,10 @@ fn standing_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
 /// prints one the machine would not play.
 fn effect_now(live: &LiveBout, side: Side, card: Card) -> Effect {
     let corner = live.duel.corner(side);
-    card.effect(&data::powers(), &corner.board(live.duel.corner(side.other())))
+    card.effect(
+        &data::powers(),
+        &corner.board(live.duel.corner(side.other())),
+    )
 }
 
 /// What a card does, in the two rows under its name: the number it
@@ -693,9 +702,12 @@ fn hand_cards(live: &LiveBout, side: Side) -> Vec<Line<'static>> {
             (None, true) => Lay::Shut,
         };
         let (frame, name, body, key) = match (lay, card_neon(card)) {
-            (Lay::Laid(_), Some(neon)) => {
-                (lit(Neon::Amber), lit(neon), ink(INK_BRIGHT), lit(Neon::Amber))
-            }
+            (Lay::Laid(_), Some(neon)) => (
+                lit(Neon::Amber),
+                lit(neon),
+                ink(INK_BRIGHT),
+                lit(Neon::Amber),
+            ),
             (Lay::Laid(_), None) => (lit(Neon::Amber), p.dim, p.dim, lit(Neon::Amber)),
             (Lay::Open, Some(neon)) => (dim(neon), lit(neon), ink(INK_BRIGHT), lit(Neon::Amber)),
             (Lay::Open, None) => (p.dim, p.dim, p.muted, lit(Neon::Amber)),
@@ -717,20 +729,21 @@ fn hand_cards(live: &LiveBout, side: Side) -> Vec<Line<'static>> {
                 Span::styled(" │", frame),
             ]);
         }
-        let (foot, foot_style) = match (lay, card.cost()) {
-            (Lay::Laid(slot), _) => (format!("slot {}", slot + 1), lit(Neon::Amber)),
-            (Lay::Open, 0) => ("free".to_string(), glow(Neon::Amber)),
-            (Lay::Open, cost) => (vec!["█"; usize::from(cost)].join(" "), glow(Neon::Amber)),
-            (Lay::Shut, 0) => ("free".to_string(), p.muted),
-            (Lay::Shut, cost) => (vec!["█"; usize::from(cost)].join(" "), p.muted),
+        let foot = match (lay, card.cost()) {
+            (Lay::Laid(slot), _) => format!("slot {}", slot + 1),
+            (Lay::Open | Lay::Shut, 0) => "free".to_string(),
+            (Lay::Open | Lay::Shut, cost) => vec!["█"; usize::from(cost)].join(" "),
         };
+        let foot_style = match lay {
+            Lay::Laid(_) => lit(Neon::Amber),
+            Lay::Open => glow(Neon::Amber),
+            Lay::Shut => p.muted,
+        };
+        let edge = "─".repeat(CARD - 4 - foot.chars().count());
         rows[3].extend([
             Span::styled("╰ ", frame),
-            Span::styled(foot.clone(), foot_style),
-            Span::styled(
-                format!(" {}╯", "─".repeat(CARD - 4 - foot.chars().count())),
-                frame,
-            ),
+            Span::styled(foot, foot_style),
+            Span::styled(format!(" {edge}╯"), frame),
         ]);
     }
     rows.into_iter().map(Line::from).collect()

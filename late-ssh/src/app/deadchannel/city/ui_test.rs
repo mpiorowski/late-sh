@@ -153,7 +153,10 @@ fn the_street_shows_a_call_to_the_runner_with_the_key_that_steps_in() {
         "{screen}"
     );
     assert!(screen.contains("[r] answer"), "{screen}");
-    assert!(screen.contains("back up the wire"), "the popover stays\n{screen}");
+    assert!(
+        screen.contains("back up the wire"),
+        "the popover stays\n{screen}"
+    );
 
     // A shop's panel is its own business: the notice waits under it.
     let mut state = State::new();

@@ -321,7 +321,10 @@ async fn the_wire_mentions_the_runner_called_and_then_the_caller() {
     assert!(
         mentioning(&tom.username, &lines)
             .expect("the call's line")
-            .starts_with(&format!("{} calls @{} to the ring.", mira.username, tom.username))
+            .starts_with(&format!(
+                "{} calls @{} to the ring.",
+                mira.username, tom.username
+            ))
     );
     assert!(
         mentioning(&mira.username, &lines)
