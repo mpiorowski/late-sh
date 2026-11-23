@@ -368,9 +368,10 @@ impl RingSession {
     }
 
     /// Copy the board if it moved, drain the answer, and say what the
-    /// rest of the session has to do about it. `open` is whether the
-    /// panel is up: only then does a moving clock owe a frame.
-    fn tick(&mut self, now: DateTime<Utc>, open: bool) -> RingTick {
+    /// rest of the session has to do about it. `drawn` is whether the
+    /// ring is on the screen (the panel, or the street's notice): only
+    /// then does a moving clock owe a frame.
+    fn tick(&mut self, now: DateTime<Utc>, drawn: bool) -> RingTick {
         let mut tick = RingTick::default();
         if self.board_rx.has_changed().unwrap_or(false) {
             self.board = seen_by(&self.board_rx.borrow_and_update(), self.user_id);
@@ -432,7 +433,7 @@ impl RingSession {
             Phase::On { clock, .. } => clock,
             Phase::Over { clears_in, .. } => Some(clears_in),
         };
-        if open && secs != self.painted_secs {
+        if drawn && secs != self.painted_secs {
             self.painted_secs = secs;
             tick.changed = true;
         }
@@ -443,16 +444,18 @@ impl RingSession {
 /// One tick of a session's ring: the board copy and the answer, the
 /// sheet re-read when this runner's bits moved, and a banner when a call
 /// lands for a runner who is not already looking at the ring. A frame is
-/// owed only where the ring is drawn: the city with the panel up.
+/// owed only where the ring is drawn: the city, in the panel or in the
+/// street's notice (`city/ui.rs::draw_ring_notice`).
 pub(crate) fn tick(app: &mut App) -> bool {
-    let open = app.screen == Screen::City && app.city.panel() == Some(Landmark::Ring);
-    let tick = app.ring.tick(Utc::now(), open);
+    let drawn = app.screen == Screen::City;
+    let at_the_ropes = drawn && app.city.panel() == Some(Landmark::Ring);
+    let tick = app.ring.tick(Utc::now(), drawn);
     if tick.reload_sheet {
         app.fight.reload();
     }
-    let mut changed = tick.changed && open;
+    let mut changed = tick.changed && drawn;
     if let Some(caller) = tick.called_by
-        && !open
+        && !at_the_ropes
     {
         app.banner = Some(Banner::info(&data::called_banner(&caller)));
         changed = true;

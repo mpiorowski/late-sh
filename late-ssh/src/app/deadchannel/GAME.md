@@ -1987,7 +1987,7 @@ bout, not a nightly card.
   clock. One slot more than three energy buys at a card apiece makes
   every round short of energy and never of slots, and where the empty
   slot sits is a choice.
-- **The clock.** A call waits three minutes. The accept deals round one
+- **The clock.** A call waits ten minutes. The accept deals round one
   and sets the bell five minutes out, the betting window, and the
   fighters can lay round one in the meantime. Round one has thirty
   seconds from the bell; every later round has six seconds to watch
@@ -2013,7 +2013,10 @@ bout, not a nightly card.
   finds nobody. A call reaches the runner wherever they are: the voice
   sends them a DM, which is hard to miss the way a line on the wire is
   not, and a session of theirs elsewhere gets a banner. The wire's line
-  is the street's news of it and mentions nobody.
+  is the street's news of it and mentions the runner called; the line
+  for the bout set mentions the caller. A runner down in the city gets
+  the ring's notice on the street (a call to them, a bout set or on)
+  with the key that steps in, and is never walked there.
   The five minutes before the bell are the betting window the nightly
   card's hours were. The wire carries three lines (the call, the bout
   set, how it ended); there is no announcer ghost, no share card for a
@@ -2043,8 +2046,8 @@ the road until another marked runner is on the wire and accepts (the
 `ring_owed` beat counts every step turned down there); a runner past
 level 3 on a second climb owes a bout before their next step; a call
 is a DM to the runner called and a line on the wire, limited only by one open
-call per caller, the three-minute expiry, and the same runner not rung
-again until the last call's three minutes are up; and watching is at the
+call per caller, the ten-minute expiry, and the same runner not rung
+again until the last call's ten minutes are up; and watching is at the
 RING shop only.
 
 Still open: a fallback opponent if `ring_owed` says runners sit at the

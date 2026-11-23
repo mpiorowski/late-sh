@@ -6,7 +6,9 @@
 //! their own). For a fighter, from the accept on: `1` to `5` lay that
 //! hand card in the next empty slot or take it back, and `e` or space
 //! locks the round. Enter leaves. A digit stays the page key it always
-//! is but for a fighter during a bout and a marked runner at an empty
+//! is but for a fighter from the accept until the ring clears (after the
+//! bout ends it does nothing, so a card key pressed as the last round
+//! comes out never turns the page) and a marked runner at an empty
 //! ring; everything else is swallowed so the runner does not walk under
 //! the panel. A lone Esc never arrives here (the root's `dispatch_escape`
 //! closes the panel).
@@ -73,6 +75,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         (Key::Digit(hand), Phase::Set { .. } | Phase::On { .. }) if fighting => {
             app.ring.card(hand);
         }
+        // The last round came out under a fighter's fingers: a card key
+        // a moment late is still the ring's, not the page it names.
+        (Key::Digit(_), Phase::Over { live, .. }) if live.bout.side_of(app.user_id).is_some() => {}
         (Key::Digit(pick), Phase::Empty) if marked => app.ring.flip_pick(usize::from(pick)),
         (Key::Digit(_), _) => return false,
         (Key::Lock, Phase::Set { .. } | Phase::On { .. }) => app.ring.lock(),
@@ -104,3 +109,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

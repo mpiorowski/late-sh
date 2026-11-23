@@ -6,11 +6,11 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use uuid::Uuid;
 
-use super::{RingView, panel_lines};
-use crate::app::deadchannel::fight::cards::{Card, DECK};
+use super::{RingView, notice, panel_lines};
+use crate::app::deadchannel::fight::cards::{Card, DECK, DRAFTS};
 use crate::app::deadchannel::fight::data::RULES;
 use crate::app::deadchannel::fight::state::Sheet;
-use crate::app::deadchannel::ring::data::{BELL_SECS, CALL_SECS, ROUND_SECS};
+use crate::app::deadchannel::ring::data::{BELL_SECS, CALL_SECS, ROUND_SECS, SIGNAL, powers};
 use crate::app::deadchannel::ring::session::{Contender, seen_by};
 use crate::app::deadchannel::ring::state::{Duel, Picks};
 use crate::app::deadchannel::ring::svc::{Board, LiveBout};
@@ -91,8 +91,20 @@ fn sheet(marks: i32, level: i32) -> Sheet {
     sheet
 }
 
-/// The panel as `viewer` reads it at `now`, a row a string.
+/// The panel as `viewer` reads it at `now`, a row a string, on a screen
+/// with room for all of it.
 fn panel(ring: &Ring, viewer: Uuid, sheet: &Sheet, now: DateTime<Utc>) -> Vec<String> {
+    panel_short_by(ring, viewer, sheet, now, 0)
+}
+
+/// [`panel`] on a screen `short_by` rows short of all of it.
+fn panel_short_by(
+    ring: &Ring,
+    viewer: Uuid,
+    sheet: &Sheet,
+    now: DateTime<Utc>,
+    short_by: usize,
+) -> Vec<String> {
     let board = seen_by(&ring.board, viewer);
     let roster = [("ash", 3), ("tom", 1)]
         .map(|(name, marks)| Contender {
@@ -115,7 +127,7 @@ fn panel(ring: &Ring, viewer: Uuid, sheet: &Sheet, now: DateTime<Utc>) -> Vec<St
         now,
         word: None,
     };
-    panel_lines(&view)
+    panel_lines(&view, short_by)
         .iter()
         .map(|line| {
             line.spans
@@ -136,6 +148,40 @@ fn holds(rows: &[String], text: &str) -> bool {
     rows.iter().any(|row| row.contains(text))
 }
 
+/// The row of the tape for `slot`, from 1.
+fn tape_row(rows: &[String], slot: usize) -> &str {
+    let label = format!("  {slot}  ");
+    rows.iter()
+        .find(|row| row.starts_with(&label))
+        .unwrap_or_else(|| panic!("no tape row for slot {slot} in:\n{}", rows.join("\n")))
+}
+
+/// What the street's notice tells `viewer` at `now`, and the verb beside
+/// the city's key.
+fn noticed(ring: &Ring, viewer: Uuid, now: DateTime<Utc>) -> Option<(String, &'static str)> {
+    let board = seen_by(&ring.board, viewer);
+    let view = RingView {
+        board: &board,
+        picks: None,
+        cursor: 0,
+        corner: Side::Caller,
+        roster: Vec::new(),
+        me: viewer,
+        sheet: None,
+        now,
+        word: None,
+    };
+    notice(&view).map(|notice| {
+        let told = notice
+            .told
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        (told, notice.verb)
+    })
+}
+
 #[test]
 fn an_empty_ring_shows_a_marked_runner_the_deck_the_wire_and_the_calls() {
     let mut ring = ring();
@@ -145,38 +191,71 @@ fn an_empty_ring_shows_a_marked_runner_the_deck_the_wire_and_the_calls() {
 
     // Mira, marked and at a draft level she has not fought for.
     let rows = panel(&ring, ring.mira, &sheet(1, 6), now);
+    // Each pick with the card it was taken over and what it does here.
     assert_eq!(
-        row(&rows, "[1]").trim(),
-        "[1] ‹jab› not brace   [2] ‹bulwark› not riposte   [3] ‹burn› not ground   [4] ‹sever› not mute"
+        row(&rows, "[1]"),
+        "  [1] ‹jab› not brace         free. hits for three quarters of a strike"
+    );
+    assert_eq!(
+        row(&rows, "[2]"),
+        "  [2] ‹bulwark› not riposte   two energy. holds two blocks and a half"
+    );
+    // The road's line names the glyph; the ring's names the other corner.
+    assert_eq!(
+        row(&rows, "[4]"),
+        "  [4] ‹sever› not mute        a strike. hits for 2.5 strikes once they are at half"
     );
     assert_eq!(
         row(&rows, "ash").trim_end(),
-        "    ash                 marks 3   no bouts yet"
+        "    ash                  marks 3   no bouts yet"
     );
     assert_eq!(
         row(&rows, "▸").trim_end(),
-        "  ▸ tom                 marks 1   3 won, 1 lost"
+        "  ▸ tom                  marks 1   3 won, 1 lost"
     );
-    assert_eq!(row(&rows, "you called"), "  you called tom. 2:41 left.");
+    assert_eq!(row(&rows, "you called"), "  you called tom. 9:41 left.");
     assert!(holds(&rows, "you owe the ring a bout at level 6"));
     assert_eq!(
         row(&rows, "[c]").trim_end(),
-        "[↑↓] pick   [c] call   [1-4] flip a pick   [x] take it back"
+        "[↑↓] pick   [c] call   [1-4] flip a pick   [x] take it back   [?] guide"
     );
+    // The minutes a call waits are when there is time to read how it
+    // goes: the bell and the rounds, then the round, with the ring's own
+    // numbers in the example.
+    let p = powers();
+    assert!(holds(&rows, "how a bout goes"));
+    assert!(holds(
+        &rows,
+        "  taking a call sets the bell 5 minutes out. until it rings the street bets."
+    ));
+    assert!(holds(
+        &rows,
+        &format!(
+            "  a ‹block› holding {} meets a ‹strike› hitting {}: {} gets through.",
+            p.block,
+            p.strike,
+            p.strike - p.block
+        )
+    ));
+    assert!(rows.last().expect("a row").contains("past round 4"));
+    let short = panel_short_by(&ring, ring.mira, &sheet(1, 6), now, 3);
+    assert!(!holds(&short, "how a bout goes"));
+    assert_eq!(short.last().map(String::as_str), Some(row(&rows, "[c]")));
 
     // Tom reads the same call as his to answer.
     let rows = panel(&ring, ring.tom, &sheet(1, 2), now);
-    assert_eq!(row(&rows, "calls you"), "  mira calls you. 2:41 to answer.");
+    assert_eq!(row(&rows, "calls you"), "  mira calls you. 9:41 to answer.");
     assert!(holds(&rows, "[a] take the call   [x] not tonight"));
     assert!(!holds(&rows, "you owe the ring"));
 
     // Wren has no mark: the call to read, no deck, nobody to call, no keys.
     let rows = panel(&ring, ring.wren, &sheet(0, 6), now);
-    assert_eq!(row(&rows, "mira calls"), "  mira calls tom. 2:41 left.");
+    assert_eq!(row(&rows, "mira calls"), "  mira calls tom. 9:41 left.");
     assert!(holds(
         &rows,
         "the ropes are for runners who put the Old Signal down"
     ));
+    assert!(holds(&rows, "how a bout goes"), "a watcher bets on it");
     for marked_only in ["[1]", "[c]", "ash", "you owe the ring"] {
         assert!(
             !holds(&rows, marked_only),
@@ -216,29 +295,46 @@ fn a_set_bout_shows_the_bell_the_pool_and_the_press_a_bet_takes() {
         row(&rows, "your bet"),
         "  your bet   80 on mira, 2 of 3 presses"
     );
-    // What each corner drafted and inked, the base ten left unsaid.
+    // What each corner drafted and inked, the base ten left unsaid, on
+    // the row under its name.
     assert_eq!(
-        row(&rows, "  mira  ").trim_end().rsplit("  ").next(),
-        Some("‹jab› ‹mute›")
+        row(&rows, "mira").trim_end(),
+        "  mira                 no bouts yet"
     );
+    assert_eq!(row(&rows, "drafted").trim_end(), "    drafted  ‹jab› ‹mute›");
     // The corner picked is the one the press names.
     assert_eq!(
         row(&rows, "[b]").trim_end(),
-        format!("[←→] corner: tom   [b] put {stake} bits on tom")
+        format!("  [←→] corner: tom   [b] put {stake} bits on tom")
     );
-    assert!(!holds(&rows, "your slots"), "a watcher lays nothing");
+    for fighters_only in ["comes out", "╭", "their hand", "[1-5]"] {
+        assert!(!holds(&rows, fighters_only), "a watcher lays nothing");
+    }
+    assert!(holds(&rows, "how a round goes"));
 
     // A fighter's press goes on their own corner, and round 1 is theirs
-    // to lay before the bell.
+    // to lay before the bell: the hand as cards, the other hand open.
     let rows = panel(&ring, ring.mira, &sheet(1, 4), now);
     assert_eq!(
         row(&rows, "[b]").trim_end(),
-        format!(
-            "[b] put {stake} bits on mira   [1-5] lay a card, or take it back   [e] lock the round"
-        )
+        format!("  [b] put {stake} bits on mira")
     );
-    assert!(holds(&rows, "your slots"));
+    assert_eq!(
+        row(&rows, "[1-5]").trim_end(),
+        "  [1-5] lay a card, or take it back   [e] lock the round   [?] guide"
+    );
     assert_eq!(row(&rows, "your bet"), "  your bet   nothing down");
+    let toms = &ring.board.live.as_ref().expect("the bout").duel;
+    let toms_first = toms.corner(Side::Called).piles.card(0).expect("a hand");
+    assert!(row(&rows, "their hand").contains(&toms_first.marked()));
+    // Her keys come before the book, which is where a short screen cuts
+    // the panel.
+    let at_row = |holding: &str| {
+        rows.iter()
+            .position(|row| row.contains(holding))
+            .unwrap_or_else(|| panic!("no row holding {holding:?}"))
+    };
+    assert!(at_row("lock the round") < at_row("the pool"));
 }
 
 #[test]
@@ -257,22 +353,21 @@ fn the_rounds_show_both_hands_and_only_your_own_slots() {
     live.duel.lock(Side::Called).expect("tom locks");
     let now = at() + Duration::seconds(BELL_SECS + 9);
 
-    // Mira: her card sits in her slot, her hand carries its keys, and
-    // tom's laid card is still in his open hand like the rest.
+    // Mira: her card sits in her slot and says so on its own frame, her
+    // hand carries its keys, and tom's laid card is still in his open
+    // hand like the rest.
     let rows = panel(&ring, ring.mira, &sheet(1, 4), now);
     assert!(row(&rows, "round 1 of 4").ends_with("the clock 0:21"));
     assert!(
-        row(&rows, "your slots").starts_with(&format!("  your slots  1:{}", mira_first.marked()))
+        row(&rows, "comes out").starts_with(&format!("  comes out     1 {}", mira_first.marked()))
     );
-    assert!(row(&rows, "[1] ").contains(&format!("[1] {} in slot 1", mira_first.name())));
+    assert!(row(&rows, "╭").starts_with(&format!("  ╭ 1 {} ", mira_first.name())));
+    assert!(row(&rows, "╰").starts_with("  ╰ slot 1 "));
     assert!(row(&rows, "  tom  ").ends_with("locked"));
     assert!(row(&rows, "  mira (you)").ends_with("laying..."));
-    let toms_hand = rows
-        .iter()
-        .find(|row| row.starts_with("  tom  ") && row.contains('‹'))
-        .expect("tom's hand");
+    let toms_hand = row(&rows, "their hand");
     assert!(toms_hand.contains(&tom_second.marked()));
-    assert!(!toms_hand.contains("in slot"), "tom's slots are his own");
+    assert!(!toms_hand.contains("slot"), "tom's slots are his own");
     // Her keys come before the pool at the foot, which is where a short
     // screen cuts the panel.
     let at_row = |holding: &str| {
@@ -282,22 +377,230 @@ fn the_rounds_show_both_hands_and_only_your_own_slots() {
     };
     assert!(at_row("lock the round") < at_row("the pool"));
 
+    // Tom locked: his keys give way to what the round waits for.
+    let rows = panel(&ring, ring.tom, &sheet(1, 4), now);
+    assert!(!holds(&rows, "[1-5]"));
+    assert!(holds(&rows, "locked. it comes out when both corners are"));
+
     // A watcher gets both hands and nobody's slots.
     let rows = panel(&ring, ring.wren, &sheet(0, 4), now);
-    assert!(!holds(&rows, "your slots"));
-    assert!(!holds(&rows, "in slot"));
-    assert!(!holds(&rows, "[1-5]"));
+    for fighters_only in ["comes out", "╭", "╰ slot", "[1-5]"] {
+        assert!(!holds(&rows, fighters_only), "{fighters_only} is a fighter's");
+    }
+    let mira_hand = rows
+        .iter()
+        .find(|row| row.starts_with("  mira ") && row.contains('‹'))
+        .expect("mira's open hand");
+    assert!(mira_hand.contains(&mira_first.marked()));
+    assert!(row(&rows, "  tom  ").ends_with("locked"));
+}
 
-    // The round comes out: the tape names what each corner played and
-    // what got through.
+#[test]
+fn the_round_that_came_out_is_told_slot_by_slot() {
+    let p = powers();
+    let mut ring = set();
     let live = ring.board.live.as_mut().expect("the bout");
+    let in_hand = |duel: &Duel, side: Side, card: Card| {
+        (0..5u8)
+            .find(|hand| duel.corner(side).piles.card(usize::from(*hand)) == Some(card))
+            .unwrap_or_else(|| panic!("no {} in the hand", card.name()))
+    };
+    // Mira throws a strike into tom's block, then a siphon into nothing.
+    let strike = in_hand(&live.duel, Side::Caller, Card::Strike);
+    let siphon = in_hand(&live.duel, Side::Caller, Card::Siphon);
+    let block = in_hand(&live.duel, Side::Called, Card::Block);
+    live.duel.place(Side::Caller, 0, strike).expect("the strike");
+    live.duel.place(Side::Caller, 1, siphon).expect("the siphon");
+    live.duel.place(Side::Called, 0, block).expect("the block");
     live.duel.lock(Side::Caller).expect("mira locks");
+    live.duel.lock(Side::Called).expect("tom locks");
     live.duel.resolve(&mut StdRng::seed_from_u64(7));
+    let now = at() + Duration::seconds(BELL_SECS + 40);
+
     let rows = panel(&ring, ring.wren, &sheet(0, 4), now);
-    assert!(holds(&rows, "round 1 came out"));
-    let first = row(&rows, "slot 1");
-    assert!(first.contains(&mira_first.marked()) && first.contains(&tom_second.marked()));
-    assert!(row(&rows, "slot 2").contains("held"));
+    assert_eq!(row(&rows, "came out"), "round 1 came out, slot by slot");
+    assert_eq!(
+        row(&rows, "signal").trim_end(),
+        format!("     {:<32}{:<32}signal", "mira", "tom")
+    );
+    // What was thrown, what the block ate, and where both signals stood
+    // once the slot was over.
+    let through = p.strike - p.block;
+    assert_eq!(
+        tape_row(&rows, 1),
+        format!(
+            "  1  {:<32}{:<32}{SIGNAL} · {}",
+            format!("‹strike› hits {}, {} blocked", p.strike, p.block),
+            format!("‹block› holds {}", p.block),
+            SIGNAL - through
+        )
+    );
+    // A siphon at full signal has nothing to mend, and says nothing of it.
+    assert_eq!(
+        tape_row(&rows, 2),
+        format!(
+            "  2  {:<32}{:<32}{SIGNAL} · {}",
+            format!("‹siphon› hits {}", p.strike),
+            "nothing laid",
+            SIGNAL - through - p.strike
+        )
+    );
+    assert!(tape_row(&rows, 4).contains("nothing laid"));
+    // The bars over the tape are the sum of its rows.
+    assert!(row(&rows, "  tom  ").contains(&format!("{}/{SIGNAL}", SIGNAL - through - p.strike)));
+}
+
+#[test]
+fn a_bout_closes_with_how_a_round_goes_unless_the_screen_is_short() {
+    let ring = set();
+    let now = at() + Duration::seconds(BELL_SECS + 9);
+    for viewer in [ring.mira, ring.wren] {
+        let rows = panel(&ring, viewer, &sheet(1, 4), now);
+        assert!(holds(&rows, "how a round goes"));
+        assert!(holds(&rows, "guards go up, then both hits land"));
+        assert!(rows.last().expect("a row").contains("past round 4"));
+
+        // Short of all of it, the explanation goes whole and nothing of
+        // the round does.
+        let short = panel_short_by(&ring, viewer, &sheet(1, 4), now, 2);
+        assert!(!holds(&short, "how a round goes"));
+        assert_eq!(short[..], rows[..short.len()]);
+        assert_eq!(short.last().map(String::as_str), Some(row(&rows, "the pool")));
+    }
+}
+
+#[test]
+fn no_row_is_wider_than_the_panel_whoever_fights() {
+    // The widest a bout gets: two names at the limit, both decks with
+    // every draft card in them, a pool in the hundreds of thousands.
+    let long = |tag: &str| format!("{tag}{}", "x".repeat(32 - tag.len()));
+    let every_draft: Vec<Card> = DRAFTS.iter().flat_map(|draft| draft.options).collect();
+    let deck = [&DECK[..], &every_draft[..]].concat();
+    let mut ring = set();
+    let live = ring.board.live.as_mut().expect("the bout");
+    live.bout.caller_username = long("mira");
+    live.bout.called_username = long("tom");
+    live.bout.caller_deck = Some(serde_json::json!(deck));
+    live.bout.called_deck = Some(serde_json::json!(deck));
+    live.bout.pool_caller = 987_654;
+    live.bout.pool_called = 123_456;
+    live.bets = vec![BoutBet {
+        bout_id: live.bout.id,
+        user_id: ring.wren,
+        username: "wren".to_string(),
+        side: Side::Called,
+        bits: 123_456,
+        presses: 3,
+        placed_at: at(),
+        paid_at: None,
+        paid_bits: None,
+    }];
+    let widest = |rows: &[String]| {
+        rows.iter()
+            .max_by_key(|row| row.chars().count())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let check = |ring: &Ring, phase: &str, now: DateTime<Utc>| {
+        for viewer in [ring.mira, ring.tom, ring.wren] {
+            let rows = panel(ring, viewer, &sheet(1, 12), now);
+            let wide = widest(&rows);
+            assert!(
+                wide.chars().count() <= 94,
+                "{phase}: a row of {} cells wraps in the panel: {wide}",
+                wide.chars().count()
+            );
+            // The hand's cards fit an 80 column terminal.
+            for card_row in rows.iter().filter(|row| row.starts_with("  ╭")) {
+                assert!(card_row.trim_end().chars().count() <= 76, "{card_row}");
+            }
+        }
+    };
+    check(&ring, "set", at() + Duration::seconds(48));
+    check(&ring, "on", at() + Duration::seconds(BELL_SECS + 9));
+    let mut now = at() + Duration::seconds(BELL_SECS + 40);
+    while ring.board.live.as_ref().expect("the bout").duel.ending.is_none() {
+        let live = ring.board.live.as_mut().expect("the bout");
+        live.duel.call_time();
+        live.duel.resolve(&mut StdRng::seed_from_u64(7));
+        check(&ring, "a round out", now);
+        now += Duration::seconds(36);
+    }
+    let live = ring.board.live.as_mut().expect("the bout");
+    live.bout.ended_at = Some(now);
+    check(&ring, "over", now + Duration::seconds(5));
+
+    // The empty ring, with calls between the same two names.
+    let mut empty = self::ring();
+    let mut call = call(empty.mira, empty.tom);
+    call.caller_username = long("mira");
+    call.called_username = long("tom");
+    empty.board.calls = vec![call];
+    check(&empty, "empty", at() + Duration::seconds(19));
+}
+
+#[test]
+fn the_street_hears_of_the_ring_only_what_concerns_the_runner() {
+    let mut ring = ring();
+    let now = at() + Duration::seconds(19);
+    assert_eq!(noticed(&ring, ring.wren, now), None, "an empty ring is no news");
+
+    // A call is news to the two it names, and to nobody else.
+    ring.board.calls = vec![call(ring.mira, ring.tom)];
+    assert_eq!(
+        noticed(&ring, ring.tom, now),
+        Some((
+            "mira calls you to the ring. 9:41 to answer.".to_string(),
+            "answer"
+        ))
+    );
+    assert_eq!(
+        noticed(&ring, ring.mira, now),
+        Some(("you called tom. 9:41 left.".to_string(), "step in"))
+    );
+    assert_eq!(noticed(&ring, ring.wren, now), None);
+
+    // A bout set is everybody's: the book for the street, the bell for
+    // the two in it.
+    let mut ring = set();
+    let now = at() + Duration::seconds(48);
+    assert_eq!(
+        noticed(&ring, ring.wren, now),
+        Some((
+            "mira against tom. the bell in 4:12, the book is open.".to_string(),
+            "watch, and bet"
+        ))
+    );
+    assert_eq!(
+        noticed(&ring, ring.tom, now),
+        Some(("your bout with mira. the bell in 4:12.".to_string(), "step in"))
+    );
+
+    // The rounds on.
+    let now = at() + Duration::seconds(BELL_SECS + 9);
+    assert_eq!(
+        noticed(&ring, ring.wren, now),
+        Some(("mira against tom, round 1 of 4.".to_string(), "watch"))
+    );
+    assert_eq!(
+        noticed(&ring, ring.mira, now),
+        Some((
+            "your bout is on. round 1 of 4, 0:21 on the clock.".to_string(),
+            "step in"
+        ))
+    );
+
+    // The result, while it is still on the board.
+    let live = ring.board.live.as_mut().expect("the bout");
+    while live.duel.ending.is_none() {
+        live.duel.call_time();
+        live.duel.resolve(&mut StdRng::seed_from_u64(7));
+    }
+    let ended = now + Duration::seconds(90);
+    live.bout.ended_at = Some(ended);
+    let (told, verb) = noticed(&ring, ring.wren, ended + Duration::seconds(5)).expect("the result");
+    assert_eq!(verb, "see it");
+    assert_eq!(told, panel(&ring, ring.wren, &sheet(0, 4), ended + Duration::seconds(5))[0]);
 }
 
 #[test]

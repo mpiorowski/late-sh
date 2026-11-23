@@ -1,13 +1,25 @@
-//! The ring's panel, in the city's palette. With nobody in the ring: the
-//! deck this runner brings, the marked runners on the wire with their
-//! records and the cursor on one, and the calls waiting. With a bout
-//! set: both corners, their decks, the pool and the bell's clock, and
-//! this runner's bet. With the rounds on: both signals, both hands (open
-//! to everybody), a fighter's own slots (nobody else's), the round that
-//! last came out, and the clock. After: the result, the pool's split and
-//! what this runner was paid. Pure: a function of the session's copy and
-//! the clock. The city's `draw_panel` frames it and puts the ring's last
-//! word at its foot.
+//! The ring's panel, in the city's palette, and the notice the street
+//! shows while something at the ring concerns this runner. With nobody
+//! in the ring: the deck this runner brings (each pick with what it does
+//! here), the marked runners on the wire with their records and the
+//! cursor on one, and the calls waiting. With a bout set: both corners
+//! and what they drafted, a fighter's round 1 (the hand as cards, the
+//! slots in the order they come out, the other hand), the pool, this
+//! runner's bet and the split. With the rounds on: both signals, the
+//! hands (open to everybody), a fighter's own slots (nobody else's), the
+//! round that last came out told slot by slot (what each card threw,
+//! what the block ate, both signals after), and the clock. After: the
+//! result, the pool's split and what this runner was paid. Every phase
+//! but that one closes with how the game goes: the round while a bout is
+//! set or on, the whole bout at an empty ring, where a call's minutes
+//! are the time to read it. Pure: a function of the session's
+//! copy and the clock. The city's `draw_panel` frames the panel and puts
+//! the ring's last word at its foot; its `draw_ring_notice` frames the
+//! notice.
+//!
+//! No row is wider than the panel, so nothing wraps: a row that wraps
+//! lands at the frame's edge and reads as a new row. The hand's cards fit
+//! an 80 column terminal.
 
 use chrono::{DateTime, Utc};
 use late_core::models::deadchannel_bout::{Bout, Side};
@@ -19,24 +31,41 @@ use ratatui::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::data::{MAX_PRESSES, PURSE_PERCENT, RAKE_PERCENT, ROUNDS, SIGNAL, SLOTS};
+use super::data::{
+    self, BELL_SECS, MAX_PRESSES, PURSE_PERCENT, RAKE_PERCENT, ROUND_SECS, ROUNDS, SIGNAL, SLOTS,
+};
 use super::session::{Contender, Phase, RingSession, bet_of, call_from, call_to, phase, roster};
-use super::state::{self, Ending, Move, Picks, Pool, SIDES, Settlement};
+use super::state::{self, Ending, Half, Move, Picks, Pool, SIDES, Settlement};
 use super::svc::{Board, LiveBout};
 use crate::app::deadchannel::city::map::Neon;
-use crate::app::deadchannel::city::ui::{INK, INK_BRIGHT, INK_DIM, INK_MUTED, action, ink, lit};
-use crate::app::deadchannel::fight::cards::{Card, DRAFTS, ENERGY};
+use crate::app::deadchannel::city::ui::{
+    INK, INK_BRIGHT, INK_DIM, INK_MUTED, action, dim, glow, ink, lit,
+};
+use crate::app::deadchannel::fight::cards::{Card, DRAFTS, ENERGY, Effect, HAND};
 use crate::app::deadchannel::fight::data::RULES;
 use crate::app::deadchannel::fight::state::Sheet;
-use crate::app::deadchannel::fight::ui::{card_mark, card_style};
+use crate::app::deadchannel::fight::ui::{card_mark, card_marked, card_neon};
 use crate::app::deadchannel::runner::svc::RunnerLooks;
 
 /// Cells in a signal bar.
 const BAR: usize = 20;
-/// The width a corner's column is padded to in the tape.
-const TAPE_COLUMN: usize = 22;
-/// The width of the tape's first column: the round's name over the slots'.
-const TAPE_LABEL: usize = 22;
+/// The width a corner's name is cut or padded to beside its signal.
+const NAME: usize = 20;
+/// The width of one card of the hand: five side by side, a cell between
+/// them and the indent, are 76 cells, the inside of the panel on an 80
+/// column terminal.
+const CARD: usize = 14;
+/// The width of the label ahead of a row of the other hand or the slots.
+const LABEL: usize = 14;
+/// The width of a slot's number in the tape, and of what each corner did
+/// in it.
+const TAPE_SLOT: usize = 5;
+const TAPE_COLUMN: usize = 32;
+/// The width of a laid card's name in the row of slots.
+const SLOT_CELL: usize = 12;
+/// The width of a pick and the card it was taken over, ahead of what the
+/// pick does.
+const PICK: usize = 24;
 
 pub(crate) struct RingView<'a> {
     /// The session's copy of the board: what this runner may see.
@@ -98,12 +127,20 @@ fn palette() -> Palette {
     }
 }
 
-/// `[k] verb`, the way every counter writes a key.
-fn hint(key: &str, verb: &str) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(format!("[{key}] "), palette().key),
-        Span::styled(format!("{verb}   "), action()),
-    ]
+/// A row of keys, each `[k] verb` the way every counter writes one,
+/// `indent` cells in. Nothing trails the last verb: a row that ends in
+/// blanks past the frame wraps into an empty one.
+fn key_row(indent: &str, hints: &[(&str, &str)]) -> Line<'static> {
+    let p = palette();
+    let mut spans = vec![Span::styled(indent.to_string(), p.text)];
+    for (index, (key, verb)) in hints.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("   ", p.text));
+        }
+        spans.push(Span::styled(format!("[{key}] "), p.key));
+        spans.push(Span::styled(verb.to_string(), action()));
+    }
+    Line::from(spans)
 }
 
 /// Seconds as `m:ss`.
@@ -112,13 +149,22 @@ fn clock(secs: i64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-pub(crate) fn panel_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
-    match phase(view.board.live.as_ref(), view.now) {
-        Phase::Empty => empty_lines(view),
-        Phase::Set { live, bell_in } => set_lines(view, live, bell_in),
-        Phase::On { live, clock } => on_lines(view, live, clock),
-        Phase::Over { live, clears_in } => over_lines(view, live, clears_in),
+/// The panel's rows. `short_by` is how many the screen is short of all
+/// of them (`city/ui.rs::draw_panel`): the panel then gives up how the
+/// game goes, whole, since half an explanation is worse than none and
+/// the guide has all of it; what is still too tall is cut at its foot.
+pub(crate) fn panel_lines(view: &RingView<'_>, short_by: usize) -> Vec<Line<'static>> {
+    let (mut lines, whole_bout) = match phase(view.board.live.as_ref(), view.now) {
+        Phase::Empty => (empty_lines(view), true),
+        Phase::Set { live, bell_in } => (set_lines(view, live, bell_in), false),
+        Phase::On { live, clock } => (on_lines(view, live, clock), false),
+        Phase::Over { live, clears_in } => return over_lines(view, live, clears_in),
+    };
+    if short_by == 0 {
+        lines.push(Line::default());
+        lines.extend(rules_lines(whole_bout));
     }
+    lines
 }
 
 /// A runner's record on the board.
@@ -129,26 +175,127 @@ fn record(view: &RingView<'_>, user_id: Uuid) -> String {
     }
 }
 
+/// `text` cut to `width` cells at most, the cut marked: a name is up to
+/// 32 characters, and a row that names two of them in full is wider than
+/// the panel.
+fn cut(text: &str, width: usize) -> String {
+    match text.chars().count() > width {
+        true => {
+            let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+            cut.push('…');
+            cut
+        }
+        false => text.to_string(),
+    }
+}
+
+/// `text` cut or padded to exactly `width` cells, so a long name never
+/// pushes the column after it.
+fn fit(text: &str, width: usize) -> String {
+    format!("{:<width$}", cut(text, width))
+}
+
+/// A corner's name inside a sentence.
+fn said(bout: &Bout, side: Side) -> String {
+    cut(bout.username(side), NAME)
+}
+
+/// `text` as a row of the panel, two cells in, its `‹card›` marks drawn
+/// as cards.
+fn prose(text: &str, style: Style) -> Line<'static> {
+    let mut spans = vec![Span::styled("  ", style)];
+    spans.extend(card_marked(text, style));
+    Line::from(spans)
+}
+
+/// What a draft card does at the ring, where the other side of the table
+/// is a corner and not a glyph: the road's own line (`Card::rule`) for
+/// every card but the two that name the glyph.
+fn ring_rule(card: Card) -> &'static str {
+    match card {
+        Card::Sever => "a strike. hits for 2.5 strikes once they are at half",
+        Card::Mute => "two energy. cancels the card in their slot across from it",
+        Card::Strike
+        | Card::Block
+        | Card::Surge
+        | Card::Wipe
+        | Card::Jab
+        | Card::Brace
+        | Card::Siphon
+        | Card::Riposte
+        | Card::Bulwark
+        | Card::Burn
+        | Card::Ground
+        | Card::Static => card.rule(),
+    }
+}
+
+/// How the card game goes, at the foot of the panel on a screen with the
+/// room for it. With a bout set or on it is the round, for whoever is
+/// looking at one. At an empty ring it is the whole bout, the bell and
+/// the rounds first: the minutes a call waits are when there is time to
+/// read it. The example's numbers are the ring's own.
+fn rules_lines(whole_bout: bool) -> Vec<Line<'static>> {
+    let p = palette();
+    let powers = data::powers();
+    let mut rules = Vec::new();
+    let head = match whole_bout {
+        true => {
+            rules.push(format!(
+                "taking a call sets the bell {} minutes out. until it rings the street bets.",
+                BELL_SECS / 60
+            ));
+            rules.push(format!(
+                "{ROUNDS} rounds at most, {ROUND_SECS} seconds each. every round is a fresh hand of {HAND}."
+            ));
+            "how a bout goes"
+        }
+        false => "how a round goes",
+    };
+    rules.extend([
+        format!("each corner lays up to {SLOTS} cards for {ENERGY} energy, in the order they come out."),
+        "hands are open. slots stay hidden until both lock, or the clock runs out.".to_string(),
+        "then slot 1 meets slot 1, 2 meets 2: guards go up, then both hits land.".to_string(),
+        format!(
+            "a ‹block› holding {} meets a ‹strike› hitting {}: {} gets through.",
+            powers.block,
+            powers.strike,
+            powers.strike - powers.block
+        ),
+        "block left over stays up. a hit that lands leaves a ‹static› in your deck.".to_string(),
+        format!("a signal at 0 is down. past round {ROUNDS} the higher signal takes it."),
+    ]);
+    let mut lines = vec![Line::from(Span::styled(head, p.head))];
+    lines.extend(rules.iter().map(|rule| prose(rule, p.dim)));
+    lines
+}
+
 /// Nobody in the ring: the deck, the wire, the calls.
 fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
     let p = palette();
     let mut lines: Vec<Line<'static>> = Vec::new();
     let marked = view.sheet.is_some_and(|sheet| sheet.marks >= 1);
     lines.push(Line::from(Span::styled(
-        "two runners, the same numbers, card against card. the street bets bits on it.",
+        "two runners, the same numbers, card against card. the street bets on it.",
         p.text,
     )));
     if !marked {
         lines.push(Line::from(Span::styled(
-            "the ropes are for runners who put the Old Signal down. you can watch here, and bet once a bout is set.",
+            "the ropes are for runners who put the Old Signal down.",
+            p.dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            "you can watch here, and bet once a bout is set.",
             p.dim,
         )));
     }
     if let Some(level) = view.sheet.and_then(Sheet::ring_gate) {
         lines.push(Line::from(Span::styled(
-            format!(
-                "you owe the ring a bout at level {level}. the road is shut until you fight one, win or lose."
-            ),
+            format!("you owe the ring a bout at level {level}."),
+            lit(Neon::Red),
+        )));
+        lines.push(Line::from(Span::styled(
+            "the road is shut until you fight one, win or lose.",
             lit(Neon::Red),
         )));
     }
@@ -158,20 +305,22 @@ fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled("the deck you bring", p.head)));
         match view.picks {
             Some(picks) => {
-                let mut spans = vec![Span::styled("  ", p.text)];
                 for (index, (draft, pick)) in DRAFTS.iter().zip(picks.cards()).enumerate() {
-                    spans.push(Span::styled(format!("[{}] ", index + 1), p.key));
-                    spans.push(card_mark(*pick));
-                    spans.push(Span::styled(
-                        format!(" not {}   ", draft.other(*pick).name()),
-                        p.muted,
-                    ));
+                    let other = format!(" not {}", draft.other(*pick).name());
+                    let name = pick.marked().chars().count() + other.chars().count();
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  [{}] ", index + 1), p.key),
+                        card_mark(*pick),
+                        Span::styled(other, p.muted),
+                        Span::styled(" ".repeat(PICK.saturating_sub(name)), p.text),
+                        Span::styled(ring_rule(*pick), p.dim),
+                    ]));
                 }
-                lines.push(Line::from(spans));
-                lines.push(Line::from(Span::styled(
-                    "  the ten, these four over them, and the other card of every draft you inked. level and kit stay outside.",
+                lines.push(prose(
+                    "the ten, these four over them, and the other card of each draft you inked.",
                     p.dim,
-                )));
+                ));
+                lines.push(prose("level and kit stay outside.", p.dim));
             }
             None => lines.push(Line::from(Span::styled("  reading it...", p.muted))),
         }
@@ -196,7 +345,7 @@ fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
                     p.key,
                 ),
                 Span::styled(
-                    format!("{:<20}", contender.username),
+                    format!("{} ", fit(&contender.username, NAME)),
                     match on {
                         true => p.head,
                         false => p.text,
@@ -219,17 +368,14 @@ fn empty_lines(view: &RingView<'_>) -> Vec<Line<'static>> {
     }
 
     if marked {
-        let mut keys = Vec::new();
-        keys.extend(hint("↑↓", "pick"));
-        keys.extend(hint("c", "call"));
-        keys.extend(hint("1-4", "flip a pick"));
+        let mut keys = vec![("↑↓", "pick"), ("c", "call"), ("1-4", "flip a pick")];
         if call_to(view.board, view.me).is_some() {
-            keys.extend(hint("a", "take the call"));
-            keys.extend(hint("x", "not tonight"));
+            keys.extend([("a", "take the call"), ("x", "not tonight")]);
         } else if call_from(view.board, view.me).is_some() {
-            keys.extend(hint("x", "take it back"));
+            keys.push(("x", "take it back"));
         }
-        lines.push(Line::from(keys));
+        keys.push(("?", "guide"));
+        lines.push(key_row("", &keys));
     }
     lines
 }
@@ -292,26 +438,25 @@ fn deck_spans(bout: &Bout, side: Side) -> Vec<Span<'static>> {
     spans
 }
 
-/// The two corners' header rows: name, record, and what they drafted.
+/// The two corners before the bell, two rows each: the name and the
+/// record, then what they drafted and inked, on a row of its own because
+/// eight cards and a long name do not fit one.
 fn corner_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
     let p = palette();
-    SIDES
-        .iter()
-        .map(|side| {
-            let mut spans = vec![
-                Span::styled(
-                    format!("  {:<24}", corner_name(view, &live.bout, *side)),
-                    p.head,
-                ),
-                Span::styled(
-                    format!("{:<18}", record(view, live.bout.user(*side))),
-                    p.dim,
-                ),
-            ];
-            spans.extend(deck_spans(&live.bout, *side));
-            Line::from(spans)
-        })
-        .collect()
+    let mut lines = Vec::new();
+    for side in SIDES {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", fit(&corner_name(view, &live.bout, side), NAME)),
+                p.head,
+            ),
+            Span::styled(record(view, live.bout.user(side)), p.dim),
+        ]));
+        let mut deck = vec![Span::styled("    drafted  ", p.muted)];
+        deck.extend(deck_spans(&live.bout, side));
+        lines.push(Line::from(deck));
+    }
+    lines
 }
 
 /// The pool, corner by corner.
@@ -320,13 +465,60 @@ fn pool_line(live: &LiveBout) -> Line<'static> {
     Line::from(vec![
         Span::styled("  the pool   ", p.dim),
         Span::styled(live.bout.pool_caller.to_string(), p.number),
-        Span::styled(format!(" on {}   ", live.bout.caller_username), p.text),
+        Span::styled(format!(" on {}   ", said(&live.bout, Side::Caller)), p.text),
         Span::styled(live.bout.pool_called.to_string(), p.number),
-        Span::styled(format!(" on {}", live.bout.called_username), p.text),
+        Span::styled(format!(" on {}", said(&live.bout, Side::Called)), p.text),
     ])
 }
 
-/// A bout is set: the corners, the pool, the bell, the bet.
+/// The book while it is open: the pool, this runner's bet, the key for
+/// one more press, and how the pool is split.
+fn book_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
+    let p = palette();
+    let mut lines = vec![
+        Line::from(Span::styled("the book", p.head)),
+        pool_line(live),
+    ];
+    lines.push(match bet_of(live, view.me) {
+        Some(bet) => Line::from(vec![
+            Span::styled("  your bet   ", p.dim),
+            Span::styled(bet.bits.to_string(), p.number),
+            Span::styled(
+                format!(
+                    " on {}, {} of {MAX_PRESSES} presses",
+                    said(&live.bout, bet.side),
+                    bet.presses
+                ),
+                p.text,
+            ),
+        ]),
+        None => Line::from(Span::styled("  your bet   nothing down", p.dim)),
+    });
+    if let Some(sheet) = view.sheet {
+        let fighter = live.bout.side_of(view.me);
+        let side = fighter.unwrap_or(view.corner);
+        let stake = RULES.cache(sheet.level);
+        let corner = format!("corner: {}", said(&live.bout, side));
+        let press = format!("put {stake} bits on {}", said(&live.bout, side));
+        lines.push(match fighter {
+            Some(_) => key_row("  ", &[("b", &press)]),
+            None => key_row("  ", &[("←→", &corner), ("b", &press)]),
+        });
+    }
+    lines.push(prose(
+        &format!(
+            "bets on the winner split the pool, less {RAKE_PERCENT}% burned and {PURSE_PERCENT}% to the winner."
+        ),
+        p.muted,
+    ));
+    lines.push(prose(
+        "a draw, or bets on one corner only, hands every stake back.",
+        p.muted,
+    ));
+    lines
+}
+
+/// A bout is set: the bell, the corners, a fighter's round 1, the book.
 fn set_lines(view: &RingView<'_>, live: &LiveBout, bell_in: i64) -> Vec<Line<'static>> {
     let p = palette();
     let mut lines = vec![Line::from(vec![
@@ -340,61 +532,15 @@ fn set_lines(view: &RingView<'_>, live: &LiveBout, bell_in: i64) -> Vec<Line<'st
     lines.push(Line::default());
     lines.extend(corner_lines(view, live));
     lines.push(Line::default());
-    lines.push(pool_line(live));
-
-    let fighter = live.bout.side_of(view.me);
-    let side = fighter.unwrap_or(view.corner);
-    let bet = bet_of(live, view.me);
-    match bet {
-        Some(bet) => lines.push(Line::from(vec![
-            Span::styled("  your bet   ", p.dim),
-            Span::styled(bet.bits.to_string(), p.number),
-            Span::styled(
-                format!(
-                    " on {}, {} of {MAX_PRESSES} presses",
-                    live.bout.username(bet.side),
-                    bet.presses
-                ),
-                p.text,
-            ),
-        ])),
-        None => lines.push(Line::from(Span::styled("  your bet   nothing down", p.dim))),
-    }
-    lines.push(Line::from(Span::styled(
-        format!(
-            "  {RAKE_PERCENT}% of the pool burns, {PURSE_PERCENT}% goes to the winner, the rest is split among the bets on them. a draw, or bets on one corner only, hands every stake back."
-        ),
-        p.muted,
-    )));
-    lines.push(Line::default());
-
-    if let Some(side) = fighter {
-        lines.extend(round_lines(live, side));
+    // A fighter's round sits over the book: a screen too short for the
+    // panel cuts it at its foot, and the keys of a round on the clock are
+    // the last thing to lose.
+    if let Some(side) = live.bout.side_of(view.me) {
+        lines.extend(round_lines(live, side, "round 1, yours to lay before the bell"));
         lines.push(Line::default());
     }
-
-    let mut keys = Vec::new();
-    if let Some(sheet) = view.sheet {
-        let stake = RULES.cache(sheet.level);
-        if fighter.is_none() {
-            keys.extend(hint("←→", &format!("corner: {}", live.bout.username(side))));
-        }
-        keys.extend(hint(
-            "b",
-            &format!("put {stake} bits on {}", live.bout.username(side)),
-        ));
-    }
-    if fighter.is_some() {
-        keys.extend(fighter_hints());
-    }
-    lines.push(Line::from(keys));
+    lines.extend(book_lines(view, live));
     lines
-}
-
-fn fighter_hints() -> Vec<Span<'static>> {
-    let mut keys = hint("1-5", "lay a card, or take it back");
-    keys.extend(hint("e", "lock the round"));
-    keys
 }
 
 /// A signal as a bar and a number.
@@ -422,7 +568,7 @@ fn standing_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
         .map(|side| {
             let corner = live.duel.corner(*side);
             let mut spans = vec![Span::styled(
-                format!("  {:<24}", corner_name(view, &live.bout, *side)),
+                format!("  {} ", fit(&corner_name(view, &live.bout, *side), NAME)),
                 p.head,
             )];
             spans.extend(signal_spans(corner.signal, corner.block));
@@ -437,122 +583,342 @@ fn standing_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// A corner's hand, open to everybody. For the viewer's own corner the
-/// cards carry their keys and the laid ones the slot they sit in.
-fn hand_line(live: &LiveBout, side: Side, own: bool) -> Line<'static> {
+/// What `card` would do played now from `side`'s corner: the numbers
+/// are `Card::effect`'s on the table as it stands, so a card never
+/// prints one the machine would not play.
+fn effect_now(live: &LiveBout, side: Side, card: Card) -> Effect {
+    let corner = live.duel.corner(side);
+    card.effect(&data::powers(), &corner.board(live.duel.corner(side.other())))
+}
+
+/// What a card does, in the two rows under its name: the number it
+/// would land for played now, then the rule nobody would guess. The
+/// road's words (`fight/ui.rs`), but for the mute: here it cancels a
+/// card, not a glyph's move.
+fn card_text(card: Card, effect: &Effect) -> [String; 2] {
+    let hit = format!("hit {}", effect.damage);
+    let hold = format!("hold {}", effect.block);
+    match card {
+        Card::Strike | Card::Surge => [hit, String::new()],
+        Card::Block | Card::Bulwark => [hold, "till hit".to_string()],
+        Card::Wipe => [hold, "-static".to_string()],
+        Card::Jab => [hit, "free".to_string()],
+        Card::Brace => [hold, "free".to_string()],
+        Card::Siphon => [hit, format!("mend {}", effect.mend)],
+        Card::Riposte => [hit, "+block up".to_string()],
+        Card::Burn => [format!("+{} energy", effect.energy), "-static".to_string()],
+        Card::Ground => [hit, "x static".to_string()],
+        Card::Sever => [hit, "x2.5<half".to_string()],
+        Card::Mute => ["cancels".to_string(), "their slot".to_string()],
+        Card::Static => ["dead card".to_string(), "play=gone".to_string()],
+    }
+}
+
+/// The one number a chip of the other hand has room for: what the card
+/// hits for, or holds, or the energy it hands back.
+fn chip_number(effect: &Effect) -> String {
+    match (effect.damage, effect.block, effect.energy) {
+        (0, 0, 0) => String::new(),
+        (0, 0, energy) => format!(" +{energy}"),
+        (0, block, _) => format!(" {block}"),
+        (damage, _, _) => format!(" {damage}"),
+    }
+}
+
+/// A corner's hand as one row of chips, open to everybody: each card
+/// with its number, under `label`.
+fn hand_chips(live: &LiveBout, side: Side, label: &str) -> Line<'static> {
     let p = palette();
     let corner = live.duel.corner(side);
-    let mut spans = vec![Span::styled(
-        format!("  {:<12}", live.bout.username(side)),
-        p.dim,
-    )];
-    let mut hand = 0u8;
-    while let Some(card) = corner.piles.card(usize::from(hand)) {
-        let laid = corner
-            .slots
-            .iter()
-            .position(|slot| *slot == Some(hand))
-            .filter(|_| own);
-        if own {
-            spans.push(Span::styled(format!("[{}] ", hand + 1), p.key));
-        }
-        match laid {
-            Some(slot) => spans.push(Span::styled(
-                format!("{} in slot {}   ", card.name(), slot + 1),
-                p.muted,
-            )),
-            None => {
-                spans.push(Span::styled(card.marked(), card_style(card)));
-                spans.push(Span::styled(format!(" {}   ", card.cost()), p.dim));
+    let mut spans = vec![Span::styled(format!("  {} ", fit(label, LABEL - 1)), p.dim)];
+    for hand in 0..HAND {
+        match corner.piles.card(hand) {
+            Some(card) => {
+                spans.push(card_mark(card));
+                spans.push(Span::styled(
+                    format!("{}  ", chip_number(&effect_now(live, side, card))),
+                    p.text,
+                ));
             }
+            None => spans.push(Span::styled("·  ", p.muted)),
         }
-        hand += 1;
     }
     Line::from(spans)
 }
 
-/// A fighter's own round: the hand with its keys, the slots as laid, the
-/// energy left.
-fn round_lines(live: &LiveBout, side: Side) -> Vec<Line<'static>> {
+/// How one card of a fighter's own hand stands in the round.
+#[derive(Clone, Copy)]
+enum Lay {
+    /// Laid in this slot, from 0.
+    Laid(usize),
+    /// In the hand, and the energy left covers it.
+    Open,
+    /// In the hand, and it cannot be laid: the energy is short, or the
+    /// round is locked.
+    Shut,
+}
+
+/// A fighter's own hand as five cards side by side, each in its place:
+/// the number to press in the corner, the name on the frame, what it
+/// does inside, and on the bottom edge its cost as pips or, once laid,
+/// the slot it sits in, the frame lit. A card the round cannot take is
+/// drawn dark. Every card is the same width whatever is laid, so nothing
+/// moves under the fingers.
+fn hand_cards(live: &LiveBout, side: Side) -> Vec<Line<'static>> {
     let p = palette();
     let corner = live.duel.corner(side);
-    let mut slots = vec![Span::styled("  your slots  ", p.dim)];
+    let energy = live.duel.energy_left(side);
+    let inside = CARD - 4;
+    let mut rows: [Vec<Span<'static>>; 4] =
+        std::array::from_fn(|_| vec![Span::styled(" ", p.text)]);
+    for hand in 0..HAND {
+        for row in &mut rows {
+            row.push(Span::styled(" ", p.text));
+        }
+        let Some(card) = corner.piles.card(hand) else {
+            let gap = " ".repeat(CARD - 2);
+            rows[0].push(Span::styled(format!("╭{gap}╮"), p.muted));
+            rows[1].push(Span::styled(" ".repeat(CARD), p.text));
+            rows[2].push(Span::styled(" ".repeat(CARD), p.text));
+            rows[3].push(Span::styled(format!("╰{gap}╯"), p.muted));
+            continue;
+        };
+        let laid = corner
+            .slots
+            .iter()
+            .position(|slot| slot.map(usize::from) == Some(hand));
+        let lay = match (laid, corner.locked || card.cost() > energy) {
+            (Some(slot), _) => Lay::Laid(slot),
+            (None, false) => Lay::Open,
+            (None, true) => Lay::Shut,
+        };
+        let (frame, name, body, key) = match (lay, card_neon(card)) {
+            (Lay::Laid(_), Some(neon)) => {
+                (lit(Neon::Amber), lit(neon), ink(INK_BRIGHT), lit(Neon::Amber))
+            }
+            (Lay::Laid(_), None) => (lit(Neon::Amber), p.dim, p.dim, lit(Neon::Amber)),
+            (Lay::Open, Some(neon)) => (dim(neon), lit(neon), ink(INK_BRIGHT), lit(Neon::Amber)),
+            (Lay::Open, None) => (p.dim, p.dim, p.muted, lit(Neon::Amber)),
+            (Lay::Shut, _) => (p.muted, p.muted, p.muted, p.muted),
+        };
+        let label = card.name();
+        rows[0].extend([
+            Span::styled("╭ ", frame),
+            Span::styled((hand + 1).to_string(), key),
+            Span::styled(" ", frame),
+            Span::styled(label, name),
+            Span::styled(format!(" {}╮", "─".repeat(CARD - 6 - label.len())), frame),
+        ]);
+        let [first, second] = card_text(card, &effect_now(live, side, card));
+        for (row, line) in [(1, first), (2, second)] {
+            rows[row].extend([
+                Span::styled("│ ", frame),
+                Span::styled(format!("{line:<inside$}"), body),
+                Span::styled(" │", frame),
+            ]);
+        }
+        let (foot, foot_style) = match (lay, card.cost()) {
+            (Lay::Laid(slot), _) => (format!("slot {}", slot + 1), lit(Neon::Amber)),
+            (Lay::Open, 0) => ("free".to_string(), glow(Neon::Amber)),
+            (Lay::Open, cost) => (vec!["█"; usize::from(cost)].join(" "), glow(Neon::Amber)),
+            (Lay::Shut, 0) => ("free".to_string(), p.muted),
+            (Lay::Shut, cost) => (vec!["█"; usize::from(cost)].join(" "), p.muted),
+        };
+        rows[3].extend([
+            Span::styled("╰ ", frame),
+            Span::styled(foot.clone(), foot_style),
+            Span::styled(
+                format!(" {}╯", "─".repeat(CARD - 4 - foot.chars().count())),
+                frame,
+            ),
+        ]);
+    }
+    rows.into_iter().map(Line::from).collect()
+}
+
+/// The round's energy as pips, the way the road draws a turn's: spent
+/// energy is a different shape, not only a darker one. A burn carries
+/// the round past its three, and the row grows to show it.
+fn energy_spans(left: u8) -> Vec<Span<'static>> {
+    let p = palette();
+    let mut spans = vec![Span::styled("energy ", p.dim)];
+    for pip in 0..ENERGY.max(left) {
+        spans.push(match pip < left {
+            true => Span::styled("██", lit(Neon::Amber)),
+            false => Span::styled("░░", p.muted),
+        });
+        spans.push(Span::styled(" ", p.text));
+    }
+    spans
+}
+
+/// A fighter's own round under `head`: the energy left, the hand as
+/// cards, the slots in the order they come out, the other corner's open
+/// hand, and the keys, or what a locked round waits for. The same rows
+/// whatever is laid.
+fn round_lines(live: &LiveBout, side: Side, head: &str) -> Vec<Line<'static>> {
+    let p = palette();
+    let corner = live.duel.corner(side);
+    let mut top = vec![Span::styled(format!("{head}   "), p.head)];
+    top.extend(energy_spans(live.duel.energy_left(side)));
+    let mut lines = vec![Line::from(top)];
+    lines.extend(hand_cards(live, side));
+
+    let mut slots = vec![Span::styled(format!("  {:<LABEL$}", "comes out"), p.dim)];
     for slot in 0..SLOTS {
         let card = corner.slots[slot].and_then(|hand| corner.piles.card(usize::from(hand)));
-        slots.push(Span::styled(format!("{}:", slot + 1), p.muted));
+        slots.push(Span::styled(format!("{} ", slot + 1), p.key));
         match card {
-            Some(card) => slots.push(card_mark(card)),
-            None => slots.push(Span::styled(" · ", p.muted)),
+            Some(card) => {
+                let pad = SLOT_CELL.saturating_sub(card.marked().chars().count());
+                slots.push(card_mark(card));
+                slots.push(Span::styled(" ".repeat(pad), p.text));
+            }
+            None => slots.push(Span::styled(format!("{:<SLOT_CELL$}", "·"), p.muted)),
         }
-        slots.push(Span::styled("   ", p.text));
     }
-    slots.push(Span::styled(
-        format!("energy {} of {ENERGY}", live.duel.energy_left(side)),
-        p.number,
-    ));
-    if corner.locked {
-        slots.push(Span::styled("   locked", lit(Neon::Green)));
-    }
-    vec![hand_line(live, side, true), Line::from(slots)]
+    lines.push(Line::from(slots));
+    lines.push(hand_chips(live, side.other(), "their hand"));
+    lines.push(match corner.locked {
+        true => Line::from(Span::styled(
+            "  locked. it comes out when both corners are, or when the clock runs out.",
+            lit(Neon::Green),
+        )),
+        false => key_row(
+            "  ",
+            &[
+                ("1-5", "lay a card, or take it back"),
+                ("e", "lock the round"),
+                ("?", "guide"),
+            ],
+        ),
+    });
+    lines
 }
 
-/// What one corner did in a beat, padded to its column.
-fn move_spans(mv: Move) -> Vec<Span<'static>> {
-    let p = palette();
-    let (card, note) = match mv {
-        Move::Empty => {
-            return vec![Span::styled(format!("{:<TAPE_COLUMN$}", "held"), p.muted)];
-        }
-        Move::Played(card) => (card, ""),
-        Move::Muted(card) => (card, " muted"),
-        Move::Fizzled(card) => (card, " fizzled"),
+/// What one corner's slot came to, in words: the card, what it put up,
+/// what it threw and how much of that the other block ate, what it
+/// mended. `before` is the corner's signal and block going into the
+/// beat. The block put up is read off the tape: what stands after, less
+/// what stood before, plus what the other's hit ate of it.
+fn deed(half: Half, other: Half, (signal_before, block_before): (i32, i32)) -> String {
+    let card = match half.mv {
+        Move::Empty => return "nothing laid".to_string(),
+        Move::Fizzled(card) => return format!("{} fizzled, no energy", card.marked()),
+        Move::Muted(card) => return format!("{} cancelled", card.marked()),
+        Move::Played(card) => card,
     };
-    let width = card.marked().chars().count() + note.chars().count();
-    vec![
-        card_mark(card),
-        Span::styled(note, p.muted),
-        Span::styled(" ".repeat(TAPE_COLUMN.saturating_sub(width)), p.text),
-    ]
+    let mut did: Vec<String> = Vec::new();
+    let eaten = other.hit - half.took;
+    let held = half.block - block_before + eaten;
+    if held > 0 {
+        did.push(format!("holds {held}"));
+    }
+    if half.hit > 0 {
+        did.push(match (other.took, half.hit - other.took) {
+            (_, 0) => format!("hits {}", half.hit),
+            (0, _) => format!("hits {}, all blocked", half.hit),
+            (_, blocked) => format!("hits {}, {blocked} blocked", half.hit),
+        });
+    }
+    let mended = half.signal - (signal_before - half.took).max(0);
+    if mended > 0 {
+        did.push(format!("mends {mended}"));
+    }
+    match card {
+        Card::Mute => did.push(match other.mv {
+            Move::Muted(theirs) => format!("cancels {}", theirs.marked()),
+            Move::Empty | Move::Fizzled(_) | Move::Played(_) => "cancels nothing".to_string(),
+        }),
+        Card::Burn => did.push("for energy".to_string()),
+        Card::Static => did.push("thrown out".to_string()),
+        Card::Strike
+        | Card::Block
+        | Card::Surge
+        | Card::Wipe
+        | Card::Jab
+        | Card::Brace
+        | Card::Siphon
+        | Card::Riposte
+        | Card::Bulwark
+        | Card::Ground
+        | Card::Sever => {}
+    }
+    format!("{} {}", card.marked(), did.join(", "))
 }
 
-/// The round that last came out, slot by slot: what each corner played
-/// and what got through.
-fn tape_lines(live: &LiveBout) -> Vec<Line<'static>> {
+/// A signal after a beat, colored by where the beat moved it: red down,
+/// green up, grey where it stood.
+fn signal_span(after: i32, before: i32) -> Span<'static> {
+    let style = match after.cmp(&before) {
+        std::cmp::Ordering::Less => lit(Neon::Red),
+        std::cmp::Ordering::Greater => lit(Neon::Green),
+        std::cmp::Ordering::Equal => palette().dim,
+    };
+    Span::styled(format!("{after:>2}"), style)
+}
+
+/// The round that last came out, slot by slot: what each corner's card
+/// did and both signals once the slot was over, so the bars above read
+/// as the sum of the rows.
+fn tape_lines(view: &RingView<'_>, live: &LiveBout) -> Vec<Line<'static>> {
     let p = palette();
-    let Some(beats) = live.duel.tape.last() else {
+    let tape = &live.duel.tape;
+    let Some(beats) = tape.last() else {
         return Vec::new();
     };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            format!(
-                "{:<TAPE_LABEL$}",
-                format!("round {} came out", live.duel.tape.len())
-            ),
+    // Where both corners stood going into the round: the last beat of
+    // the round before it, or the opening bell.
+    let earlier = tape
+        .len()
+        .checked_sub(2)
+        .and_then(|round| tape[round].last());
+    let mut before = match earlier {
+        Some(beat) => beat.map(|half| (half.signal, half.block)),
+        None => [(SIGNAL, 0); 2],
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("round {} came out, slot by slot", tape.len()),
             p.head,
-        ),
-        Span::styled(
-            format!(
-                "{:<TAPE_COLUMN$}{:<TAPE_COLUMN$}",
-                live.bout.caller_username, live.bout.called_username
+        )),
+        Line::from(vec![
+            Span::styled(" ".repeat(TAPE_SLOT), p.text),
+            Span::styled(
+                SIDES
+                    .map(|side| {
+                        format!(
+                            "{}  ",
+                            fit(&corner_name(view, &live.bout, side), TAPE_COLUMN - 2)
+                        )
+                    })
+                    .concat(),
+                p.dim,
             ),
-            p.dim,
-        ),
-    ])];
+            Span::styled("signal", p.dim),
+        ]),
+    ];
     for (slot, beat) in beats.iter().enumerate() {
         let mut spans = vec![Span::styled(
-            format!("{:<TAPE_LABEL$}", format!("  slot {}", slot + 1)),
-            p.muted,
+            format!("{:<TAPE_SLOT$}", format!("  {}", slot + 1)),
+            p.key,
         )];
-        spans.extend(move_spans(beat[0].mv));
-        spans.extend(move_spans(beat[1].mv));
-        let took: Vec<String> = SIDES
-            .iter()
-            .zip(beat)
-            .filter(|(_, half)| half.took > 0)
-            .map(|(side, half)| format!("{} takes {}", live.bout.username(*side), half.took))
-            .collect();
-        spans.push(Span::styled(took.join(", "), lit(Neon::Red)));
+        for seat in 0..2 {
+            let half = beat[seat];
+            let text = deed(half, beat[1 - seat], before[seat]);
+            let style = match half.mv {
+                Move::Played(_) => p.text,
+                Move::Empty | Move::Fizzled(_) | Move::Muted(_) => p.muted,
+            };
+            let pad = TAPE_COLUMN.saturating_sub(text.chars().count()).max(2);
+            spans.extend(card_marked(&text, style));
+            spans.push(Span::styled(" ".repeat(pad), p.text));
+        }
+        spans.push(signal_span(beat[0].signal, before[0].0));
+        spans.push(Span::styled(" · ", p.muted));
+        spans.push(signal_span(beat[1].signal, before[1].0));
         lines.push(Line::from(spans));
+        before = beat.map(|half| (half.signal, half.block));
     }
     lines
 }
@@ -572,33 +938,34 @@ fn on_lines(view: &RingView<'_>, live: &LiveBout, left: Option<i64>) -> Vec<Line
     lines.extend(standing_lines(view, live));
     lines.push(Line::default());
 
-    let fighter = live.bout.side_of(view.me);
-    lines.push(Line::from(Span::styled(
-        "the hands, open; the slots, not",
-        p.head,
-    )));
-    for side in SIDES {
-        match fighter == Some(side) {
-            true => lines.extend(round_lines(live, side)),
-            false => lines.push(hand_line(live, side, false)),
+    // A fighter's hand and its keys sit over the tape and the pool: a
+    // screen too short for the panel cuts it at its foot, and a round on
+    // the clock can lose the tape but never its keys.
+    match live.bout.side_of(view.me) {
+        Some(side) => lines.extend(round_lines(live, side, "your round")),
+        None => {
+            lines.push(Line::from(Span::styled(
+                "the hands, open to everybody: a number is what the card hits for, or holds",
+                p.head,
+            )));
+            for side in SIDES {
+                lines.push(hand_chips(live, side, live.bout.username(side)));
+            }
         }
     }
-    // The keys sit under the hands, not at the foot: a screen too short
-    // for the panel cuts it there, and a round on the clock can lose the
-    // tape and the pool but never its keys.
-    if fighter.is_some() {
-        lines.push(Line::from(fighter_hints()));
+    lines.push(Line::default());
+    let tape = tape_lines(view, live);
+    if !tape.is_empty() {
+        lines.extend(tape);
+        lines.push(Line::default());
     }
-    lines.push(Line::default());
-    lines.extend(tape_lines(live));
-    lines.push(Line::default());
     lines.push(pool_line(live));
     lines
 }
 
 /// How the bout ended, in the panel's own words.
 fn ending_text(live: &LiveBout, ending: Ending) -> String {
-    let name = |side: Side| live.bout.username(side);
+    let name = |side: Side| said(&live.bout, side);
     let duel = &live.duel;
     match ending {
         Ending::Knockout(winner) => format!(
@@ -630,7 +997,7 @@ fn over_lines(view: &RingView<'_>, live: &LiveBout, clears_in: i64) -> Vec<Line<
     lines.push(Line::default());
     lines.extend(standing_lines(view, live));
     lines.push(Line::default());
-    lines.extend(tape_lines(live));
+    lines.extend(tape_lines(view, live));
     lines.push(Line::default());
 
     let pool = Pool {
@@ -656,7 +1023,7 @@ fn over_lines(view: &RingView<'_>, live: &LiveBout, clears_in: i64) -> Vec<Line<
             format!(
                 "  the pool was {total} bits: {} burned, {purse} to {}, {split} to the bets on them.",
                 total - purse - split,
-                live.bout.username(winner),
+                said(&live.bout, winner),
             ),
             p.text,
         )),
@@ -665,7 +1032,7 @@ fn over_lines(view: &RingView<'_>, live: &LiveBout, clears_in: i64) -> Vec<Line<
         let paid = state::pay(pool, settlement, bet.side, bet.bits);
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  your {} on {} ", bet.bits, live.bout.username(bet.side)),
+                format!("  your {} on {} ", bet.bits, said(&live.bout, bet.side)),
                 p.text,
             ),
             match (paid, settlement) {
@@ -689,6 +1056,94 @@ fn over_lines(view: &RingView<'_>, live: &LiveBout, clears_in: i64) -> Vec<Line<
         p.dim,
     )));
     lines
+}
+
+/// What the street says of the ring to a runner who is not at it.
+pub(crate) struct Notice {
+    pub told: Line<'static>,
+    /// What stepping in is for, the verb beside the city's key.
+    pub verb: &'static str,
+}
+
+/// The ring's news for the street: a call to this runner or their own
+/// call out, a bout set or on (theirs said as theirs), the result while
+/// it is still on the board. `None` when the ring holds nothing to tell
+/// them. Other runners' calls are not news: nothing is happening yet.
+pub(crate) fn notice(view: &RingView<'_>) -> Option<Notice> {
+    let p = palette();
+    let urgent = lit(Neon::Magenta);
+    let board = view.board;
+    let names = |live: &LiveBout| {
+        format!(
+            "{} against {}",
+            said(&live.bout, Side::Caller),
+            said(&live.bout, Side::Called)
+        )
+    };
+    let (text, style, verb) = match phase(board.live.as_ref(), view.now) {
+        Phase::Empty => match (call_to(board, view.me), call_from(board, view.me)) {
+            (Some(call), _) => (
+                format!(
+                    "{} calls you to the ring. {} to answer.",
+                    call.caller_username,
+                    clock((call.expires_at - view.now).num_seconds())
+                ),
+                urgent,
+                "answer",
+            ),
+            (None, Some(call)) => (
+                format!(
+                    "you called {}. {} left.",
+                    call.called_username,
+                    clock((call.expires_at - view.now).num_seconds())
+                ),
+                p.text,
+                "step in",
+            ),
+            (None, None) => return None,
+        },
+        Phase::Set { live, bell_in } => match live.bout.side_of(view.me) {
+            Some(side) => (
+                format!(
+                    "your bout with {}. the bell in {}.",
+                    said(&live.bout, side.other()),
+                    clock(bell_in)
+                ),
+                urgent,
+                "step in",
+            ),
+            None => (
+                format!(
+                    "{}. the bell in {}, the book is open.",
+                    names(live),
+                    clock(bell_in)
+                ),
+                p.text,
+                "watch, and bet",
+            ),
+        },
+        Phase::On { live, clock: left } => {
+            let round = format!("round {} of {ROUNDS}", live.duel.round);
+            match (live.bout.side_of(view.me), left) {
+                (Some(_), Some(left)) => (
+                    format!("your bout is on. {round}, {} on the clock.", clock(left)),
+                    urgent,
+                    "step in",
+                ),
+                (Some(_), None) => (
+                    format!("your bout is on. {round}, the clock is up."),
+                    urgent,
+                    "step in",
+                ),
+                (None, _) => (format!("{}, {round}.", names(live)), p.text, "watch"),
+            }
+        }
+        Phase::Over { live, .. } => (ending_text(live, live.duel.ending?), p.text, "see it"),
+    };
+    Some(Notice {
+        told: Line::from(Span::styled(text, style)),
+        verb,
+    })
 }
 
 #[cfg(test)]

@@ -64,6 +64,11 @@ pub(crate) enum Move {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Half {
     pub mv: Move,
+    /// What their card threw at the other corner, before any block: with
+    /// the other half's `took` it says how much of a hit was eaten. A
+    /// bout dealt before the tape carried it reads as nothing thrown.
+    #[serde(default)]
+    pub hit: i32,
     /// Signal this beat took off them.
     pub took: i32,
     /// Their signal and block once the beat was over.
@@ -411,12 +416,14 @@ impl Duel {
         [
             Half {
                 mv: caller_move,
+                hit: caller_effect.damage,
                 took: caller_took,
                 signal: caller.signal,
                 block: caller.block,
             },
             Half {
                 mv: called_move,
+                hit: called_effect.damage,
                 took: called_took,
                 signal: called.signal,
                 block: called.block,

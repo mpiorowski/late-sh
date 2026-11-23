@@ -265,6 +265,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     frame.render_widget(Paragraph::new(lines).style(ink(INK)), area);
 
     draw_street_line(frame, area, &view);
+    draw_ring_notice(frame, area, &view);
     draw_popover(frame, area, &view);
     draw_panel(frame, area, &view);
     // The sheet strip, the road, and the fight scene (`fight/ui.rs`): the
@@ -1626,6 +1627,55 @@ fn draw_street_line(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     );
 }
 
+/// The ring's news, bottom-left (`ring/ui.rs::notice`): a call to this
+/// runner or their own call out, a bout set or on, the result while it
+/// stands, and the key that steps up to the ropes from anywhere on the
+/// street (`input.rs`). Nobody is walked there: the box says so and
+/// waits. Drawn under the popover, so on a street too narrow for both
+/// the thing stood at wins.
+fn draw_ring_notice(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
+    if view.state.panel().is_some() || view.scene.is_some() || view.picker.is_some() {
+        return;
+    }
+    let Some(notice) = ring_ui::notice(&view.ring) else {
+        return;
+    };
+    let neon = landmark_neon(Landmark::Ring);
+    let title = format!(" {} ", data::title(Landmark::Ring));
+    let lines = vec![
+        notice.told,
+        Line::from(vec![
+            Span::styled("[r] ", lit(Neon::Amber)),
+            Span::styled(notice.verb, action()),
+        ]),
+    ];
+    let width = (lines
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+        .max(title.chars().count())
+        + 4)
+    .min(usize::from(area.width).saturating_sub(2)) as u16;
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
+    let rect = Rect {
+        x: area.x + 1,
+        y: area.y + area.height.saturating_sub(height),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).style(ink(INK)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(glow(neon))
+                .title(Span::styled(title, lit(neon))),
+        ),
+        rect,
+    );
+}
+
 /// What you can do where you stand, bottom-right.
 fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     if view.state.panel().is_some() || view.scene.is_some() {
@@ -1687,7 +1737,8 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
 /// word lands in rows already there, so nothing a key does moves the
 /// frame. On a screen too short for all of it the blank row goes first,
 /// then the panel gives up the rows it is short by (the armorer from its
-/// wall, `panel_lines`), so the keys and the word stay on the screen.
+/// wall, the ring its explanation, `panel_lines`), so the keys and the
+/// word stay on the screen.
 fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     let Some(landmark) = view.state.panel() else {
         return;
@@ -1800,8 +1851,9 @@ pub(super) fn draw_framed(
 }
 
 /// What a shop's panel says. `short_by` is how many rows the screen is
-/// short of all of it: the armorer gives them up from its wall; every
-/// other panel says everything and is cut at its foot.
+/// short of all of it: the armorer gives them up from its wall, the ring
+/// gives up how the game goes; every other panel says everything and is
+/// cut at its foot.
 fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -1857,7 +1909,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
         }
         Landmark::Bits => lines.extend(machine_lines(view)),
         Landmark::Blades => lines.extend(cart_lines(view)),
-        Landmark::Ring => lines.extend(ring_ui::panel_lines(&view.ring)),
+        Landmark::Ring => lines.extend(ring_ui::panel_lines(&view.ring, short_by)),
         Landmark::Screen
         | Landmark::Noodles
         | Landmark::Umbrellas
