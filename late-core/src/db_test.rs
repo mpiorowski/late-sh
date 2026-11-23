@@ -1,5 +1,39 @@
-use crate::db::{Db, DbConfig, create_pool};
+use std::time::Duration;
+
+use crate::db::{Db, DbConfig, create_pool, create_pool_with_max_age};
 use crate::test_utils::test_db;
+
+async fn backend_pid(pool: &deadpool_postgres::Pool) -> i32 {
+    let client = pool.get().await.expect("failed to get connection");
+    let row = client
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("pid query failed");
+    row.get(0)
+}
+
+#[tokio::test]
+async fn pool_reuses_a_connection_younger_than_max_age() {
+    let test_db = test_db().await;
+    let pool = create_pool_with_max_age(test_db.db.config(), Duration::from_secs(3600)).unwrap();
+
+    let first = backend_pid(&pool).await;
+    let second = backend_pid(&pool).await;
+
+    assert_eq!(first, second);
+}
+
+#[tokio::test]
+async fn pool_replaces_a_connection_past_max_age() {
+    let test_db = test_db().await;
+    let pool = create_pool_with_max_age(test_db.db.config(), Duration::ZERO).unwrap();
+
+    let first = backend_pid(&pool).await;
+    let second = backend_pid(&pool).await;
+
+    assert_ne!(first, second);
+    assert_eq!(pool.status().size, 1);
+}
 
 #[test]
 fn default_config_values() {

@@ -226,6 +226,14 @@ One dated entry per production crash or serious incident. **Add a new entry (new
 
 Entry template: symptom → evidence → verdict → fixes shipped → what to check if it repeats.
 
+### 2026-11-14: Postgres primary OOMKilled at its 4 GiB limit (CNPG restart, no failover)
+
+- **Symptom:** `postgres-2` (primary) was OOMKilled at 10:52:51Z and back in a second. On 2026-11-23 it sat at 3.8 GiB of 4 GiB again, with `memory.events` `max 172` (reclaim at the ceiling).
+- **Evidence:** working set climbed 0.7 GiB (11-07) → 2.8 GiB (11-10), reset by the 11-11 failover, then 3.7 GiB within 12 h and 3.8 GiB by 11-13. `shared_buffers` is 256 MB; on 11-23 the anon memory was 2.6 GiB, almost all private memory of idle pooled backends, scaling with connection age: the 7-day-old service-ssh pod's 17 backends averaged 121 MiB anon, service-web's 9-day-old 16 averaged 18 MiB, the 4.5 h-old service-ssh pod's 17 averaged 12 MiB (`Pss_Anon` from `/proc/<pid>/smaps_rollup`, grouped by `client_addr`). The deadpool pools in `late-core/src/db.rs` never retired a connection, and a draining pod keeps its pool for its 6 h grace on top of a fresh pod's.
+- **Verdict:** consistent and plausible, not proven. Backend caches growing with connection lifetime explain the 11-23 state; the 12 h regrowth after 11-11 is faster than age alone suggests, so some queries inflate a backend quickly.
+- **Fixes shipped:** pooled connections are replaced at checkout once older than 30 min (`MAX_CONNECTION_AGE`, a deadpool `pre_recycle` hook), for every app pool.
+- **If it repeats:** group backend `Pss_Anon` by `client_addr` as above. Old backends heavy means the age cap is not reaching them (an idle pool is not checked out, so it does not recycle); young backends heavy means a query, so look at `pg_stat_statements` for the largest plans and sorts.
+
 ### 2026-10-12: cert renewal reloaded ingress-nginx, every SSH session dropped 240 s later (no crash)
 
 - **Symptom:** at 18:50:39Z every SSH session and paired websocket disconnected at once and clients reconnected within ~20 s, which looked like a crash. `service-ssh` had 0 restarts (up since 09:42Z); nodes and every other pod were healthy.

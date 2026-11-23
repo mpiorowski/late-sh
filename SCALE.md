@@ -242,7 +242,7 @@ The `service-web -> icecast-sv:8000` upstream drops seen in 2026-07 have not ret
 
 ### 5. Postgres connections are bounded but not pooled externally
 
-App pools are currently per process through deadpool, with `max_pool_size: 16` in both prod profiles (`late-ssh/src/config.rs`, `late-web/src/config.rs`).
+App pools are currently per process through deadpool, with `max_pool_size: 16` in both prod profiles (`late-ssh/src/config.rs`, `late-web/src/config.rs`). A pooled connection is replaced at checkout once it is 30 minutes old (`late-core/src/db.rs`), because a Postgres backend's private memory grows with its lifetime.
 
 Each `late-ssh` replica also holds exactly one LISTEN connection outside the pool (`late-ssh/src/pg_listener.rs`), so a replica costs 17 connections. PgBouncer in transaction mode cannot carry that one; it stays a direct connection.
 
