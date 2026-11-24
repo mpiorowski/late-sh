@@ -8835,3 +8835,82 @@ async fn the_guide_searches_every_topic() {
     app.handle_input(b"\x1b");
     wait_for_esc_effect(&mut app, |app| !app.show_help, "the guide").await;
 }
+
+/// The terminal reporting its colors is not a person. A light/dark switch
+/// while the session sits away on the splash answers with a DEC 2031
+/// notice and, once asked, two OSC replies: the colors land, one query goes
+/// out, and the session stays away with its splash up.
+#[tokio::test]
+async fn terminal_color_reports_are_not_a_person() {
+    use crate::app::common::{away::AWAY_AFTER, terminal_colors};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "colors-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "colors-flow-it");
+    app.show_splash = true;
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away(), "the session starts away");
+    app.pending_terminal_commands.clear();
+
+    app.handle_input(b"\x1b[?997;2n");
+    app.handle_input(
+        b"\x1b[?997;2n\x1b]10;rgb:d5d5/d4d4/d6d6\x1b\\\x1b]11;rgb:1515/1414/1b1b\x1b\\",
+    );
+
+    assert!(app.away, "a color report brought the session back");
+    assert!(app.show_splash, "a color report dismissed the splash");
+    assert_eq!(app.terminal_fg, Some((0xD5, 0xD4, 0xD6)));
+    assert_eq!(app.terminal_bg, Some((0x15, 0x14, 0x1B)));
+    assert_eq!(
+        app.pending_terminal_commands,
+        vec![terminal_colors::QUERY.to_vec()],
+        "two notices ask once"
+    );
+}
+
+/// Leaving a synced background (here: previewing the Terminal theme in
+/// Settings) resets it with OSC 111 and asks for the colors again. The
+/// background held until then may be the synced canvas, latte's near-white
+/// on a dark profile, so the reset frame must already draw without it:
+/// reverse video until the terminal's own answer lands.
+#[tokio::test]
+async fn leaving_a_synced_background_forgets_it_before_drawing() {
+    use crate::app::common::{terminal_colors, theme};
+    use late_core::models::profile::Profile;
+    use ratatui::style::{Color, Modifier};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "sync-reset-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "sync-reset-flow-it");
+    let client = test_db.db.get().await.unwrap();
+    let mut profile = Profile::load(&client, user.id).await.unwrap();
+    profile.theme_id = Some("terminal".to_string());
+    profile.enable_background_color = true;
+    app.settings_modal_state
+        .open_from_profile(&profile, app.artboard_disclaimer_enabled());
+    app.show_settings = true;
+    let latte = (0xEF, 0xF1, 0xF5);
+    app.last_terminal_bg = Some(Color::Rgb(latte.0, latte.1, latte.2));
+    app.terminal_fg = Some((0xD5, 0xD4, 0xD6));
+    app.terminal_bg = Some(latte);
+    app.pending_terminal_commands.clear();
+
+    render_plain(&mut app);
+
+    assert_eq!(app.terminal_bg, None);
+    let reset = b"\x1b]111\x1b\\".to_vec();
+    let at = |cmd: &[u8]| app.pending_terminal_commands.iter().position(|c| c == cmd);
+    assert!(
+        at(&reset) < at(terminal_colors::QUERY) && at(&reset).is_some(),
+        "the reset goes out before the query: {:?}",
+        app.pending_terminal_commands
+    );
+    // The colors the frame was drawn with are still installed on this thread.
+    theme::set_current_by_id("terminal");
+    let drawn = theme::selection_style();
+    theme::set_current_by_id("contrast");
+    assert!(
+        drawn.add_modifier.contains(Modifier::REVERSED),
+        "the reset frame filled from the synced canvas: {drawn:?}"
+    );
+}

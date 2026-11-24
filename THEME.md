@@ -163,15 +163,20 @@ If you write a palette this way, know what you trade away:
   under an unknown color, so `theme::selection_style()` (and the
   `theme::row_style(selected)` list helper built on it) switches to reverse
   video: the terminal swaps its own fg/bg pair, the one pair the user already
-  made legible. New selection call sites must go through those helpers, never
-  raw `bg(BG_SELECTION())`. The swap is total: patching `selection_style()`
-  in clears any fg or bg the call site set earlier, so a reversed row gives
-  up its intra-row accents on these palettes. A color that must survive
-  because it means something (a game piece, a card suit) is applied after
-  the patch, where it becomes the fill of the swapped cell. And because the
-  swap is a modifier a later `.bg()` cannot remove, treatments that compete
-  on the same cell (cursor vs. selection on a game board) must resolve to
-  exactly one branch, never patch-then-overwrite.
+  made legible. On a light profile that swap paints the row in the
+  near-black text color, so the session asks the terminal for its default
+  foreground and background (OSC 10/11) at login and again when it reports a
+  palette switch (DEC mode 2031); when the background is the brighter of the
+  two, the selection is that background moved 18% toward the text instead.
+  New selection call sites must go through those helpers, never raw
+  `bg(BG_SELECTION())`. The reverse-video swap is total: patching
+  `selection_style()` in clears any fg or bg the call site set earlier, so a
+  reversed row gives up its intra-row accents on these palettes. A color that
+  must survive because it means something (a game piece, a card suit) is
+  applied after the patch, where it becomes the fill of the swapped cell. And
+  because the swap is a modifier a later `.bg()` cannot remove, treatments
+  that compete on the same cell (cursor vs. selection on a game board) must
+  resolve to exactly one branch, never patch-then-overwrite.
 - The text brightness setting only moves colors it can read, so `Color::Reset`
   entries ignore it.
 - With `bg_canvas: Color::Reset`, the "Sync terminal background" setting stops

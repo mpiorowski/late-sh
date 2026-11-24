@@ -214,6 +214,19 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
   input parser consumes the replies. Kitty-family wins over iTerm2-family wins
   over Sixel; DA1 attribute 4 only fills in Sixel when nothing else was found.
   `TERM` of tmux disables raster previews entirely (no passthrough).
+- **Terminal colors.** The same setup asks for the default foreground and
+  background (`OSC 10;?`, `OSC 11;?`, `app/common/terminal_colors.rs`) ahead
+  of any OSC 11 the render loop writes, and turns on DEC mode 2031, whose
+  `CSI ? 997 ; Ps n` says the terminal switched palettes. The session asks
+  again on that notice and after every OSC 111 reset (while synced, an answer
+  was the theme's canvas, so the held background is dropped), one query a
+  frame however many notices arrive. `App::terminal_fg`/`terminal_bg` reach
+  the theme through `theme::set_terminal_colors` before each draw; only the
+  selection fill of a Reset-canvas palette on a light profile reads them
+  (`THEME.md`). Unanswered queries cost nothing: the selection stays reverse
+  video. `leave_alt_screen` and the CLI's `SESSION_MODES_OFF` turn 2031 off;
+  a session that ends without its teardown (a stall, a dropped link) leaves
+  it on for a plain `ssh` user, as it does the mouse modes.
 - **Rasters.** Chat rows always render the RGB block fallback; native image
   data is fetched lazily for the image modal and opt-in producers (none today).
   Kitty ids live in `0x4C000000..0x4CFFFFFF` with a dedicated z-index; an image
@@ -247,6 +260,12 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
 - `Ctrl+R` (and `/redraw`) is the manual full repaint.
 
 ## 6. Input parsing
+
+`App::handle_input` first takes out the terminal's complete color reports
+(OSC 10/11 replies, DEC 2031 notices; `terminal_colors::strip_reports`), so
+they never reach a door's raw passthrough, the away clock, or the splash. A
+report split across two reads slips through as input, as a split latency
+probe reply does.
 
 SSH input runs through a persistent `vte::Parser` (`app/input.rs`), so CSI/SS3
 sequences and bracketed paste survive split reads. `is_likely_paste` treats a

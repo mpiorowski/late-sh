@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
         .then(RawModeGuard::enable_if_tty);
     // Declared after the raw-mode guard so it drops first: every way out of
     // the session below, clean or not, leaves the shell without mouse
-    // reporting or bracketed paste.
+    // reporting, bracketed paste, or palette notifications.
     let _session_modes = SessionModesGuard::enable_if_tty();
 
     if config.ssh_mode == config::SshMode::OpenSsh {

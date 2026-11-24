@@ -39,6 +39,7 @@ use crate::{
         chat::svc::ChatService,
         chat::{mod_modal, sheet_modal},
         common::primitives::{Banner, Screen},
+        common::terminal_colors,
         help_modal, hub, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
@@ -1074,6 +1075,10 @@ pub struct App {
     /// The terminal's own name for itself, from its XTVERSION reply; named
     /// in the session's wire summary log (`ssh.rs`).
     terminal_version: Option<String>,
+    /// The terminal's default foreground and background, from its OSC 10/11
+    /// replies (`common/terminal_colors.rs`).
+    pub(crate) terminal_fg: Option<terminal_colors::Rgb>,
+    pub(crate) terminal_bg: Option<terminal_colors::Rgb>,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
@@ -2053,6 +2058,8 @@ impl App {
             multiplexer_term: terminal_images_disabled,
             windows_terminal: false,
             terminal_version: None,
+            terminal_fg: None,
+            terminal_bg: None,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
@@ -3010,6 +3017,20 @@ impl App {
         }
     }
 
+    /// What the terminal reported about its own colors. A palette switch
+    /// (DEC 2031, a light/dark follow) asks again; the answers land here too.
+    fn apply_terminal_color_reports(&mut self, reports: terminal_colors::Reports) {
+        if let Some(fg) = reports.fg {
+            self.terminal_fg = Some(fg);
+        }
+        if let Some(bg) = reports.bg {
+            self.terminal_bg = Some(bg);
+        }
+        if reports.palette_changed {
+            terminal_colors::queue_query(&mut self.pending_terminal_commands);
+        }
+    }
+
     /// The terminal's XTVERSION name, when it answered the startup probe.
     pub(crate) fn terminal_version(&self) -> Option<&str> {
         self.terminal_version.as_deref()
@@ -3140,6 +3161,11 @@ impl App {
 
     pub fn handle_input(&mut self, data: &[u8]) {
         use crate::app::common::away::{PresenceInput, paste_end, presence_input};
+        // The terminal reporting its colors, not a person: out before the
+        // away clock, the doors' raw passthrough, or the splash can read it.
+        let (data, reports) = terminal_colors::strip_reports(data);
+        self.apply_terminal_color_reports(reports);
+        let data: &[u8] = &data;
         if !data.is_empty() {
             self.last_input_at = Instant::now();
         }
@@ -4569,7 +4595,11 @@ impl App {
             buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h");
         }
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~) - always on.
-        buf.extend_from_slice(b"\x1b[?2004h");
+        // 2031h = palette change notifications (CSI ? 997 ; Ps n).
+        buf.extend_from_slice(b"\x1b[?2004h\x1b[?2031h");
+        // Ahead of every OSC 11 the render loop writes, so the answer is the
+        // terminal's own background, not the synced one.
+        buf.extend_from_slice(terminal_colors::QUERY);
         buf.extend_from_slice(&crate::app::files::terminal_image::xtversion_probe());
         buf.extend_from_slice(&iterm2_capabilities_probe());
         // DA1 last: nearly every terminal answers it, and replies arrive in
@@ -4581,12 +4611,15 @@ impl App {
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(terminal_string_terminator());
+        // 2031l = disable palette change notifications
         // 2004l = disable bracketed paste
         // 1006l = disable SGR mouse tracking
         // 1003l = disable any-event mouse tracking
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(
+            b"\x1b[?2031l\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\",
+        );
         buf.extend_from_slice(POP_WINDOW_TITLE);
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);

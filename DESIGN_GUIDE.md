@@ -245,9 +245,9 @@ established game identities can legitimately use their own colors; their
 legibility against UI backgrounds is a separate concern.
 
 **Rendering contract:** theme state is thread-local. The render path installs
-the reader's theme and brightness adjustment before drawing. Background work
-should carry data or semantic ink roles rather than resolve and cache
-reader-specific theme colors on an unrelated worker thread.
+the reader's theme, brightness adjustment, and reported terminal colors before
+drawing. Background work should carry data or semantic ink roles rather than
+resolve and cache reader-specific theme colors on an unrelated worker thread.
 See [render initialization](late-ssh/src/app/render.rs).
 
 ### 5.2 Nominal palette contrast — observed snapshot
@@ -270,8 +270,10 @@ pair, or terminal configuration, and are not a claim of accessibility compliance
 `theme::selection_style()` uses `BG_SELECTION` on a paintable canvas. For a
 `Color::Reset` canvas, it sets foreground and background to Reset and adds
 `REVERSED`, allowing the terminal's own foreground/background pair to provide
-the selection. Reset inherits terminal defaults, which may be opaque or
-transparent.
+the selection; when the terminal has reported a light profile (OSC 10/11), it
+fills with the reported background moved toward the reported foreground
+instead (see [THEME.md](THEME.md)). Reset inherits terminal defaults, which
+may be opaque or transparent.
 
 A page surface (a screen's body, a game board, a keyboard strip) should leave
 its background `Color::Reset` rather than paint `BG_CANVAS()`. "Sync terminal
