@@ -14,9 +14,6 @@ use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
 use late_core::models::media_queue_item::MediaQueueItem;
-use late_core::models::pet::{
-    Form, PetCompanion, PetGuest, PetMood, PetSpecies, Stage, TreatKind, Trick,
-};
 use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{
@@ -38,6 +35,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot, watch};
 use tracing::{Instrument, info_span};
 
+use crate::app::pet::svc::{PetService, ProfilePet};
 use crate::app::profile::ledger::{self, LedgerRow, LedgerSources};
 use crate::ircd::registry::IrcRegistry;
 use crate::session::{SessionMessage, SessionRegistry};
@@ -55,23 +53,6 @@ pub struct ProfileService {
     username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
     irc_registry: Option<IrcRegistry>,
-}
-
-/// What a profile shows of a pet: enough to draw it and caption it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProfilePet {
-    pub species: PetSpecies,
-    pub mood: PetMood,
-    pub name: Option<String>,
-    pub form: Form,
-    pub days_together: i32,
-    /// The treat it ate today: the title after its name and the thing it
-    /// carries, until the UTC day ends.
-    pub fed_today: Option<TreatKind>,
-    /// The tricks it knows: its portrait runs through them.
-    pub tricks: Vec<Trick>,
-    /// The pets staying with it as the profile loaded, newest first.
-    pub guests: Vec<PetGuest>,
 }
 
 /// What a profile shows of a runner: the face, the sheet (the badge's
@@ -420,35 +401,7 @@ impl ProfileService {
         };
         let aquarium_fish =
             marketplace::active_aquarium_creatures_for_user(&client, user_id).await?;
-        // Every account that has signed in since pets grew has a row; one
-        // put away is not shown.
-        let pet = match PetCompanion::find_by_user_id(&client, user_id).await? {
-            Some(row) if row.enabled => {
-                let fed = PetCompanion::last_fed(&**client, user_id).await?;
-                Some(ProfilePet {
-                    species: row.species(),
-                    mood: row.mood(),
-                    name: row.name.clone(),
-                    form: row.form(),
-                    days_together: row.days_together,
-                    // An egg is nothing yet: it goes by no title.
-                    fed_today: match row.stage() {
-                        Stage::Egg => None,
-                        Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => {
-                            crate::app::pet::growth::fed_today(fed, today)
-                        }
-                    },
-                    tricks: row.tricks(),
-                    guests: PetCompanion::guests_since(
-                        &**client,
-                        user_id,
-                        crate::app::pet::growth::stays_since(Utc::now()),
-                    )
-                    .await?,
-                })
-            }
-            Some(_) | None => None,
-        };
+        let pet = PetService::profile_pet(&**client, user_id).await?;
         let runner = match DeadchannelRunner::find_by_user(&client, user_id).await? {
             Some(row) if row.left_at.is_none() => {
                 let look = crate::app::deadchannel::runner::state::Look::parse(&row.look);

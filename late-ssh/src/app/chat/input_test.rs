@@ -1,33 +1,5 @@
-use super::{is_next_room_key, is_prev_room_key, leader_reaction_emoji, petname_banner};
-use crate::app::chat::state::PetnameRequest;
+use super::{is_next_room_key, is_prev_room_key, leader_reaction_emoji};
 use chrono::Utc;
-use late_core::models::pet::PetSpecies;
-
-/// `/petname` speaks of the pet the owner has: a bird is never called a cat.
-#[test]
-fn petname_banners_name_the_species_the_owner_has() {
-    let set = PetnameRequest::Set("Tweety".to_string());
-    assert_eq!(
-        petname_banner(Some(PetSpecies::Bird), Some("Tweety"), &set).message,
-        "🐦 named your bird Tweety"
-    );
-    assert_eq!(
-        petname_banner(Some(PetSpecies::Dog), Some("Rex"), &PetnameRequest::Show).message,
-        "🐕 your dog is named Rex"
-    );
-    assert_eq!(
-        petname_banner(Some(PetSpecies::Bird), None, &PetnameRequest::Show).message,
-        "your bird doesn't have a name yet: use /petname <name> to set one"
-    );
-    assert_eq!(
-        petname_banner(Some(PetSpecies::Dog), None, &PetnameRequest::Clear).message,
-        "cleared your dog's name"
-    );
-    assert_eq!(
-        petname_banner(Some(PetSpecies::Cat), Some("Mochi"), &PetnameRequest::Show).message,
-        "🐈 your cat is named Mochi"
-    );
-}
 
 #[test]
 fn next_room_keys_include_ctrl_n() {

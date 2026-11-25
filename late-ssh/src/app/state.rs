@@ -689,7 +689,7 @@ pub struct App {
     /// The box the pet was drawn in last frame, where it stood, and how far
     /// it could roam; `None` when no box was drawn. Gates the pet
     /// animation's frame cost in tick and places the cursor for the walk.
-    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::state::PetFrameInputs>>,
+    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::session::PetFrameInputs>>,
     /// The terminal cursor's last reported cell (0-based), for the pet to
     /// walk after. `None` until the terminal reports one.
     pub(crate) last_mouse: Option<(u16, u16)>,
@@ -823,7 +823,7 @@ pub struct App {
     pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
 
     /// Cat companion
-    pub(crate) pet_state: crate::app::pet::state::PetState,
+    pub(crate) pet_state: crate::app::pet::session::PetState,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
@@ -1525,7 +1525,7 @@ impl App {
             config.ring_service.clone(),
         );
 
-        let pet_state = crate::app::pet::state::PetState::new(
+        let pet_state = crate::app::pet::session::PetState::new(
             config.user_id,
             config.pet_service.clone(),
             config.initial_pet,
@@ -4596,9 +4596,7 @@ impl Drop for App {
         // An owner going offline leaves a sleeping pet on the profile. Only
         // the owner's session writes the row; another device still up
         // rewrites it on its next mood change.
-        self.pet_state
-            .svc
-            .set_mood_task(self.user_id, late_core::models::pet::PetMood::Asleep);
+        self.pet_state.session_ended();
         // The device mark: when this terminal's keyboard went quiet, not when
         // the connection closed. A terminal parked open overnight and shut in
         // the morning left last night. Keyless sessions (ghost bots, tests)

@@ -12,7 +12,7 @@ use super::{
     WatchSide, WatchTarget, draw_pet_box, frame_changed, guest_label, pick_name, portrait_lines,
     portrait_with_guests, status_line, still_rows,
 };
-use crate::app::pet::state::{
+use crate::app::pet::session::{
     Ambient, Body, Look, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTick, PetTravel,
 };
 use crate::test_helpers::new_test_db;

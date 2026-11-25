@@ -4,12 +4,13 @@ use late_core::models::pet::{
     Fed, Form, PetCompanion, PetMood, PetSpecies, Pick, Stage, TreatKind, Trick, VisitKind,
 };
 use late_core::test_utils::{TestDb, create_test_user};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use super::{Did, PET_CHIP_BONUS, PetCommand, PetService, Refusal, Visited};
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
-use crate::app::pet::growth::{DayCounted, Practiced, TRICK_DAYS};
+use crate::app::pet::state::{DayCounted, Practiced, TRICK_DAYS};
+use crate::pg_listener::{Channel, PgListener, Signal};
 use crate::test_helpers::new_test_db;
 
 fn service(test_db: &TestDb) -> (PetService, broadcast::Receiver<ActivityEvent>) {
@@ -620,6 +621,14 @@ async fn a_pet_goes_calling_once_a_day_and_an_egg_stays_home() {
         Did::Hatched(PetSpecies::Cat)
     );
 
+    let revisions = (
+        svc.bootstrap(host).await.expect("the host").row.revision,
+        svc.bootstrap(caller)
+            .await
+            .expect("the caller")
+            .row
+            .revision,
+    );
     assert_eq!(
         svc.visit(caller, host, VisitKind::Call, day(1))
             .await
@@ -649,6 +658,10 @@ async fn a_pet_goes_calling_once_a_day_and_an_egg_stays_home() {
     assert!(away.guests.is_empty());
     let stay = away.calling.expect("its pet is out calling");
     assert_eq!(stay.since, home.guests[0].since);
+    // Both mirrors changed, so both rows are newer than any snapshot read
+    // before the call: a late answer cannot put the old tile back.
+    assert!(home.row.revision > revisions.0, "the host's row moved");
+    assert!(away.row.revision > revisions.1, "the caller's row moved");
     assert!(
         svc.bootstrap(second_host)
             .await
@@ -689,6 +702,72 @@ async fn a_pet_goes_calling_once_a_day_and_an_egg_stays_home() {
             line: "they sat in the sun together",
         },
         "yesterday's treat names nobody today"
+    );
+}
+
+async fn next_signal(heard: &mut mpsc::UnboundedReceiver<Signal>) -> Signal {
+    tokio::time::timeout(std::time::Duration::from_secs(10), heard.recv())
+        .await
+        .expect("signal timeout")
+        .expect("listener queue open")
+}
+
+/// A pet staying somewhere is drawn in its host's box from its own row, so
+/// its host is told when that changes: put away it is no guest at all.
+#[tokio::test]
+async fn a_guest_that_changes_tells_its_host() {
+    let test_db = new_test_db().await;
+    let (svc, _rx) = service(&test_db);
+    let host = owner(&test_db, &svc, "pet-svc-told-host").await;
+    let guest = hatched(&test_db, &svc, "pet-svc-told-guest", PetSpecies::Cat).await;
+    assert!(matches!(
+        svc.visit(guest, host, VisitKind::Call, day(1))
+            .await
+            .expect("call"),
+        Visited::Called { .. }
+    ));
+
+    let mut listener = PgListener::new();
+    let mut heard = listener.subscribe(&[Channel::PetChanged]);
+    let _task = listener.start(test_db.db.config().clone());
+    let told = |user_id: Uuid| Signal::Notify {
+        channel: Channel::PetChanged,
+        payload: user_id.to_string(),
+    };
+    assert_eq!(next_signal(&mut heard).await, Signal::Resync);
+
+    svc.set_enabled(guest, false).await.expect("put away");
+    assert_eq!(next_signal(&mut heard).await, told(host));
+    assert!(
+        svc.bootstrap(host)
+            .await
+            .expect("the host")
+            .guests
+            .is_empty(),
+        "a pet put away is nobody's guest"
+    );
+
+    svc.set_enabled(guest, true).await.expect("out again");
+    assert_eq!(next_signal(&mut heard).await, told(host));
+
+    // Its own sessions hear of the new animal, and so does its host.
+    assert_eq!(
+        did(&svc, guest, PetCommand::Species(PetSpecies::Dog), day(1)).await,
+        Did::Became(PetSpecies::Dog)
+    );
+    assert_eq!(next_signal(&mut heard).await, told(guest));
+    assert_eq!(next_signal(&mut heard).await, told(host));
+    let home = svc.bootstrap(host).await.expect("the host");
+    assert_eq!(home.guests[0].species, PetSpecies::Dog);
+
+    // A day counted changes nothing a host draws: only its own are told.
+    did(&svc, guest, PetCommand::CountDay, day(2)).await;
+    svc.set_name(guest, Some("Rex")).await.expect("name");
+    assert_eq!(next_signal(&mut heard).await, told(guest));
+    assert_eq!(
+        next_signal(&mut heard).await,
+        told(host),
+        "the name, not the day"
     );
 }
 

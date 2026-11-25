@@ -24,7 +24,7 @@ use chrono::Utc;
 use dartboard_core::Canvas;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
 use late_core::models::daily_rung::STAR_GLYPH;
-use late_core::models::pet::{PET_NAME_MAX_CHARS, Stage};
+use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
 use ratatui::{
     Frame,
@@ -55,10 +55,11 @@ use crate::app::{
     },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
     pet::{
-        growth::treat_title as pet_treat_title,
-        ui::{Portrait as PetPortrait, guest_label, portrait_with_guests},
+        state::treat_title as pet_treat_title,
+        svc::ProfilePet,
+        ui::{guest_label, portrait_with_guests},
     },
-    profile::svc::{ProfilePet, ProfileRunner},
+    profile::svc::ProfileRunner,
     settings_modal::data::country_label,
 };
 
@@ -515,18 +516,7 @@ fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
 /// today and running through its tricks, with the pets staying with it
 /// beside it as far as `width` cells go.
 fn pet_portrait(pet: &ProfilePet, wall_tick: usize, width: usize) -> Vec<Line<'static>> {
-    portrait_with_guests(
-        PetPortrait {
-            species: pet.species,
-            form: pet.form,
-            mood: pet.mood,
-            carries: pet.fed_today,
-            tricks: &pet.tricks,
-        },
-        &pet.guests,
-        wall_tick,
-        width,
-    )
+    portrait_with_guests(pet.portrait(), &pet.guests, wall_tick, width)
 }
 
 /// Who is staying with the pet: `with mat's Biscuit`, and how many more.
@@ -561,15 +551,12 @@ fn pet_visit_hint() -> Line<'static> {
     ])
 }
 
-/// The pet's name, or what it is while it has none: an egg is no animal
-/// yet, whatever species its row still holds.
+/// The pet's name, or what it is while it has none: its animal, or an egg.
 fn pet_name_span(pet: &ProfilePet) -> Span<'static> {
-    let name = match (&pet.name, pet.form.stage()) {
+    let name = match (&pet.name, pet.animal()) {
         (Some(name), _) => name.clone(),
-        (None, Stage::Egg) => "egg".to_string(),
-        (None, Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder) => {
-            pet.species.as_str().to_string()
-        }
+        (None, None) => "egg".to_string(),
+        (None, Some(species)) => species.as_str().to_string(),
     };
     Span::styled(
         name,

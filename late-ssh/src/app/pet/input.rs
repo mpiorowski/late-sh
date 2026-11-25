@@ -3,13 +3,13 @@
 //! the `/pet` line. Nothing here decides anything about the pet: every
 //! gesture becomes a call on `PetState`, which asks the service.
 
-use late_core::models::pet::{PetSpecies, Pick};
+use late_core::models::pet::{PetSpecies, Pick, normalize_pet_name};
 use ratatui::layout::Position;
 
 use crate::app::{
     common::primitives::Banner,
     input::{MouseButton, MouseEventKind, ParsedInput},
-    pet::state::{Clicked, Toy},
+    pet::session::{Clicked, Toy},
     state::App,
 };
 
@@ -132,9 +132,9 @@ pub(crate) fn handle_escape(app: &mut App) {
     close(app);
 }
 
-/// What a `/pet` line asks for. The pet's settings live on the line, not
-/// in the care box: the box is for playing with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a `/pet` or `/petname` line asks for. The pet's settings live on
+/// the line, not in the care box: the box is for playing with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Order {
     /// `/pet cat`, `/pet dog`, `/pet bird`: what a hatched pet is.
     Species(PetSpecies),
@@ -146,6 +146,19 @@ pub(crate) enum Order {
     ResetAsk,
     /// `/pet reset yes`: start over as an egg.
     Reset,
+    /// `/petname`: what it is called.
+    Name(Naming),
+}
+
+/// What a `/petname` line asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Naming {
+    /// `/petname`: say its name.
+    Show,
+    /// `/petname <name>`: name it. Holds the normalised name.
+    Set(String),
+    /// `/petname clear`: take its name away.
+    Clear,
 }
 
 pub(crate) const ORDER_USAGE: &str =
@@ -169,11 +182,37 @@ pub(crate) fn parse_order(words: &str) -> Option<Order> {
     }
 }
 
-/// Carry out a `/pet` order. What the row decides (the species, the reset)
-/// answers with its own banner on a later tick.
+pub(crate) const NAME_USAGE: &str = "Usage: /petname <name> (up to 24 chars), or /petname clear";
+
+/// Parse the words after `/petname`. `None` for a name that normalises to
+/// nothing.
+pub(crate) fn parse_name_order(words: &str) -> Option<Order> {
+    let naming = match words.to_ascii_lowercase().as_str() {
+        "" => Naming::Show,
+        "clear" | "remove" | "none" | "off" => Naming::Clear,
+        _ => Naming::Set(normalize_pet_name(words)?),
+    };
+    Some(Order::Name(naming))
+}
+
+/// Carry out a `/pet` or `/petname` order. What the row decides (the
+/// species, the reset) answers with its own banner on a later tick. A pet
+/// put away keeps its name and can still be named.
 pub(crate) fn handle_order(app: &mut App, order: Order) -> Option<Banner> {
     const AWAY: &str = "Your pet is put away: /pet out brings it back";
     match (order, app.pet_out()) {
+        (Order::Name(naming), _) => {
+            match &naming {
+                Naming::Show => {}
+                Naming::Set(name) => app.pet_state.set_name(Some(name.clone())),
+                Naming::Clear => app.pet_state.set_name(None),
+            }
+            Some(naming_banner(
+                app.pet_state.animal(),
+                app.pet_state.name.as_deref(),
+                &naming,
+            ))
+        }
         (Order::Out, true) => Some(Banner::info("Your pet is already out")),
         (Order::Out, false) => {
             app.pet_state.set_enabled(true);
@@ -205,6 +244,28 @@ pub(crate) fn handle_order(app: &mut App, order: Order) -> Option<Banner> {
             app.pet_state.start_over();
             None
         }
+    }
+}
+
+/// The banner for a `/petname` line, worded for what the pet is: its
+/// species, or an egg (`None`). `name` is the pet's name after the line
+/// applied.
+fn naming_banner(animal: Option<PetSpecies>, name: Option<&str>, naming: &Naming) -> Banner {
+    let (glyph, kind) = match animal {
+        Some(PetSpecies::Cat) => ("🐈", "cat"),
+        Some(PetSpecies::Dog) => ("🐕", "dog"),
+        Some(PetSpecies::Bird) => ("🐦", "bird"),
+        None => ("🥚", "egg"),
+    };
+    match (naming, name) {
+        (Naming::Show, Some(name)) => {
+            Banner::success(&format!("{glyph} your {kind} is named {name}"))
+        }
+        (Naming::Show, None) => Banner::error(&format!(
+            "your {kind} doesn't have a name yet: use /petname <name> to set one"
+        )),
+        (Naming::Set(name), _) => Banner::success(&format!("{glyph} named your {kind} {name}")),
+        (Naming::Clear, _) => Banner::success(&format!("cleared your {kind}'s name")),
     }
 }
 

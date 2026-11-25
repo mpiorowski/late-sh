@@ -47,7 +47,8 @@ break: an owner who stays away finds it asleep and glad they are back.
   games earns it, and so do ten active minutes in one door screen. Its
   kind is where it came from: `puzzle` (a daily puzzle), `arcade` (a
   score game), `match` (a daily match), `table` (a card or casino table),
-  `door`. At most one waits in the pouch, and while one waits no other is
+  `door`. No house table raises a win yet, so nothing earns the `table`
+  treat today (`devdocs/PET-GROWTH.md`). At most one waits in the pouch, and while one waits no other is
   earned; an egg can earn but not eat. Lateania's mob kills are not wins:
   its minutes earn a door treat.
 - **The treat shows today.** The last treat eaten (`Fed`), if eaten this
@@ -68,8 +69,9 @@ break: an owner who stays away finds it asleep and glad they are back.
   `STAY_MINUTES` (60) from the call: drawn in the host's box, care box
   and profile as it looks now, named `owner's Name`. It never leaves its
   own box: its owner's tile says `visiting <host>, N min left`. A guest
-  put away or reset to an egg is no guest. The stay is the `pet_visits`
-  row's `created`; nothing is written when it ends.
+  put away or reset to an egg is no guest, and its hosts are told when
+  it changes (below). The stay is the `pet_visits` row's `created`;
+  nothing is written when it ends.
 - **Toys.** A ball and a toy mouse, both free.
 - **The daily pat.** The first click of a UTC day pays 100 chips
   (`PET_CHIP_BONUS`), as it always did.
@@ -79,31 +81,37 @@ break: an owner who stays away finds it asleep and glad they are back.
   `/pet out`; `/pet reset` says what a reset takes and `/pet reset yes`
   does it (back to an egg on its first day: days, stage, picks, bond,
   tricks go;
-  the name, the day's pat and a waiting treat stay). `/petname` names it.
+  the name, the day's pat and a waiting treat stay). `/petname` shows
+  its name, `/petname <name>` sets it and `/petname clear` removes it
+  (`Order::Name`), for a pet put away too.
 - **Put away** (`/pet away`): the row keeps everything and takes
   nothing. No day is counted, no treat earned, no pat paid, no visitor
-  let in, and every order but `/pet out` is refused.
+  let in, and every order but `/pet out` and `/petname` is refused.
 
 ---
 
 ## 2. File map
 
 ```text
-growth.rs    the rules, pure: days, stages and their picks, the bond,
+state.rs     the rules, pure: days, stages and their picks, the bond,
              tricks, the reset,
              GameFamily -> TreatKind, today's title, which screens are
-             doors, call lines
-svc.rs       the one writer: lock the row, apply one rule, store, notify
-state.rs     the session's mirror, the mood reading, moments, the toy,
+             doors, call lines, the hour of a stay
+svc.rs       the one writer: lock the row, apply one rule, store, notify;
+             the read a profile makes
+session.rs   the session's mirror, the mood reading, moments, the toy,
              the walk after the toy or the cursor
-input.rs     clicks on the tile, the care box's keys, the `/pet` orders
+input.rs     clicks on the tile, the care box's keys, the `/pet` and
+             `/petname` orders
 ui.rs        the bodies drawn from picked parts, the tile's rows, the
              profile portrait
 modal_ui.rs  the care box
 ```
 
 Rows: `pet_companions` (one per user, the growth columns, `looks` (the
-picks, in order, checked against `stage`) and `revision`; `adopted_at` is a leftover nothing reads),
+picks, in order, checked against `stage`) and `revision`; the
+`adopted_at` column is left from the retired unlock and the model does
+not read it),
 `pet_treats` (the primary key `(user_id, earned_on)` is the day's claim,
 a partial unique index keeps one waiting), `pet_visits`
 (the primary key `(owner_id, visitor_id, day, kind)` is the claim, a
@@ -137,10 +145,14 @@ mirror that never decides.
   `pg_listener` (`Channel::PetChanged`) into a process-local broadcast;
   a session whose user it names reloads. That is how a second session
   and an owner on another replica hear of a visit. A call tells the
-  caller's sessions too, so their tiles learn where the pet went.
+  caller's sessions too, so their tiles learn where the pet went. A pet
+  that is staying somewhere tells its hosts when what they draw of it
+  changes (`PetCompanion::notify_hosts`: its name, the put-away switch,
+  its animal, its form, a reset), so the host's reload drops or redraws
+  it.
 - **A stay ends on the clock.** A mirror holds the guests and its own
   stay with the time each began, and the tick drops them when
-  `growth::stay_left` says the hour is up (the UTC clock is `PetTick`'s
+  `state::stay_left` says the hour is up (the UTC clock is `PetTick`'s
   day and day age). No write, no notice, no read.
 - **The species.** `PetCommand::Hatch(species)` and
   `PetCommand::Species(species)` write it under the same lock
@@ -149,12 +161,18 @@ mirror that never decides.
   `Growth::grow`, refused without the days (`Refusal::NotReady`).
   `PetCommand::Reset` stores `Growth::reset()`.
 - `PetService::visit_task(visitor, owner, kind, reply)` is the surface
-  other domains call (the profile modal, through `PetState::visit`). The
-  host's row is locked first, the caller's own row is only read.
-  `PetCompanion::guests_since` is the read a profile makes for the pets
-  staying with the one it shows.
+  other domains call (the profile modal, through `PetState::visit`).
+  Both pets are read without a row lock (`PetCompanion::find_out`); the
+  `pet_visits` claim is what makes a visit happen once. A pat touches
+  the host's row; a call touches the host's and the caller's, in the
+  order of their ids, so each mirror orders the snapshot after it by
+  `revision`. `PetService::profile_pet` is the one read a profile makes:
+  the pet as it is drawn there (`ProfilePet`), with the pets staying
+  with it.
 - The session asks sparingly: the day once per session and UTC day (again
-  after a failure, or after the pet is brought back out), a treat once
+  after a failure, or after the pet is brought back out: not before the
+  switch's write is over, `PetOutcome::Switched`, since a count that
+  finds the pet still away is refused for the day), a treat once
   a day and not while one waits, and only one owner command
   is out at a time (`busy`), so a held key queues nothing.
 - **The mood is still read, not stored state**: `mood_at` from the
@@ -221,9 +239,13 @@ hands the order to `input::handle_order`.
   bird) on free floor beside them, seen by every session on every
   replica. It rides the owner's presence record
   (`ClubhouseStand.pet_at_heel`, its species), never a local registry.
-- Both read `PetState::portrait()`: species, form, mood, today's treat
-  as `carries`, the tricks it knows. The glue
-  builds it only while `App::pet_out`; each surface leaves an egg out.
+- Both read `PetState::portrait()`: a `ui::Portrait`, whose fields are
+  the pet's own. Another surface draws it (`portrait_lines`) or asks
+  `Portrait::animal()`, which is `None` for an egg, so none of them
+  pairs an egg with the species its row still holds. The profile's
+  `ProfilePet` answers the same two ways (`portrait()`, `animal()`). The
+  glue builds the portrait only while `App::pet_out`; each surface
+  leaves an egg out.
 - **Moments** are session-only and last seconds: eating, the welcome
   back (longer the more days away), a trick, the hatch.
 
@@ -266,19 +288,21 @@ hands the order to `input::handle_order`.
 
 ## 7. Tests
 
-- `growth_test.rs`: the rules, whole-state from egg to elder by days and
+- `state_test.rs`: the rules, whole-state from egg to elder by days and
   picks, the reset, today's title, the hour of a stay.
 - `svc_test.rs`: every claim against a real database, two sessions
   racing, a pet put away, the hatch pick, the grow pick, a change of
-  species, a reset, visits and calls, the guest a call leaves.
-- `state_test.rs`: the mood reading, the walk, the first key of a day,
-  the click chain, the door clock, snapshot ordering, the portrait, a
-  stay from the call to the end of its hour.
+  species, a reset, visits and calls, the guest a call leaves and the
+  rows it moves, a guest that changes telling its host.
+- `session_test.rs`: the mood reading, the walk, the first key of a day,
+  the day counted after the pet is brought back out, the click chain,
+  the door clock, snapshot ordering, the portrait, a stay from the call
+  to the end of its hour.
 - `ui_test.rs`: both drawings of every part of every species, whole;
   the eight elders a species; the eight columns; what the care box
   offers; guests in the box and beside a portrait; poses and the frame
   gate.
 - `input_test.rs`: the care box through a rendered app, the hatch pick,
   the grow pick, a guest in the care box and on the tile, the `/pet`
-  words and what each order does.
+  and `/petname` words and what each order does.
 - `late-core/src/models/pet_test.rs`: the rows and their claims.

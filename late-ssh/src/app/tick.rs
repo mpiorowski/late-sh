@@ -1203,10 +1203,10 @@ impl App {
             self.pet_state.note_spoke(at);
         }
         let utc_now = chrono::Utc::now();
-        let pet_ticked = self.pet_state.tick(crate::app::pet::state::PetTick {
+        let pet_ticked = self.pet_state.tick(crate::app::pet::session::PetTick {
             wall_tick: self.marquee_tick,
             now: Instant::now(),
-            ambient: crate::app::pet::state::Ambient {
+            ambient: crate::app::pet::session::Ambient {
                 last_input: self.last_input_at,
                 music_playing: self.music_playing(),
             },

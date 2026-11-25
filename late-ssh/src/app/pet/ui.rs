@@ -10,7 +10,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::state::{
+use super::session::{
     Body, Look, Moment, PET_HEIGHT, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTravel,
     Plaything, Toy, visit_line,
 };
@@ -459,13 +459,42 @@ fn draw_pet(frame: &mut Frame, zone: Rect, body: Body, art: PetArt) -> Rect {
 
 /// What a profile draws of a pet: enough for its body, and the tricks it
 /// shows a visitor.
+///
+/// The fields are the pet's own: an egg's row still holds a species that
+/// means nothing, so another surface asks `animal` and never pairs the two.
 #[derive(Clone, Copy, Debug)]
 pub struct Portrait<'a> {
-    pub species: PetSpecies,
-    pub form: Form,
-    pub mood: PetMood,
-    pub carries: Option<TreatKind>,
-    pub tricks: &'a [Trick],
+    pub(super) species: PetSpecies,
+    pub(super) form: Form,
+    pub(super) mood: PetMood,
+    pub(super) carries: Option<TreatKind>,
+    pub(super) tricks: &'a [Trick],
+}
+
+impl<'a> Portrait<'a> {
+    pub fn new(
+        species: PetSpecies,
+        form: Form,
+        mood: PetMood,
+        carries: Option<TreatKind>,
+        tricks: &'a [Trick],
+    ) -> Self {
+        Self {
+            species,
+            form,
+            mood,
+            carries,
+            tricks,
+        }
+    }
+
+    /// The animal it is, `None` for an egg: an egg is no animal yet.
+    pub fn animal(&self) -> Option<PetSpecies> {
+        match self.form.stage() {
+            Stage::Egg => None,
+            Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => Some(self.species),
+        }
+    }
 }
 
 /// Wall ticks between the tricks a portrait performs: about twenty seconds.

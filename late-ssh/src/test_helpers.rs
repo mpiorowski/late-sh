@@ -1443,6 +1443,6 @@ pub fn pet_grown_to(
         .into_iter()
         .map(|pick| pick.as_str().to_string())
         .collect();
-    pet.row.days_together = crate::app::pet::growth::days_for(stage);
+    pet.row.days_together = crate::app::pet::state::days_for(stage);
     pet
 }

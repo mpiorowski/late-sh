@@ -3,15 +3,16 @@ use chrono::{NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::pet::{
-    Fed, PetCompanion, PetDay, PetGuest, PetMood, PetSpecies, PetStay, PetVisitor, Pick, Stage,
-    TreatEarned, TreatKind, Trick, VisitKind,
+    Fed, Form, PetCompanion, PetDay, PetGuest, PetMood, PetSpecies, PetStay, PetVisitor, Pick,
+    Stage, TreatEarned, TreatKind, Trick, VisitKind,
 };
 use tokio::sync::{broadcast, mpsc};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
-use crate::app::pet::growth::{DayCounted, Growth, Practiced, call_line, fed_today, stays_since};
+use crate::app::pet::state::{DayCounted, Growth, Practiced, call_line, fed_today, stays_since};
+use crate::app::pet::ui::Portrait;
 use crate::pg_listener::{Channel, Signal};
 
 /// What the first pet of the UTC day pays.
@@ -217,6 +218,44 @@ pub(crate) enum PetOutcome {
     },
     /// The answer to a visit this session's user paid someone else's pet.
     Visited(Visited),
+    /// The put-away switch was written, or its write failed and was logged.
+    Switched,
+}
+
+/// What a profile shows of a pet: enough to draw it and caption it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfilePet {
+    species: PetSpecies,
+    pub mood: PetMood,
+    pub name: Option<String>,
+    pub form: Form,
+    pub days_together: i32,
+    /// The treat it ate today: the title after its name and the thing it
+    /// carries, until the UTC day ends.
+    pub fed_today: Option<TreatKind>,
+    /// The tricks it knows: its portrait runs through them.
+    pub tricks: Vec<Trick>,
+    /// The pets staying with it as the profile loaded, newest first.
+    pub guests: Vec<PetGuest>,
+}
+
+impl ProfilePet {
+    /// The animal it is, `None` for an egg: an egg is no animal yet,
+    /// whatever species its row still holds.
+    pub fn animal(&self) -> Option<PetSpecies> {
+        self.portrait().animal()
+    }
+
+    /// Its body in its form and stored mood, carrying what it ate today.
+    pub fn portrait(&self) -> Portrait<'_> {
+        Portrait::new(
+            self.species,
+            self.form,
+            self.mood,
+            self.fed_today,
+            &self.tricks,
+        )
+    }
 }
 
 /// What a visit to someone else's pet came to.
@@ -307,6 +346,36 @@ impl PetService {
         })
     }
 
+    /// What `user_id`'s profile shows of their pet: `None` for one put
+    /// away, and for an account that has not signed in since pets grew.
+    pub(crate) async fn profile_pet(
+        client: &impl tokio_postgres::GenericClient,
+        user_id: Uuid,
+    ) -> Result<Option<ProfilePet>> {
+        let Some(row) = PetCompanion::find_out(client, user_id).await? else {
+            return Ok(None);
+        };
+        let now = Utc::now();
+        // An egg is nothing yet: it goes by no title.
+        let fed_today = match row.stage() {
+            Stage::Egg => None,
+            Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => fed_today(
+                PetCompanion::last_fed(client, user_id).await?,
+                now.date_naive(),
+            ),
+        };
+        Ok(Some(ProfilePet {
+            species: row.species(),
+            mood: row.mood(),
+            name: row.name.clone(),
+            form: row.form(),
+            days_together: row.days_together,
+            fed_today,
+            tricks: row.tricks(),
+            guests: PetCompanion::guests_since(client, user_id, stays_since(now)).await?,
+        }))
+    }
+
     /// Run one command for an owner's session and answer on `reply`.
     pub(crate) fn act_task(
         &self,
@@ -393,6 +462,8 @@ impl PetService {
 
         let mut growth = Growth::from_row(&row);
         let before = growth.clone();
+        // What a host draws of this pet while it is staying somewhere.
+        let drawn = (row.species(), row.form());
         let hatched = match growth.stage() {
             Stage::Egg => false,
             Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => true,
@@ -498,6 +569,9 @@ impl PetService {
         if grew || touched || wrote {
             PetCompanion::notify_changed(&*tx, user_id).await?;
         }
+        if (row.species(), row.form()) != drawn {
+            PetCompanion::notify_hosts(&*tx, user_id, stays_since(Utc::now())).await?;
+        }
         let pet = Self::snapshot(&*tx, row).await?;
         tx.commit().await?;
         Ok(Acted { pet, did })
@@ -587,10 +661,12 @@ impl PetService {
     }
 
     /// The visit is the row in `pet_visits`: the insert claims it, once per
-    /// visitor, pet, kind and day. The host's row is touched and its
-    /// owner's sessions told in the same transaction. A call is also a
-    /// stay: the caller's pet is its host's guest for `STAY_MINUTES` from
-    /// the claim, so the caller's own sessions are told too.
+    /// visitor, pet, kind and day. Both pets are read without a row lock;
+    /// the claim is what makes a visit happen once. The host's row is
+    /// touched and its owner's sessions told in the same transaction. A
+    /// call is also a stay: the caller's pet is its host's guest for
+    /// `STAY_MINUTES` from the claim, so the caller's row is touched and
+    /// its sessions told too.
     async fn visit(
         &self,
         visitor_id: Uuid,
@@ -603,7 +679,7 @@ impl PetService {
         }
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
-        let Some(host) = Self::pet_out(&tx, owner_id).await? else {
+        let Some(host) = PetCompanion::find_out(&*tx, owner_id).await? else {
             tx.commit().await?;
             return Ok(Visited::NobodyHome);
         };
@@ -612,7 +688,7 @@ impl PetService {
                 pet: display_name(&host),
             },
             VisitKind::Call => {
-                let caller = match Self::pet_out(&tx, visitor_id).await? {
+                let caller = match PetCompanion::find_out(&*tx, visitor_id).await? {
                     Some(caller) => caller,
                     None => {
                         tx.commit().await?;
@@ -643,30 +719,20 @@ impl PetService {
             tx.commit().await?;
             return Ok(Visited::AlreadyToday(kind));
         }
-        PetCompanion::touch(&*tx, owner_id).await?;
-        PetCompanion::notify_changed(&*tx, owner_id).await?;
-        match kind {
-            VisitKind::Pat => {}
-            VisitKind::Call => PetCompanion::notify_changed(&*tx, visitor_id).await?,
+        // Every mirror a visit changes orders its snapshots by `revision`:
+        // the host's, and for a call the caller's (its tile says where its
+        // pet is staying). Two rows are touched in the order of their ids,
+        // so two people calling on each other cannot lock each other out.
+        let touched = match kind {
+            VisitKind::Pat => vec![owner_id],
+            VisitKind::Call => vec![owner_id.min(visitor_id), owner_id.max(visitor_id)],
+        };
+        for user_id in touched {
+            PetCompanion::touch(&*tx, user_id).await?;
+            PetCompanion::notify_changed(&*tx, user_id).await?;
         }
         tx.commit().await?;
         Ok(visited)
-    }
-
-    /// `user_id`'s pet row, when it has one and has it out. A read without
-    /// the row lock: a visit writes its own table, and the claim there is
-    /// what makes it once.
-    async fn pet_out(
-        tx: &tokio_postgres::Transaction<'_>,
-        user_id: Uuid,
-    ) -> Result<Option<PetCompanion>> {
-        let row = tx
-            .query_opt(
-                "SELECT * FROM pet_companions WHERE user_id = $1 AND enabled",
-                &[&user_id],
-            )
-            .await?;
-        Ok(row.map(PetCompanion::from))
     }
 
     /// Re-read the stored pet for a session whose mirror went stale.
@@ -731,23 +797,38 @@ impl PetService {
         });
     }
 
+    /// A pet staying somewhere is named in its host's box, so its hosts
+    /// are told once the name is written.
     async fn set_name(&self, user_id: Uuid, name: Option<&str>) -> Result<()> {
         let client = self.db.get().await?;
-        PetCompanion::set_name(&client, user_id, name).await
+        PetCompanion::set_name(&client, user_id, name).await?;
+        PetCompanion::notify_hosts(&**client, user_id, stays_since(Utc::now())).await
     }
 
-    pub fn set_enabled_task(&self, user_id: Uuid, enabled: bool) {
+    /// Bring the pet out or put it away, and tell the asking session on
+    /// `reply` once the write is over: until then a command of its own can
+    /// still find the row as it was.
+    pub(crate) fn set_enabled_task(
+        &self,
+        user_id: Uuid,
+        enabled: bool,
+        reply: mpsc::UnboundedSender<PetOutcome>,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
             if let Err(e) = svc.set_enabled(user_id, enabled).await {
                 tracing::error!(error = ?e, user_id = %user_id, enabled, "failed to switch the pet");
             }
+            let _ = reply.send(PetOutcome::Switched);
         });
     }
 
+    /// A pet put away is nobody's guest, so its hosts are told once the
+    /// switch is written.
     async fn set_enabled(&self, user_id: Uuid, enabled: bool) -> Result<()> {
         let client = self.db.get().await?;
-        PetCompanion::set_enabled(&client, user_id, enabled).await
+        PetCompanion::set_enabled(&client, user_id, enabled).await?;
+        PetCompanion::notify_hosts(&**client, user_id, stays_since(Utc::now())).await
     }
 
     /// Record the mood the session inferred, so a profile can show it. Fired

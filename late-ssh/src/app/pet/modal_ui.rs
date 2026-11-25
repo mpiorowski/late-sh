@@ -12,8 +12,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::growth::{TRICK_DAYS, treat_title};
-use super::state::{PetState, visit_line};
+use super::session::{PetState, visit_line};
+use super::state::{TRICK_DAYS, treat_title};
 use super::ui::{Neighbours, PetView, draw_pet_box, guest_label, pick_name, still_rows};
 use crate::app::common::theme;
 

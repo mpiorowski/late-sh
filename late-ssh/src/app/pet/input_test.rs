@@ -1,8 +1,8 @@
 use late_core::models::pet::{Form, PetCompanion, PetSpecies, Pick, Stage, Trick, VisitKind};
 use late_core::test_utils::{TestDb, create_test_user};
 
-use super::{Order, handle_order, parse_order};
-use crate::app::pet::state::Toy;
+use super::{Naming, Order, handle_order, naming_banner, parse_name_order, parse_order};
+use crate::app::pet::session::Toy;
 use crate::app::pet::svc::PetCommand;
 use crate::app::state::App;
 use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
@@ -264,6 +264,57 @@ fn the_words_after_pet_are_an_order_or_nothing() {
     ] {
         assert_eq!(parse_order(nothing), None, "{nothing:?}");
     }
+}
+
+#[test]
+fn the_words_after_petname_show_set_or_clear_the_name() {
+    let naming = |words: &str| match parse_name_order(words) {
+        Some(Order::Name(naming)) => Some(naming),
+        Some(_) | None => None,
+    };
+    assert_eq!(naming(""), Some(Naming::Show));
+    assert_eq!(
+        naming("Whiskers"),
+        Some(Naming::Set("Whiskers".to_string()))
+    );
+    // Inner whitespace runs collapse to a single space.
+    assert_eq!(
+        naming("Sir   Hopkins"),
+        Some(Naming::Set("Sir Hopkins".to_string()))
+    );
+    for word in ["clear", "remove", "none", "off", "CLEAR"] {
+        assert_eq!(naming(word), Some(Naming::Clear), "{word}");
+    }
+}
+
+/// `/petname` speaks of the pet the owner has: a bird is never called a cat.
+#[test]
+fn petname_banners_name_the_species_the_owner_has() {
+    let set = Naming::Set("Tweety".to_string());
+    assert_eq!(
+        naming_banner(Some(PetSpecies::Bird), Some("Tweety"), &set).message,
+        "🐦 named your bird Tweety"
+    );
+    assert_eq!(
+        naming_banner(Some(PetSpecies::Dog), Some("Rex"), &Naming::Show).message,
+        "🐕 your dog is named Rex"
+    );
+    assert_eq!(
+        naming_banner(Some(PetSpecies::Bird), None, &Naming::Show).message,
+        "your bird doesn't have a name yet: use /petname <name> to set one"
+    );
+    assert_eq!(
+        naming_banner(Some(PetSpecies::Dog), None, &Naming::Clear).message,
+        "cleared your dog's name"
+    );
+    assert_eq!(
+        naming_banner(Some(PetSpecies::Cat), Some("Mochi"), &Naming::Show).message,
+        "🐈 your cat is named Mochi"
+    );
+    assert_eq!(
+        naming_banner(None, None, &Naming::Clear).message,
+        "cleared your egg's name"
+    );
 }
 
 #[tokio::test]

@@ -15,7 +15,6 @@ crate::user_scoped_model! {
     struct PetCompanion {
         @data
         pub user_id: Uuid,
-        pub adopted_at: Option<DateTime<Utc>>,
         pub name: Option<String>,
         pub species: String,
         pub mood: String,
@@ -93,7 +92,7 @@ impl PetSpecies {
 
 /// How the pet feels: what its owner's session has been doing, read as a
 /// creature would. Ordered by precedence, first wins (`PetMood::ALL`); the
-/// windows and the reading live in `late-ssh/src/app/pet/state.rs`.
+/// windows and the reading live in `late-ssh/src/app/pet/session.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetMood {
     /// Just petted (a click on it).
@@ -152,7 +151,7 @@ impl PetMood {
 /// How grown the pet is. Closed and ordered: the database checks the column
 /// against this list, and a pet only ever moves to the next one. The days
 /// each asks for and the rules of moving live in
-/// `late-ssh/src/app/pet/growth.rs`.
+/// `late-ssh/src/app/pet/state.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     Egg,
@@ -284,7 +283,7 @@ impl Form {
 
 /// What a treat was earned by: one kind per family of the house's games.
 /// Closed: the database checks `pet_treats.kind` against this list. The
-/// mapping from a game lives in `late-ssh/src/app/pet/growth.rs`.
+/// mapping from a game lives in `late-ssh/src/app/pet/state.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TreatKind {
     /// A won Arcade board, daily or personal.
@@ -703,6 +702,19 @@ impl PetCompanion {
         Ok(Self::from(row))
     }
 
+    /// `user_id`'s pet, when it has one and has it out. A read without the
+    /// row lock.
+    pub async fn find_out(client: &impl GenericClient, user_id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM pet_companions WHERE user_id = $1 AND enabled",
+                &[&user_id],
+            )
+            .await
+            .context("reading a pet that is out")?;
+        Ok(row.map(Self::from))
+    }
+
     /// Tell every replica this owner's pet moved. Sent inside the writing
     /// transaction, so it is delivered on commit and never for a rollback.
     pub async fn notify_changed(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
@@ -713,6 +725,26 @@ impl PetCompanion {
             )
             .await
             .context("notifying pet change")?;
+        Ok(())
+    }
+
+    /// Tell the owners `visitor_id`'s pet is staying with (calls made after
+    /// `since`) that their box changed: a guest that was renamed, put away,
+    /// changed animal, grew or started over is drawn from its own row.
+    pub async fn notify_hosts(
+        client: &impl GenericClient,
+        visitor_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<()> {
+        client
+            .execute(
+                "SELECT pg_notify($1, owner_id::text)
+                 FROM pet_visits
+                 WHERE visitor_id = $2 AND kind = 'call' AND created > $3",
+                &[&PET_CHANGED_CHANNEL, &visitor_id, &since],
+            )
+            .await
+            .context("notifying a pet's hosts")?;
         Ok(())
     }
 

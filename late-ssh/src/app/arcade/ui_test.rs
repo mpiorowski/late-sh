@@ -36,13 +36,13 @@ const ADULT: late_core::models::pet::Form = late_core::models::pet::Form::Adult 
 };
 
 fn cat(form: late_core::models::pet::Form) -> crate::app::pet::ui::Portrait<'static> {
-    crate::app::pet::ui::Portrait {
-        species: late_core::models::pet::PetSpecies::Cat,
+    crate::app::pet::ui::Portrait::new(
+        late_core::models::pet::PetSpecies::Cat,
         form,
-        mood: late_core::models::pet::PetMood::Idle,
-        carries: None,
-        tricks: &[],
-    }
+        late_core::models::pet::PetMood::Idle,
+        None,
+        &[],
+    )
 }
 
 /// An open Le Word at `width` by `height`, drawn the way the Arcade draws

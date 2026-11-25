@@ -54,6 +54,16 @@ its owner is disconnected earns nothing. The fix reads the result row at
 the next connect instead of the event; it belongs to the lobby's daily
 state, which owns that row.
 
+### The table treat has no source
+
+`TreatKind::Table` (the lucky) is earned by a win in `GameFamily::Table`
+(Blackjack, Poker, Asterion, Tron, Ssnake), and no house table raises a
+win: they tell the registry who sat down (`RoomGameEvent::SeatJoined`)
+and nothing else. The wiring is a second `RoomGameEvent` from each
+table's settlement, forwarded to the winner's session as a private
+activity event. What counts as a win at each table is undecided (a paid
+Blackjack hand, a Poker pot, a round of Tron or Ssnake).
+
 ### The bond has no reader
 
 `bond_days` is counted (the first treat given or toy fetched of a UTC
@@ -66,10 +76,10 @@ more call lines, or a trick only a bonded pet learns.
   their next connect: they are not on `pet_changed`. The switch is
   written from a task of its own, so `/pet away` and `/pet out` typed
   back to back can land in either order.
-- `pet_companions.adopted_at` is written and read by nobody since the
-  unlock was retired.
-- A host's mirror learns that a guest was put away, renamed or changed
-  animal at its next reload, not as it happens.
+- The `pet_companions.adopted_at` column is left from the retired
+  unlock: the model no longer reads it. Dropping it is a migration for
+  a later release, since a build still running during the deploy selects
+  it.
 - One call a UTC day and an hour's stay: a call just before midnight and
   one just after put the same pet in two boxes for up to an hour.
 

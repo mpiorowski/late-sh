@@ -14,7 +14,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::daily_rung::Rung;
-use late_core::models::pet::Stage;
 use late_core::models::presence::{ClubhouseStand, Emote, Spot};
 use uuid::Uuid;
 
@@ -556,11 +555,9 @@ impl State {
     /// presence sync; the stand only changes when the answer does, so the
     /// record is not republished for it.
     pub fn set_pet(&mut self, pet: Option<Portrait<'_>>) {
-        self.own.pet_at_heel = match pet.map(|pet| (pet.species, pet.form.stage())) {
-            None | Some((_, Stage::Egg)) => None,
-            Some((species, Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder)) => {
-                Some(species)
-            }
+        self.own.pet_at_heel = match pet {
+            None => None,
+            Some(pet) => pet.animal(),
         };
     }
 

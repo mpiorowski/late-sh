@@ -13,7 +13,6 @@ use ratatui::{
 use uuid::Uuid;
 
 use late_core::models::daily_rung::{Rung, STAR_GLYPH};
-use late_core::models::pet::Stage;
 
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
@@ -426,10 +425,7 @@ pub(super) fn draw_beside_pet(
         height: PET_CORNER_HEIGHT,
     };
     let fits = area.width >= PET_CORNER_WIDTH && area.height >= PET_CORNER_HEIGHT;
-    let hatched = pet.filter(|pet| match pet.form.stage() {
-        Stage::Egg => false,
-        Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => true,
-    });
+    let hatched = pet.filter(|pet| pet.animal().is_some());
     let (Some(pet), true) = (hatched, fits) else {
         draw(frame);
         return;

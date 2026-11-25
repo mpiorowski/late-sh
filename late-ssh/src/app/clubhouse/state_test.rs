@@ -592,13 +592,7 @@ fn a_hatched_pet_rides_the_stand_and_an_egg_or_no_pet_does_not() {
     use late_core::models::pet::{Form, PetMood, PetSpecies, Pick};
 
     let mut state = session(Vec::new(), false);
-    let pet = |form| Portrait {
-        species: PetSpecies::Dog,
-        form,
-        mood: PetMood::Idle,
-        carries: None,
-        tricks: &[],
-    };
+    let pet = |form| Portrait::new(PetSpecies::Dog, form, PetMood::Idle, None, &[]);
     assert_eq!(state.stand().pet_at_heel, None);
 
     state.set_pet(Some(pet(Form::Egg)));

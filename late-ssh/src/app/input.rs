@@ -3438,7 +3438,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
         .set_shelf(crate::app::directory::state::Shelf::Map);
 }
 
-/// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.
+/// Shared Shop entry point for Ctrl+S, `/shop`, and the status bar's Shop hint.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3495,25 +3495,9 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
 /// Open the pet's care box over whatever is up (`pet::input::open_care`,
 /// whose callers gate it on the pet being out).
 pub(crate) fn open_pet_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
+    close_overlays_for_modal(app);
+    // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_lobby_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
     app.show_pet_modal = true;
 }
 
