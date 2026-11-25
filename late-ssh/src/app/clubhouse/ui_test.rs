@@ -653,3 +653,61 @@ fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
     let blank = (0..24).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " "));
     assert!(blank);
 }
+
+fn patron(n: u128, placement: Placement, pet: Option<PetSpecies>) -> Patron {
+    Patron {
+        user_id: Uuid::from_u128(n),
+        username: format!("user{n:03}"),
+        placement,
+        emote: None,
+        drunk_level: 0,
+        pet,
+    }
+}
+
+#[test]
+fn a_pet_is_drawn_at_its_patrons_heel_on_free_floor_and_skipped_when_it_is_taken() {
+    // Open floor in front of the bar stools: the heel is two cells right of the
+    // feet.
+    let ann = patron(1, Placement::Walking(20, 14), Some(PetSpecies::Cat));
+    assert_eq!(map::char_at(22, 14), ' ', "the heel is open floor");
+    let mut cells = styled_base_grid();
+    draw_pets(&mut cells, &[ann.clone()], Uuid::from_u128(99));
+    assert_eq!(cells[14][22].0, 'c');
+
+    // A patron with no pet has none beside them.
+    let bob = patron(2, Placement::Walking(40, 14), None);
+    let mut cells = styled_base_grid();
+    let before = cells.clone();
+    draw_pets(&mut cells, &[bob], Uuid::from_u128(99));
+    assert_eq!(cells, before);
+
+    // Another patron on the heel, a speech bubble over it, or furniture
+    // there (the armchair's side beside a seated patron): not drawn.
+    let mut cells = styled_base_grid();
+    draw_figure(&mut cells, 22, 14, 'o', Style::default());
+    let before = cells.clone();
+    draw_pets(&mut cells, &[ann.clone()], Uuid::from_u128(99));
+    assert_eq!(cells, before, "over another patron");
+
+    let mut cells = styled_base_grid();
+    draw_bubble_box(&mut cells, 22, 14, &["hi there".to_string()]);
+    let before = cells.clone();
+    draw_pets(&mut cells, &[ann], Uuid::from_u128(99));
+    assert_eq!(cells, before, "over a speech bubble");
+
+    let armchair = map::SEATS
+        .iter()
+        .position(|seat| seat.kind == map::SeatKind::Armchair)
+        .expect("an armchair");
+    let seated = patron(3, Placement::Seated(armchair), Some(PetSpecies::Dog));
+    let (x, y) = seated.placement.position();
+    assert!(
+        !matches!(map::char_at(x + 2, y), ' ' | '░'),
+        "the armchair's heel is furniture"
+    );
+    let mut cells = styled_base_grid();
+    let before = cells.clone();
+    draw_pets(&mut cells, &[seated], Uuid::from_u128(99));
+    assert_eq!(cells, before, "over furniture");
+}

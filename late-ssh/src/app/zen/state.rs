@@ -189,7 +189,10 @@ impl TileKind {
                 TileHint::Takes(TileKey::Feed),
                 TileHint::Names(HouseKey::FeedClick),
             ],
-            TileKind::Pet => &[TileHint::Names(HouseKey::PetClick)],
+            TileKind::Pet => &[
+                TileHint::Takes(TileKey::Care),
+                TileHint::Names(HouseKey::PetClick),
+            ],
             TileKind::Chat => &[
                 TileHint::Takes(TileKey::CycleRoom),
                 TileHint::Names(HouseKey::PickRoom),
@@ -248,6 +251,9 @@ pub enum TileKey {
     Feed,
     /// `[` `]` rebind a chat tile to the previous or next room.
     CycleRoom,
+    /// Enter opens the pet's care box (a click on the tile's rows does the
+    /// same from any mode).
+    Care,
 }
 
 impl TileKey {
@@ -257,6 +263,7 @@ impl TileKey {
             TileKey::PickPiece => ("[ ] Enter", "pick"),
             TileKey::Feed => ("a", "feed"),
             TileKey::CycleRoom => ("[ ]", "cycle"),
+            TileKey::Care => ("Enter", "care"),
         }
     }
 
@@ -267,6 +274,7 @@ impl TileKey {
             TileKey::PickPiece => matches!(byte, b'[' | b']' | b'\r' | b'\n'),
             TileKey::Feed => byte == b'a',
             TileKey::CycleRoom => matches!(byte, b'[' | b']'),
+            TileKey::Care => matches!(byte, b'\r' | b'\n'),
         }
     }
 }

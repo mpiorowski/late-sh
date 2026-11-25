@@ -293,6 +293,11 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
     }
+    if let Some(order) = app.chat.take_requested_pet_order()
+        && let Some(banner) = crate::app::pet::input::handle_order(app, order)
+    {
+        app.banner = Some(banner);
+    }
     if let Some(upload) = app.chat.take_requested_url_upload() {
         crate::app::input::trigger_url_image_upload(
             app,
@@ -328,27 +333,28 @@ fn apply_petname_request(
         PetnameRequest::Clear => app.pet_state.set_name(None),
     }
     petname_banner(
-        app.pet_state.species,
+        app.pet_state.animal(),
         app.pet_state.name.as_deref(),
         &request,
     )
 }
 
-/// The banner for a `/petname` request, worded for the pet's species.
-/// `name` is the pet's name after the request applied.
+/// The banner for a `/petname` request, worded for what the pet is: its
+/// species, or an egg (`None`). `name` is the pet's name after the request
+/// applied.
 pub(super) fn petname_banner(
-    species: late_core::models::pet::PetSpecies,
+    animal: Option<late_core::models::pet::PetSpecies>,
     name: Option<&str>,
     request: &crate::app::chat::state::PetnameRequest,
 ) -> Banner {
     use crate::app::chat::state::PetnameRequest;
     use late_core::models::pet::PetSpecies;
-    let glyph = match species {
-        PetSpecies::Cat => "🐈",
-        PetSpecies::Dog => "🐕",
-        PetSpecies::Bird => "🐦",
+    let (glyph, kind) = match animal {
+        Some(PetSpecies::Cat) => ("🐈", "cat"),
+        Some(PetSpecies::Dog) => ("🐕", "dog"),
+        Some(PetSpecies::Bird) => ("🐦", "bird"),
+        None => ("🥚", "egg"),
     };
-    let kind = species.as_str();
     match (request, name) {
         (PetnameRequest::Show, Some(name)) => {
             Banner::success(&format!("{glyph} your {kind} is named {name}"))

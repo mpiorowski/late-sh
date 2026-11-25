@@ -259,6 +259,11 @@ impl ProfileModalState {
     }
 
     /// The profile on show is this session's own.
+    /// Whose profile is up, `None` while the modal is closed.
+    pub(crate) fn viewed_user_id(&self) -> Option<Uuid> {
+        self.viewed_user_id
+    }
+
     pub(crate) fn viewing_own(&self) -> bool {
         self.viewed_user_id == Some(self.own_user_id)
     }

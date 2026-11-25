@@ -14,7 +14,9 @@ use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
 use late_core::models::media_queue_item::MediaQueueItem;
-use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
+use late_core::models::pet::{
+    Form, PetCompanion, PetGuest, PetMood, PetSpecies, Stage, TreatKind, Trick,
+};
 use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{
@@ -61,6 +63,15 @@ pub struct ProfilePet {
     pub species: PetSpecies,
     pub mood: PetMood,
     pub name: Option<String>,
+    pub form: Form,
+    pub days_together: i32,
+    /// The treat it ate today: the title after its name and the thing it
+    /// carries, until the UTC day ends.
+    pub fed_today: Option<TreatKind>,
+    /// The tricks it knows: its portrait runs through them.
+    pub tricks: Vec<Trick>,
+    /// The pets staying with it as the profile loaded, newest first.
+    pub guests: Vec<PetGuest>,
 }
 
 /// What a profile shows of a runner: the face, the sheet (the badge's
@@ -95,8 +106,8 @@ pub struct ProfileSnapshot {
     pub bonsai: Option<Tree>,
     pub bonsai_decay_protection: Option<BonsaiDecayProtection>,
     pub aquarium_fish: Vec<(String, usize)>,
-    /// The Pet Companion, for owners only, in the mood its owner's session
-    /// last left it in.
+    /// The Pet Companion unless its owner put it away, in the mood their
+    /// session last left it in.
     pub pet: Option<ProfilePet>,
     /// The standing runner behind this profile, if any.
     pub runner: Option<ProfileRunner>,
@@ -409,17 +420,34 @@ impl ProfileService {
         };
         let aquarium_fish =
             marketplace::active_aquarium_creatures_for_user(&client, user_id).await?;
-        let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
-            PetCompanion::find_by_user_id(&client, user_id)
-                .await?
-                .filter(|row| row.enabled)
-                .map(|row| ProfilePet {
+        // Every account that has signed in since pets grew has a row; one
+        // put away is not shown.
+        let pet = match PetCompanion::find_by_user_id(&client, user_id).await? {
+            Some(row) if row.enabled => {
+                let fed = PetCompanion::last_fed(&**client, user_id).await?;
+                Some(ProfilePet {
                     species: row.species(),
                     mood: row.mood(),
                     name: row.name.clone(),
+                    form: row.form(),
+                    days_together: row.days_together,
+                    // An egg is nothing yet: it goes by no title.
+                    fed_today: match row.stage() {
+                        Stage::Egg => None,
+                        Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => {
+                            crate::app::pet::growth::fed_today(fed, today)
+                        }
+                    },
+                    tricks: row.tricks(),
+                    guests: PetCompanion::guests_since(
+                        &**client,
+                        user_id,
+                        crate::app::pet::growth::stays_since(Utc::now()),
+                    )
+                    .await?,
                 })
-        } else {
-            None
+            }
+            Some(_) | None => None,
         };
         let runner = match DeadchannelRunner::find_by_user(&client, user_id).await? {
             Some(row) if row.left_at.is_none() => {

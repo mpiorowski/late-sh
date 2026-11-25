@@ -328,6 +328,8 @@ async fn main() -> anyhow::Result<()> {
         pg_listener.subscribe(late_ssh::app::bonsai::svc::BonsaiService::CHANNELS),
     );
     let pet_service = late_ssh::app::pet::svc::PetService::new(db.clone(), activity_tx.clone());
+    let _pet_notify_task = pet_service
+        .start_notify_worker(pg_listener.subscribe(late_ssh::app::pet::svc::PetService::CHANNELS));
     let aquarium_service = late_ssh::app::AquariumService::new(db.clone(), activity_tx.clone());
     let initial_dartboard = match late_ssh::dartboard::load_persisted_artboard(&db).await {
         Ok(snapshot) => snapshot,

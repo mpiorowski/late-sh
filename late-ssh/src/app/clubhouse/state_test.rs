@@ -18,6 +18,7 @@ fn other(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
             since_ms,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         nightcap: None,
         street: None,
@@ -583,4 +584,37 @@ fn heading_out_back_puts_the_avatar_at_the_back_door_for_everyone() {
     // back door.
     let (x, y) = map::BACK_DOOR_MAT;
     assert_eq!(state.stand().spot, Spot::Walking { x, y });
+}
+
+#[test]
+fn a_hatched_pet_rides_the_stand_and_an_egg_or_no_pet_does_not() {
+    use crate::app::pet::ui::Portrait;
+    use late_core::models::pet::{Form, PetMood, PetSpecies, Pick};
+
+    let mut state = session(Vec::new(), false);
+    let pet = |form| Portrait {
+        species: PetSpecies::Dog,
+        form,
+        mood: PetMood::Idle,
+        carries: None,
+        tricks: &[],
+    };
+    assert_eq!(state.stand().pet_at_heel, None);
+
+    state.set_pet(Some(pet(Form::Egg)));
+    assert_eq!(state.stand().pet_at_heel, None, "an egg stays home");
+
+    state.set_pet(Some(pet(Form::Young { top: Pick::One })));
+    let young = state.stand();
+    assert_eq!(young.pet_at_heel, Some(PetSpecies::Dog));
+    // Growing changes nothing on the wire: the record is not republished.
+    state.set_pet(Some(pet(Form::Elder {
+        top: Pick::One,
+        feet: Pick::Two,
+        face: Pick::Two,
+    })));
+    assert_eq!(state.stand(), young);
+
+    state.set_pet(None);
+    assert_eq!(state.stand().pet_at_heel, None, "put away");
 }

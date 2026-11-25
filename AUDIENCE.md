@@ -728,6 +728,17 @@ Live, in order of evidence behind them:
   beside it; that number decides whether to post again, and where.
 - **Progress Quest** is the cheap next door on the incremental shelf, the
   only door shape that holds people (`devdocs/DOOR-CANDIDATES.md`).
+- **The pet grows** (`late-ssh/src/app/pet/CONTEXT.md`), built and
+  unmeasured: an egg for every account, the animal its owner picks at
+  the hatch and a look they pick at each stage after, drawn life stages
+  earned by days they showed up, one treat a
+  day for a win in any game (ten minutes in a door counts) worn as that
+  day's title, tricks, visitors who can pet it from the profile or send
+  their own to stay in its box for an hour, and
+  nothing it needs or can lose. The care-loop reading in section 4 is the
+  reason it is play and is seen by others, never a chore. Nothing about
+  it is sold (`devdocs/PET-GROWTH.md` has what is still undecided and the
+  queries that would say it worked).
 
 Parked, with the reason:
 

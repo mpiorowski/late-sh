@@ -13,6 +13,7 @@ use ratatui::{
 use uuid::Uuid;
 
 use late_core::models::daily_rung::{Rung, STAR_GLYPH};
+use late_core::models::pet::Stage;
 
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
@@ -20,6 +21,7 @@ use crate::{
         activity::event::ActivityGame,
         common::theme,
         files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
+        pet::ui::{Portrait, portrait_lines},
     },
     usernames::UsernameLookup,
 };
@@ -369,6 +371,11 @@ pub struct ArcadeHubView<'a> {
     pub show_solvers: bool,
     /// The terminal's image protocol, for Chess Puzzle's PNG pieces.
     pub image_protocol: Option<TerminalImageProtocol>,
+    /// This session's pet while it is out, drawn beside an open game
+    /// (`draw_beside_pet`); `None` while it is not.
+    pub pet: Option<Portrait<'a>>,
+    /// The app's wall tick: the pet blinks and runs its tricks on it.
+    pub wall_tick: usize,
 }
 
 impl ArcadeHubView<'_> {
@@ -389,6 +396,65 @@ impl ArcadeHubView<'_> {
 /// re-decided as a literal at each call site.
 pub const SHOW_GAME_BOTTOM_BAR: bool = true;
 
+/// A pet's portrait (`portrait_lines`): three rows, at most eight columns.
+const PET_ROWS: u16 = 3;
+const PET_COLUMNS: u16 = 8;
+/// The corner an open game may share with the pet: its top right, the
+/// portrait plus a blank column either side and a blank row under it.
+/// Status and key bars sit at the bottom, so this corner never holds them.
+const PET_CORNER_WIDTH: u16 = PET_COLUMNS + 2;
+const PET_CORNER_HEIGHT: u16 = PET_ROWS + 1;
+
+/// Draw an open game with `draw`, then this session's pet in the top right
+/// corner of `area` when the game left that corner alone: every cell of it
+/// the same after the game drew as before. Every game centers its board (or
+/// fills the page), so the corner is spare margin exactly when the
+/// terminal has room for it; a small terminal or a wide board keeps the
+/// corner and the pet is not drawn. An egg is not drawn either. Decoration
+/// only: no keys, no clicks, no state.
+pub(super) fn draw_beside_pet(
+    frame: &mut Frame,
+    area: Rect,
+    pet: Option<Portrait<'_>>,
+    wall_tick: usize,
+    draw: impl FnOnce(&mut Frame),
+) {
+    let corner = Rect {
+        x: area.right().saturating_sub(PET_CORNER_WIDTH),
+        y: area.y,
+        width: PET_CORNER_WIDTH,
+        height: PET_CORNER_HEIGHT,
+    };
+    let fits = area.width >= PET_CORNER_WIDTH && area.height >= PET_CORNER_HEIGHT;
+    let hatched = pet.filter(|pet| match pet.form.stage() {
+        Stage::Egg => false,
+        Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => true,
+    });
+    let (Some(pet), true) = (hatched, fits) else {
+        draw(frame);
+        return;
+    };
+    let cells = |frame: &mut Frame| {
+        let buffer = frame.buffer_mut();
+        corner
+            .positions()
+            .map(|position| buffer[position].clone())
+            .collect::<Vec<_>>()
+    };
+    let before = cells(frame);
+    draw(frame);
+    if cells(frame) != before {
+        return;
+    }
+    let seat = Rect {
+        x: corner.x + 1,
+        width: PET_COLUMNS,
+        height: PET_ROWS,
+        ..corner
+    };
+    frame.render_widget(Paragraph::new(portrait_lines(pet, wall_tick)), seat);
+}
+
 pub fn draw_arcade_hub(
     frame: &mut Frame,
     area: Rect,
@@ -397,12 +463,16 @@ pub fn draw_arcade_hub(
 ) {
     let show_bottom_bar = SHOW_GAME_BOTTOM_BAR;
     if view.is_playing_game {
-        match view.game_selection {
-            ArcadeGame::Puzzle(puzzle) => {
-                draw_puzzle(frame, area, view, puzzle, show_bottom_bar, terminal_images)
+        draw_beside_pet(frame, area, view.pet, view.wall_tick, |frame| {
+            match view.game_selection {
+                ArcadeGame::Puzzle(puzzle) => {
+                    draw_puzzle(frame, area, view, puzzle, show_bottom_bar, terminal_images)
+                }
+                ArcadeGame::Score(game) => {
+                    draw_score_game(frame, area, view, game, show_bottom_bar)
+                }
             }
-            ArcadeGame::Score(game) => draw_score_game(frame, area, view, game, show_bottom_bar),
-        }
+        });
         return;
     }
 

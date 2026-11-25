@@ -1123,6 +1123,8 @@ pub struct ChatState {
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
+    /// Set by `/pet <order>`; consumed by `App`, which owns the pet.
+    requested_pet_order: Option<crate::app::pet::input::Order>,
     requested_open_profile: Option<(Uuid, String, ProfileSection)>,
     requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
@@ -1498,6 +1500,7 @@ impl ChatState {
             requested_favorite_toggle: None,
             requested_message_search: None,
             requested_petname: None,
+            requested_pet_order: None,
             requested_open_profile: None,
             requested_open_sheet: None,
             requested_quit: false,
@@ -2316,6 +2319,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
         self.requested_petname.take()
+    }
+
+    pub(crate) fn take_requested_pet_order(&mut self) -> Option<crate::app::pet::input::Order> {
+        self.requested_pet_order.take()
     }
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
@@ -4389,6 +4396,17 @@ impl ChatState {
             };
             self.service.check_poll_start_task(self.user_id, room_id);
             return Some(Banner::success("Checking poll availability..."));
+        }
+
+        if let Some(words) = pet_command_words(&body) {
+            self.clear_composer_after_submit();
+            match crate::app::pet::input::parse_order(words) {
+                Some(order) => {
+                    self.requested_pet_order = Some(order);
+                    return None;
+                }
+                None => return Some(Banner::error(crate::app::pet::input::ORDER_USAGE)),
+            }
         }
 
         if let Some(parsed) = parse_petname_command(&body) {
@@ -8428,6 +8446,17 @@ pub(crate) enum PetnameParse {
     Request(PetnameRequest),
     /// `/petname` with an argument that normalised to nothing.
     Invalid,
+}
+
+/// The words after `/pet`, `None` when the line is another command
+/// (`/petname`, a typo): what they mean is the pet's to say
+/// (`pet::input::parse_order`).
+pub(crate) fn pet_command_words(input: &str) -> Option<&str> {
+    let rest = input.trim().strip_prefix("/pet")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(rest.trim())
 }
 
 /// Parse a `/petname` command. Returns `None` if the input isn't a

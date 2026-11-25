@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use late_core::models::pet::PetSpecies;
 use late_core::models::presence::{ClubhouseStand, Emote, PresenceRecord, Spot};
 use uuid::Uuid;
 
@@ -15,6 +16,7 @@ fn stand(spot: Spot, since_ms: i64) -> ClubhouseStand {
         since_ms,
         emote: None,
         petted_dog_at_ms: None,
+        pet_at_heel: None,
     }
 }
 
@@ -154,6 +156,40 @@ fn one_user_on_two_sessions_is_one_patron_where_they_last_moved() {
     assert_eq!(
         pick_spot(&[laptop], Uuid::from_u128(1), 2),
         Spot::Seat { index: 2 }
+    );
+}
+
+/// The session behind `record`, as the replica hosting it lays it over the
+/// records it holds.
+fn hosting(record: &PresenceRecord) -> Own<'_> {
+    Own {
+        session_id: record.session_id,
+        user_id: record.user_id,
+        username: &record.username,
+        stand: record.clubhouse,
+    }
+}
+
+/// Two replicas, each hosting one of the two sessions and holding the
+/// other's record off the wire, draw the same room: the pet rides its
+/// owner's record to their heel, and a patron without one has none.
+#[test]
+fn a_pet_rides_its_owners_record_to_the_same_heel_on_every_replica() {
+    let mut ann = record(1, Spot::Walking { x: 30, y: 12 }, 1_000);
+    ann.clubhouse.pet_at_heel = Some(PetSpecies::Cat);
+    let bob = record(2, Spot::Seat { index: 3 }, 1_000);
+    let on_anns_replica = crowd(&[bob.clone()], &hosting(&ann), &HashMap::new(), 2_000);
+    let on_bobs_replica = crowd(&[ann.clone()], &hosting(&bob), &HashMap::new(), 2_000);
+
+    assert_eq!(on_anns_replica, on_bobs_replica);
+    let at_heel = |crowd: &Crowd, user_id| crowd.find(user_id).map(|p| (p.placement, p.pet));
+    assert_eq!(
+        at_heel(&on_anns_replica, ann.user_id),
+        Some((Placement::Walking(30, 12), Some(PetSpecies::Cat)))
+    );
+    assert_eq!(
+        at_heel(&on_anns_replica, bob.user_id),
+        Some((Placement::Seated(3), None))
     );
 }
 

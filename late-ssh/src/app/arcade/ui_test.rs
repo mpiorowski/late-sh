@@ -29,6 +29,100 @@ fn keys_line_does_not_pad_key_only_hints() {
     assert_eq!(text, "hjkl↕↔ · q exit");
 }
 
+/// A grown cat, drawn with the first of each pick.
+const ADULT: late_core::models::pet::Form = late_core::models::pet::Form::Adult {
+    top: late_core::models::pet::Pick::One,
+    feet: late_core::models::pet::Pick::One,
+};
+
+fn cat(form: late_core::models::pet::Form) -> crate::app::pet::ui::Portrait<'static> {
+    crate::app::pet::ui::Portrait {
+        species: late_core::models::pet::PetSpecies::Cat,
+        form,
+        mood: late_core::models::pet::PetMood::Idle,
+        carries: None,
+        tricks: &[],
+    }
+}
+
+/// An open Le Word at `width` by `height`, drawn the way the Arcade draws
+/// it today (`pet` is `None` and no `draw_beside_pet`) or beside a pet.
+fn le_word(
+    width: u16,
+    height: u16,
+    pet: Option<Option<crate::app::pet::ui::Portrait<'static>>>,
+) -> ratatui::buffer::Buffer {
+    use crate::app::arcade::le_word::{state::state_test::state_for, ui::draw_game};
+    let state = state_for(
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
+        "crane",
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+        .expect("terminal");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let game =
+                |frame: &mut ratatui::Frame| draw_game(frame, area, &state, SHOW_GAME_BOTTOM_BAR);
+            match pet {
+                None => game(frame),
+                Some(pet) => draw_beside_pet(frame, area, pet, 0, game),
+            }
+        })
+        .expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+/// The pet sits in the top right corner the board leaves spare, and
+/// nothing else on the frame moves: not a board cell, not the bars.
+#[test]
+fn a_pet_with_room_sits_in_the_corner_and_the_board_is_untouched() {
+    let today = le_word(80, 30, None);
+    let beside = le_word(80, 30, Some(Some(cat(ADULT))));
+    let seat = Rect::new(80 - 9, 0, 8, 3);
+
+    let moved: Vec<(u16, u16)> = today
+        .area
+        .positions()
+        .filter(|position| today[*position] != beside[*position])
+        .map(|position| (position.x, position.y))
+        .collect();
+    assert!(!moved.is_empty(), "the pet is drawn");
+    assert!(
+        moved
+            .iter()
+            .all(|&(x, y)| seat.contains(ratatui::layout::Position { x, y })),
+        "only the pet's seat changed: {moved:?}"
+    );
+    let rows: Vec<String> = (0..3)
+        .map(|y| {
+            (seat.x..seat.right())
+                .map(|x| beside[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect();
+    let drawn: Vec<String> = crate::app::pet::ui::portrait_lines(cat(ADULT), 0)
+        .iter()
+        .map(|line| format!("{:<8}", line.to_string()))
+        .collect();
+    assert_eq!(rows, drawn);
+}
+
+/// No room (a small terminal whose board reaches the corner), no pet, or
+/// an egg: the frame is exactly the one the Arcade draws without a pet.
+#[test]
+fn without_room_a_pet_or_a_hatched_one_the_frame_is_todays() {
+    assert_eq!(
+        le_word(30, 16, Some(Some(cat(ADULT)))),
+        le_word(30, 16, None)
+    );
+    assert_eq!(le_word(80, 30, Some(None)), le_word(80, 30, None));
+    assert_eq!(
+        le_word(80, 30, Some(Some(cat(late_core::models::pet::Form::Egg)))),
+        le_word(80, 30, None)
+    );
+}
+
 #[tokio::test]
 async fn sliding_puzzle_card_renders_rewards_and_launches() {
     use crate::{

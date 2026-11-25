@@ -13,6 +13,7 @@ fn record(session_id: Uuid, user_id: Uuid, x: u16) -> PresenceRecord {
             since_ms: 1_000,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         nightcap: None,
         street: None,

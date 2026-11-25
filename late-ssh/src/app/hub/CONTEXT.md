@@ -24,11 +24,11 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `state.rs`: snapshot/event drains for the quest strip and completion banners.
   - `ui.rs`: `draw_arcade_strip`, the quest strip at the top of The Arcade lobby: a heading with the daily streak (`streak day 3 · any daily board today keeps it`, `tomorrow` once today's is won, `no streak · win any daily board to start one` at zero), then Daily and Weekly sections, each with a done count, the open-chip sum, and a reset note. Items show a status glyph, colored difficulty tag (easy/medium/hard), reward, and a progress bar for multi-step quests on terminals at least 70 cols wide. Height is dynamic via `arcade_strip_height`; the lobby drops the strip when fewer than 13 rows would remain below it.
 - `aquarium/`: the reef everyone has, its drawing and its care (`aquarium/CONTEXT.md`).
-- `shop/`: Hub-owned marketplace domain: catalog, purchases, entitlements, rentals, flair (`shop/CONTEXT.md`).
+- `shop/`: Hub-owned marketplace domain: catalog, purchases, rentals, flair (`shop/CONTEXT.md`).
 
 ## The modal
 
-The modal is the Shop and nothing else: a functional marketplace surface where Pet Companion is the durable companion unlock. It has no tab strip and no tab state; `Tab`/arrows switch the Shop's own category tabs. It is opened by Ctrl+S, the `/shop` composer command (`ChatState` request drained in `chat/input.rs`, calling `input::open_shop_modal_globally`), and the locked pet nudge. Active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings.
+The modal is the Shop and nothing else: a functional marketplace surface. It has no tab strip and no tab state; `Tab`/arrows switch the Shop's own category tabs. It is opened by Ctrl+S, the `/shop` composer command (`ChatState` request drained in `chat/input.rs`, calling `input::open_shop_modal_globally`), and a click on the status bar's Shop hint. Active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings.
 
 Leaderboards live on page `6` (`app/leaderboard`), quests on the strip at the top of the Arcade lobby (`dailies/ui.rs::draw_arcade_strip`), and the economy's player-facing explanation in the global guide's Economy topic. There is no in-app editor for rewards or catalog rows (Known Gaps).
 
@@ -114,7 +114,7 @@ Each board's tier is `DailyPuzzle::tiers` in `late-core/src/models/leaderboard.r
 
 ## Shop / Marketplace
 
-Durable marketplace ownership: `marketplace_items` / `user_purchases`, purchases as one chip-debit transaction, per-user `ShopSnapshot` watch channels kept fresh by the process listener, entitlements (Pet Companion), room consumables, rentals (username effects, badge and flag rentals, titles including the AI-screened custom title), burn milestones, and the `NameFlairDirectory` that distributes name flair to every session. All of it, and the future Shop work, is in `shop/CONTEXT.md`.
+Durable marketplace ownership: `marketplace_items` / `user_purchases`, purchases as one chip-debit transaction, per-user `ShopSnapshot` watch channels kept fresh by the process listener, room consumables, rentals (username effects, badge and flag rentals, titles including the AI-screened custom title), burn milestones, and the `NameFlairDirectory` that distributes name flair to every session. All of it, and the future Shop work, is in `shop/CONTEXT.md`.
 
 ## Events (no surface today)
 

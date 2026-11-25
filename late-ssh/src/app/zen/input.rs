@@ -552,6 +552,15 @@ fn act(app: &mut App, key: TileKey, byte: u8) -> bool {
             cycle_room(app, if byte == b']' { 1 } else { -1 });
             true
         }
+        // With the pet put away the tile holds a note and Enter is the
+        // page's.
+        TileKey::Care => {
+            let out = app.pet_out();
+            if out {
+                crate::app::pet::input::open_care(app);
+            }
+            out
+        }
     }
 }
 

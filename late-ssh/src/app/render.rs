@@ -292,7 +292,6 @@ struct DrawContext<'a> {
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
-    pet_state: &'a crate::app::pet::state::PetState,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
@@ -312,6 +311,8 @@ struct DrawContext<'a> {
     /// against the pinned rail list, which lives on the pane.
     cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
     show_bonsai_modal: bool,
+    /// The care box's pen, `Some` while the box is up.
+    pet_care: Option<crate::app::pet::ui::PetView<'a>>,
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
@@ -410,6 +411,9 @@ struct DrawContext<'a> {
     /// the page's chat: the card carries it itself).
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
+    /// This session's pet while it is out, for the corner beside an open
+    /// Arcade game.
+    arcade_pet: Option<crate::app::pet::ui::Portrait<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     /// Today's board posts for the banner over Home's tiles; empty on a day
     /// the board has nothing.
@@ -1538,6 +1542,7 @@ impl App {
             pet_rect_slot: Some(&self.last_pet_rect),
             frame_slot: Some(&self.last_pet_frame),
         });
+        let arcade_pet = pet_out.then(|| self.pet_state.portrait());
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.
@@ -1608,6 +1613,7 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_pet_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
             || self.comeback.is_open()
@@ -1633,6 +1639,7 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_pet_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
             || self.comeback.is_open()
@@ -1850,7 +1857,6 @@ impl App {
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
-                        pet_state: &self.pet_state,
                         leaderboard_page: &self.leaderboard_page,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
@@ -1870,6 +1876,11 @@ impl App {
                             .modal_active()
                             .then_some(&self.chat.cyberspace),
                         show_bonsai_modal: self.show_bonsai_modal,
+                        pet_care: self.show_pet_modal.then_some(crate::app::pet::ui::PetView {
+                            state: &self.pet_state,
+                            pet_rect_slot: Some(&self.last_pet_rect),
+                            frame_slot: Some(&self.last_pet_frame),
+                        }),
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
@@ -1968,6 +1979,7 @@ impl App {
                         home_chat_tiles,
                         guest_live_strip,
                         home_pet_strip,
+                        arcade_pet,
                         home_active_friends: &self.active_friends,
                         home_board_day,
                         pulse_history: self.presence.history.clone(),
@@ -2658,6 +2670,8 @@ impl App {
                         username: ctx.clubhouse_own_username,
                         show_solvers: ctx.arcade_solvers_open,
                         image_protocol: ctx.terminal_image_protocol,
+                        pet: ctx.arcade_pet,
+                        wall_tick: ctx.marquee_tick,
                     },
                     terminal_images,
                 );
@@ -2831,10 +2845,6 @@ impl App {
                 inner,
                 crate::app::hub::ui::HubDrawProps {
                     shop_state: ctx.shop_state,
-                    pet: crate::app::hub::shop::ui::ShopPet {
-                        species: ctx.pet_state.species,
-                        enabled: ctx.pet_state.enabled,
-                    },
                     aquarium_care: ctx.aquarium_care,
                 },
             );
@@ -2873,6 +2883,10 @@ impl App {
 
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(frame, inner, ctx.bonsai, ctx.marquee_tick);
+        }
+
+        if let Some(pet_care) = &ctx.pet_care {
+            crate::app::pet::modal_ui::draw(frame, inner, pet_care);
         }
 
         if ctx.show_lobby_modal {
