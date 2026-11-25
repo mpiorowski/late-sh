@@ -381,7 +381,7 @@ impl PetService {
         // An account whose bootstrap load failed still has a row to lock.
         PetCompanion::ensure(&client, user_id).await?;
         let tx = client.transaction().await?;
-        let row = PetCompanion::lock(&*tx, user_id).await?;
+        let mut row = PetCompanion::lock(&*tx, user_id).await?;
         if !row.enabled {
             let pet = Self::snapshot(&*tx, row).await?;
             tx.commit().await?;
@@ -400,7 +400,6 @@ impl PetService {
         // `touched`: the command wrote something a mirror shows outside the
         // growth columns (the pat's day, the pouch). `wrote`: it wrote the
         // row itself and bumped its revision (the visits seen, the species).
-        let mut row = row;
         let mut wrote = false;
         let (did, touched) = match command {
             PetCommand::Pat => match PetCompanion::pet_day(&*tx, user_id, today).await? {

@@ -3493,7 +3493,7 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
 }
 
 /// Open the pet's care box over whatever is up (`pet::input::open_care`,
-/// which gates it on the pet being out).
+/// whose callers gate it on the pet being out).
 pub(crate) fn open_pet_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.piece_picker.close();

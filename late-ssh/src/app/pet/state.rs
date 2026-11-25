@@ -5,7 +5,7 @@ use late_core::models::pet::{
     Fed, Form, PetGuest, PetMood, PetSpecies, PetStay, PetVisitor, Pick, TreatKind, Trick,
     VisitKind,
 };
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
@@ -557,14 +557,13 @@ impl PetState {
 
     /// Send one of the owner's own commands. Dropped while another is out:
     /// the mirror does not move until the answer comes back.
-    fn request(&mut self, command: PetCommand) -> bool {
+    fn request(&mut self, command: PetCommand) {
         if self.busy.is_some() {
-            return false;
+            return;
         }
         self.busy = Some(command);
         self.svc
             .act_task(self.user_id, command, self.outcome_tx.clone());
-        true
     }
 
     /// Send a command the session raises by itself (the day, a treat
@@ -588,9 +587,7 @@ impl PetState {
             return Clicked::Done;
         }
         match (self.hatched(), self.waiting) {
-            (true, Some(_)) => {
-                self.request(PetCommand::Give);
-            }
+            (true, Some(_)) => self.request(PetCommand::Give),
             (true, None) | (false, _) => {
                 self.note_petted(now);
                 self.perform_next();
@@ -668,7 +665,7 @@ impl PetState {
 
     /// The trick the teach row points at, `None` once it knows them all.
     pub fn teaching(&self) -> Option<Trick> {
-        let trick = Trick::ALL[self.care.trick % Trick::ALL.len()];
+        let trick = Trick::ALL[self.care.trick];
         match self.growth.tricks.contains(&trick) {
             true => Trick::ALL
                 .into_iter()
@@ -709,7 +706,7 @@ impl PetState {
             self.care.trick = Trick::ALL
                 .iter()
                 .position(|known| *known == trick)
-                .unwrap_or(0);
+                .expect("every trick is in Trick::ALL");
         }
         if !self.visitors.is_empty() {
             self.raise(PetCommand::SeenVisits);
@@ -1196,8 +1193,7 @@ fn mood_follows(mood: PetMood) -> bool {
 fn cursor_target(frame: PetFrameInputs, cursor: (u16, u16)) -> Option<Perch> {
     let zone = frame.zone;
     let (cx, cy) = cursor;
-    let inside = cx >= zone.x && cx < zone.right() && cy >= zone.y && cy < zone.bottom();
-    if !inside {
+    if !zone.contains(Position { x: cx, y: cy }) {
         return None;
     }
     // The face is three cells in from the pet's left edge.

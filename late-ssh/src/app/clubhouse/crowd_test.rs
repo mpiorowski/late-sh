@@ -178,7 +178,12 @@ fn a_pet_rides_its_owners_record_to_the_same_heel_on_every_replica() {
     let mut ann = record(1, Spot::Walking { x: 30, y: 12 }, 1_000);
     ann.clubhouse.pet_at_heel = Some(PetSpecies::Cat);
     let bob = record(2, Spot::Seat { index: 3 }, 1_000);
-    let on_anns_replica = crowd(&[bob.clone()], &hosting(&ann), &HashMap::new(), 2_000);
+    let on_anns_replica = crowd(
+        std::slice::from_ref(&bob),
+        &hosting(&ann),
+        &HashMap::new(),
+        2_000,
+    );
     let on_bobs_replica = crowd(&[ann.clone()], &hosting(&bob), &HashMap::new(), 2_000);
 
     assert_eq!(on_anns_replica, on_bobs_replica);

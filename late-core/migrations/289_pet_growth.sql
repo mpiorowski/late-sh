@@ -3,9 +3,9 @@
 -- stages, each entered by a pick its owner makes (the animal at the hatch,
 -- then one of two drawings of a part); a treat a day earned by playing the
 -- house's games names it for the day and feeds a bond; tricks are taught
--- over separate days. Nothing
--- here ever goes down. The closed sets are the enums in
--- `late-core/src/models/pet.rs`; the checks keep the rows honest.
+-- over separate days. Nothing here goes down but by its owner's reset. The
+-- closed sets are the enums in `late-core/src/models/pet.rs`; the checks
+-- keep the rows honest.
 ALTER TABLE pet_companions
     ADD COLUMN days_together INT NOT NULL DEFAULT 0 CHECK (days_together >= 0),
     ADD COLUMN last_day DATE,
@@ -33,8 +33,9 @@ ALTER TABLE pet_companions
     ADD COLUMN learning_days INT NOT NULL DEFAULT 0 CHECK (learning_days >= 0),
     ADD COLUMN last_practice DATE,
     ADD COLUMN visits_seen_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-    -- Counts stored growth writes, so a session holding two copies of the
-    -- row can tell which one is newer. Owned by `PetCompanion::store`.
+    -- Counts stored writes, so a session holding two copies of the row can
+    -- tell which one is newer. Bumped by `PetCompanion::store`, `touch`,
+    -- `mark_visits_seen` and `set_species`.
     ADD COLUMN revision BIGINT NOT NULL DEFAULT 0;
 
 -- Every pet starts over as an egg: the defaults above are the reset, and

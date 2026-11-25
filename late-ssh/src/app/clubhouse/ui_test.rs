@@ -672,7 +672,7 @@ fn a_pet_is_drawn_at_its_patrons_heel_on_free_floor_and_skipped_when_it_is_taken
     let ann = patron(1, Placement::Walking(20, 14), Some(PetSpecies::Cat));
     assert_eq!(map::char_at(22, 14), ' ', "the heel is open floor");
     let mut cells = styled_base_grid();
-    draw_pets(&mut cells, &[ann.clone()], Uuid::from_u128(99));
+    draw_pets(&mut cells, std::slice::from_ref(&ann), Uuid::from_u128(99));
     assert_eq!(cells[14][22].0, 'c');
 
     // A patron with no pet has none beside them.
@@ -687,7 +687,7 @@ fn a_pet_is_drawn_at_its_patrons_heel_on_free_floor_and_skipped_when_it_is_taken
     let mut cells = styled_base_grid();
     draw_figure(&mut cells, 22, 14, 'o', Style::default());
     let before = cells.clone();
-    draw_pets(&mut cells, &[ann.clone()], Uuid::from_u128(99));
+    draw_pets(&mut cells, std::slice::from_ref(&ann), Uuid::from_u128(99));
     assert_eq!(cells, before, "over another patron");
 
     let mut cells = styled_base_grid();

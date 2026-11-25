@@ -283,8 +283,8 @@ impl Form {
 }
 
 /// What a treat was earned by: one kind per family of the house's games.
-/// Closed: the database checks `pet_treats.kind` against this list. The mapping from a game lives in
-/// `late-ssh/src/app/pet/growth.rs`.
+/// Closed: the database checks `pet_treats.kind` against this list. The
+/// mapping from a game lives in `late-ssh/src/app/pet/growth.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TreatKind {
     /// A won Arcade board, daily or personal.
@@ -450,6 +450,16 @@ fn treat_kind(row: &tokio_postgres::Row) -> TreatKind {
     TreatKind::parse(row.get("kind")).expect("treat kind is checked by the database")
 }
 
+/// The `stage` and `looks` columns of a `pet_companions` row, read as one.
+fn form_of(stage: &str, looks: &[String]) -> Form {
+    let stage = Stage::parse(stage).expect("pet stage is checked by the database");
+    let picks: Vec<Pick> = looks
+        .iter()
+        .map(|pick| Pick::parse(pick).expect("pet looks are checked by the database"))
+        .collect();
+    Form::from_parts(stage, &picks).expect("pet looks fit the stage, checked by the database")
+}
+
 /// Normalise a candidate pet name. Trims surrounding whitespace, collapses
 /// inner whitespace runs to a single space, caps to `PET_NAME_MAX_CHARS`
 /// characters. Returns `None` when the result would be empty.
@@ -582,13 +592,7 @@ impl PetCompanion {
 
     /// The stage with the drawings picked on the way to it.
     pub fn form(&self) -> Form {
-        let picks: Vec<Pick> = self
-            .looks
-            .iter()
-            .map(|pick| Pick::parse(pick).expect("pet looks are checked by the database"))
-            .collect();
-        Form::from_parts(self.stage(), &picks)
-            .expect("pet looks fit the stage, checked by the database")
+        form_of(&self.stage, &self.looks)
     }
 
     /// The tricks it knows, in the order it learned them.
@@ -622,8 +626,8 @@ impl PetCompanion {
         Ok(Self::from(row))
     }
 
-    /// Write the growth back. Call it only while holding `lock`. `revision`
-    /// is owned here: it counts stored writes.
+    /// Write the growth back. Call it only while holding `lock`. Bumps
+    /// `revision`, like every stored write.
     pub async fn store(client: &impl GenericClient, write: PetGrowthWrite) -> Result<Self> {
         let tricks: Vec<&str> = write.tricks.iter().map(|trick| trick.as_str()).collect();
         let looks: Vec<&str> = write.form.picks().into_iter().map(Pick::as_str).collect();
@@ -868,24 +872,14 @@ impl PetCompanion {
             .context("reading a pet's guests")?;
         Ok(rows
             .iter()
-            .map(|row| {
-                let picks: Vec<Pick> = row
-                    .get::<_, Vec<String>>("looks")
-                    .iter()
-                    .map(|pick| Pick::parse(pick).expect("pet looks are checked by the database"))
-                    .collect();
-                let stage =
-                    Stage::parse(row.get("stage")).expect("pet stage is checked by the database");
-                PetGuest {
-                    visitor_id: row.get("visitor_id"),
-                    username: row.get("username"),
-                    species: PetSpecies::parse(row.get("species"))
-                        .expect("pet species is checked by the database"),
-                    form: Form::from_parts(stage, &picks)
-                        .expect("pet looks fit the stage, checked by the database"),
-                    name: row.get("name"),
-                    since: row.get("created"),
-                }
+            .map(|row| PetGuest {
+                visitor_id: row.get("visitor_id"),
+                username: row.get("username"),
+                species: PetSpecies::parse(row.get("species"))
+                    .expect("pet species is checked by the database"),
+                form: form_of(row.get("stage"), &row.get::<_, Vec<String>>("looks")),
+                name: row.get("name"),
+                since: row.get("created"),
             })
             .collect())
     }

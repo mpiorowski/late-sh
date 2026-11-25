@@ -3,7 +3,7 @@ use std::cell::Cell;
 use late_core::models::pet::{Form, PetGuest, PetMood, PetSpecies, Pick, Stage, TreatKind, Trick};
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -319,8 +319,7 @@ fn draw_toy(frame: &mut Frame, zone: Rect, pet: Rect, toy: Plaything, tick: usiz
     };
     let x = zone.x + (toy.x as u16).min(zone.width.saturating_sub(1));
     let y = zone.y + (toy.y as u16).min(zone.height.saturating_sub(1));
-    let on_pet = x >= pet.x && x < pet.right() && y >= pet.y && y < pet.bottom();
-    if on_pet {
+    if pet.contains(Position { x, y }) {
         return;
     }
     frame.render_widget(
@@ -768,6 +767,7 @@ impl PetArt {
         let mood = body.mood;
         let activity = pet_activity(mood, pose);
         let blink = activity > 0 && tick % 64 < 3;
+        let resting_eyes = if blink { "-.-" } else { mood_eyes(mood) };
         let tail = tail(activity, tick);
         let position = pet_position(pose, tick, travel);
         let art = match pose {
@@ -782,7 +782,7 @@ impl PetArt {
             },
             PetPose::Sulk | PetPose::Sleep | PetPose::Stroll => PetArt {
                 position,
-                eyes: if blink { "-.-" } else { mood_eyes(mood) },
+                eyes: resting_eyes,
                 tail,
                 mouth: Mouth::Mood(mood),
                 rock: false,
@@ -792,13 +792,7 @@ impl PetArt {
                 eyes: match perch.look {
                     Look::Left => "<.<",
                     Look::Right => ">.>",
-                    Look::Ahead => {
-                        if blink {
-                            "-.-"
-                        } else {
-                            mood_eyes(mood)
-                        }
-                    }
+                    Look::Ahead => resting_eyes,
                 },
                 tail,
                 mouth: Mouth::Mood(mood),
@@ -881,7 +875,11 @@ impl PetArt {
                 ..self
             },
             Moment::Welcome { .. } => PetArt {
-                position: if (age / 8) % 2 == 0 { up } else { (x, y) },
+                position: if (age / 8).is_multiple_of(2) {
+                    up
+                } else {
+                    (x, y)
+                },
                 eyes: "^.^",
                 tail: wag,
                 mouth: Mouth::Grin,
@@ -903,14 +901,22 @@ impl PetArt {
                 ..self
             },
             Moment::Trick(Trick::Hop) => PetArt {
-                position: if (age / 6) % 2 == 0 { up } else { (x, y) },
+                position: if (age / 6).is_multiple_of(2) {
+                    up
+                } else {
+                    (x, y)
+                },
                 eyes: "^.^",
                 mouth: Mouth::Grin,
                 ..self
             },
             Moment::Trick(Trick::Dance) => PetArt {
                 position: sway,
-                eyes: if (age / 6) % 2 == 0 { "^.^" } else { "-.-" },
+                eyes: if (age / 6).is_multiple_of(2) {
+                    "^.^"
+                } else {
+                    "-.-"
+                },
                 tail: wag,
                 mouth: Mouth::Grin,
                 ..self
@@ -1038,21 +1044,19 @@ fn mood_eyes(mood: PetMood) -> &'static str {
 /// The mouth glyph. The bird's is its beak, drawn between its eyes and
 /// always the same: birds do not smile.
 fn mouth(mouth: Mouth, species: PetSpecies) -> char {
-    match (species, mouth) {
-        (PetSpecies::Bird, _) => 'v',
-        (PetSpecies::Dog, Mouth::Mood(PetMood::Purring | PetMood::Proud | PetMood::Vibing)) => 'd',
-        (PetSpecies::Cat, Mouth::Mood(PetMood::Purring | PetMood::Proud | PetMood::Vibing)) => 'w',
-        (_, Mouth::Mood(PetMood::Chatty)) => 'o',
-        (_, Mouth::Mood(PetMood::Sulking)) => '_',
-        (_, Mouth::Mood(PetMood::Asleep)) => 'z',
-        (_, Mouth::Mood(PetMood::Idle)) => '.',
-        (_, Mouth::Hush) => '.',
-        (_, Mouth::Gasp) => 'o',
-        (_, Mouth::Sniff) => 'v',
-        (_, Mouth::Chew(true)) => 'o',
-        (_, Mouth::Chew(false)) => '-',
-        (PetSpecies::Dog, Mouth::Grin) => 'd',
-        (PetSpecies::Cat, Mouth::Grin) => 'w',
+    let smile = match species {
+        PetSpecies::Cat => 'w',
+        PetSpecies::Dog => 'd',
+        PetSpecies::Bird => return 'v',
+    };
+    match mouth {
+        Mouth::Mood(PetMood::Purring | PetMood::Proud | PetMood::Vibing) | Mouth::Grin => smile,
+        Mouth::Mood(PetMood::Chatty) | Mouth::Gasp | Mouth::Chew(true) => 'o',
+        Mouth::Mood(PetMood::Sulking) => '_',
+        Mouth::Mood(PetMood::Asleep) => 'z',
+        Mouth::Mood(PetMood::Idle) | Mouth::Hush => '.',
+        Mouth::Sniff => 'v',
+        Mouth::Chew(false) => '-',
     }
 }
 

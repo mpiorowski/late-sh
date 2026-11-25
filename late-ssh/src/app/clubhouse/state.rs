@@ -3,8 +3,9 @@
 //! sits where it picked, walkers carry live positions, and every session
 //! draws the same room. This struct owns this session's part of it (its
 //! own stand: the spot it picked or the cell it walked to, its last emote,
-//! its last pet of the dog, the pet at its heel), the camera target (your own cell, mirrored from the crowd),
-//! animation clock, the derived crowd, door arrival/departure ambience,
+//! its last pet of the dog, the pet at its heel), the camera target (your
+//! own cell, mirrored from the crowd), animation clock, the derived crowd,
+//! door arrival/departure ambience,
 //! and the first-visit tutorial state machine. Pure: every `now_ms` is
 //! handed in.
 

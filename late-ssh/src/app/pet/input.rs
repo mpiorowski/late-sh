@@ -4,7 +4,7 @@
 //! gesture becomes a call on `PetState`, which asks the service.
 
 use late_core::models::pet::{PetSpecies, Pick};
-use ratatui::layout::Rect;
+use ratatui::layout::Position;
 
 use crate::app::{
     common::primitives::Banner,
@@ -25,10 +25,11 @@ pub(crate) fn handle_click(app: &mut App, x: u16, y: u16) -> bool {
     let Some(frame) = app.last_pet_frame.get() else {
         return false;
     };
+    let at = Position { x, y };
     let on_pet = app
         .last_pet_rect
         .get()
-        .is_some_and(|rect| contains(rect, x, y));
+        .is_some_and(|rect| rect.contains(at));
     if on_pet {
         let clicked = app.pet_state.click(
             std::time::Instant::now(),
@@ -41,15 +42,15 @@ pub(crate) fn handle_click(app: &mut App, x: u16, y: u16) -> bool {
         }
         return true;
     }
-    if frame.treat.is_some_and(|rect| contains(rect, x, y)) {
+    if frame.treat.is_some_and(|rect| rect.contains(at)) {
         app.pet_state.give();
         return true;
     }
-    if frame.rows.iter().flatten().any(|row| contains(*row, x, y)) {
+    if frame.rows.iter().flatten().any(|row| row.contains(at)) {
         open_care(app);
         return true;
     }
-    if contains(frame.zone, x, y) {
+    if frame.zone.contains(at) {
         app.pet_state.throw(
             Toy::Ball,
             usize::from(x - frame.zone.x),
@@ -66,8 +67,9 @@ pub(crate) fn handle_right_click(app: &mut App, x: u16, y: u16) -> bool {
     let Some(frame) = app.last_pet_frame.get() else {
         return false;
     };
+    let at = Position { x, y };
     let on_tile =
-        contains(frame.zone, x, y) || frame.rows.iter().flatten().any(|row| contains(*row, x, y));
+        frame.zone.contains(at) || frame.rows.iter().flatten().any(|row| row.contains(at));
     if !on_tile || !app.pet_out() {
         return false;
     }
@@ -75,11 +77,9 @@ pub(crate) fn handle_right_click(app: &mut App, x: u16, y: u16) -> bool {
     true
 }
 
-/// Open the care box over whatever is up, for a pet that is out.
+/// Open the care box over whatever is up. Only for a pet that is out:
+/// every caller has checked `App::pet_out`.
 pub(crate) fn open_care(app: &mut App) {
-    if !app.pet_out() {
-        return;
-    }
     crate::app::input::open_pet_modal_globally(app);
     app.pet_state.open_care();
 }
@@ -117,12 +117,12 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
             app.pet_state.perform_next();
         }
-        ParsedInput::Mouse(mouse) => {
-            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
-                // The terminal reports cells from 1; the frame's rects
-                // count from 0.
-                handle_click(app, mouse.x.saturating_sub(1), mouse.y.saturating_sub(1));
-            }
+        ParsedInput::Mouse(mouse)
+            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) =>
+        {
+            // The terminal reports cells from 1; the frame's rects
+            // count from 0.
+            handle_click(app, mouse.x.saturating_sub(1), mouse.y.saturating_sub(1));
         }
         _ => {}
     }
@@ -225,10 +225,6 @@ fn throw(app: &mut App, toy: Toy) {
         column,
         usize::from(frame.zone.height.saturating_sub(1)),
     );
-}
-
-fn contains(rect: Rect, x: u16, y: u16) -> bool {
-    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
 }
 
 #[cfg(test)]

@@ -130,9 +130,9 @@ mirror that never decides.
   `INSERT ... ON CONFLICT DO NOTHING` in that transaction, so two
   sessions or two replicas racing settle to one.
 - **Ordering.** Every write a mirror shows bumps `pet_companions.revision`
-  (`store`, `touch`, `mark_visits_seen`). A reload and an answer race
-  each other; `PetState::install` drops a snapshot older than the one it
-  holds.
+  (`store`, `touch`, `mark_visits_seen`, `set_species`). A reload and an
+  answer race each other; `PetState::install` drops a snapshot older than
+  the one it holds.
 - **Fan-out.** `pet_changed` carries the owner's id through
   `pg_listener` (`Channel::PetChanged`) into a process-local broadcast;
   a session whose user it names reloads. That is how a second session
@@ -233,7 +233,8 @@ hands the order to `input::handle_order`.
 
 - A new stage adds a variant to `Form` and an arm to `form_rows` and
   `days_for`; a new animal adds an arm to each part (`top_row`,
-  `feet_row`, `elder_face`, `pick_name`): all exhaustive, no catch-all.
+  `feet_row`, `elder_face`, `pick_name`, `mouth`): all exhaustive, no
+  catch-all.
 - The bird's beak is the middle cell of its eyes (`face_cells`), so every
   eye string is three cells with the nose in the middle.
 - Every body is seven cells plus one column (the tail, and on the floor

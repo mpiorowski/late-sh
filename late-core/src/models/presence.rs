@@ -60,7 +60,7 @@ pub struct ClubhouseStand {
     /// When this session last petted the dog.
     pub petted_dog_at_ms: Option<i64>,
     /// The species of the hatched pet at this patron's heel: `None` with
-    /// no pet bought, one put away, or an egg. Set from the publishing
+    /// the pet put away or still an egg. Set from the publishing
     /// session's own pet, so it changes only when the pet comes out, goes
     /// away, hatches or changes species. Mixed versions during a deploy:
     /// absent reads as `None` and a species this build does not know
