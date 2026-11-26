@@ -172,8 +172,10 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
 
     let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "strip-key-me").await;
-    let them = create_test_user(&test_db.db, "strip-key-them").await;
+    // Short names: on the test terminal the strip's one line names each
+    // player in ten cells.
+    let me = create_test_user(&test_db.db, "key-me").await;
+    let them = create_test_user(&test_db.db, "key-them").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -200,7 +202,7 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "strip-key-them v strip-key-me").await;
+    wait_for_render_contains(&mut app, "key-them v key-me").await;
 
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
@@ -218,8 +220,10 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
 
     let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "strip-close-me").await;
-    let them = create_test_user(&test_db.db, "strip-close-them").await;
+    // Short names: on the test terminal the strip's one line names each
+    // player in ten cells.
+    let me = create_test_user(&test_db.db, "shut-me").await;
+    let them = create_test_user(&test_db.db, "shut-them").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -246,7 +250,7 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
         .await
         .expect("post the open one");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "strip-close-them v strip-close-me").await;
+    wait_for_render_contains(&mut app, "shut-them v shut-me").await;
     assert!(app.lobby.glow(), "the open challenge glows");
 
     app.handle_input(b"o");

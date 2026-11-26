@@ -282,8 +282,15 @@ lands harder on an SSH server than it ever did on the web.
   empty 500-sector world. The right format is event content: a fresh small
   universe per season (`bigbang` makes regeneration cheap), a daily turn
   ration, "highest net worth by Sunday", a #lounge coronation, then the
-  universe dies. Do not build the always-on version.
+  universe dies. Do not build the always-on version. The Realm
+  (`late-ssh/src/app/door/realm/CONTEXT.md`) holds the season-world slot
+  today, opened by 24 people in the 14 days to 2026-11-06; a second
+  season world would draw on the same people.
 - **Progress Quest** is the natural cheap follow-up on the incremental shelf.
+  Consider it as a Home tile, not a hub card: it plays itself, so it needs
+  no screen of its own, every door together holds 3% of all time, and the
+  leave-it-open surfaces are where a thing that rewards being connected
+  belongs (root `AUDIENCE.md`, section 4).
 - **NetHack variants, Angband, the museum wing (Rogue/Hack/Umoria)** reuse the
   `late-nethack` host shape almost verbatim; each costs an image and a pod.
 

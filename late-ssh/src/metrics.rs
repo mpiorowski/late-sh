@@ -38,6 +38,7 @@ use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdit
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
+use crate::app::pet::svc::{PetAction, PetActionResult, TreatBeat, VisitBeat};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::presence::svc::PulseSampleOutcome;
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
@@ -397,6 +398,15 @@ pub enum FightBeat {
     Inked,
     /// A lounge glyph's leavings onto the sheet (`deadchannel/lounge`).
     Pocketed,
+    /// A bet at the ring off the hand (`deadchannel/ring`).
+    Staked,
+    /// The ring's pay onto the hand: winnings, a refund, a purse.
+    Collected,
+    /// A bout fought: the sheet told, the gate cleared if one stood.
+    RingFought,
+    /// A step, a crossing or an answer turned down at the ring's gate: a
+    /// marked runner at a draft level who has not fought their bout.
+    RingOwed,
     /// A step onto the crossing: a sleeper on the row.
     Crossed,
     /// The sleeper's answer: the one who crossed them on the row.
@@ -429,6 +439,34 @@ pub enum LoungeBeat {
     HitRefused,
     HitFailed,
     NotifyFailed,
+}
+
+/// One beat of the ring (`deadchannel/ring`): a call made, turned down by
+/// the row, accepted, declined, lapsed; a bet taken or turned down; a
+/// round locked, a round the clock forced, a round resolved, a bout
+/// ended; a fighter's end settled on their sheet, a bet paid, one whose
+/// runner had left, a settle or a pay that erred; a deck set; a row that
+/// moved but could not be announced; an ask that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RingBeat {
+    Called,
+    CallRefused,
+    Accepted,
+    AcceptRefused,
+    Declined,
+    Expired,
+    Bet,
+    BetRefused,
+    Locked,
+    TimedOut,
+    Resolved,
+    Ended,
+    Settled,
+    Paid,
+    PayLeft,
+    SettleFailed,
+    DeckSet,
+    Failed,
 }
 
 /// The Old Signal's chips after a kill (`fight/svc.rs::pay_mark`): `Paid`
@@ -859,8 +897,8 @@ mod inner {
         PayoutTimersRead, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
         PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
         RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        Refresh, RefreshOutcome, RenderReason, RingBeat, RollCallResult, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
     };
@@ -875,6 +913,7 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+    use super::{PetAction, PetActionResult, TreatBeat, VisitBeat};
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -1259,6 +1298,98 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_bonsai_actions_total")
                 .with_description("Bonsai care actions, by action and how they settled")
+                .build()
+        })
+    }
+
+    fn pet_action_label(action: PetAction) -> &'static str {
+        match action {
+            PetAction::Pat => "pat",
+            PetAction::CountDay => "count_day",
+            PetAction::Hatch => "hatch",
+            PetAction::Grow => "grow",
+            PetAction::Earn => "earn",
+            PetAction::Give => "give",
+            PetAction::Play => "play",
+            PetAction::Practice => "practice",
+            PetAction::SeenVisits => "seen_visits",
+            PetAction::Species => "species",
+            PetAction::Reset => "reset",
+            PetAction::VisitPat => "visit_pat",
+            PetAction::VisitCall => "visit_call",
+        }
+    }
+
+    fn pet_action_result_label(result: PetActionResult) -> &'static str {
+        match result {
+            PetActionResult::Stored => "stored",
+            PetActionResult::Refused => "refused",
+            PetActionResult::Failed => "failed",
+        }
+    }
+
+    fn pet_treat_beat_label(beat: TreatBeat) -> &'static str {
+        match beat {
+            TreatBeat::Earned => "earned",
+            TreatBeat::Given => "given",
+            TreatBeat::Refused => "refused",
+        }
+    }
+
+    fn pet_visit_beat_label(beat: VisitBeat) -> &'static str {
+        match beat {
+            VisitBeat::Pat => "pat",
+            VisitBeat::Call => "call",
+            VisitBeat::Refused => "refused",
+        }
+    }
+
+    fn pet_actions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_actions_total")
+                .with_description("Pet commands and visits, by action and how they settled")
+                .build()
+        })
+    }
+
+    fn pet_days_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_days_total")
+                .with_description("Days together counted: an owner's first key of a UTC day")
+                .build()
+        })
+    }
+
+    fn pet_stage_ups_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_stage_ups_total")
+                .with_description("Pets entering a stage, by the stage entered")
+                .build()
+        })
+    }
+
+    fn pet_treats_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_treats_total")
+                .with_description("Pet treats, by kind and beat (earned, given, refused)")
+                .build()
+        })
+    }
+
+    fn pet_visits_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_visits_total")
+                .with_description("Visits to someone else's pet, by beat (pat, call, refused)")
                 .build()
         })
     }
@@ -2215,6 +2346,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_ring_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_ring_total")
+                .with_description("deadchannel ring calls, bets, rounds, and pay, by beat")
+                .build()
+        })
+    }
+
     fn runner_door_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2322,6 +2463,10 @@ mod inner {
             FightBeat::Carted => "carted",
             FightBeat::Inked => "inked",
             FightBeat::Pocketed => "pocketed",
+            FightBeat::Staked => "staked",
+            FightBeat::Collected => "collected",
+            FightBeat::RingFought => "ring_fought",
+            FightBeat::RingOwed => "ring_owed",
             FightBeat::Crossed => "crossed",
             FightBeat::Answered => "answered",
             FightBeat::Ambushed => "ambushed",
@@ -2377,6 +2522,33 @@ mod inner {
 
     pub fn record_deadchannel_lounge(beat: LoungeBeat) {
         deadchannel_lounge_total().add(1, &[KeyValue::new("beat", lounge_beat_label(beat))]);
+    }
+
+    fn ring_beat_label(beat: RingBeat) -> &'static str {
+        match beat {
+            RingBeat::Called => "called",
+            RingBeat::CallRefused => "call_refused",
+            RingBeat::Accepted => "accepted",
+            RingBeat::AcceptRefused => "accept_refused",
+            RingBeat::Declined => "declined",
+            RingBeat::Expired => "expired",
+            RingBeat::Bet => "bet",
+            RingBeat::BetRefused => "bet_refused",
+            RingBeat::Locked => "locked",
+            RingBeat::TimedOut => "timed_out",
+            RingBeat::Resolved => "resolved",
+            RingBeat::Ended => "ended",
+            RingBeat::Settled => "settled",
+            RingBeat::Paid => "paid",
+            RingBeat::PayLeft => "pay_left",
+            RingBeat::SettleFailed => "settle_failed",
+            RingBeat::DeckSet => "deck_set",
+            RingBeat::Failed => "failed",
+        }
+    }
+
+    pub fn record_deadchannel_ring(beat: RingBeat) {
+        deadchannel_ring_total().add(1, &[KeyValue::new("beat", ring_beat_label(beat))]);
     }
 
     fn presence_wire_label(beat: PresenceWire) -> &'static str {
@@ -2709,6 +2881,7 @@ mod inner {
         match refresh {
             Refresh::RunnerLooks => "runner_looks",
             Refresh::LoungeSpawn => "lounge_spawn",
+            Refresh::RingBoard => "ring_board",
             Refresh::DailyMatches => "daily_matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
@@ -3685,6 +3858,38 @@ mod inner {
                 KeyValue::new("result", bonsai_action_result_label(result)),
             ],
         );
+    }
+
+    pub fn record_pet_action(action: PetAction, result: PetActionResult) {
+        pet_actions_total().add(
+            1,
+            &[
+                KeyValue::new("action", pet_action_label(action)),
+                KeyValue::new("result", pet_action_result_label(result)),
+            ],
+        );
+    }
+
+    pub fn record_pet_day() {
+        pet_days_total().add(1, &[]);
+    }
+
+    pub fn record_pet_stage_up(stage: late_core::models::pet::Stage) {
+        pet_stage_ups_total().add(1, &[KeyValue::new("stage", stage.as_str())]);
+    }
+
+    pub fn record_pet_treat(kind: late_core::models::pet::TreatKind, beat: TreatBeat) {
+        pet_treats_total().add(
+            1,
+            &[
+                KeyValue::new("kind", kind.as_str()),
+                KeyValue::new("beat", pet_treat_beat_label(beat)),
+            ],
+        );
+    }
+
+    pub fn record_pet_visit(beat: VisitBeat) {
+        pet_visits_total().add(1, &[KeyValue::new("beat", pet_visit_beat_label(beat))]);
     }
 
     /// A settled round. The price is burned whole, and the
@@ -4730,8 +4935,8 @@ mod inner {
         PayoutTimersRead, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
         PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
         RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        Refresh, RefreshOutcome, RenderReason, RingBeat, RollCallResult, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
     };
@@ -4746,6 +4951,7 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+    use super::{PetAction, PetActionResult, TreatBeat, VisitBeat};
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -4761,6 +4967,7 @@ mod inner {
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
     pub fn record_deadchannel_poster(_beat: PosterBeat) {}
     pub fn record_deadchannel_lounge(_beat: LoungeBeat) {}
+    pub fn record_deadchannel_ring(_beat: RingBeat) {}
     pub fn record_presence(_beat: PresenceWire) {}
     pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
@@ -4875,6 +5082,11 @@ mod inner {
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub(crate) fn record_chat_send_refused(_refusal: &SendRefusal) {}
     pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
+    pub fn record_pet_action(_action: PetAction, _result: PetActionResult) {}
+    pub fn record_pet_day() {}
+    pub fn record_pet_stage_up(_stage: late_core::models::pet::Stage) {}
+    pub fn record_pet_treat(_kind: late_core::models::pet::TreatKind, _beat: TreatBeat) {}
+    pub fn record_pet_visit(_beat: VisitBeat) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}
     pub fn record_round_refused(_refusal: RoundRefusal) {}
     pub fn record_gift_drink_bought(_chips: i64) {}

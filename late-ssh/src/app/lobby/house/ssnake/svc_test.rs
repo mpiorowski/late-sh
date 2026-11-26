@@ -217,7 +217,7 @@ fn last_food_pays_the_clear_bonus_and_reshuffles_the_arena() {
     assert!(!Arc::ptr_eq(&before, &after), "a new arena is drawn");
     assert_eq!(state.points_left, after.points_needed);
     assert!(state.point.is_some(), "the new arena is stocked");
-    for player in state.players.iter().take(2) {
+    for player in &state.players[..2] {
         assert_eq!(player.body.len(), 1, "everyone is re-seeded");
         assert_eq!(player.motion, Motion::Idle);
     }

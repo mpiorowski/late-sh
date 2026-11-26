@@ -606,8 +606,8 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[1])
     );
     assert_eq!(selected_line, 1);
-    // The five bespoke boards, then a blank and the "Games" header.
-    let games_header = 1 + 5 + 1;
+    // The four bespoke boards, then a blank and the "Games" header.
+    let games_header = 1 + 4 + 1;
     assert_eq!(text(&lines[games_header - 1]), "");
     assert!(
         text(&lines[games_header]).contains("Games"),

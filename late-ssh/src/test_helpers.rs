@@ -228,6 +228,27 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
     }
 }
 
+/// A ring with no sweeper and no listener behind it: the board stays
+/// empty unless a test fills the rows and re-reads it.
+fn test_ring_service(
+    db: Db,
+    chat_service: ChatService,
+    chip_service: ChipService,
+) -> crate::app::deadchannel::ring::svc::RingService {
+    crate::app::deadchannel::ring::svc::RingService::new(
+        db.clone(),
+        crate::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            chat_service.clone(),
+            chip_service,
+        ),
+        chat_service,
+        crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        crate::app::deadchannel::runner::svc::fixed_looks_rx(std::collections::HashMap::new()),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+}
+
 /// A lounge with no spawner behind it: nothing lands unless a test
 /// lands it, and the hit path runs against the test database.
 fn test_lounge_service(
@@ -346,6 +367,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
         presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
         lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
+        ring_service: test_ring_service(db.clone(), chat_service.clone(), chip_service.clone()),
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         pot_service: crate::app::pot::svc::PotService::new(db.clone()),
@@ -704,6 +726,7 @@ fn make_app_with_chat_service_and_permissions(
         poster_service: crate::app::deadchannel::poster::svc::PosterService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
         lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
+        ring_service: test_ring_service(db.clone(), chat_service.clone(), chip_service.clone()),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -1018,6 +1041,11 @@ pub fn make_app_with_paired_client(
         poster_service: crate::app::deadchannel::poster::svc::PosterService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
         lounge_service: test_lounge_service(
+            db.clone(),
+            ChatService::new(db.clone(), notification_service.clone()),
+            chip_service.clone(),
+        ),
+        ring_service: test_ring_service(
             db.clone(),
             ChatService::new(db.clone(), notification_service.clone()),
             chip_service.clone(),
@@ -1399,4 +1427,22 @@ pub async fn publish_test_splash(state: &State) -> Uuid {
         piece.id
     );
     piece.id
+}
+
+/// A pet's snapshot grown to `form` in memory, with the days its stage
+/// asks for: for tests of the session and the drawing that need a pet out
+/// of its egg and never touch the row.
+pub fn pet_grown_to(
+    mut pet: crate::app::pet::svc::PetSnapshot,
+    form: late_core::models::pet::Form,
+) -> crate::app::pet::svc::PetSnapshot {
+    let stage = form.stage();
+    pet.row.stage = stage.as_str().to_string();
+    pet.row.looks = form
+        .picks()
+        .into_iter()
+        .map(|pick| pick.as_str().to_string())
+        .collect();
+    pet.row.days_together = crate::app::pet::state::days_for(stage);
+    pet
 }

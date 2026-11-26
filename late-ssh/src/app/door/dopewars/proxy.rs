@@ -48,7 +48,7 @@ enum OutboundCommand {
 /// vt100 model and transport, but the target is late.sh's own dopewars host.
 /// The SSH username carries the player's `late.sh` handle: the host sanitizes it
 /// and passes it to dopewars as `-P`, so the startup name prompt is skipped and
-/// the shared high-score table records the right player.
+/// the session's high-score table records the right player.
 pub struct DopewarsProcess {
     cmd_tx: mpsc::Sender<OutboundCommand>,
     task: JoinHandle<()>,

@@ -39,7 +39,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::cards::{Board, Card, DRAFTS, Draft, ENERGY, HAND};
+use super::cards::{Board, Card, DRAFTS, Draft, ENERGY, Effect, HAND};
 use super::data::{self, FOES, FoeKind, FoeTier, Intent, OLD_SIGNAL, RATIONS_PER_DAY};
 use super::road::{LANES, Mark, Node, STEPS};
 use super::session::{Picker, Scene};
@@ -597,9 +597,9 @@ pub(crate) fn intent_named(word: &str) -> Option<Intent> {
 /// What a card does, in the two rows under its name: the number it would
 /// land for played now, then the rule nobody would guess. The numbers are
 /// `Card::effect`'s, so the card never prints one the machine would not
-/// play.
-fn card_text(card: Card, powers: &Powers, board: &Board) -> [String; 2] {
-    let effect = card.effect(powers, board);
+/// play. The ring's cards read the same but for the mute
+/// (`ring/ui.rs::card_text`).
+pub(crate) fn card_text(card: Card, effect: &Effect) -> [String; 2] {
     let hit = format!("hit {}", effect.damage);
     let hold = format!("hold {}", effect.block);
     match card {
@@ -700,7 +700,7 @@ fn hand_cards(sheet: &Sheet, fight: &Fight) -> Vec<Line<'static>> {
                     (Some(_), false) | (None, false) => (muted, muted, muted, muted),
                     (None, true) => (ink(INK_DIM), ink(INK_DIM), muted, lit(Neon::Amber)),
                 };
-                let [first, second] = card_text(card, &powers, &board);
+                let [first, second] = card_text(card, &card.effect(&powers, &board));
                 let label = card.name();
                 rows[0].extend([
                     Span::styled("╭ ", frame),
@@ -1805,6 +1805,37 @@ fn draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
     (lines, keys)
 }
 
+/// The ring's gate, in the three rows the node under the cursor would
+/// have: a marked runner at a draft level fights a bout before the next
+/// step (GAME.md, "The arena pass").
+fn ring_owed_lines(level: i32) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let key = lit(Neon::Amber);
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  ▸ ", key),
+            Span::styled("the ring wants you first", lit(Neon::Magenta)),
+            Span::styled(format!("   level {level}, with a mark on you"), dim_text),
+        ]),
+        Line::from(Span::styled(
+            "    one bout at RING, against a runner with a mark. win or lose, the road opens.",
+            text,
+        )),
+        Line::from(Span::styled(
+            "    no steps, no crossing and no answer until it is fought.",
+            dim_text,
+        )),
+    ];
+    let keys = vec![
+        Span::styled("    esc ", key),
+        Span::styled("back", action()),
+        Span::styled(" to the street", text),
+        Span::styled("   RING is the lit sign past the blade shop", dim_text),
+    ];
+    (lines, keys)
+}
+
 /// The road over the street: the sheet, the day's map with the run on
 /// it, what waits under the cursor (or the draft owed, ahead of any
 /// step), the keys. Fixed width like the scene;
@@ -1974,8 +2005,14 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 Some(_) => None,
                 None => sheet.node_ahead(view.picker.lane),
             };
-            match (sheet.draft(), ahead) {
-                (Some(draft), _) => {
+            // The ring's gate stands where the step would: after a draft
+            // owed, ahead of any node, and only while there is road left.
+            let gate = match (reason, sheet.draft()) {
+                (None, None) => sheet.ring_gate(),
+                (Some(_), _) | (None, Some(_)) => None,
+            };
+            match (sheet.draft(), gate, ahead) {
+                (Some(draft), _, _) => {
                     let (detail, keys) = match sheet.inked(draft.level) {
                         true => inked_draft_lines(draft),
                         false => draft_lines(draft),
@@ -1983,7 +2020,12 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                     lines.extend(detail);
                     lines.push(Line::from(keys));
                 }
-                (None, None) => {
+                (None, Some(level), _) => {
+                    let (detail, keys) = ring_owed_lines(level);
+                    lines.extend(detail);
+                    lines.push(Line::from(keys));
+                }
+                (None, None, None) => {
                     // The day's card, in words: the map above is the
                     // picture of it.
                     let glyphs = match sheet.kills_today {
@@ -2018,7 +2060,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                     ]);
                     lines.push(Line::from(keys));
                 }
-                (None, Some(node)) => {
+                (None, None, Some(node)) => {
                     let (detail, keys) = node_lines(sheet, view.picker, view.lookout, node);
                     lines.extend(detail);
                     lines.push(Line::from(keys));

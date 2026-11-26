@@ -41,7 +41,8 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // `poster` (migration 249) is the runner's picture from PRINTS, a
 // serialized `dartboard_core::Canvas` the app decodes where it draws it,
 // `None` with none hung; the trigger does not watch it and the nuke keeps
-// it.
+// it. `ring_cleared` (migration 287) is the highest level whose ring gate
+// this climb has cleared, 0 with none; a mark and the ledge zero it.
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -72,7 +73,8 @@ crate::model! {
         pub road: Option<serde_json::Value>,
         pub cards: Option<serde_json::Value>,
         pub inks: Option<serde_json::Value>,
-        pub poster: Option<serde_json::Value>;
+        pub poster: Option<serde_json::Value>,
+        pub ring_cleared: i32;
 
         @data
         pub user_id: Uuid,
@@ -108,6 +110,7 @@ pub struct SheetWrite {
     pub road: Option<serde_json::Value>,
     pub cards: Option<serde_json::Value>,
     pub inks: Option<serde_json::Value>,
+    pub ring_cleared: i32,
 }
 
 /// What the directory serves per standing runner: the look as stored, the
@@ -351,7 +354,8 @@ impl DeadchannelRunner {
                      fight = $10, kills = $11, kills_today = $12, runs_today = $13,
                      peak_level = $14, marks = $15, unpaid_mark = $16,
                      stash = $17, debt = $18, crystals = $19, drink = $20,
-                     road = $21, cards = $22, inks = $23, updated = current_timestamp
+                     road = $21, cards = $22, inks = $23, ring_cleared = $24,
+                     updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -378,6 +382,7 @@ impl DeadchannelRunner {
                     &write.road,
                     &write.cards,
                     &write.inks,
+                    &write.ring_cleared,
                 ],
             )
             .await

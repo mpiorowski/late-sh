@@ -1,0 +1,12 @@
+{
+  "type": "content",
+  "modid": "latearrows",
+  "name": "late.sh arrows",
+  "version": "1.0.0",
+  "description": "Iron, meteoric iron and steel arrows never break on impact.",
+  "authors": ["late.sh"],
+  "side": "Server",
+  "requiredOnClient": false,
+  "requiredOnServer": true,
+  "dependencies": { "game": "1.22.0" }
+}

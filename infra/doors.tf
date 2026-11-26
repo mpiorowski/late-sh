@@ -31,9 +31,11 @@ locals {
       extra_ports         = []
     }
 
-    # dopewars: no mid-game save upstream; what persists is the single shared
-    # high-score file every session's `-f` points at. The binary creates the
-    # .sco itself on first score write and locks it during updates.
+    # dopewars: no mid-game save upstream; what persists is the append-only
+    # run log `dopewars.sco.runs.log`, which every session's finished games
+    # are appended to and the leaderboard ingest streams.
+    # LATE_DOPEWARS_SCORE_FILE only names that log's path: nothing writes the
+    # .sco itself, each session plays on its own table in a scratch HOME.
     dopewars = {
       port                = 2324
       var_path            = "/var/lib/late-dopewars"

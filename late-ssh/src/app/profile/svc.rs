@@ -14,7 +14,6 @@ use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
 use late_core::models::media_queue_item::MediaQueueItem;
-use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
 use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
 use late_core::models::profile_award::{
@@ -36,6 +35,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot, watch};
 use tracing::{Instrument, info_span};
 
+use crate::app::pet::svc::{PetService, ProfilePet};
 use crate::app::profile::ledger::{self, LedgerRow, LedgerSources};
 use crate::ircd::registry::IrcRegistry;
 use crate::session::{SessionMessage, SessionRegistry};
@@ -53,14 +53,6 @@ pub struct ProfileService {
     username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
     irc_registry: Option<IrcRegistry>,
-}
-
-/// What a profile shows of a pet: enough to draw it and caption it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProfilePet {
-    pub species: PetSpecies,
-    pub mood: PetMood,
-    pub name: Option<String>,
 }
 
 /// What a profile shows of a runner: the face, the sheet (the badge's
@@ -95,8 +87,8 @@ pub struct ProfileSnapshot {
     pub bonsai: Option<Tree>,
     pub bonsai_decay_protection: Option<BonsaiDecayProtection>,
     pub aquarium_fish: Vec<(String, usize)>,
-    /// The Pet Companion, for owners only, in the mood its owner's session
-    /// last left it in.
+    /// The Pet Companion unless its owner put it away, in the mood their
+    /// session last left it in.
     pub pet: Option<ProfilePet>,
     /// The standing runner behind this profile, if any.
     pub runner: Option<ProfileRunner>,
@@ -409,18 +401,7 @@ impl ProfileService {
         };
         let aquarium_fish =
             marketplace::active_aquarium_creatures_for_user(&client, user_id).await?;
-        let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
-            PetCompanion::find_by_user_id(&client, user_id)
-                .await?
-                .filter(|row| row.enabled)
-                .map(|row| ProfilePet {
-                    species: row.species(),
-                    mood: row.mood(),
-                    name: row.name.clone(),
-                })
-        } else {
-            None
-        };
+        let pet = PetService::profile_pet(&**client, user_id).await?;
         let runner = match DeadchannelRunner::find_by_user(&client, user_id).await? {
             Some(row) if row.left_at.is_none() => {
                 let look = crate::app::deadchannel::runner::state::Look::parse(&row.look);

@@ -187,6 +187,39 @@ so (`Undercity · f road · p patch · ? guide`,
   240). The contract (who is met and in what order, the caps as
   indexes, the settle, the day roll dropping a hanging fight, the
   lookout the session reads, the wire lines) is `CROSSING.md`.
+- **The ring's gate.** ../GAME.md, "The arena pass": the ring
+  (`../ring/CONTEXT.md`) is a slice of its own, and the sheet still has
+  one writer, so what it needs of the sheet is three commands and the
+  gate. `Sheet::ring_gate` is the gate owed: for a runner with a mark,
+  the highest draft level (3, 6, 9, 12) at or under the level and above
+  `ring_cleared` (the column, migration 287); `None` on a first climb.
+  While one stands, `step_to`, `crossing_refused` and `answer` refuse
+  with `Refusal::RingOwed` (after a draft owed, so the card comes
+  first), spending nothing, and the road panel shows why in place of
+  the node under the cursor (`ui.rs::ring_owed_lines`, the draft
+  offer's spot) and where to go. `Command::Stake { bits }` takes a bet
+  off the hand (refused short, `Refusal::Short`, or with a glyph
+  waiting, `FightWaiting`); `Command::Collect { bits }` puts the ring's
+  pay on the hand (winnings, a refund, the purse), the machine's
+  garnish left out because most of it is the runner's own stake coming
+  back, never refused; `Command::RingFought` sets `ring_cleared` to the
+  gate that stood, clearing every gate up to the level, never refused.
+  `slay` (a mark) and `reset` (the ledge) put `ring_cleared` back to 0.
+  The ring applies them through `FightService::apply_in`: one command
+  on the locked row inside a transaction the ring owns, so a stake and
+  its bet row, a pay and its claim, a bout's end and the gate it clears
+  commit together or not at all; the ring locks its own rows first, and
+  hands each outcome to `FightService::landed` after its commit, which
+  is where the beat is counted. `act` asks the ring's rows one thing
+  (`Bout::holds`) before a `Command::Reset`, and refuses the ledge with
+  `Refusal::RingHolds` while a bet or a bout of the runner's is out. The
+  ring fights on flat numbers through `Powers::of`, the one constructor
+  that `Sheet::powers_under` also calls, so the cards' shares stay in
+  one place. `sim.rs` takes the bout as fought the day the gate stands
+  (another runner's to give, no part of the road's balance). Beats:
+  `staked`, `collected`, `ring_fought`, and `ring_owed`, the gate's
+  refusal counted apart from `refused` because there is no fallback
+  opponent and how often the road is found shut is the cost.
 - **Not yet:** bands and charge (the surge and the wipe are the
   bandless deck's two moves; a band's replace them), events and card
   drops on the road, the operators (levels climb on exp until they

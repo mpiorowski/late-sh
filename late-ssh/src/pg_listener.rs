@@ -25,10 +25,12 @@ use late_core::models::{
     chat_message_gild::CHAT_MESSAGE_GILDED_CHANNEL,
     chips::CHIP_USER_CHANGED_CHANNEL,
     daily_match::DAILY_MATCH_CHANGED_CHANNEL,
+    deadchannel_bout::DEADCHANNEL_BOUT_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
     deadchannel_spawn::DEADCHANNEL_SPAWN_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
+    pet::PET_CHANGED_CHANNEL,
     pot::POT_CHANGED_CHANNEL,
     presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
@@ -50,6 +52,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 pub enum Refresh {
     RunnerLooks,
     LoungeSpawn,
+    RingBoard,
     DailyMatches,
     Pot,
     Articles,
@@ -66,6 +69,7 @@ impl Refresh {
         match self {
             Refresh::RunnerLooks => "runner looks",
             Refresh::LoungeSpawn => "lounge spawn",
+            Refresh::RingBoard => "ring board",
             Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
@@ -122,6 +126,8 @@ pub enum Channel {
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
     DeadchannelSpawn,
+    DeadchannelBout,
+    PetChanged,
     PotChanged,
     Presence,
     QuestAssignmentsChanged,
@@ -133,7 +139,7 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 17] = [
+    pub const ALL: [Channel; 19] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -143,6 +149,8 @@ impl Channel {
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
         Channel::DeadchannelSpawn,
+        Channel::DeadchannelBout,
+        Channel::PetChanged,
         Channel::PotChanged,
         Channel::Presence,
         Channel::QuestAssignmentsChanged,
@@ -164,6 +172,8 @@ impl Channel {
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
             Channel::DeadchannelSpawn => DEADCHANNEL_SPAWN_CHANNEL,
+            Channel::DeadchannelBout => DEADCHANNEL_BOUT_CHANNEL,
+            Channel::PetChanged => PET_CHANGED_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
             Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,

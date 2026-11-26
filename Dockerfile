@@ -498,10 +498,11 @@ CMD ["/app/late-nethack"]
 # Stage 4e: Runtime dopewars - the late-dopewars host (game served over SSH)
 # ==============================================================================
 # Owns everything the game needs: the from-source terminal-only dopewars binary,
-# its curses/glib runtime, and the writable directory holding the single shared
-# high-score file (/var/lib/late-dopewars/dopewars.sco; backed by a PVC in prod
-# so the leaderboard survives restarts). LATE_DOPEWARS_BIN defaults to
-# /usr/games/dopewars, LATE_DOPEWARS_SCORE_FILE to that .sco path.
+# its curses/glib runtime, and the writable directory holding the run log
+# (/var/lib/late-dopewars/dopewars.sco.runs.log; backed by a PVC in prod so the
+# leaderboard survives restarts). LATE_DOPEWARS_BIN defaults to
+# /usr/games/dopewars, LATE_DOPEWARS_SCORE_FILE to the .sco path the log is
+# named after.
 FROM runtime-base AS runtime-dopewars
 USER root
 # libglib2.0-0/libncursesw6/libcurl4: dopewars' runtime deps. ncurses-term: the

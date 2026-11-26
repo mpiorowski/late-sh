@@ -69,6 +69,8 @@ The door is gated by the `nethack_enabled` profile flag in `late-ssh/src/config.
 | `stats.rs` | The `late_stats` log-streaming session: cursor env parsing, complete-line framing (`frame_lines`), and the stateless tail loop over `xlogfile`/`livelog` in `var_dir`. Constants mirrored in late-ssh's `app/door/ingest/stream.rs`; the late-dcss twin. |
 | `watch.rs` | Live spectating (`../spectate/CONTEXT.md`): the `LiveRegistry` of live games (host-side `vt100` mirror + pulse per game, watcher counts), the `late_watch` sessions, and `hud_status` (`Xp3 Dlvl:4` off the bottom status line). The late-dcss twin; `host.rs` feeds it every output chunk and window change. |
 
+`late-nethack/sokoban/` is not part of the host: a local-only Sokoban solver and autoplayer for the player's desktop, its own Cargo workspace, never built by CI or into an image. Runbook in `late-nethack/sokoban/SOKOBAN.md`.
+
 Cross-module wiring (client side, outside this folder):
 - `app/state.rs`: `App::nethack_state`, `enter_nethack`/`leave_nethack`, and the Running-mode input passthrough in `App::handle_input` (intercept F1, else forward raw bytes).
 - `app/input.rs`: launcher `Enter` → `enter_nethack` + `connect`; arrows are a no-op on the launcher (Running-mode arrows are forwarded upstream).

@@ -185,10 +185,10 @@ fn the_banner_and_the_footer_each_take_one_row_off_the_tiles() {
     assert_eq!(neither.footer, None);
 }
 
-/// The stock lobby is four rows and the pet three, each under its title
-/// rule, and the bonsai under them takes whatever the column has left.
+/// The stock lobby is four rows under its title rule, and the bonsai under
+/// the live panel takes whatever the column has left.
 #[test]
-fn the_stock_lobby_is_four_rows_the_pet_three_and_the_bonsai_takes_the_rest() {
+fn the_stock_lobby_is_four_rows_and_the_bonsai_takes_the_rest() {
     let rice = RiceLayout::home();
     let rects = tile_rects(
         &rice.root,
@@ -196,14 +196,42 @@ fn the_stock_lobby_is_four_rows_the_pet_three_and_the_bonsai_takes_the_rest() {
         Gaps::uniform(rice.look.gap as u16),
         &all_up(&rice.root),
     );
-    let (lobby, pet, bonsai) = (rects[6], rects[8], rects[9]);
+    let (lobby, live, bonsai) = (rects[7], rects[8], rects[9]);
     assert_eq!(lobby.0, TileKind::Lobby);
     assert_eq!(lobby.1.height, 5);
-    assert_eq!(pet.0, TileKind::Pet);
-    assert_eq!(pet.1.height, 4);
+    assert_eq!(live.0, TileKind::Live);
     assert_eq!(bonsai.0, TileKind::Bonsai);
-    assert_eq!(bonsai.1.y, pet.1.bottom());
+    assert_eq!(bonsai.1.y, live.1.bottom());
     assert_eq!(bonsai.1.bottom(), 60);
+}
+
+/// The stock band over the chat, on Home's rules: the reef on two thirds of
+/// it and the pet on the last, the same rows, so the pet has the glass on its
+/// left to go and watch.
+#[test]
+fn the_stock_band_is_two_thirds_reef_and_a_third_pet() {
+    let rice = RiceLayout::home();
+    let rects = tile_rects(
+        &rice.root,
+        Rect::new(0, 0, 200, 60),
+        RULES_GAPS,
+        &all_up(&rice.root),
+    );
+    assert_eq!(
+        rects[1..4],
+        [
+            (TileKind::Aquarium, Rect::new(24, 0, 100, 12)),
+            (TileKind::Pet, Rect::new(125, 0, 51, 12)),
+            (TileKind::Chat, Rect::new(24, 12, 152, 48)),
+        ]
+    );
+    assert_eq!(
+        pet_neighbours(&rects, RULES_GAPS),
+        Neighbours {
+            tank: Some(WatchSide::Left),
+            bonsai: None,
+        }
+    );
 }
 
 /// A rail beside a section of a reef and a pet over a chat, on Home's rules:

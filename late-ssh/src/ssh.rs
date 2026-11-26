@@ -929,7 +929,7 @@ impl russh::server::Handler for ClientHandler {
         if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
             tracing::warn!(error = ?e, "failed to refresh shop snapshot");
         }
-        let initial_pet = match self.state.pet_service.ensure_pet(user_id).await {
+        let initial_pet = match self.state.pet_service.bootstrap(user_id).await {
             Ok(pet) => Some(pet),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create pet companion");
@@ -1095,6 +1095,7 @@ impl russh::server::Handler for ClientHandler {
                 self.state.db.clone(),
             ),
             lounge_service: self.state.lounge_service.clone(),
+            ring_service: self.state.ring_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),

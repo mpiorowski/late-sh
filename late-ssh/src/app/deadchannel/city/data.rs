@@ -151,11 +151,11 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Coin
         | Landmark::Vids
         | Landmark::Pawn => CLOSED_LINES,
         Landmark::Ink
         | Landmark::Prints
+        | Landmark::Ring
         | Landmark::Armorer
         | Landmark::Tailor
         | Landmark::Lockers
@@ -190,11 +190,11 @@ pub fn title(landmark: Landmark) -> &'static str {
         Landmark::Stairs => "the stairs down",
         Landmark::Ink => "ink",
         Landmark::Prints => "prints",
+        Landmark::Ring => "the ring",
         Landmark::Baths => "the baths",
         Landmark::Sleep => "sleep",
         Landmark::Shrine => "the shrine",
         Landmark::Market => "the market",
-        Landmark::Coin => "coin",
         Landmark::Vids => "vids",
         Landmark::Pawn => "the pawn shop",
         Landmark::Wire => "the wire",
@@ -225,11 +225,13 @@ pub fn pitch(landmark: Landmark) -> &'static str {
             "the needle. a draft inked is both its cards, this climb and every one after. crystals only"
         }
         Landmark::Prints => "the poster: 32 by 12, painted here, hung on your profile. free",
+        Landmark::Ring => {
+            "two runners who put down the Old Signal, card against card. the street bets bits on it"
+        }
         Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Coin
         | Landmark::Vids
         | Landmark::Pawn => CLOSED_PITCH,
         Landmark::Wire => "back up to #deadchannel",

@@ -1,6 +1,6 @@
 // Pure parser for late-dopewars' append-only run log (`late-dopewars/src/
-// scorelog.rs` — keep the two copies in sync). One TAB-separated line per run
-// that ever reached dopewars' top-18 high-score table:
+// scorelog.rs` — keep the two copies in sync). One TAB-separated line per
+// finished game, read off the session's own high-score table:
 //
 //   `name \t money \t dead \t ended_epoch \t sco_date`
 //

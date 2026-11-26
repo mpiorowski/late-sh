@@ -56,8 +56,6 @@ impl Chrome {
     }
 }
 
-/// The pet box at its smallest: its three art rows.
-pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 /// The smallest page Rice draws. Under it the page is its too-small notice
 /// alone: no tiles.
 pub const RICE_MIN_COLS: u16 = 40;

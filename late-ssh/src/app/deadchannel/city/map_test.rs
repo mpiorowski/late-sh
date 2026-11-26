@@ -100,6 +100,7 @@ fn a_closed_shop_is_spelled_but_never_lit() {
         Landmark::Lockers,
         Landmark::Bits,
         Landmark::Blades,
+        Landmark::Ring,
     ] {
         let reach = landmark.reach();
         let building = BUILDINGS
@@ -126,6 +127,7 @@ fn a_shop_is_in_reach_on_its_whole_floor_and_only_there() {
         Landmark::Blades,
         Landmark::Ink,
         Landmark::Prints,
+        Landmark::Ring,
     ] {
         let reach = landmark.reach();
         let shop = BUILDINGS

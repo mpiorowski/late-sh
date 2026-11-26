@@ -1,14 +1,15 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
 //! run), Enter at a landmark (a shop panel, a street line, the road at
-//! the screen, or the wire out), `f` to walk up to the static and `p` to
-//! open patch from anywhere on the street, Enter to close a panel. The
+//! the screen, or the wire out), `f` to walk up to the static, `p` to
+//! open patch and `r` to step up to the ring from anywhere on the
+//! street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
 //! `Command::Outfit`), the lockers `d` and `w`, the bits machine `b` and
 //! `r`, Dead Air `s`, `d`, `t`, `f`, `u`, and `o` (a glass or a pour
 //! each), the blade shop `w` and `a`, INK up/down over the drafts and `i`
 //! to ink the picked one, the ledge `r` twice to step off; the tailor's
-//! hands every key to `tailor/input.rs`, and PRINTS every key to
-//! `poster/input.rs`.
+//! hands every key to `tailor/input.rs`, PRINTS every key to
+//! `poster/input.rs`, and the ring every key to `ring/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page but PRINTS opens it (the site guide's key,
 //! taken over down here: the street has its own; PRINTS paints it). While the road or the fight scene
@@ -91,6 +92,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                     let runner = app.runner_looks.get(&app.user_id).copied();
                     app.poster.open(runner);
                 }
+                if landmark == Landmark::Ring {
+                    app.ring.open();
+                }
             }
             Enter::Line(landmark) => {
                 let pool = data::lines(landmark);
@@ -126,6 +130,18 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         return true;
     }
 
+    // `r` steps up to the ring from anywhere on the street, the same
+    // panel Enter at its sign opens: a call has minutes on it and a round
+    // has seconds, and the street's notice (`ui.rs::draw_ring_notice`)
+    // names this key.
+    if let Some(b'r' | b'R') = event_byte(event) {
+        app.music_prefix_armed = false;
+        app.city.open_panel(Landmark::Ring);
+        app.fight.clear_till();
+        app.ring.open();
+        return true;
+    }
+
     handle_walk(app, event)
 }
 
@@ -137,6 +153,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     if app.city.panel() == Some(Landmark::Tailor) {
         return crate::app::deadchannel::tailor::input::handle_event(app, event);
+    }
+    if app.city.panel() == Some(Landmark::Ring) {
+        return crate::app::deadchannel::ring::input::handle_event(app, event);
     }
     if app.city.panel() == Some(Landmark::Armorer) {
         match event {
@@ -329,3 +348,7 @@ fn event_byte(event: &ParsedInput) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

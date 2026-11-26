@@ -163,7 +163,6 @@ fn every_closed_shop_answers_enter_with_the_same_line() {
         Landmark::Sleep,
         Landmark::Shrine,
         Landmark::Market,
-        Landmark::Coin,
         Landmark::Vids,
         Landmark::Pawn,
     ] {
