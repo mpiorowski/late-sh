@@ -281,7 +281,7 @@ pub struct SessionConfig {
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
-    pub initial_pet: Option<late_core::models::pet::PetCompanion>,
+    pub initial_pet: Option<crate::app::pet::svc::PetSnapshot>,
     pub aquarium_service: crate::app::hub::aquarium::svc::AquariumService,
     /// The tank's care at connect, with any starvation already settled.
     pub initial_aquarium_care: crate::app::hub::aquarium::svc::CareBootstrap,
@@ -539,6 +539,8 @@ pub struct App {
     pub(crate) show_poll_modal: bool,
     pub(crate) show_gild_modal: bool,
     pub(crate) show_bonsai_modal: bool,
+    /// The pet's care box (`pet/modal_ui.rs`).
+    pub(crate) show_pet_modal: bool,
     pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     /// Edge detector for the cooldown label's ready flip: the countdown is
@@ -687,7 +689,7 @@ pub struct App {
     /// The box the pet was drawn in last frame, where it stood, and how far
     /// it could roam; `None` when no box was drawn. Gates the pet
     /// animation's frame cost in tick and places the cursor for the walk.
-    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::state::PetFrameInputs>>,
+    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::session::PetFrameInputs>>,
     /// The terminal cursor's last reported cell (0-based), for the pet to
     /// walk after. `None` until the terminal reports one.
     pub(crate) last_mouse: Option<(u16, u16)>,
@@ -821,7 +823,7 @@ pub struct App {
     pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
 
     /// Cat companion
-    pub(crate) pet_state: crate::app::pet::state::PetState,
+    pub(crate) pet_state: crate::app::pet::session::PetState,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
@@ -1230,6 +1232,7 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_pet_modal = false;
         self.show_lobby_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
@@ -1522,31 +1525,11 @@ impl App {
             config.ring_service.clone(),
         );
 
-        let pet_state = if let Some(companion) = config.initial_pet {
-            crate::app::pet::state::PetState::new(
-                config.user_id,
-                config.pet_service.clone(),
-                companion,
-            )
-        } else {
-            crate::app::pet::state::PetState::new(
-                config.user_id,
-                config.pet_service.clone(),
-                late_core::models::pet::PetCompanion {
-                    id: uuid::Uuid::nil(),
-                    created: chrono::Utc::now(),
-                    updated: chrono::Utc::now(),
-                    user_id: config.user_id,
-                    adopted_at: None,
-                    name: None,
-                    species: late_core::models::pet::PetSpecies::Cat.as_str().to_string(),
-                    mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
-                    mood_since: chrono::Utc::now(),
-                    last_petted: None,
-                    enabled: true,
-                },
-            )
-        };
+        let pet_state = crate::app::pet::session::PetState::new(
+            config.user_id,
+            config.pet_service.clone(),
+            config.initial_pet,
+        );
         let quest_state = crate::app::hub::dailies::state::QuestState::new(
             config.user_id,
             config.quest_service.clone(),
@@ -1570,15 +1553,10 @@ impl App {
             aquarium_care.sprout_visible(),
         );
         aquarium_state.set_hungry(aquarium_care.hungry());
-        // What the login settlement did while the user was away, or the tank
-        // it planted: said once, on the first screen. A loss outranks the
-        // sprout news.
+        // What the login settlement did while the user was away: said once,
+        // on the first screen. A loss outranks the sprout news. A tank
+        // planted by this connect says nothing: a new account has the tour.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
-            [] if config.initial_aquarium_care.welcomed => {
-                Some(crate::app::common::primitives::Banner::info(
-                    "You have a tank, a fry and a sprout: click the tank or /aquarium feed daily, cut the sprout in /shop or let it root",
-                ))
-            }
             [] => match (
                 &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
@@ -1700,6 +1678,7 @@ impl App {
             show_poll_modal: false,
             show_gild_modal: false,
             show_bonsai_modal: false,
+            show_pet_modal: false,
             show_lobby_modal: false,
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
@@ -3117,6 +3096,7 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_pet_modal
             || self.show_lobby_modal
             || self.paper.modal.is_some()
             || self.comeback.is_open()
@@ -3474,6 +3454,8 @@ impl App {
             self.screen == Screen::City,
             now_ms,
         );
+        let pet = self.pet_out().then(|| self.pet_state.portrait());
+        self.clubhouse.set_pet(pet);
         let record = late_core::models::presence::PresenceRecord {
             session_id: self.presence.session_id(),
             user_id: self.user_id,
@@ -3692,10 +3674,11 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Whether the pet shows: bought, and not put away with its Shop switch.
-    /// Every surface that draws it, pets it or asks for it reads this.
+    /// Whether the pet shows: every account has one, and `/pet away` puts
+    /// it away. Every surface that draws it, pets it or asks for it reads
+    /// this.
     pub(crate) fn pet_out(&self) -> bool {
-        self.shop_state.entitlements().has_pet_companion() && self.pet_state.enabled
+        self.pet_state.enabled
     }
 
     /// Today's care, the pet gated on `pet_out`: what the attention guest
@@ -4608,11 +4591,7 @@ impl Drop for App {
         // An owner going offline leaves a sleeping pet on the profile. Only
         // the owner's session writes the row; another device still up
         // rewrites it on its next mood change.
-        if self.shop_state.entitlements().has_pet_companion() {
-            self.pet_state
-                .svc
-                .set_mood_task(self.user_id, late_core::models::pet::PetMood::Asleep);
-        }
+        self.pet_state.session_ended();
         // The device mark: when this terminal's keyboard went quiet, not when
         // the connection closed. A terminal parked open overnight and shut in
         // the morning left last night. Keyless sessions (ghost bots, tests)

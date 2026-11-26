@@ -189,7 +189,10 @@ impl TileKind {
                 TileHint::Takes(TileKey::Feed),
                 TileHint::Names(HouseKey::FeedClick),
             ],
-            TileKind::Pet => &[TileHint::Names(HouseKey::PetClick)],
+            TileKind::Pet => &[
+                TileHint::Takes(TileKey::Care),
+                TileHint::Names(HouseKey::PetClick),
+            ],
             TileKind::Chat => &[
                 TileHint::Takes(TileKey::CycleRoom),
                 TileHint::Names(HouseKey::PickRoom),
@@ -248,6 +251,9 @@ pub enum TileKey {
     Feed,
     /// `[` `]` rebind a chat tile to the previous or next room.
     CycleRoom,
+    /// Enter opens the pet's care box (a click on the tile's rows does the
+    /// same from any mode).
+    Care,
 }
 
 impl TileKey {
@@ -257,6 +263,7 @@ impl TileKey {
             TileKey::PickPiece => ("[ ] Enter", "pick"),
             TileKey::Feed => ("a", "feed"),
             TileKey::CycleRoom => ("[ ]", "cycle"),
+            TileKey::Care => ("Enter", "care"),
         }
     }
 
@@ -267,6 +274,7 @@ impl TileKey {
             TileKey::PickPiece => matches!(byte, b'[' | b']' | b'\r' | b'\n'),
             TileKey::Feed => byte == b'a',
             TileKey::CycleRoom => matches!(byte, b'[' | b']'),
+            TileKey::Care => matches!(byte, b'\r' | b'\n'),
         }
     }
 }
@@ -721,8 +729,8 @@ fn known_piece<'de, D: serde::Deserializer<'de>>(
     Ok(key.as_deref().and_then(AsciiSelection::from_key))
 }
 
-/// The permanent room the stock reef keeps to, by slug since a stock layout
-/// knows no account's room ids.
+/// The permanent room the stock reef and the pet beside it keep to, by slug
+/// since a stock layout knows no account's room ids.
 pub const REEF_ROOM: &str = "lounge";
 
 /// Per-mille bounds for a split's first child, so neither side is ever
@@ -1334,6 +1342,9 @@ pub const PRESENCE_ROWS: u16 = 2;
 /// eleven rows while that is Bigbert), so the fish swim in arrange mode too,
 /// where the title takes the extra row this tile has outside it.
 pub const HOME_AQUARIUM_ROWS: u16 = 11;
+/// The reef's per-mille share of the stock Home's top band: two thirds,
+/// the pet beside it on the last.
+pub const HOME_REEF_SHARE: u16 = 667;
 /// The stock lobby tile: two tables over the status line and the keys.
 pub const HOME_LOBBY_ROWS: u16 = 4;
 /// The stock `street` layout's right rail, wide enough for the clock's
@@ -1353,28 +1364,34 @@ impl RiceLayout {
         }
     }
 
-    /// The stock Home: the room rail, then the reef across the top of the
-    /// chat hosting the now strip and kept to #lounge, so the chat has its
-    /// rows in every other room, the chat under it, and a right column
-    /// of the presence row, the visualizer, the music dock, the lobby
-    /// hosting attention, live and the pet (the shop's note while none is
-    /// owned) at their panel rows, with the bonsai taking the rest. Fixed,
+    /// The stock Home: the room rail, then a band across the top of the
+    /// chat, the reef hosting the now strip on two thirds of it and the pet
+    /// on the last, both kept to #lounge, so the chat has its rows in every
+    /// other room, the chat under it, and a right column of the presence
+    /// row, the visualizer, the music dock, the lobby hosting attention and
+    /// live at their panel rows, with the bonsai taking the rest. Fixed,
     /// the same for every account: the page is arranged in place
     /// (`Ctrl+E`), and this is what `R` resets to.
     pub fn home() -> Self {
-        let center = Node::split_first(
-            Dir::Column,
-            HOME_AQUARIUM_ROWS + 1,
-            // The row the title takes in arrange mode stays the reef's
-            // outside it, so nothing moves when the mode comes up.
+        // The row the title takes in arrange mode stays the tile's outside
+        // it, so nothing moves when the mode comes up.
+        let band = Node::split(
+            Dir::Row,
+            HOME_REEF_SHARE,
             Node::hosting(TileKind::Aquarium, &[Guest::Now])
                 .untitled()
                 .only_in(REEF_ROOM),
+            Node::leaf(TileKind::Pet).untitled().only_in(REEF_ROOM),
+        );
+        let center = Node::split_first(
+            Dir::Column,
+            HOME_AQUARIUM_ROWS + 1,
+            band,
             Node::leaf(TileKind::Chat),
         );
         // The right column's panels, each at its rows plus its title rule; the
         // bonsai, last, takes the rest of the column.
-        let panels: [(Node, u16); 5] = [
+        let panels: [(Node, u16); 4] = [
             (
                 Node::leaf(TileKind::Visualizer),
                 crate::app::common::music_dock::MUSIC_VIZ_HEIGHT,
@@ -1393,8 +1410,6 @@ impl RiceLayout {
                 Node::leaf(TileKind::Live),
                 crate::app::live::panel::LIVE_PANEL_HEIGHT,
             ),
-            // The pet's box and nothing else: no mood row.
-            (Node::leaf(TileKind::Pet), super::layout::FLOOR_ROWS),
         ];
         let mut column = Node::leaf(TileKind::Bonsai);
         for (tile, rows) in panels.into_iter().rev() {

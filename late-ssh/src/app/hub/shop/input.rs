@@ -109,20 +109,6 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
 
     match event {
         ParsedInput::Mouse(mouse) => handle_shop_mouse(app, mouse),
-        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
-            if let Some(banner) = toggle_pet_species(app) {
-                app.banner = Some(banner);
-                return true;
-            }
-            false
-        }
-        ParsedInput::Byte(b'o' | b'O') | ParsedInput::Char('o' | 'O') => {
-            if let Some(banner) = toggle_pet_out(app) {
-                app.banner = Some(banner);
-                return true;
-            }
-            false
-        }
         ParsedInput::Arrow(b'A')
         | ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K') => {
@@ -247,34 +233,6 @@ fn handle_shop_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
         }
         _ => false,
     }
-}
-
-fn toggle_pet_species(app: &mut App) -> Option<Banner> {
-    let item = app.shop_state.selected_item()?;
-    if !item.is_pet_companion() || !item.owned {
-        return None;
-    }
-    let next = app.pet_state.species.next();
-    app.pet_state.set_species(next);
-    Some(Banner::success(&format!(
-        "Switched companion to {}",
-        next.as_str()
-    )))
-}
-
-/// `o` on the owned pet: its on/off switch. Away it keeps everything it was
-/// (name, species, age), and nothing draws it or asks for it.
-fn toggle_pet_out(app: &mut App) -> Option<Banner> {
-    let item = app.shop_state.selected_item()?;
-    if !item.is_pet_companion() || !item.owned {
-        return None;
-    }
-    let enabled = !app.pet_state.enabled;
-    app.pet_state.set_enabled(enabled);
-    Some(Banner::success(match enabled {
-        true => "Your pet is back out",
-        false => "Put your pet away: no reminders, o brings it back",
-    }))
 }
 
 /// `-` on the Sprout row: cut the sprout on the tank floor. The floor

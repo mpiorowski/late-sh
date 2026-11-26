@@ -30,6 +30,7 @@ use late_core::models::{
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
     deadchannel_spawn::DEADCHANNEL_SPAWN_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
+    pet::PET_CHANGED_CHANNEL,
     pot::POT_CHANGED_CHANNEL,
     presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
@@ -126,6 +127,7 @@ pub enum Channel {
     DeadchannelRunnerChanged,
     DeadchannelSpawn,
     DeadchannelBout,
+    PetChanged,
     PotChanged,
     Presence,
     QuestAssignmentsChanged,
@@ -137,7 +139,7 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 18] = [
+    pub const ALL: [Channel; 19] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -148,6 +150,7 @@ impl Channel {
         Channel::DeadchannelRunnerChanged,
         Channel::DeadchannelSpawn,
         Channel::DeadchannelBout,
+        Channel::PetChanged,
         Channel::PotChanged,
         Channel::Presence,
         Channel::QuestAssignmentsChanged,
@@ -170,6 +173,7 @@ impl Channel {
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
             Channel::DeadchannelSpawn => DEADCHANNEL_SPAWN_CHANNEL,
             Channel::DeadchannelBout => DEADCHANNEL_BOUT_CHANNEL,
+            Channel::PetChanged => PET_CHANGED_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
             Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,

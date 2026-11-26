@@ -40,6 +40,7 @@ fn record(looking: &Looking, lounge: bool) -> PresenceRecord {
             since_ms: 0,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         nightcap: None,
         street: None,

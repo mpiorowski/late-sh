@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::models::pet::PetSpecies;
+
 /// Cross-process channel for presence.
 pub const PRESENCE_CHANNEL: &str = "presence";
 
@@ -57,6 +59,42 @@ pub struct ClubhouseStand {
     pub emote: Option<(Emote, i64)>,
     /// When this session last petted the dog.
     pub petted_dog_at_ms: Option<i64>,
+    /// The species of the hatched pet at this patron's heel: `None` with
+    /// the pet put away or still an egg. Set from the publishing
+    /// session's own pet, so it changes only when the pet comes out, goes
+    /// away, hatches or changes species. Mixed versions during a deploy:
+    /// absent reads as `None` and a species this build does not know
+    /// reads as `None` (the record still parses), and a replica a deploy
+    /// behind ignores the field.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "species_on_the_wire"
+    )]
+    pub pet_at_heel: Option<PetSpecies>,
+}
+
+/// A pet species as its `as_str` on the wire, read back leniently: a
+/// species this build has never heard of is no pet, never a record that
+/// fails to parse (which would drop the whole batch it came in).
+mod species_on_the_wire {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::models::pet::PetSpecies;
+
+    pub(super) fn serialize<S: Serializer>(
+        species: &Option<PetSpecies>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        species.map(PetSpecies::as_str).serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<PetSpecies>, D::Error> {
+        let raw = Option::<String>::deserialize(deserializer)?;
+        Ok(raw.as_deref().and_then(PetSpecies::parse))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -38,6 +38,7 @@ use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdit
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
+use crate::app::pet::svc::{PetAction, PetActionResult, TreatBeat, VisitBeat};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::presence::svc::PulseSampleOutcome;
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
@@ -912,6 +913,7 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+    use super::{PetAction, PetActionResult, TreatBeat, VisitBeat};
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -1296,6 +1298,98 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_bonsai_actions_total")
                 .with_description("Bonsai care actions, by action and how they settled")
+                .build()
+        })
+    }
+
+    fn pet_action_label(action: PetAction) -> &'static str {
+        match action {
+            PetAction::Pat => "pat",
+            PetAction::CountDay => "count_day",
+            PetAction::Hatch => "hatch",
+            PetAction::Grow => "grow",
+            PetAction::Earn => "earn",
+            PetAction::Give => "give",
+            PetAction::Play => "play",
+            PetAction::Practice => "practice",
+            PetAction::SeenVisits => "seen_visits",
+            PetAction::Species => "species",
+            PetAction::Reset => "reset",
+            PetAction::VisitPat => "visit_pat",
+            PetAction::VisitCall => "visit_call",
+        }
+    }
+
+    fn pet_action_result_label(result: PetActionResult) -> &'static str {
+        match result {
+            PetActionResult::Stored => "stored",
+            PetActionResult::Refused => "refused",
+            PetActionResult::Failed => "failed",
+        }
+    }
+
+    fn pet_treat_beat_label(beat: TreatBeat) -> &'static str {
+        match beat {
+            TreatBeat::Earned => "earned",
+            TreatBeat::Given => "given",
+            TreatBeat::Refused => "refused",
+        }
+    }
+
+    fn pet_visit_beat_label(beat: VisitBeat) -> &'static str {
+        match beat {
+            VisitBeat::Pat => "pat",
+            VisitBeat::Call => "call",
+            VisitBeat::Refused => "refused",
+        }
+    }
+
+    fn pet_actions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_actions_total")
+                .with_description("Pet commands and visits, by action and how they settled")
+                .build()
+        })
+    }
+
+    fn pet_days_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_days_total")
+                .with_description("Days together counted: an owner's first key of a UTC day")
+                .build()
+        })
+    }
+
+    fn pet_stage_ups_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_stage_ups_total")
+                .with_description("Pets entering a stage, by the stage entered")
+                .build()
+        })
+    }
+
+    fn pet_treats_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_treats_total")
+                .with_description("Pet treats, by kind and beat (earned, given, refused)")
+                .build()
+        })
+    }
+
+    fn pet_visits_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pet_visits_total")
+                .with_description("Visits to someone else's pet, by beat (pat, call, refused)")
                 .build()
         })
     }
@@ -3766,6 +3860,38 @@ mod inner {
         );
     }
 
+    pub fn record_pet_action(action: PetAction, result: PetActionResult) {
+        pet_actions_total().add(
+            1,
+            &[
+                KeyValue::new("action", pet_action_label(action)),
+                KeyValue::new("result", pet_action_result_label(result)),
+            ],
+        );
+    }
+
+    pub fn record_pet_day() {
+        pet_days_total().add(1, &[]);
+    }
+
+    pub fn record_pet_stage_up(stage: late_core::models::pet::Stage) {
+        pet_stage_ups_total().add(1, &[KeyValue::new("stage", stage.as_str())]);
+    }
+
+    pub fn record_pet_treat(kind: late_core::models::pet::TreatKind, beat: TreatBeat) {
+        pet_treats_total().add(
+            1,
+            &[
+                KeyValue::new("kind", kind.as_str()),
+                KeyValue::new("beat", pet_treat_beat_label(beat)),
+            ],
+        );
+    }
+
+    pub fn record_pet_visit(beat: VisitBeat) {
+        pet_visits_total().add(1, &[KeyValue::new("beat", pet_visit_beat_label(beat))]);
+    }
+
     /// A settled round. The price is burned whole, and the
     /// drinks are counted separately from the rounds because the interesting
     /// number is how many of them ever get drunk.
@@ -4825,6 +4951,7 @@ mod inner {
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+    use super::{PetAction, PetActionResult, TreatBeat, VisitBeat};
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -4955,6 +5082,11 @@ mod inner {
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub(crate) fn record_chat_send_refused(_refusal: &SendRefusal) {}
     pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
+    pub fn record_pet_action(_action: PetAction, _result: PetActionResult) {}
+    pub fn record_pet_day() {}
+    pub fn record_pet_stage_up(_stage: late_core::models::pet::Stage) {}
+    pub fn record_pet_treat(_kind: late_core::models::pet::TreatKind, _beat: TreatBeat) {}
+    pub fn record_pet_visit(_beat: VisitBeat) {}
     pub fn record_round_bought(_patrons: i64, _chips: i64) {}
     pub fn record_round_refused(_refusal: RoundRefusal) {}
     pub fn record_gift_drink_bought(_chips: i64) {}

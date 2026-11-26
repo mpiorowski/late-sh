@@ -42,7 +42,7 @@ before it when selected. Each tile keeps independent session-only playback in
 clears playback; resizing and overlays preserve it and its timer. Only
 the selection is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
-changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the dock, `common/music_dock.rs::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
+changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn as the profile portrait; its top row, `pet::ui::status_line`, reads `name title · stage · day N · mood` as far as the width allows, led by what the pet waits on, and a pouch row under the box holds its waiting treat; the mood is inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle), and everything else about the pet (stages, treats, tricks, the care box, the `/pet` commands) is `pet/CONTEXT.md`; when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it is the pet's (`pet::input::handle_click`: the care box for a pet with a pick waiting, pat, give a treat; the first pat of the UTC day pays 100 chips) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); a right click on the tile opens its care box; while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the dock, `common/music_dock.rs::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the latest tables on the
 board, newest change first: open challenges, matches by their last move,
 unseen results, each `○ chess srw 2m` with the state as the marker and the
@@ -154,19 +154,25 @@ arrange mode the bottom row is the key footer,
 `App::home_tiles_area` and `App::home_tile_rects`, from the same pure
 functions the renderer uses. The stock
 Home (`RiceLayout::home`) is fixed and the same for every account: the
-room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
-chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip and kept to
+room rail (`rooms`, `HOME_RAIL_COLS`), a band across the top of the
+chat (`HOME_AQUARIUM_ROWS`), the reef (`aquarium`) hosting the now strip on
+two thirds of it (`HOME_REEF_SHARE`) and the `pet` on the last, both kept to
 #lounge (below, Tiles kept to a room), the chat
 under it (a `chat` bound to no room, so it shows the rail's; a stored
 `center` reads as one), and the stock right column (`HOME_RIGHT_COLS`):
 `presence`, then `visualizer` (the band's three rows), `music` (the dock's
 thirteen), `lobby` hosting attention (four rows: two tables over the status
-line and the keys), `live` at its panel rows, `pet` (its three-row box, no mood row) and
-`bonsai` taking the rest. The rail, the reef and `presence` take their
+line and the keys), `live` at its panel rows and
+`bonsai` taking the rest. The pet has the glass on its left, so it goes and
+watches the fish, and its box is tall enough for its status row, its pouch
+row and a guest's name; under about ninety columns its third is narrower
+than the pet and only the status row draws. The rail, the reef, the pet and
+`presence` take their
 title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
-reef keeps the row for water, so nothing moves when the mode comes up, and
-`presence` gets both its rows. An unowned
-pet, or one its owner put away (the Shop's `o`), draws the shop's note in its tile. `R` resets to the stock. Nothing about the terminal's size
+band keeps the row for water and floor, so nothing moves when the mode comes
+up, and `presence` gets both its rows. The stock is what a new device and `R`
+get: a device keeps the `home` it already stored. A pet its owner put away (`/pet away`)
+draws a note in its tile saying `/pet out` brings it back. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
 arranges its own Home once and keeps it on its key.
 
@@ -190,8 +196,9 @@ other name with a banner (`Layouts::stock_of` is `None` for them,
 `LayoutsError::NoStock`). The status line's care click loads the layout
 named `home` (`zen::input::open_care`, `/layout home` by another
 route: Home first, and the `No layout by that name or number` banner on
-a device that deleted it). With the tank due it also takes the chat to the
-room the reef keeps to, so the click lands on a reef it can feed. Names are trimmed, one to
+a device that deleted it). With the tank or the pet due it also takes the
+chat to the room that tile keeps to, so the click lands on a reef it can feed
+or a pet it can pat. Names are trimmed, one to
 `MAX_LAYOUT_NAME_CHARS` (16) characters, unique case aside. Nothing
 switches a layout but the keys, `/layout` and the care click: not
 `/golive`, not a game waiting, not the screensaver, not the landing
@@ -213,7 +220,7 @@ table with the handler, `TileHint`): a house key the tile only names
 (`HouseKey`: `w tend`, `m mute`, `ctrl+/ room`, `^G open`, `s1-4 open`,
 `click pet`, `click feed`) on every tile, and a key the tile takes itself (`TileKey`:
 `[ ] Enter pick` on an ascii tile, `a feed` on the reef or tank, `[ ]
-cycle` on a chat, and `j k Enter act` for the attention guest,
+cycle` on a chat, `Enter care` on the pet (its care box, only while a pet is out), and `j k Enter act` for the attention guest,
 `Guest::hints`) only on the focused one. The rail names none: it takes
 clicks on its rows. A layout with
 a border (the stock `street`, or `b` in
@@ -294,8 +301,8 @@ anywhere else the tile goes down and its sibling takes its cells, so a reef
 and a pet kept to #lounge leave the chat their rows in every other room. The
 page only reflows on a room change, when the messages change anyway.
 
-- The stock reef keeps to #lounge by slug (`REEF_ROOM`, `Node::only_in`), and so
-  it takes the now strip it hosts with it. A device from before that gets the
+- The stock reef and the pet beside it keep to #lounge by slug (`REEF_ROOM`,
+  `Node::only_in`), and so the reef takes the now strip it hosts with it. A device from before that gets the
   same once on its next login (`Layouts::seed_stock`, `RiceLayout::keep_reefs_to_lounge`,
   a `stock_seen` mark): every reef still in every room, on any layout with a
   chat; a page with no chat keeps its reef, since nothing would take its space.
@@ -344,9 +351,9 @@ Every row is a fact the session already holds, and every row clears on the act t
 | `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | Enter on the row, its message rendering in its room, or opening Mentions: each stamps `read_at`, the one read signal |
 | the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, a click or `a` on the tank |
 | the tree is unwatered today | `last_watered` is not today | watering |
-| the pet is unpetted today | the pet is out (`App::pet_out`: owned, not put away) and not petted today | a pat |
+| the pet is unpetted today | the pet is out (`App::pet_out`: not put away) and not petted today | a pat |
 
-Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), an unowned or put-away pet is never due; everyone has a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
+Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), a put-away pet is never due; everyone has a pet, a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
 
 ### Not built
 
@@ -525,8 +532,9 @@ saves the page as a new one (`presets::LayoutCommand`,
 `zen::input::run_layout_command`; a banner names the digit it got).
 Every form walks Home first (`go_home_for_layouts`).
 
-The pet has no key: it is petted with a left click and reads the rest of
-the session itself. The tank takes the same click as its meal
+The pet has no key outside arrange mode: a left click is its gesture
+(hatch, pat, a treat), a right click on its tile opens its care box, and
+it reads the rest of the session itself. The tank takes the same click as its meal
 (`handle_tank_click`, before the tile focus like the pet's). The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row (`-`,
 Companions), never a page key: dedicated keys accumulate and collide, and

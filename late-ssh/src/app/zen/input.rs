@@ -367,18 +367,22 @@ pub(crate) fn load_home_layout(app: &mut App) {
     );
 }
 
-/// The status line's care click: the `home` layout and, with the tank due,
-/// the chat in the room the reef keeps to, so the click lands on a reef that
-/// can take the meal.
+/// The status line's care click: the `home` layout and, with the tank or the
+/// pet due, the chat in the room that tile keeps to, so the click lands on a
+/// reef that can take the meal or a pet that can take the pat.
 pub(crate) fn open_care(app: &mut App) {
     load_home_layout(app);
-    if app.care_today().tank != Chore::Due {
-        return;
-    }
-    let Some(reef) = app.home.first_tile_of(TileKind::Aquarium) else {
+    let care = app.care_today();
+    let waiting = [(care.tank, TileKind::Aquarium), (care.pet, TileKind::Pet)]
+        .into_iter()
+        .find(|(chore, _)| *chore == Chore::Due);
+    let Some((_, kind)) = waiting else {
         return;
     };
-    let only = app.home.rice.root.only_at(reef);
+    let Some(tile) = app.home.first_tile_of(kind) else {
+        return;
+    };
+    let only = app.home.rice.root.only_at(tile);
     match only.joined_room(&app.chat.rooms).map(|room| room.id) {
         Some(room_id) if app.home_chat_room_id() != Some(room_id) => {
             pick_for_active_chat(app, RoomSlot::Room(room_id));
@@ -551,6 +555,15 @@ fn act(app: &mut App, key: TileKey, byte: u8) -> bool {
         TileKey::CycleRoom => {
             cycle_room(app, if byte == b']' { 1 } else { -1 });
             true
+        }
+        // With the pet put away the tile holds a note and Enter is the
+        // page's.
+        TileKey::Care => {
+            let out = app.pet_out();
+            if out {
+                crate::app::pet::input::open_care(app);
+            }
+            out
         }
     }
 }
