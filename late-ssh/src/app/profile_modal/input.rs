@@ -34,6 +34,12 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
             MouseEventKind::Down if clicked_outside(app, &mouse) => close(app),
             _ => {}
         },
+        ParsedInput::Byte(b'p' | b'P') | ParsedInput::Char('p' | 'P') => {
+            visit_pet(app, late_core::models::pet::VisitKind::Pat);
+        }
+        ParsedInput::Byte(b'v' | b'V') | ParsedInput::Char('v' | 'V') => {
+            visit_pet(app, late_core::models::pet::VisitKind::Call);
+        }
         ParsedInput::PageDown => {
             let step = (app.size.1 / 2).max(1) as i16;
             app.profile_modal_state.scroll_by(step);
@@ -44,6 +50,20 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         }
         _ => {}
     }
+}
+
+/// Pay the pet on the viewed profile a visit: a pat, or this user's own
+/// pet sent over. Only for someone else's pet that is out; the pet's
+/// service claims the visit and its answer comes back as a banner.
+fn visit_pet(app: &mut App, kind: late_core::models::pet::VisitKind) {
+    let state = &app.profile_modal_state;
+    if state.viewing_own() || state.pet().is_none() {
+        return;
+    }
+    let Some(owner_id) = state.viewed_user_id() else {
+        return;
+    };
+    app.pet_state.visit(owner_id, kind);
 }
 
 pub(crate) fn handle_escape(app: &mut App) {

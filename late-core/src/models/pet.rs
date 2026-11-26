@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
@@ -15,17 +15,38 @@ crate::user_scoped_model! {
     struct PetCompanion {
         @data
         pub user_id: Uuid,
-        pub adopted_at: Option<DateTime<Utc>>,
         pub name: Option<String>,
         pub species: String,
         pub mood: String,
         pub mood_since: DateTime<Utc>,
         // The last UTC day the owner petted it: the daily chip gate.
         pub last_petted: Option<NaiveDate>,
-        // The owner's switch: false puts the pet away while it stays bought.
+        // The owner's switch: false puts the pet away and it keeps everything.
         pub enabled: bool,
+        // The growth, written only by `PetCompanion::store` under
+        // `PetCompanion::lock`. Read the closed sets through the typed
+        // accessors (`form`, `stage`, `tricks`, `learning`).
+        pub days_together: i32,
+        pub last_day: Option<NaiveDate>,
+        pub stage: String,
+        // The drawings picked on the way up, in order; read with `stage`
+        // through `form`.
+        pub looks: Vec<String>,
+        pub bond_days: i32,
+        pub last_bond_day: Option<NaiveDate>,
+        pub tricks: Vec<String>,
+        pub learning: Option<String>,
+        pub learning_days: i32,
+        pub last_practice: Option<NaiveDate>,
+        // Visits made after this are the ones the owner has not looked at.
+        pub visits_seen_at: DateTime<Utc>,
+        pub revision: i64,
     }
 }
+
+/// Carries the owner's user id as its payload: the row is re-read by
+/// whoever cares, never trusted from a serialized copy.
+pub const PET_CHANGED_CHANNEL: &str = "pet_changed";
 
 /// Maximum length of a user-set pet name.
 pub const PET_NAME_MAX_CHARS: usize = 24;
@@ -67,20 +88,11 @@ impl PetSpecies {
             _ => None,
         }
     }
-
-    /// The Shop's `t` key walks this ring.
-    pub fn next(self) -> Self {
-        match self {
-            PetSpecies::Cat => PetSpecies::Dog,
-            PetSpecies::Dog => PetSpecies::Bird,
-            PetSpecies::Bird => PetSpecies::Cat,
-        }
-    }
 }
 
 /// How the pet feels: what its owner's session has been doing, read as a
 /// creature would. Ordered by precedence, first wins (`PetMood::ALL`); the
-/// windows and the reading live in `late-ssh/src/app/pet/state.rs`.
+/// windows and the reading live in `late-ssh/src/app/pet/session.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PetMood {
     /// Just petted (a click on it).
@@ -136,93 +148,315 @@ impl PetMood {
     }
 }
 
-/// Life stage of the pet, derived from how many days it has existed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LifeStage {
+/// How grown the pet is. Closed and ordered: the database checks the column
+/// against this list, and a pet only ever moves to the next one. The days
+/// each asks for and the rules of moving live in
+/// `late-ssh/src/app/pet/state.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    Egg,
+    Baby,
     Young,
-    Junior,
     Adult,
-    Senior,
+    Elder,
 }
 
-impl LifeStage {
-    /// Species-aware display label for use in the modal title and elsewhere.
-    pub fn label(self, species: PetSpecies) -> &'static str {
-        match (species, self) {
-            (PetSpecies::Cat, LifeStage::Young) => "Kitten",
-            (PetSpecies::Cat, LifeStage::Junior) => "Young Cat",
-            (PetSpecies::Cat, LifeStage::Adult) => "Adult",
-            (PetSpecies::Cat, LifeStage::Senior) => "Wise Old Cat",
-            (PetSpecies::Dog, LifeStage::Young) => "Puppy",
-            (PetSpecies::Dog, LifeStage::Junior) => "Young Dog",
-            (PetSpecies::Dog, LifeStage::Adult) => "Adult Dog",
-            (PetSpecies::Dog, LifeStage::Senior) => "Senior Dog",
-            (PetSpecies::Bird, LifeStage::Young) => "Chick",
-            (PetSpecies::Bird, LifeStage::Junior) => "Fledgling",
-            (PetSpecies::Bird, LifeStage::Adult) => "Adult Bird",
-            (PetSpecies::Bird, LifeStage::Senior) => "Old Bird",
+impl Stage {
+    pub const ALL: [Stage; 5] = [
+        Stage::Egg,
+        Stage::Baby,
+        Stage::Young,
+        Stage::Adult,
+        Stage::Elder,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Egg => "egg",
+            Stage::Baby => "baby",
+            Stage::Young => "young",
+            Stage::Adult => "adult",
+            Stage::Elder => "elder",
         }
     }
 
-    /// Stage bucket for a given age in days. Negative inputs are treated as 0.
-    pub fn from_age_days(days: i64) -> Self {
-        match days.max(0) {
-            0..=6 => LifeStage::Young,
-            7..=29 => LifeStage::Junior,
-            30..=179 => LifeStage::Adult,
-            _ => LifeStage::Senior,
+    pub fn parse(value: &str) -> Option<Self> {
+        Stage::ALL.into_iter().find(|stage| stage.as_str() == value)
+    }
+
+    /// The stage after this one, `None` for an elder.
+    pub fn next(self) -> Option<Self> {
+        match self {
+            Stage::Egg => Some(Stage::Baby),
+            Stage::Baby => Some(Stage::Young),
+            Stage::Young => Some(Stage::Adult),
+            Stage::Adult => Some(Stage::Elder),
+            Stage::Elder => None,
         }
     }
 }
 
-/// Pet age in whole days. Clamped at 0 so freshly-created or future-dated
-/// rows count as "today" rather than panicking the renderer with negatives.
-pub fn pet_age_days(created: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
-    (now - created).num_days().max(0)
+/// One of the two drawings offered for a part when a pet grows. What each
+/// draws depends on the animal and the part: `late-ssh/src/app/pet/ui.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pick {
+    One,
+    Two,
 }
 
-/// Timestamp used for pet age. Purchased pets age from adoption; pre-adoption
-/// fallback states still use row creation so the UI can render sensibly.
-pub fn pet_age_anchor(created: DateTime<Utc>, adopted_at: Option<DateTime<Utc>>) -> DateTime<Utc> {
-    adopted_at.unwrap_or(created)
+impl Pick {
+    pub const ALL: [Pick; 2] = [Pick::One, Pick::Two];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Pick::One => "one",
+            Pick::Two => "two",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Pick::ALL.into_iter().find(|pick| pick.as_str() == value)
+    }
 }
 
-/// Human-readable age label that pairs naturally with a life-stage label,
-/// e.g. "today", "3 days", "2 weeks", "5 months", "1 year".
-pub fn pet_age_label(created: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let days = pet_age_days(created, now);
-    if days < 1 {
-        return "today".to_string();
+/// A pet's stage together with the drawings picked on the way to it: the
+/// top (ears or crest) on becoming young, the feet on becoming adult, the
+/// face on becoming elder. A stage cannot be held without its picks, and
+/// the database checks the two columns agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    Egg,
+    Baby,
+    Young { top: Pick },
+    Adult { top: Pick, feet: Pick },
+    Elder { top: Pick, feet: Pick, face: Pick },
+}
+
+impl Form {
+    pub fn stage(self) -> Stage {
+        match self {
+            Form::Egg => Stage::Egg,
+            Form::Baby => Stage::Baby,
+            Form::Young { .. } => Stage::Young,
+            Form::Adult { .. } => Stage::Adult,
+            Form::Elder { .. } => Stage::Elder,
+        }
     }
-    if days < 14 {
-        return if days == 1 {
-            "1 day".to_string()
-        } else {
-            format!("{days} days")
-        };
+
+    /// The picks made so far, in the order they were made.
+    pub fn picks(self) -> Vec<Pick> {
+        match self {
+            Form::Egg | Form::Baby => Vec::new(),
+            Form::Young { top } => vec![top],
+            Form::Adult { top, feet } => vec![top, feet],
+            Form::Elder { top, feet, face } => vec![top, feet, face],
+        }
     }
-    if days < 30 {
-        let weeks = days / 7;
-        return if weeks == 1 {
-            "1 week".to_string()
-        } else {
-            format!("{weeks} weeks")
-        };
+
+    /// The form a stage and its picks make, `None` when they do not fit.
+    pub fn from_parts(stage: Stage, picks: &[Pick]) -> Option<Self> {
+        match (stage, picks) {
+            (Stage::Egg, []) => Some(Form::Egg),
+            (Stage::Baby, []) => Some(Form::Baby),
+            (Stage::Young, &[top]) => Some(Form::Young { top }),
+            (Stage::Adult, &[top, feet]) => Some(Form::Adult { top, feet }),
+            (Stage::Elder, &[top, feet, face]) => Some(Form::Elder { top, feet, face }),
+            (Stage::Egg | Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder, _) => None,
+        }
     }
-    if days < 365 {
-        let months = days / 30;
-        return if months == 1 {
-            "1 month".to_string()
-        } else {
-            format!("{months} months")
-        };
+
+    /// The form one stage on, drawn with `pick` for the part that stage
+    /// adds. `None` for an egg (it hatches, as an animal) and an elder.
+    pub fn grown(self, pick: Pick) -> Option<Self> {
+        match self {
+            Form::Egg | Form::Elder { .. } => None,
+            Form::Baby => Some(Form::Young { top: pick }),
+            Form::Young { top } => Some(Form::Adult { top, feet: pick }),
+            Form::Adult { top, feet } => Some(Form::Elder {
+                top,
+                feet,
+                face: pick,
+            }),
+        }
     }
-    let years = days / 365;
-    if years == 1 {
-        "1 year".to_string()
-    } else {
-        format!("{years} years")
+}
+
+/// What a treat was earned by: one kind per family of the house's games.
+/// Closed: the database checks `pet_treats.kind` against this list. The
+/// mapping from a game lives in `late-ssh/src/app/pet/state.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TreatKind {
+    /// A won Arcade board, daily or personal.
+    Puzzle,
+    /// A finished score run.
+    Arcade,
+    /// A won match against another member.
+    Match,
+    /// A win at a house table.
+    Table,
+    /// Ten active minutes in a door, or a door's ending.
+    Door,
+}
+
+impl TreatKind {
+    pub const ALL: [TreatKind; 5] = [
+        TreatKind::Puzzle,
+        TreatKind::Arcade,
+        TreatKind::Match,
+        TreatKind::Table,
+        TreatKind::Door,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TreatKind::Puzzle => "puzzle",
+            TreatKind::Arcade => "arcade",
+            TreatKind::Match => "match",
+            TreatKind::Table => "table",
+            TreatKind::Door => "door",
+        }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        TreatKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+    }
+}
+
+/// A trick a pet can be taught. Closed: the database checks
+/// `pet_companions.tricks` and `learning` against this list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trick {
+    Spin,
+    Bow,
+    Hop,
+    Dance,
+}
+
+impl Trick {
+    pub const ALL: [Trick; 4] = [Trick::Spin, Trick::Bow, Trick::Hop, Trick::Dance];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Trick::Spin => "spin",
+            Trick::Bow => "bow",
+            Trick::Hop => "hop",
+            Trick::Dance => "dance",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Trick::ALL.into_iter().find(|trick| trick.as_str() == value)
+    }
+}
+
+/// How someone else came to a pet. Closed: the database checks
+/// `pet_visits.kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisitKind {
+    /// A pat from the pet's profile.
+    Pat,
+    /// The visitor's own pet came calling.
+    Call,
+}
+
+impl VisitKind {
+    pub const ALL: [VisitKind; 2] = [VisitKind::Pat, VisitKind::Call];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VisitKind::Pat => "pat",
+            VisitKind::Call => "call",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        VisitKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+    }
+}
+
+/// Everything `PetCompanion::store` writes: the growth and nothing else.
+/// The name, the species, the mood, the switch and the daily pat are their
+/// own single-column writes and never ride a stored copy. No revision: the
+/// row owns that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PetGrowthWrite {
+    pub user_id: Uuid,
+    pub days_together: i32,
+    pub last_day: Option<NaiveDate>,
+    pub form: Form,
+    pub bond_days: i32,
+    pub last_bond_day: Option<NaiveDate>,
+    pub tricks: Vec<Trick>,
+    pub learning: Option<Trick>,
+    pub learning_days: i32,
+    pub last_practice: Option<NaiveDate>,
+}
+
+/// The last treat the pet was given, and the UTC day it ate it. The day it
+/// names is the day the pet goes by the treat's title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fed {
+    pub kind: TreatKind,
+    pub on: NaiveDate,
+}
+
+/// What asking for a treat came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreatEarned {
+    /// The day's treat waits in the pouch.
+    Earned,
+    /// The day's treat was already earned, of whatever kind.
+    AlreadyToday,
+    /// An earlier treat still waits to be given.
+    Waiting,
+}
+
+/// A visit the owner has not looked at yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PetVisitor {
+    pub visitor_id: Uuid,
+    pub username: String,
+    pub kind: VisitKind,
+    pub at: DateTime<Utc>,
+}
+
+/// A pet staying with another: the caller's pet, as it looks now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PetGuest {
+    pub visitor_id: Uuid,
+    /// Its owner's username.
+    pub username: String,
+    pub species: PetSpecies,
+    pub form: Form,
+    pub name: Option<String>,
+    /// When it came.
+    pub since: DateTime<Utc>,
+}
+
+/// Where a user's own pet went calling: its host's username, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PetStay {
+    pub host: String,
+    pub since: DateTime<Utc>,
+}
+
+/// The `kind` column of a `pet_treats` row.
+fn treat_kind(row: &tokio_postgres::Row) -> TreatKind {
+    TreatKind::parse(row.get("kind")).expect("treat kind is checked by the database")
+}
+
+/// The `stage` and `looks` columns of a `pet_companions` row, read as one.
+fn form_of(stage: &str, looks: &[String]) -> Form {
+    let stage = Stage::parse(stage).expect("pet stage is checked by the database");
+    let picks: Vec<Pick> = looks
+        .iter()
+        .map(|pick| Pick::parse(pick).expect("pet looks are checked by the database"))
+        .collect();
+    Form::from_parts(stage, &picks).expect("pet looks fit the stage, checked by the database")
 }
 
 /// Normalise a candidate pet name. Trims surrounding whitespace, collapses
@@ -270,14 +504,25 @@ impl PetCompanion {
         Ok(())
     }
 
-    pub async fn set_species(client: &Client, user_id: Uuid, species: PetSpecies) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions SET species = $1, updated = current_timestamp WHERE user_id = $2",
-                &[&species.as_str(), &user_id],
+    /// What the pet is: picked at the hatch, changed by its owner after.
+    /// Call it only while holding `lock`; it counts as a stored write
+    /// (`revision`, like `touch`). Returns the row as it stands.
+    pub async fn set_species(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        species: PetSpecies,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE pet_companions
+                 SET species = $2, revision = revision + 1, updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[&user_id, &species.as_str()],
             )
-            .await?;
-        Ok(())
+            .await
+            .context("setting the pet's species")?;
+        Ok(Self::from(row))
     }
 
     /// Bring the pet out or put it away.
@@ -339,12 +584,359 @@ impl PetCompanion {
         Ok(())
     }
 
-    /// Life stage for this pet at the given `now`, derived from adoption when
-    /// available and row creation otherwise.
-    pub fn life_stage(&self, now: DateTime<Utc>) -> LifeStage {
-        LifeStage::from_age_days(pet_age_days(
-            pet_age_anchor(self.created, self.adopted_at),
-            now,
-        ))
+    /// The row's stage, same contract as [`PetCompanion::species`].
+    pub fn stage(&self) -> Stage {
+        Stage::parse(&self.stage).expect("pet stage is checked by the database")
+    }
+
+    /// The stage with the drawings picked on the way to it.
+    pub fn form(&self) -> Form {
+        form_of(&self.stage, &self.looks)
+    }
+
+    /// The tricks it knows, in the order it learned them.
+    pub fn tricks(&self) -> Vec<Trick> {
+        self.tricks
+            .iter()
+            .map(|trick| Trick::parse(trick).expect("pet tricks are checked by the database"))
+            .collect()
+    }
+
+    /// The trick being taught, if any.
+    pub fn learning(&self) -> Option<Trick> {
+        self.learning
+            .as_deref()
+            .map(|trick| Trick::parse(trick).expect("pet learning is checked by the database"))
+    }
+
+    /// Take the owner's row lock for the rest of the transaction. Every
+    /// growth write happens behind this lock: the caller reads the row,
+    /// applies one rule to it, and stores the result, so two sessions (or
+    /// two replicas) acting at once run one after the other on the same
+    /// truth.
+    pub async fn lock(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
+        let row = client
+            .query_one(
+                "SELECT * FROM pet_companions WHERE user_id = $1 FOR UPDATE",
+                &[&user_id],
+            )
+            .await
+            .context("locking pet companion")?;
+        Ok(Self::from(row))
+    }
+
+    /// Write the growth back. Call it only while holding `lock`. Bumps
+    /// `revision`, like every stored write.
+    pub async fn store(client: &impl GenericClient, write: PetGrowthWrite) -> Result<Self> {
+        let tricks: Vec<&str> = write.tricks.iter().map(|trick| trick.as_str()).collect();
+        let looks: Vec<&str> = write.form.picks().into_iter().map(Pick::as_str).collect();
+        let row = client
+            .query_one(
+                "UPDATE pet_companions
+                 SET days_together = $2,
+                     last_day = $3,
+                     stage = $4,
+                     bond_days = $5,
+                     last_bond_day = $6,
+                     tricks = $7,
+                     learning = $8,
+                     learning_days = $9,
+                     last_practice = $10,
+                     looks = $11,
+                     revision = revision + 1,
+                     updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[
+                    &write.user_id,
+                    &write.days_together,
+                    &write.last_day,
+                    &write.form.stage().as_str(),
+                    &write.bond_days,
+                    &write.last_bond_day,
+                    &tricks,
+                    &write.learning.map(Trick::as_str),
+                    &write.learning_days,
+                    &write.last_practice,
+                    &looks,
+                ],
+            )
+            .await
+            .context("storing pet growth")?;
+        Ok(Self::from(row))
+    }
+
+    /// Count a write that changed something a mirror shows outside the
+    /// growth columns (the pat's day, the pouch, a visit), so every stored
+    /// snapshot of a pet is ordered by `revision`. Returns the row as it
+    /// stands.
+    pub async fn touch(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE pet_companions
+                 SET revision = revision + 1, updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[&user_id],
+            )
+            .await
+            .context("touching pet companion")?;
+        Ok(Self::from(row))
+    }
+
+    /// The owner looked at who came by: visits up to now are seen. Call it
+    /// only while holding `lock`; it counts as a stored write.
+    pub async fn mark_visits_seen(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE pet_companions
+                 SET visits_seen_at = current_timestamp,
+                     revision = revision + 1,
+                     updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[&user_id],
+            )
+            .await
+            .context("marking pet visits seen")?;
+        Ok(Self::from(row))
+    }
+
+    /// `user_id`'s pet, when it has one and has it out. A read without the
+    /// row lock.
+    pub async fn find_out(client: &impl GenericClient, user_id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM pet_companions WHERE user_id = $1 AND enabled",
+                &[&user_id],
+            )
+            .await
+            .context("reading a pet that is out")?;
+        Ok(row.map(Self::from))
+    }
+
+    /// Tell every replica this owner's pet moved. Sent inside the writing
+    /// transaction, so it is delivered on commit and never for a rollback.
+    pub async fn notify_changed(client: &impl GenericClient, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "SELECT pg_notify($1, $2)",
+                &[&PET_CHANGED_CHANNEL, &user_id.to_string()],
+            )
+            .await
+            .context("notifying pet change")?;
+        Ok(())
+    }
+
+    /// Tell the owners `visitor_id`'s pet is staying with (calls made after
+    /// `since`) that their box changed: a guest that was renamed, put away,
+    /// changed animal, grew or started over is drawn from its own row.
+    pub async fn notify_hosts(
+        client: &impl GenericClient,
+        visitor_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<()> {
+        client
+            .execute(
+                "SELECT pg_notify($1, owner_id::text)
+                 FROM pet_visits
+                 WHERE visitor_id = $2 AND kind = 'call' AND created > $3",
+                &[&PET_CHANGED_CHANNEL, &visitor_id, &since],
+            )
+            .await
+            .context("notifying a pet's hosts")?;
+        Ok(())
+    }
+
+    /// Ask for the treat of `today`, earned in `kind`'s family of games.
+    /// The insert is the claim: the primary key refuses a second treat this
+    /// UTC day, whatever its kind, and the partial unique index refuses one
+    /// while another still waits. The read after it only names why nothing
+    /// was earned.
+    pub async fn earn_treat(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        kind: TreatKind,
+        today: NaiveDate,
+    ) -> Result<TreatEarned> {
+        let earned = client
+            .execute(
+                "INSERT INTO pet_treats (user_id, kind, earned_on)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT DO NOTHING",
+                &[&user_id, &kind.as_str(), &today],
+            )
+            .await
+            .context("earning a pet treat")?;
+        if earned == 1 {
+            return Ok(TreatEarned::Earned);
+        }
+        match Self::waiting_treat(client, user_id).await? {
+            Some(_) => Ok(TreatEarned::Waiting),
+            None => Ok(TreatEarned::AlreadyToday),
+        }
+    }
+
+    /// Give the treat waiting in the owner's pouch. `None` when none waits.
+    pub async fn give_treat(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<Option<TreatKind>> {
+        let given = client
+            .query_opt(
+                "UPDATE pet_treats
+                 SET given_on = $2
+                 WHERE user_id = $1 AND given_on IS NULL
+                 RETURNING kind",
+                &[&user_id, &today],
+            )
+            .await
+            .context("giving a pet treat")?;
+        Ok(given.map(|row| treat_kind(&row)))
+    }
+
+    /// The treat waiting in the owner's pouch, if one does.
+    pub async fn waiting_treat(
+        client: &impl GenericClient,
+        user_id: Uuid,
+    ) -> Result<Option<TreatKind>> {
+        let waiting = client
+            .query_opt(
+                "SELECT kind FROM pet_treats WHERE user_id = $1 AND given_on IS NULL",
+                &[&user_id],
+            )
+            .await
+            .context("reading the waiting pet treat")?;
+        Ok(waiting.map(|row| treat_kind(&row)))
+    }
+
+    /// The last treat the owner gave, and the day it was eaten.
+    pub async fn last_fed(client: &impl GenericClient, user_id: Uuid) -> Result<Option<Fed>> {
+        let fed = client
+            .query_opt(
+                "SELECT kind, given_on FROM pet_treats
+                 WHERE user_id = $1 AND given_on IS NOT NULL
+                 ORDER BY given_on DESC, earned_on DESC
+                 LIMIT 1",
+                &[&user_id],
+            )
+            .await
+            .context("reading the last pet treat given")?;
+        Ok(fed.map(|row| Fed {
+            kind: treat_kind(&row),
+            on: row.get("given_on"),
+        }))
+    }
+
+    /// Claim a visit of `kind` by `visitor_id` to `owner_id`'s pet on
+    /// `day`. The insert is the claim: once per visitor, pet, kind and day,
+    /// and a pet goes calling once a day. False when it was already made.
+    pub async fn claim_visit(
+        client: &impl GenericClient,
+        owner_id: Uuid,
+        visitor_id: Uuid,
+        kind: VisitKind,
+        day: NaiveDate,
+    ) -> Result<bool> {
+        let claimed = client
+            .execute(
+                "INSERT INTO pet_visits (owner_id, visitor_id, day, kind)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT DO NOTHING",
+                &[&owner_id, &visitor_id, &day, &kind.as_str()],
+            )
+            .await
+            .context("claiming a pet visit")?;
+        Ok(claimed == 1)
+    }
+
+    /// The visits to `owner_id`'s pet made after `since`, newest first.
+    pub async fn visitors_since(
+        client: &impl GenericClient,
+        owner_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PetVisitor>> {
+        let rows = client
+            .query(
+                "SELECT v.visitor_id, u.username, v.kind, v.created
+                 FROM pet_visits v
+                 JOIN users u ON u.id = v.visitor_id
+                 WHERE v.owner_id = $1 AND v.created > $2
+                 ORDER BY v.created DESC
+                 LIMIT 20",
+                &[&owner_id, &since],
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| PetVisitor {
+                visitor_id: row.get("visitor_id"),
+                username: row.get("username"),
+                kind: VisitKind::parse(row.get("kind"))
+                    .expect("visit kind is checked by the database"),
+                at: row.get("created"),
+            })
+            .collect())
+    }
+
+    /// The pets that came calling on `owner_id`'s after `since`, newest
+    /// first, each as it looks now. One that has gone back into its egg or
+    /// been put away since is not a guest any more.
+    pub async fn guests_since(
+        client: &impl GenericClient,
+        owner_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<PetGuest>> {
+        let rows = client
+            .query(
+                "SELECT v.visitor_id, u.username, v.created,
+                        p.species, p.stage, p.looks, p.name
+                 FROM pet_visits v
+                 JOIN users u ON u.id = v.visitor_id
+                 JOIN pet_companions p ON p.user_id = v.visitor_id
+                 WHERE v.owner_id = $1 AND v.kind = 'call' AND v.created > $2
+                   AND p.enabled AND p.stage <> 'egg'
+                 ORDER BY v.created DESC",
+                &[&owner_id, &since],
+            )
+            .await
+            .context("reading a pet's guests")?;
+        Ok(rows
+            .iter()
+            .map(|row| PetGuest {
+                visitor_id: row.get("visitor_id"),
+                username: row.get("username"),
+                species: PetSpecies::parse(row.get("species"))
+                    .expect("pet species is checked by the database"),
+                form: form_of(row.get("stage"), &row.get::<_, Vec<String>>("looks")),
+                name: row.get("name"),
+                since: row.get("created"),
+            })
+            .collect())
+    }
+
+    /// Where `visitor_id`'s pet last went calling after `since`, if it did.
+    pub async fn stay_since(
+        client: &impl GenericClient,
+        visitor_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Option<PetStay>> {
+        let stay = client
+            .query_opt(
+                "SELECT u.username, v.created
+                 FROM pet_visits v
+                 JOIN users u ON u.id = v.owner_id
+                 WHERE v.visitor_id = $1 AND v.kind = 'call' AND v.created > $2
+                 ORDER BY v.created DESC
+                 LIMIT 1",
+                &[&visitor_id, &since],
+            )
+            .await
+            .context("reading where a pet went calling")?;
+        Ok(stay.map(|row| PetStay {
+            host: row.get("username"),
+            since: row.get("created"),
+        }))
     }
 }

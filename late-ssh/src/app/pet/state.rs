@@ -1,372 +1,374 @@
-use std::time::{Duration, Instant};
+//! The rules of a pet growing up, pure: no clock, no I/O. `PetService`
+//! loads a `Growth` from the locked row, applies one of these, and stores
+//! it; a session's mirror reads the same type to draw and never writes.
+//!
+//! Nothing here goes down. Days together are counted, never lost; a stage
+//! is entered and never left; a trick and a bond day are kept. Only the
+//! owner's own `reset` starts a pet over.
+//!
+//! The days make a pet ready for its next stage and its owner's pick
+//! enters it: the animal at the hatch, then one of two drawings of a part
+//! (`Form`).
 
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::pet::{
-    LifeStage, PetCompanion, PetMood, PetSpecies, pet_age_anchor, pet_age_label,
+    Fed, Form, PetCompanion, PetGrowthWrite, Pick, Stage, TreatKind, Trick,
 };
-use ratatui::layout::Rect;
 use uuid::Uuid;
 
-use super::svc::PetService;
+use crate::app::activity::event::GameFamily;
+use crate::app::common::primitives::Screen;
 
-/// How long each event mood lasts. A win outlasts a loss on purpose: the
-/// pet is an optimist.
-pub const PURR_FOR: Duration = Duration::from_secs(2 * 60);
-pub const PROUD_FOR: Duration = Duration::from_secs(30 * 60);
-pub const SULK_FOR: Duration = Duration::from_secs(10 * 60);
-pub const CHATTY_FOR: Duration = Duration::from_secs(10 * 60);
-/// No key from the owner for this long and the pet dozes off: well before
-/// the account reads as idle to anyone else.
-pub const ASLEEP_AFTER: Duration = Duration::from_secs(10 * 60);
+/// Separate UTC days of practice that teach a trick.
+pub const TRICK_DAYS: i32 = 3;
 
-/// Body width including the tail column, used to keep the pet inside its box.
-pub const PET_WIDTH: usize = 8;
-pub const PET_HEIGHT: usize = 3;
+/// Active seconds in one door, in a UTC day, that earn the day's treat.
+pub const DOOR_TREAT_SECONDS: u64 = 600;
 
-/// What the session has told the pet, as the moment each thing last
-/// happened. Nothing here is persisted: a fresh session starts blank, so
-/// the first tick reads idle (or asleep, for a session nobody touches).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MoodSignals {
-    /// A click on the pet.
-    pub petted: Option<Instant>,
-    /// Any win: a game, a daily match, a boss.
-    pub won: Option<Instant>,
-    /// Any loss: a death in a door game, a lost daily match.
-    pub lost: Option<Instant>,
-    /// A chat message of the owner's landed, in any room or DM.
-    pub spoke: Option<Instant>,
+/// Minutes a pet that went calling stays with its host.
+pub const STAY_MINUTES: i64 = 60;
+
+/// When a stay that is still running at `now` began, at the earliest.
+pub fn stays_since(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - chrono::Duration::minutes(STAY_MINUTES)
 }
 
-/// The session facts the tick hands over every time: they are read, not
-/// pushed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ambient {
-    /// The owner's last keystroke or click.
-    pub last_input: Instant,
-    /// A paired client is playing, unmuted.
-    pub music_playing: bool,
-}
-
-/// The one reading: precedence top to bottom (`PetMood::ALL`). Event moods
-/// hold for their window; sleep beats the music, since a pet dozing beside
-/// a radio is the honest picture of an owner who walked off.
-pub fn mood_at(signals: MoodSignals, ambient: Ambient, now: Instant) -> PetMood {
-    let within = |at: Option<Instant>, window: Duration| {
-        at.is_some_and(|at| now.saturating_duration_since(at) < window)
-    };
-    if within(signals.petted, PURR_FOR) {
-        PetMood::Purring
-    } else if within(signals.won, PROUD_FOR) {
-        PetMood::Proud
-    } else if within(signals.lost, SULK_FOR) {
-        PetMood::Sulking
-    } else if within(signals.spoke, CHATTY_FOR) {
-        PetMood::Chatty
-    } else if now.saturating_duration_since(ambient.last_input) >= ASLEEP_AFTER {
-        PetMood::Asleep
-    } else if ambient.music_playing {
-        PetMood::Vibing
-    } else {
-        PetMood::Idle
+/// The minutes a stay that began at `since` still has at `now`, the one
+/// under way counted whole. `None` once it is over.
+pub fn stay_left(since: DateTime<Utc>, now: DateTime<Utc>) -> Option<i64> {
+    let seconds = (since + chrono::Duration::minutes(STAY_MINUTES) - now).num_seconds();
+    match seconds > 0 {
+        true => Some((seconds + 59) / 60),
+        false => None,
     }
 }
 
-/// Where the pet's eyes point while it walks after the cursor.
+/// Days together a stage asks for. The day the pet arrives counts as the
+/// first, so an egg hatches from the day after.
+pub fn days_for(stage: Stage) -> i32 {
+    match stage {
+        Stage::Egg => 0,
+        Stage::Baby => 2,
+        Stage::Young => 7,
+        Stage::Adult => 30,
+        Stage::Elder => 100,
+    }
+}
+
+/// The kind of treat a win in `family` earns, when it is the day's first.
+/// Lateania's win is a mob kill, so it earns by its minutes only
+/// (`DOOR_TREAT_SECONDS`).
+pub fn treat_for_win(family: GameFamily) -> Option<TreatKind> {
+    match family {
+        GameFamily::ArcadeDaily => Some(TreatKind::Puzzle),
+        GameFamily::ArcadeScore => Some(TreatKind::Arcade),
+        GameFamily::Match => Some(TreatKind::Match),
+        GameFamily::Table => Some(TreatKind::Table),
+        GameFamily::Door => Some(TreatKind::Door),
+        GameFamily::Lateania => None,
+    }
+}
+
+/// Whether `screen` is a door: a game the owner goes into, whose minutes
+/// count toward the door treat. The Games hub is the hallway, not a door.
+pub fn is_door(screen: Screen) -> bool {
+    match screen {
+        Screen::Lateania
+        | Screen::Rebels
+        | Screen::Nethack
+        | Screen::Dcss
+        | Screen::Brogue
+        | Screen::Dopewars
+        | Screen::Bashquest
+        | Screen::Codekeep
+        | Screen::Zork
+        | Screen::Usurper
+        | Screen::GreenDragon
+        | Screen::Darkroom
+        | Screen::Realm => true,
+        Screen::Dashboard
+        | Screen::Arcade
+        | Screen::Games
+        | Screen::Artboard
+        | Screen::Profiles
+        | Screen::Leaderboard
+        | Screen::Calendars
+        | Screen::Clubhouse
+        | Screen::Nightcap
+        | Screen::City
+        | Screen::DailyMatch
+        | Screen::HouseTable
+        | Screen::Scratchpad => false,
+    }
+}
+
+/// The title a pet goes by, after its name, on the day it ate a `kind`
+/// treat.
+pub fn treat_title(kind: TreatKind) -> &'static str {
+    match kind {
+        TreatKind::Puzzle => "the bookish",
+        TreatKind::Arcade => "the quick",
+        TreatKind::Match => "the cunning",
+        TreatKind::Table => "the lucky",
+        TreatKind::Door => "the brave",
+    }
+}
+
+/// The treat a pet goes by on `today`: the one it ate today. Yesterday's
+/// is gone at UTC midnight.
+pub fn fed_today(fed: Option<Fed>, today: NaiveDate) -> Option<TreatKind> {
+    match fed {
+        Some(fed) if fed.on == today => Some(fed.kind),
+        Some(_) | None => None,
+    }
+}
+
+/// What a pet calling on another brings back, from a closed set: by the
+/// treat the two share today, else by the caller's own. `caller` and `host`
+/// are the treat each pet ate today.
+pub fn call_line(
+    caller: Option<TreatKind>,
+    host: Option<TreatKind>,
+    host_stage: Stage,
+) -> &'static str {
+    match host_stage {
+        Stage::Egg => return "it kept the egg warm",
+        Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => {}
+    }
+    match (caller, caller == host) {
+        (None, _) => "they sat in the sun together",
+        (Some(TreatKind::Puzzle), true) => "they worked a puzzle out together",
+        (Some(TreatKind::Arcade), true) => "they raced laps round the room",
+        (Some(TreatKind::Match), true) => "they played a long game and called it a draw",
+        (Some(TreatKind::Table), true) => "they split a lucky find",
+        (Some(TreatKind::Door), true) => "they went exploring and came back muddy",
+        (Some(TreatKind::Puzzle), false) => "it read over their shoulder",
+        (Some(TreatKind::Arcade), false) => "it ran rings round them",
+        (Some(TreatKind::Match), false) => "it won at staring",
+        (Some(TreatKind::Table), false) => "it came back with a found coin",
+        (Some(TreatKind::Door), false) => "it came back with a story",
+    }
+}
+
+/// A day that counted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Look {
-    Left,
-    Ahead,
-    Right,
+pub struct DayCounted {
+    /// Whole UTC days with no key between the last counted day and this
+    /// one: 0 for the day after, and for a first day.
+    pub days_away: i64,
 }
 
-/// The pet off the stroll formula: walking after the cursor, or sitting
-/// under it. Cell offsets inside the roam zone.
+/// What a day's practice came to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Perch {
-    pub x: usize,
-    pub y: usize,
-    pub look: Look,
+pub enum Practiced {
+    /// One more day of it, `days` so far.
+    Progress {
+        days: i32,
+    },
+    Learned,
+    /// It already practiced this UTC day.
+    AlreadyToday,
+    /// It knows this one.
+    Known,
+    /// An egg learns nothing.
+    Egg,
 }
 
-/// What the last draw of the box used, recorded for the tick: how far the
-/// pet can travel, the zone it travels in (so the cursor can be placed in
-/// it), what it has to watch beside it, and where it stood.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PetFrameInputs {
-    pub travel: PetTravel,
-    pub zone: Rect,
-    pub neighbours: super::ui::Neighbours,
-    pub position: (usize, usize),
-    /// Where the pet would stand with no perch (the stroll, the sulk spot,
-    /// the glass): where a pet the cursor let go of walks back to.
-    pub home: (usize, usize),
+/// The growth of one pet: the row's columns, typed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Growth {
+    pub days_together: i32,
+    pub last_day: Option<NaiveDate>,
+    pub form: Form,
+    pub bond_days: i32,
+    pub last_bond_day: Option<NaiveDate>,
+    pub tricks: Vec<Trick>,
+    pub learning: Option<Trick>,
+    pub learning_days: i32,
+    pub last_practice: Option<NaiveDate>,
 }
 
-/// How far the pet can travel inside its box, in cells, on each axis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PetTravel {
-    pub x: usize,
-    pub y: usize,
-}
-
-/// Everything one tick reads.
-#[derive(Clone, Copy, Debug)]
-pub struct PetTick {
-    /// The app's shared 66ms wall clock (marquee_tick): the adaptive loop
-    /// ticks sparsely, so a per-call counter would slow the animation with
-    /// the cadence; syncing to the wall clock keeps every speed true.
-    pub wall_tick: usize,
-    pub now: Instant,
-    pub ambient: Ambient,
-    /// The box drawn last frame, `None` when no box was drawn.
-    pub frame: Option<PetFrameInputs>,
-    /// The terminal cursor, 0-based cells, when the terminal reported it.
-    pub cursor: Option<(u16, u16)>,
-    /// Whether a mood change is written to the row (pet owners only; the
-    /// state machine runs for everyone, cheaply).
-    pub persist: bool,
-}
-
-pub struct PetState {
-    pub user_id: Uuid,
-    pub svc: PetService,
-
-    /// User-set pet name. `None` until set via the `/petname` chat command.
-    pub name: Option<String>,
-    pub species: PetSpecies,
-    /// When the row was first created. Used as a fallback age anchor.
-    pub created: DateTime<Utc>,
-    /// When the user unlocked the companion. Drives the life-stage buckets
-    /// for purchased pets.
-    pub adopted_at: Option<DateTime<Utc>>,
-    /// The last UTC day this account petted it, from the row and then from
-    /// this session's clicks: the care row reads it, and a second click the
-    /// same day does not ask the service again.
-    pub last_petted: Option<NaiveDate>,
-    /// The owner's switch, from the row and then from this session's Shop
-    /// key. Off, the pet stays bought but is put away (`App::pet_out`).
-    pub enabled: bool,
-
-    pub signals: MoodSignals,
-    mood: PetMood,
-    perch: Option<Perch>,
-    animation_ticks: usize,
-}
-
-impl PetState {
-    pub fn new(user_id: Uuid, svc: PetService, companion: PetCompanion) -> Self {
-        let species = companion.species();
-        let mood = companion.mood();
+impl Growth {
+    pub fn from_row(row: &PetCompanion) -> Self {
         Self {
+            days_together: row.days_together,
+            last_day: row.last_day,
+            form: row.form(),
+            bond_days: row.bond_days,
+            last_bond_day: row.last_bond_day,
+            tricks: row.tricks(),
+            learning: row.learning(),
+            learning_days: row.learning_days,
+            last_practice: row.last_practice,
+        }
+    }
+
+    pub fn to_write(&self, user_id: Uuid) -> PetGrowthWrite {
+        PetGrowthWrite {
             user_id,
-            svc,
-            name: companion.name,
-            species,
-            created: companion.created,
-            adopted_at: companion.adopted_at,
-            last_petted: companion.last_petted,
-            enabled: companion.enabled,
-            signals: MoodSignals::default(),
-            // The mood the row holds (`asleep` after the last session left):
-            // the first tick reads the real thing and, since it differs,
-            // writes it, so the profile stops saying asleep the moment the
-            // owner is back.
-            mood,
-            perch: None,
-            animation_ticks: 0,
+            days_together: self.days_together,
+            last_day: self.last_day,
+            form: self.form,
+            bond_days: self.bond_days,
+            last_bond_day: self.last_bond_day,
+            tricks: self.tricks.clone(),
+            learning: self.learning,
+            learning_days: self.learning_days,
+            last_practice: self.last_practice,
         }
     }
 
-    /// Current life stage based on how long the pet has existed.
-    pub fn life_stage(&self) -> LifeStage {
-        LifeStage::from_age_days(
-            (Utc::now() - pet_age_anchor(self.created, self.adopted_at))
-                .num_days()
-                .max(0),
-        )
+    pub fn stage(&self) -> Stage {
+        self.form.stage()
     }
 
-    /// Human-readable age string for display, e.g. "3 days" or "1 year".
-    pub fn age_label(&self) -> String {
-        pet_age_label(pet_age_anchor(self.created, self.adopted_at), Utc::now())
+    /// Count `today` as a day together, once. `None` when the day is
+    /// already counted, or when the row holds a later day (a clock that
+    /// stepped back never uncounts one). The days enter no stage: they
+    /// make the pet ready, and its owner's pick does the rest.
+    pub fn count_day(&mut self, today: NaiveDate) -> Option<DayCounted> {
+        let days_away = match self.last_day {
+            Some(last) if last >= today => return None,
+            Some(last) => (today - last).num_days() - 1,
+            None => 0,
+        };
+        self.days_together += 1;
+        self.last_day = Some(today);
+        Some(DayCounted { days_away })
     }
 
-    /// Set (or clear with `None`) the user-set pet name and persist it.
-    pub fn set_name(&mut self, name: Option<String>) {
-        self.name = name.clone();
-        self.svc.set_name_task(self.user_id, name);
-    }
-
-    /// Set the pet species and persist it.
-    pub fn set_species(&mut self, species: PetSpecies) {
-        self.species = species;
-        self.svc.set_species_task(self.user_id, species);
-    }
-
-    /// Bring the pet out or put it away, and persist it.
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-        self.svc.set_enabled_task(self.user_id, enabled);
-    }
-
-    pub fn mood(&self) -> PetMood {
-        self.mood
-    }
-
-    pub fn perch(&self) -> Option<Perch> {
-        self.perch
-    }
-
-    pub fn animation_ticks(&self) -> usize {
-        self.animation_ticks
-    }
-
-    pub fn note_petted(&mut self, now: Instant) {
-        self.signals.petted = Some(now);
-    }
-
-    /// A click on the pet: it always purrs, and the first click of the UTC
-    /// day asks the service for the daily chips. The service's gate decides
-    /// the payout; this only saves asking twice from one session.
-    pub fn pet(&mut self, now: Instant, today: NaiveDate) {
-        self.note_petted(now);
-        if self.petted_on(today) {
-            return;
+    /// Whether it has the days for the stage after this one.
+    fn has_its_days(&self) -> bool {
+        match self.stage().next() {
+            Some(next) => self.days_together >= days_for(next),
+            None => false,
         }
-        self.last_petted = Some(today);
-        self.svc.pet_task(self.user_id);
     }
 
-    pub fn petted_on(&self, today: NaiveDate) -> bool {
-        self.last_petted == Some(today)
-    }
-
-    pub fn note_win(&mut self, now: Instant) {
-        self.signals.won = Some(now);
-    }
-
-    pub fn note_loss(&mut self, now: Instant) {
-        self.signals.lost = Some(now);
-    }
-
-    pub fn note_spoke(&mut self, now: Instant) {
-        self.signals.spoke = Some(now);
-    }
-
-    /// Advance the pet: read the mood, walk after the cursor. Returns true
-    /// on state edges that need a frame even when the animation predicate
-    /// is quiet: a mood change, a step of the walk. Pure animation cadence
-    /// is the box's business (`ui::frame_changed`).
-    pub fn tick(&mut self, input: PetTick) -> bool {
-        let mut changed = false;
-        let elapsed = input.wall_tick.saturating_sub(self.animation_ticks);
-        self.animation_ticks = input.wall_tick;
-
-        let mood = mood_at(self.signals, input.ambient, input.now);
-        if mood != self.mood {
-            self.mood = mood;
-            changed = true;
-            if input.persist {
-                self.svc.set_mood_task(self.user_id, mood);
-            }
+    /// Whether the egg has its days and waits on its owner to hatch it.
+    pub fn ready_to_hatch(&self) -> bool {
+        match self.form {
+            Form::Egg => self.has_its_days(),
+            Form::Baby | Form::Young { .. } | Form::Adult { .. } | Form::Elder { .. } => false,
         }
+    }
 
-        let target = match (mood_follows(mood), input.frame, input.cursor) {
-            (true, Some(frame), Some(cursor)) => cursor_target(frame, cursor),
+    /// The two forms a hatched pet with its days can grow into, one per
+    /// drawing of the part its next stage adds. `None` while it waits on
+    /// its days, for an egg (it hatches) and for an elder.
+    pub fn offers(&self) -> Option<[Form; 2]> {
+        match (
+            self.has_its_days(),
+            self.form.grown(Pick::One),
+            self.form.grown(Pick::Two),
+        ) {
+            (true, Some(one), Some(two)) => Some([one, two]),
             (true, _, _) | (false, _, _) => None,
-        };
-        // Off the stroll the pet only ever walks: one cell per animation
-        // edge on each axis, from wherever it stood. After the cursor while
-        // it is in the box; back to where the stroll is once it leaves,
-        // purring or not (a pet that holds still where it was petted reads
-        // as stuck, and one that jumps back reads as a glitch). The stroll
-        // takes over when the pet is right beside it.
-        // The stroll paints on every second wall tick; the walk keeps that
-        // pace whatever the loop's cadence.
-        let cells = elapsed.div_ceil(2);
-        let perch = match (target, self.perch, input.frame) {
-            (Some(target), from, Some(frame)) => {
-                let (x, y) = from.map_or(frame.position, |perch| (perch.x, perch.y));
-                Some(Perch {
-                    x: step_toward(x, target.x, cells),
-                    y: step_toward(y, target.y, cells),
-                    look: target.look,
-                })
-            }
-            (None, Some(from), Some(frame)) => {
-                let (home_x, home_y) = frame.home;
-                match from.x.abs_diff(home_x) <= 1 && from.y.abs_diff(home_y) <= 1 {
-                    true => None,
-                    false => Some(Perch {
-                        x: step_toward(from.x, home_x, cells),
-                        y: step_toward(from.y, home_y, cells),
-                        look: look_toward(from.x, home_x),
-                    }),
-                }
-            }
-            (None, None, Some(_)) | (Some(_), _, None) | (None, _, None) => None,
-        };
-        if perch != self.perch {
-            self.perch = perch;
-            changed = true;
         }
-        changed
     }
-}
 
-/// A sulking or sleeping pet does not come when called.
-fn mood_follows(mood: PetMood) -> bool {
-    match mood {
-        PetMood::Purring | PetMood::Proud | PetMood::Chatty | PetMood::Vibing | PetMood::Idle => {
-            true
+    /// Hatch an egg that has its days. False for anything else. What comes
+    /// out of it (cat, dog, bird) is the owner's pick, stored beside this.
+    pub fn hatch(&mut self) -> bool {
+        match self.ready_to_hatch() {
+            true => {
+                self.form = Form::Baby;
+                true
+            }
+            false => false,
         }
-        PetMood::Sulking | PetMood::Asleep => false,
+    }
+
+    /// Enter the next stage drawn with `pick`, for a hatched pet that has
+    /// its days. The stage entered, `None` for anything else.
+    pub fn grow(&mut self, pick: Pick) -> Option<Stage> {
+        let [one, two] = self.offers()?;
+        self.form = match pick {
+            Pick::One => one,
+            Pick::Two => two,
+        };
+        Some(self.stage())
+    }
+
+    /// Start over: an egg on its first day, nothing learned. The one rule
+    /// that takes anything away, and only its owner asks for it.
+    pub fn reset(&mut self) {
+        *self = Self {
+            days_together: 0,
+            last_day: None,
+            form: Form::Egg,
+            bond_days: 0,
+            last_bond_day: None,
+            tricks: Vec::new(),
+            learning: None,
+            learning_days: 0,
+            last_practice: None,
+        };
+    }
+
+    /// Stamp `today` as a bond day: the first treat or play of a UTC day.
+    /// False when the day already has one.
+    pub fn bond(&mut self, today: NaiveDate) -> bool {
+        if self.last_bond_day == Some(today) {
+            return false;
+        }
+        self.bond_days += 1;
+        self.last_bond_day = Some(today);
+        true
+    }
+
+    /// One day's practice of `trick`. Starting another trick starts over.
+    pub fn practice(&mut self, trick: Trick, today: NaiveDate) -> Practiced {
+        match self.form {
+            Form::Egg => return Practiced::Egg,
+            Form::Baby | Form::Young { .. } | Form::Adult { .. } | Form::Elder { .. } => {}
+        }
+        if self.tricks.contains(&trick) {
+            return Practiced::Known;
+        }
+        if self.last_practice == Some(today) {
+            return Practiced::AlreadyToday;
+        }
+        let days = match self.learning == Some(trick) {
+            true => self.learning_days + 1,
+            false => 1,
+        };
+        self.last_practice = Some(today);
+        if days >= TRICK_DAYS {
+            self.tricks.push(trick);
+            self.learning = None;
+            self.learning_days = 0;
+            return Practiced::Learned;
+        }
+        self.learning = Some(trick);
+        self.learning_days = days;
+        Practiced::Progress { days }
+    }
+
+    /// Days still to go before the next stage, `None` for an elder. 0
+    /// means it waits on its owner.
+    pub fn days_to_next(&self) -> Option<i32> {
+        self.stage()
+            .next()
+            .map(|next| (days_for(next) - self.days_together).max(0))
+    }
+
+    /// The days an egg still waits for. `None` once it has them, and for a
+    /// hatched pet.
+    pub fn days_to_hatch(&self) -> Option<i32> {
+        match self.form {
+            Form::Egg => self.days_to_next().filter(|days| *days > 0),
+            Form::Baby | Form::Young { .. } | Form::Adult { .. } | Form::Elder { .. } => None,
+        }
     }
 }
 
-/// Where the pet should stand to sit under the cursor, when the cursor is
-/// inside the box the pet was last drawn in; the face lands on the cursor
-/// column and the eyes point at it on the way.
-fn cursor_target(frame: PetFrameInputs, cursor: (u16, u16)) -> Option<Perch> {
-    let zone = frame.zone;
-    let (cx, cy) = cursor;
-    let inside = cx >= zone.x && cx < zone.right() && cy >= zone.y && cy < zone.bottom();
-    if !inside {
-        return None;
-    }
-    // The face is three cells in from the pet's left edge.
-    let x = (usize::from(cx - zone.x))
-        .saturating_sub(3)
-        .min(frame.travel.x);
-    let y = (usize::from(cy - zone.y))
-        .saturating_sub(1)
-        .min(frame.travel.y);
-    let face = frame.position.0 + 3;
-    let look = if usize::from(cx - zone.x) < face {
-        Look::Left
-    } else if usize::from(cx - zone.x) > face + 1 {
-        Look::Right
-    } else {
-        Look::Ahead
-    };
-    Some(Perch { x, y, look })
-}
-
-/// Which way the pet faces while walking from `from` to `to`.
-fn look_toward(from: usize, to: usize) -> Look {
-    match from.cmp(&to) {
-        std::cmp::Ordering::Less => Look::Right,
-        std::cmp::Ordering::Equal => Look::Ahead,
-        std::cmp::Ordering::Greater => Look::Left,
-    }
-}
-
-fn step_toward(from: usize, to: usize, cells: usize) -> usize {
-    if from < to {
-        (from + cells).min(to)
-    } else {
-        from.saturating_sub(cells).max(to)
+/// When an egg `days` short hatches, as its owner reads it: `tomorrow`,
+/// `in 3 days`. The tile, the care box and the pat all say it this way.
+pub fn hatch_wait(days: i32) -> String {
+    match days {
+        1 => "tomorrow".to_string(),
+        days => format!("in {days} days"),
     }
 }
 

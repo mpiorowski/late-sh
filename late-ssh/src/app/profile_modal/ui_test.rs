@@ -444,27 +444,23 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
 /// mood on a row each.
 #[tokio::test]
 async fn a_pet_sits_beside_its_owners_reef() {
-    use late_core::models::marketplace::{
-        PET_COMPANION_SKU, purchase_durable_item_by_sku, welcome_aquarium_tank_in_tx,
-    };
+    use late_core::models::marketplace::welcome_aquarium_tank_in_tx;
+    use late_core::models::pet::PetCompanion;
 
     let fixture = fixture("reef").await;
     let db = fixture._test_db.db.clone();
     {
         let mut client = db.get().await.expect("db client");
-        UserChips::admin_grant(&**client, fixture.user_id, 1_000_000)
-            .await
-            .expect("fund chips");
-        // The tank arrives with a welcome fry swimming, the pet with its row.
+        // The tank arrives with a welcome fry swimming, the pet as the egg
+        // every account gets at its first sign in.
         let tx = client.transaction().await.expect("transaction");
         welcome_aquarium_tank_in_tx(&tx, fixture.user_id)
             .await
             .expect("plant the tank");
         tx.commit().await.expect("commit");
-        purchase_durable_item_by_sku(&mut client, fixture.user_id, PET_COMPANION_SKU)
+        PetCompanion::ensure(&client, fixture.user_id)
             .await
-            .expect("purchase")
-            .expect("affordable");
+            .expect("the egg");
     }
     let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
     let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);
@@ -485,8 +481,11 @@ async fn a_pet_sits_beside_its_owners_reef() {
         let snapshot = snapshot_rx.borrow();
         let pet = snapshot.pet.as_ref().expect("pet");
         assert!(!snapshot.aquarium_fish.is_empty(), "the welcome fry swims");
-        (pet.species.as_str(), pet.mood.as_str())
+        assert_eq!(pet.fed_today, None, "an egg has no title row");
+        // An unnamed egg is no animal yet.
+        ("egg", pet.mood.as_str())
     };
+    let stage = "egg · day 0";
     // Columns, not bytes: the rules are multi-byte.
     let col_of = |line: &str, needle: &str| -> Option<usize> {
         line.find(needle).map(|at| line[..at].chars().count())
@@ -514,9 +513,19 @@ async fn a_pet_sits_beside_its_owners_reef() {
             .position(|line| cells(line, pet_col, species.len() + 1).trim_end() == species)
             .unwrap_or_else(|| panic!("the pet's name under its heading:\n{text}"));
         assert_eq!(
-            cells(&band[name + 1], pet_col, mood.len() + 1).trim_end(),
+            cells(&band[name + 1], pet_col, stage.len() + 1).trim_end(),
+            stage,
+            "the stage and its day under the name:\n{text}"
+        );
+        assert_eq!(
+            cells(&band[name + 2], pet_col, mood.len() + 1).trim_end(),
             mood,
-            "the mood under the name:\n{text}"
+            "the mood under the stage:\n{text}"
+        );
+        assert_eq!(
+            cells(&band[name + 3], pet_col, 23),
+            "p pet it · v send yours",
+            "a visitor's two keys under the mood:\n{text}"
         );
         assert!(name >= 3, "three art rows above the name:\n{text}");
         for row in band {
@@ -531,6 +540,107 @@ async fn a_pet_sits_beside_its_owners_reef() {
             "the reef's surface runs up to the gap:\n{text}"
         );
     }
+}
+
+/// A pet that came calling stands beside its host on the host's profile,
+/// and the row under them says whose it is.
+#[tokio::test]
+async fn a_guest_stands_beside_the_pet_on_its_hosts_profile() {
+    use late_core::models::pet::{Form, PetCompanion, PetGrowthWrite, PetSpecies, Pick, VisitKind};
+
+    let fixture = fixture("guest").await;
+    let db = fixture._test_db.db.clone();
+    let caller = create_test_user(&db, "caller").await;
+    let today = chrono::Utc::now().date_naive();
+    {
+        let mut client = db.get().await.expect("db client");
+        for (user_id, form) in [
+            (fixture.user_id, Form::Young { top: Pick::One }),
+            (caller.id, Form::Baby),
+        ] {
+            PetCompanion::ensure(&client, user_id)
+                .await
+                .expect("the egg");
+            let tx = client.transaction().await.expect("transaction");
+            PetCompanion::store(
+                &*tx,
+                PetGrowthWrite {
+                    user_id,
+                    days_together: 7,
+                    last_day: Some(today),
+                    form,
+                    bond_days: 0,
+                    last_bond_day: None,
+                    tricks: Vec::new(),
+                    learning: None,
+                    learning_days: 0,
+                    last_practice: None,
+                },
+            )
+            .await
+            .expect("grow");
+            tx.commit().await.expect("commit");
+        }
+        PetCompanion::set_species(&**client, caller.id, PetSpecies::Dog)
+            .await
+            .expect("a dog");
+        PetCompanion::set_name(&client, caller.id, Some("Biscuit"))
+            .await
+            .expect("name");
+        assert!(
+            PetCompanion::claim_visit(
+                &**client,
+                fixture.user_id,
+                caller.id,
+                VisitKind::Call,
+                today
+            )
+            .await
+            .expect("call")
+        );
+    }
+    let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
+    let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);
+    let mut state = ProfileModalState::new(profile_service, Uuid::nil());
+    state.open(fixture.user_id, "guest-viewed".to_string());
+    timeout(Duration::from_secs(5), async {
+        loop {
+            snapshot_rx.changed().await.expect("watch open");
+            if snapshot_rx.borrow().pet.is_some() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("pet snapshot");
+    assert!(state.tick());
+    assert_eq!(
+        snapshot_rx.borrow().pet.as_ref().expect("pet").guests.len(),
+        1
+    );
+
+    let lines = render(&state, false, 110, 90);
+    let text = lines.join("\n");
+    let col_of = |line: &str, needle: &str| -> Option<usize> {
+        line.find(needle).map(|at| line[..at].chars().count())
+    };
+    // The host's ears, and on the row under them its face beside the
+    // guest's ears: a baby dog, its face one row further down.
+    let ears = row_of(&lines, r"/\_/\").unwrap_or_else(|| panic!("the host's ears:\n{text}"));
+    let host_col = col_of(&lines[ears], r"/\_/\").expect("the host's column");
+    let guest_col = col_of(&lines[ears + 1], "u u")
+        .unwrap_or_else(|| panic!("the guest's ears beside the host's face:\n{text}"));
+    assert!(guest_col > host_col + 8, "beside it, not on it:\n{text}");
+    // The modal draws at wall tick 0, the first tick of a blink.
+    assert_eq!(
+        col_of(&lines[ears + 2], "(-.-) ~"),
+        Some(guest_col - 1),
+        "the guest's own face:\n{text}"
+    );
+    assert!(
+        text.contains(&format!("with {}'s Biscuit", caller.username)),
+        "whose it is:\n{text}"
+    );
 }
 
 #[tokio::test]

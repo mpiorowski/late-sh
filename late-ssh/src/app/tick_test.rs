@@ -7,7 +7,7 @@ use crate::app::common::primitives::Screen;
 use crate::app::state::App;
 use crate::app::tick::{ANIM_HALF_TICK, ANIM_QUARTER_TICK, HOT_TICK, IDLE_TICK};
 use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
-use crate::test_helpers::chat_compose_app;
+use crate::test_helpers::{chat_compose_app, render_plain};
 
 const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
 /// Watchdog, not the assertion: `CLEAN_SETTLE_WINDOW` is what the gate is
@@ -286,6 +286,9 @@ async fn home_equalizer_tiles_hold_the_half_rate_tier() {
         },
         Some(RiceLayout::default()),
     );
+    // The stock Home the helper drew has the pet beside its reef, and a
+    // drawn pet holds the half tier: this page has none once it is drawn.
+    render_plain(&mut app);
     assert_eq!(
         app.wake_hint(),
         ANIM_QUARTER_TICK,

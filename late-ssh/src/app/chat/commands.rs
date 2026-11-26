@@ -136,6 +136,7 @@ const COMMANDS: &[Command] = &[
     global("pair", "shared coding scratchpad; both run /pair @user"),
     global("paper", "graybeard's daily paper (/paper [YYYY-MM-DD])"),
     global("paste-image", "upload image from CLI clipboard"),
+    global("pet", "your pet: /pet cat|dog|bird, away, out, reset"),
     global("petname", "name your pet (/petname Mochi; bare shows)"),
     global("picker", "open the room picker (same as Ctrl+/)"),
     global("poll", "start a Home room poll (2-4 options)"),

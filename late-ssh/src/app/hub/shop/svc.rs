@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -19,12 +19,11 @@ use late_core::{
             AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU,
             BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseResult, PurchaseStatus,
-            PurchaseWithEffectResult, TankActiveStatus, TankStockKind, ULTIMATE_SPELL_KIND,
-            USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_active_by_sku, is_sprout_row,
-            is_welcome_fish, purchase_item_by_sku_with_chat_effect,
-            purchase_item_by_sku_with_custom_title, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs,
+            MarketplaceItem, PurchaseResult, PurchaseStatus, PurchaseWithEffectResult,
+            TankActiveStatus, TankStockKind, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
+            UserPurchase, adjust_aquarium_active_by_sku, is_sprout_row, is_welcome_fish,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
@@ -42,7 +41,6 @@ use uuid::Uuid;
 
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
-use super::entitlements::ShopEntitlements;
 use crate::app::ai::screen::{TitleScreen, screen_custom_title};
 use crate::app::ai::svc::AiService;
 use crate::app::common::username_effect::{FlairEffect, FlairTitle, NameFlair, NameFlairDirectory};
@@ -52,7 +50,6 @@ pub struct ShopSnapshot {
     pub user_id: Option<Uuid>,
     pub balance: i64,
     pub items: Vec<ShopCatalogItem>,
-    pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     /// The user's live username effect, if any (detail pane shows the style
     /// and remaining time).
@@ -153,10 +150,6 @@ pub struct ShopCatalogItem {
 }
 
 impl ShopCatalogItem {
-    pub fn is_pet_companion(&self) -> bool {
-        self.sku == PET_COMPANION_SKU
-    }
-
     pub fn is_bonsai_decay_shield(&self) -> bool {
         self.sku == BONSAI_DECAY_SHIELD_SKU
     }
@@ -1087,7 +1080,6 @@ impl ShopService {
             purchases_by_item.insert(purchase.item_id, purchase);
         }
 
-        let mut owned_skus = HashSet::new();
         let catalog = items
             .into_iter()
             .map(|item| {
@@ -1096,9 +1088,6 @@ impl ShopService {
                 let owned = purchase.is_some_and(|purchase| {
                     !is_consumable_kind(&item_kind) || purchase.quantity > 0
                 });
-                if owned {
-                    owned_skus.insert(item.sku.clone());
-                }
                 let equipped = match (
                     purchase.and_then(|purchase| purchase.equipped_slot.as_deref()),
                     item.slot.as_deref(),
@@ -1200,7 +1189,6 @@ impl ShopService {
             user_id: Some(user_id),
             balance: chips.balance,
             items: catalog,
-            entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             active_room_effects,
             active_username_effect,
             active_bonsai_decay_protection,

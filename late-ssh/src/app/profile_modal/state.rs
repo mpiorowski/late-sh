@@ -12,10 +12,9 @@ use uuid::Uuid;
 
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::hub::aquarium::state::AquariumState;
+use crate::app::pet::svc::ProfilePet;
 use crate::app::profile::ledger::LedgerRow;
-use crate::app::profile::svc::{
-    ProfileLadder, ProfilePet, ProfileRunner, ProfileService, ProfileSnapshot,
-};
+use crate::app::profile::svc::{ProfileLadder, ProfileRunner, ProfileService, ProfileSnapshot};
 
 /// The vertical extent the last draw measured: how tall the composed body
 /// is, how many rows the viewport showed, and where the chips section
@@ -256,6 +255,11 @@ impl ProfileModalState {
 
     pub(crate) fn runner(&self) -> Option<&ProfileRunner> {
         self.runner.as_ref()
+    }
+
+    /// Whose profile is up, `None` while the modal is closed.
+    pub(crate) fn viewed_user_id(&self) -> Option<Uuid> {
+        self.viewed_user_id
     }
 
     /// The profile on show is this session's own.

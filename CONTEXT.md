@@ -205,8 +205,10 @@ otherwise.
 | `statusline` | The frame status bars and their customizer |
 | `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles, the attention guest (what waits on you, a row each, gone when the list is empty) |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
+| `artboard` | The Artboard: the shared canvas, its editor and input model, the board server and persistence (hung pieces, applause, the monthly award and the splash wall in `gallery/CONTEXT.md`) |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
-| `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
+| `pet` | The Pet Companion, an egg for every account: the animal picked at the hatch and a drawing picked at each stage after, days together, one treat a day from a win in any game shown as that day's title, tricks, visitors and the pets they send to stay an hour, the care box, the `/pet` commands |
+| `hub` | The Shop (`Ctrl+S`), quests (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
 | `games` | Shared game primitives: cards, the chips service, `chess_core`, `pool_core` (each kernel has its own `CONTEXT.md`) |
 | `arcade` | The Arcade: solo games, daily puzzles, high scores (per-game notes, controls and adding a game in `GAMES.md`) |
 | `leaderboard` | Leaderboards page, board rosters, the refresh service (monthly awards and milestone badges in `AWARDS.md`) |
@@ -219,6 +221,7 @@ otherwise.
 | `calendar` | The events board |
 | `clubhouse` | The tavern: crowd, seating, bubbles, the tour, the floor plan |
 | `clubhouse/nightcap` | The Nightcap bar out back |
+| `comeback` | The comeback moments: one box on a newcomer's return day, three in all |
 | `scratchpad` | `/pair` shared scratchpad |
 | `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`; the diagnosis it rests on in the root `AUDIENCE.md`, the #lounge valve it waits on in `devdocs/FEED-BUDGET.md` |
 | `deadchannel/runner` | The runner: the look, the directory, the face in #deadchannel, the runner row |
@@ -238,7 +241,7 @@ otherwise.
 
 No context of its own (read `late-ssh/CONTEXT.md` and the code): `activity`,
 `common`, `dashboard`, `files`, `help_modal`,
-`icon_picker`, `notify`, `pet`, `presence`, `profile`, `ultimates` and the
+`icon_picker`, `notify`, `presence`, `profile`, `ultimates` and the
 small modals.
 
 ## 6. Other docs
@@ -254,7 +257,8 @@ small modals.
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
   budget, the IRC design, the parked audio leader, the CLI YouTube backend
-  plan, the rest of the Artboard hot-worker plan).
+  plan, the rest of the Artboard hot-worker plan, the proposed house field
+  and browser terminal, what is left of pet growth).
 
 ## 7. Telemetry
 

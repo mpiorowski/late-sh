@@ -24,7 +24,8 @@
 # serverconfig.json on the volume. The full list of keys and values is in
 # late-ssh/src/app/door/vintagestory/WORLDCONFIG.md. Mods are not set here
 # either: they are zips in /data/Mods on the volume, listed in that folder's
-# CONTEXT.md.
+# CONTEXT.md. Our own server-side mod, latearrows, lives in
+# infra/vintagestory/latearrows and is zipped into the same folder by hand.
 #
 # The Games hub card (late-ssh/src/app/door/vintagestory/ui.rs) quotes the
 # version, address, and the settings below to players; its ui_test.rs reads
@@ -48,6 +49,10 @@ locals {
     AllowPvP          = true
     AllowFireSpread   = true
     PassTimeWhenEmpty = false
+    # X-ray mods, refused by the client at join: the server sends this list
+    # and the client refuses to run a listed mod. A modified client can still
+    # get past it; this stops the casual case.
+    ModIdBlackList = ["blocksoverlay", "orexrayserver", "golb"]
   }
 }
 
