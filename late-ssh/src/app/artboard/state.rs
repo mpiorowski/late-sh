@@ -1485,9 +1485,9 @@ impl State {
 
     /// Runs `edit` on the local board and submits what it changed as one op.
     /// The diff reads only the edit's `reach`, so a keystroke costs a few
-    /// cells, not two copies and a diff of the whole board. Debug builds
-    /// check every edit, a `Nothing` one included, against the whole-board
-    /// diff.
+    /// cells, not two copies and a diff of the whole board. Unit tests with
+    /// debug assertions check every edit, a `Nothing` one included, against
+    /// the whole-board diff.
     fn edit_board<R>(
         &mut self,
         reach: EditReach,
@@ -1496,10 +1496,10 @@ impl State {
         let color = self.active_user_color();
         let area = match reach {
             EditReach::Nothing => {
-                #[cfg(debug_assertions)]
+                #[cfg(all(test, debug_assertions))]
                 let whole_before = self.snapshot.canvas.clone();
                 let result = edit(&mut self.editor, &mut self.snapshot.canvas, color);
-                #[cfg(debug_assertions)]
+                #[cfg(all(test, debug_assertions))]
                 debug_assert_eq!(
                     diff_canvas_op(&whole_before, &self.snapshot.canvas, color),
                     None,
@@ -1510,7 +1510,7 @@ impl State {
             EditReach::Within(bounds) => Some(widen_for_wide_glyphs(bounds, &self.snapshot.canvas)),
             EditReach::Anywhere => None,
         };
-        #[cfg(debug_assertions)]
+        #[cfg(all(test, debug_assertions))]
         let whole_before = self.snapshot.canvas.clone();
         let before = match area {
             Some(area) => crop_canvas(&self.snapshot.canvas, area),
@@ -1521,7 +1521,7 @@ impl State {
             Some(area) => diff_canvas_op(&before, &crop_canvas(&self.snapshot.canvas, area), color),
             None => diff_canvas_op(&before, &self.snapshot.canvas, color),
         };
-        #[cfg(debug_assertions)]
+        #[cfg(all(test, debug_assertions))]
         debug_assert_eq!(
             op,
             diff_canvas_op(&whole_before, &self.snapshot.canvas, color),

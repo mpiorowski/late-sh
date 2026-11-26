@@ -170,7 +170,7 @@ Inline pure tests cover:
 - `late-core` `profile_award.rs`: `NHA`/`NHY` badge codes + chips score formatting. `late-core` `user.rs`: chat author label collapses `NHA` into `NHY`.
 - Host `playname.rs`: sanitize keeps alphanumerics + `_`, strips metachars, caps length, falls back when empty.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
-- Host `host.rs`: rc materialize/clear/keep, and `child_command` spawned on a real pty with a fake `nethack` script: a resize after spawn reaches the child's curses (`tput cols`), pinning the no-`LINES`/`COLUMNS` rule.
+- Host `host.rs`: rc materialize/clear/keep, and `child_command` spawned on a real pty with a fake `nethack` script: a resize after spawn reaches the child's curses (`tput cols`), pinning the no-`LINES`/`COLUMNS` rule. The fake child waits for an acknowledgement after reporting both dimensions, so macOS cannot discard unread output when the PTY slave closes.
 - `app/common/primitives.rs` + `app/input.rs`: screen `next`/`prev` ordering; NetHack is a door screen reached through the Games hub, absent from the tab cycle.
 
 The rest of the PTY bridge (`run_bridge`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/save/quit manually against a real host.

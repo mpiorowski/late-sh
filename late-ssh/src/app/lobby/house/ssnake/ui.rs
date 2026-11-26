@@ -368,8 +368,7 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
     }
     // Heads last so they stay visible over walls and the other body while a
     // fresh collision plays out its death shrink.
-    for seat_index in 0..MAX_SEATS {
-        let player = &snapshot.players[seat_index];
+    for (seat_index, player) in snapshot.players.iter().enumerate() {
         if let Some(head) = player.body.first().copied() {
             let color = match player.motion {
                 Motion::Dying => body_color(seat_index),

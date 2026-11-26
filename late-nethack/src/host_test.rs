@@ -49,7 +49,7 @@ fn materialize_none_keeps_whatever_is_on_disk() {
 /// window borders, and a Ctrl-R that redraws at the stale size.
 #[test]
 fn child_curses_sees_the_pty_resized_after_spawn() {
-    use std::io::{Read, Write};
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
 
     use nix::pty::{Winsize, openpty};
@@ -58,7 +58,11 @@ fn child_curses_sees_the_pty_resized_after_spawn() {
     std::fs::create_dir_all(&data_dir).expect("scratch dir");
     // Stands in for nethack: waits for a key, then asks curses for its size.
     let bin = format!("{data_dir}/fake-nethack");
-    std::fs::write(&bin, "#!/bin/sh\nread _\ntput cols\ntput lines\n").expect("write fake bin");
+    std::fs::write(
+        &bin,
+        "#!/bin/sh\nset -e\nread -r _\ntput cols\ntput lines\nread -r _\n",
+    )
+    .expect("write fake bin");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod fake bin");
     let cfg = HostConfig {
         bin,
@@ -89,21 +93,16 @@ fn child_curses_sees_the_pty_resized_after_spawn() {
     // The watchers' chat opening beside the game narrows it after spawn.
     set_winsize(&master, 60, 20);
     master.write_all(b"\n").expect("press a key");
-    child.wait().expect("fake nethack exits");
 
-    // Drain until the closed slave reports EIO.
-    let mut out = Vec::new();
-    let mut buf = [0u8; 1024];
-    while let Ok(n) = master.read(&mut buf)
-        && n > 0
-    {
-        out.extend_from_slice(&buf[..n]);
-    }
-    let out = String::from_utf8(out).expect("utf-8 output");
-    let sizes: Vec<&str> = out
+    // Keep the child waiting for an acknowledgement until both dimensions have
+    // been read: macOS can discard unread output when the last PTY slave closes.
+    let sizes: Vec<String> = BufReader::new(&master)
         .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
+        .map(|line| line.expect("read size report").trim().to_string())
+        .filter(|line| !line.is_empty())
+        .take(2)
         .collect();
+    master.write_all(b"\n").expect("acknowledge size report");
+    assert!(child.wait().expect("fake nethack exits").success());
     assert_eq!(sizes, ["60", "20"]);
 }

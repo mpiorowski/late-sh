@@ -182,7 +182,6 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bo
 struct StageGeom {
     road_width: u16,
     lane_starts: Vec<u16>,
-    total_lanes: usize,
     incoming: usize,
     grass_left_w: u16,
     grass_right_w: u16,
@@ -198,7 +197,6 @@ fn compute_geom(stage: &Stage, road_x: u16) -> StageGeom {
     StageGeom {
         road_width,
         lane_starts,
-        total_lanes: total,
         incoming: lanes.incoming.len(),
         grass_left_w: stage.road.sceneries.left.width as u16,
         grass_right_w: stage.road.sceneries.right.width as u16,
@@ -694,14 +692,14 @@ fn pick_object(objects: &[super::track::Object], seed: u64) -> &super::track::Ob
 // ─── Road ────────────────────────────────────────────────────────────────────
 
 fn lane_separator_x(geom: &StageGeom, lane_idx: usize) -> Option<u16> {
-    if lane_idx + 1 >= geom.total_lanes {
+    if lane_idx + 1 >= geom.lane_starts.len() {
         return None;
     }
     Some(geom.lane_starts[lane_idx] + Config::LANE_WIDTH)
 }
 
 fn player_body_x_start(geom: &StageGeom, lane_f: f32) -> u16 {
-    let total = geom.total_lanes as i32;
+    let total = geom.lane_starts.len() as i32;
     let floor_i = (lane_f.floor() as i32).clamp(0, (total - 1).max(0));
     let frac = (lane_f - floor_i as f32).clamp(0.0, 1.0);
     let a = geom.lane_starts[floor_i as usize] as f32 + 1.0;
@@ -763,8 +761,7 @@ fn draw_road(
                 .set_bg(Color::Rgb(0, 0, 0));
         }
 
-        for (lane_idx, &lane_x_start) in geom.lane_starts.iter().enumerate().take(geom.total_lanes)
-        {
+        for (lane_idx, &lane_x_start) in geom.lane_starts.iter().enumerate() {
             let lane_cfg = match lanes.get(lane_idx) {
                 Some(l) => l,
                 None => continue,
@@ -811,7 +808,7 @@ fn draw_road(
             }
         }
 
-        for lane_idx in 0..geom.total_lanes {
+        for lane_idx in 0..geom.lane_starts.len() {
             let Some(sep_x) = lane_separator_x(geom, lane_idx) else {
                 continue;
             };
@@ -1093,7 +1090,7 @@ fn draw_lane_speed_labels(frame: &mut Frame, area: Rect, stage: &Stage, geom: &S
         return;
     }
     let buf = frame.buffer_mut();
-    for (lane_idx, &lane_x) in geom.lane_starts.iter().enumerate().take(geom.total_lanes) {
+    for (lane_idx, &lane_x) in geom.lane_starts.iter().enumerate() {
         let Some(lane) = stage.road.lanes.get(lane_idx) else {
             continue;
         };
