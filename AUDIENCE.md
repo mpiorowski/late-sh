@@ -727,7 +727,13 @@ Live, in order of evidence behind them:
   post's cohort through the funnel queries against the organic cohorts
   beside it; that number decides whether to post again, and where.
 - **Progress Quest** is the cheap next door on the incremental shelf, the
-  only door shape that holds people (`devdocs/DOOR-CANDIDATES.md`).
+  only door shape that holds people (`devdocs/DOOR-CANDIDATES.md`); as a
+  Home tile it would sit where people already are.
+- **The house field** (`devdocs/HOUSE-FIELD.md`), proposed and unbuilt:
+  one Minesweeper board the whole house clears together, a few opens per
+  person per day, on a tile beside #lounge. The async, shared shape
+  between the solo dailies and the live tables, and a way to take part
+  that is not talking.
 - **The pet grows** (`late-ssh/src/app/pet/CONTEXT.md`), built and
   unmeasured: an egg for every account, the animal its owner picks at
   the hatch and a look they pick at each stage after, drawn life stages
@@ -739,6 +745,10 @@ Live, in order of evidence behind them:
   reason it is play and is seen by others, never a chore. Nothing about
   it is sold (`devdocs/PET-GROWTH.md` has what is still undecided and the
   queries that would say it worked).
+- **A browser terminal with sound** (`devdocs/BROWSER-TERMINAL.md`),
+  proposed, unbuilt and undecided: real SSH in a page that also plays the
+  radio, for the 84% who arrive with nothing to hear. Its gate is the
+  open question: ssh and a key filter who comes in, a link does not.
 
 Parked, with the reason:
 

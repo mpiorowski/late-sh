@@ -257,8 +257,8 @@ small modals.
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
   budget, the IRC design, the parked audio leader, the CLI YouTube backend
-  plan, the rest of the Artboard hot-worker plan, what is left of pet
-  growth).
+  plan, the rest of the Artboard hot-worker plan, the proposed house field
+  and browser terminal, what is left of pet growth).
 
 ## 7. Telemetry
 
