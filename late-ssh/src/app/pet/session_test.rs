@@ -531,10 +531,8 @@ async fn the_owner_changes_what_it_is_and_starts_it_over() {
     state.tick(tick_after_key(1, key));
 
     state.change_species(PetSpecies::Bird);
-    let banner = tick_until(&mut state, key, "the refusal", |state| {
-        state.animation_ticks() > 3
-    })
-    .await;
+    // The answer frees the mirror for its owner's next command.
+    let banner = tick_until(&mut state, key, "the refusal", |state| state.busy.is_none()).await;
     assert_eq!(
         banner.map(|banner| banner.message),
         Some("It is still an egg".to_string())
