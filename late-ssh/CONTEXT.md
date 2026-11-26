@@ -220,7 +220,8 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
   `CSI ? 997 ; Ps n` says the terminal switched palettes. The session asks
   again on that notice and after every OSC 111 reset (while synced, an answer
   was the theme's canvas, so the held background is dropped), one query a
-  frame however many notices arrive. `App::terminal_fg`/`terminal_bg` reach
+  frame however many notices arrive, and always behind the reset.
+  `App::terminal_colors` (`terminal_colors::TerminalColors`) reaches
   the theme through `theme::set_terminal_colors` before each draw; only the
   selection fill of a Reset-canvas palette on a light profile reads them
   (`THEME.md`). Unanswered queries cost nothing: the selection stays reverse

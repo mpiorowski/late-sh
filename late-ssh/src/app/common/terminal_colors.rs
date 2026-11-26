@@ -10,7 +10,9 @@
 //! before anything else reads it: they never reach a door game as keys,
 //! count as a person for the away clock, or dismiss the splash. A report
 //! split across two SSH reads slips through as input, the way a split
-//! latency probe reply does (`terminal_probe.rs`); the terminal writes each
+//! latency probe reply does (`terminal_probe.rs`): its color is lost until
+//! the next query, and the away clock, which joins the halves back together,
+//! takes it for a person and wakes an away session. The terminal writes each
 //! one in a single go, so that takes a read boundary inside it.
 
 use std::borrow::Cow;
@@ -24,6 +26,14 @@ pub(crate) const QUERY: &[u8] = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
 const MAX_SPEC: usize = 32;
 
 pub(crate) type Rgb = (u8, u8, u8);
+
+/// The terminal's own default foreground and background, as it answered the
+/// OSC 10/11 queries; each `None` until (or unless) it answers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TerminalColors {
+    pub(crate) fg: Option<Rgb>,
+    pub(crate) bg: Option<Rgb>,
+}
 
 /// What the reports stripped from one chunk said.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

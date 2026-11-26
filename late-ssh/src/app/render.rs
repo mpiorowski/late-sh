@@ -20,7 +20,7 @@ use super::{
     chat::{mod_modal, room_info_modal, room_search_modal, sheet_modal},
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        theme,
+        terminal_colors, theme,
         time::clock_text,
     },
     help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
@@ -551,20 +551,24 @@ impl App {
             } else {
                 b"\x1b]111\x1b\\".to_vec()
             };
-            self.pending_terminal_commands.push(cmd);
             // While synced, an OSC 11 answer was the theme's canvas, not the
             // terminal's own: forget it and ask again once the reset puts the
-            // terminal's back.
+            // terminal's back. A query a palette notice queued this frame
+            // would go out ahead of the reset and bring the canvas back, so
+            // it is dropped for the one behind the reset.
             if current_bg.is_none() {
-                self.terminal_bg = None;
-                crate::app::common::terminal_colors::queue_query(
-                    &mut self.pending_terminal_commands,
-                );
+                self.terminal_colors.bg = None;
+                self.pending_terminal_commands
+                    .retain(|command| command != terminal_colors::QUERY);
+            }
+            self.pending_terminal_commands.push(cmd);
+            if current_bg.is_none() {
+                terminal_colors::queue_query(&mut self.pending_terminal_commands);
             }
             self.last_terminal_bg = current_bg;
         }
         // After the sync above, which may just have dropped a stale background.
-        theme::set_terminal_colors(self.terminal_fg, self.terminal_bg);
+        theme::set_terminal_colors(self.terminal_colors);
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         // Draft-aware live preview: the user-arranged bottom-left components;
