@@ -1079,8 +1079,7 @@ pub struct App {
     terminal_version: Option<String>,
     /// The terminal's default foreground and background, from its OSC 10/11
     /// replies (`common/terminal_colors.rs`).
-    pub(crate) terminal_fg: Option<terminal_colors::Rgb>,
-    pub(crate) terminal_bg: Option<terminal_colors::Rgb>,
+    pub(crate) terminal_colors: terminal_colors::TerminalColors,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
@@ -2037,8 +2036,7 @@ impl App {
             multiplexer_term: terminal_images_disabled,
             windows_terminal: false,
             terminal_version: None,
-            terminal_fg: None,
-            terminal_bg: None,
+            terminal_colors: terminal_colors::TerminalColors::default(),
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
@@ -3000,10 +2998,10 @@ impl App {
     /// (DEC 2031, a light/dark follow) asks again; the answers land here too.
     fn apply_terminal_color_reports(&mut self, reports: terminal_colors::Reports) {
         if let Some(fg) = reports.fg {
-            self.terminal_fg = Some(fg);
+            self.terminal_colors.fg = Some(fg);
         }
         if let Some(bg) = reports.bg {
-            self.terminal_bg = Some(bg);
+            self.terminal_colors.bg = Some(bg);
         }
         if reports.palette_changed {
             terminal_colors::queue_query(&mut self.pending_terminal_commands);

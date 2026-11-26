@@ -1,6 +1,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use std::{cell::Cell, hash::Hash};
 
+use super::terminal_colors::TerminalColors;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeKind {
     Late = 0,
@@ -4071,13 +4073,10 @@ const PALETTE_TERMINAL: Palette = Palette {
     badge_gold: Color::Indexed(11),    // Bright Yellow
 };
 
-/// The terminal's reported (foreground, background), see `set_terminal_colors`.
-type TerminalColors = (Option<(u8, u8, u8)>, Option<(u8, u8, u8)>);
-
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
     static TEXT_BRIGHTNESS_ADJUSTMENT: Cell<i32> = const { Cell::new(0) };
-    static TERMINAL_COLORS: Cell<TerminalColors> = const { Cell::new((None, None)) };
+    static TERMINAL_COLORS: Cell<TerminalColors> = const { Cell::new(TerminalColors { fg: None, bg: None }) };
 }
 
 pub fn normalize_id(id: &str) -> &'static str {
@@ -4092,10 +4091,9 @@ pub fn set_text_brightness_adjustment(adjustment: i32) {
     TEXT_BRIGHTNESS_ADJUSTMENT.with(|current| current.set(adjustment.clamp(-5, 5)));
 }
 
-/// The terminal's own default foreground and background, as it answered the
-/// OSC 10/11 queries; `None` until (or unless) it answers.
-pub fn set_terminal_colors(fg: Option<(u8, u8, u8)>, bg: Option<(u8, u8, u8)>) {
-    TERMINAL_COLORS.with(|current| current.set((fg, bg)));
+/// The terminal's own colors for this thread's next draw.
+pub(crate) fn set_terminal_colors(colors: TerminalColors) {
+    TERMINAL_COLORS.with(|current| current.set(colors));
 }
 
 pub fn current_kind() -> ThemeKind {
@@ -4444,7 +4442,11 @@ pub fn selection_style() -> Style {
 const TERMINAL_SELECTION_TOWARD_FG: f32 = 0.18;
 
 fn terminal_selection_fill() -> Option<Color> {
-    let (Some(fg), Some(bg)) = TERMINAL_COLORS.with(Cell::get) else {
+    let TerminalColors {
+        fg: Some(fg),
+        bg: Some(bg),
+    } = TERMINAL_COLORS.with(Cell::get)
+    else {
         return None;
     };
     if relative_luminance(bg) <= relative_luminance(fg) {

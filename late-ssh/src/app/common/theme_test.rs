@@ -202,17 +202,26 @@ fn reset_canvas_selection_fills_on_a_light_terminal_only() {
     // light, the selection is a quiet fill instead.
     let (fg, bg) = ((0x10, 0x0F, 0x0F), (0xFF, 0xFC, 0xF0));
     set_current_by_id("terminal");
-    set_terminal_colors(Some(fg), Some(bg));
+    set_terminal_colors(TerminalColors {
+        fg: Some(fg),
+        bg: Some(bg),
+    });
     let light = Style::default()
         .fg(Color::Indexed(11))
         .patch(selection_style());
     // A dark profile keeps reverse video, which already reads well there.
-    set_terminal_colors(Some((0xD5, 0xD4, 0xD6)), Some((0x15, 0x14, 0x1B)));
+    set_terminal_colors(TerminalColors {
+        fg: Some((0xD5, 0xD4, 0xD6)),
+        bg: Some((0x15, 0x14, 0x1B)),
+    });
     let dark = selection_style();
     // One answer is not a pair: keep inverting.
-    set_terminal_colors(None, Some(bg));
+    set_terminal_colors(TerminalColors {
+        fg: None,
+        bg: Some(bg),
+    });
     let half = selection_style();
-    set_terminal_colors(None, None);
+    set_terminal_colors(TerminalColors::default());
     set_current_by_id("contrast");
 
     assert!(!light.add_modifier.contains(Modifier::REVERSED));

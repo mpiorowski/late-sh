@@ -8855,8 +8855,13 @@ async fn terminal_color_reports_are_not_a_person() {
 
     assert!(app.away, "a color report brought the session back");
     assert!(app.show_splash, "a color report dismissed the splash");
-    assert_eq!(app.terminal_fg, Some((0xD5, 0xD4, 0xD6)));
-    assert_eq!(app.terminal_bg, Some((0x15, 0x14, 0x1B)));
+    assert_eq!(
+        app.terminal_colors,
+        terminal_colors::TerminalColors {
+            fg: Some((0xD5, 0xD4, 0xD6)),
+            bg: Some((0x15, 0x14, 0x1B)),
+        }
+    );
     assert_eq!(
         app.pending_terminal_commands,
         vec![terminal_colors::QUERY.to_vec()],
@@ -8887,13 +8892,18 @@ async fn leaving_a_synced_background_forgets_it_before_drawing() {
     app.show_settings = true;
     let latte = (0xEF, 0xF1, 0xF5);
     app.last_terminal_bg = Some(Color::Rgb(latte.0, latte.1, latte.2));
-    app.terminal_fg = Some((0xD5, 0xD4, 0xD6));
-    app.terminal_bg = Some(latte);
+    app.terminal_colors = terminal_colors::TerminalColors {
+        fg: Some((0xD5, 0xD4, 0xD6)),
+        bg: Some(latte),
+    };
     app.pending_terminal_commands.clear();
+    // A palette notice earlier in the frame already asked: that query would
+    // go out ahead of the reset and be answered with the synced canvas.
+    terminal_colors::queue_query(&mut app.pending_terminal_commands);
 
     render_plain(&mut app);
 
-    assert_eq!(app.terminal_bg, None);
+    assert_eq!(app.terminal_colors.bg, None);
     let reset = b"\x1b]111\x1b\\".to_vec();
     let at = |cmd: &[u8]| app.pending_terminal_commands.iter().position(|c| c == cmd);
     assert!(
