@@ -9,7 +9,6 @@ use crate::app::common::primitives::Banner;
 
 use super::{
     catalog::{CompanionSection, ShopCategory},
-    entitlements::ShopEntitlements,
     svc::{
         ActiveChatRoomEffect, ActiveRental, ActiveUsernameEffect, ShopCatalogItem, ShopEvent,
         ShopService, ShopSnapshot,
@@ -185,10 +184,6 @@ impl ShopState {
 
     pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
-    }
-
-    pub(crate) fn entitlements(&self) -> &ShopEntitlements {
-        &self.snapshot.entitlements
     }
 
     pub(crate) fn all_items(&self) -> &[ShopCatalogItem] {

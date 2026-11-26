@@ -45,6 +45,7 @@ async fn a_session_on_one_replica_moves_and_leaves_on_the_other() {
             since_ms: 1_000,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         nightcap: None,
         street: None,

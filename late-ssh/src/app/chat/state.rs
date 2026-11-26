@@ -1122,7 +1122,8 @@ pub struct ChatState {
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
     requested_message_search: Option<String>,
-    requested_petname: Option<PetnameRequest>,
+    /// Set by `/pet <order>`; consumed by `App`, which owns the pet.
+    requested_pet_order: Option<crate::app::pet::input::Order>,
     requested_open_profile: Option<(Uuid, String, ProfileSection)>,
     requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
@@ -1497,7 +1498,7 @@ impl ChatState {
             requested_room_picker: false,
             requested_favorite_toggle: None,
             requested_message_search: None,
-            requested_petname: None,
+            requested_pet_order: None,
             requested_open_profile: None,
             requested_open_sheet: None,
             requested_quit: false,
@@ -2314,8 +2315,8 @@ impl ChatState {
         std::mem::take(&mut self.requested_brb)
     }
 
-    pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
-        self.requested_petname.take()
+    pub(crate) fn take_requested_pet_order(&mut self) -> Option<crate::app::pet::input::Order> {
+        self.requested_pet_order.take()
     }
 
     pub fn take_requested_icon_picker(&mut self) -> bool {
@@ -4391,18 +4392,25 @@ impl ChatState {
             return Some(Banner::success("Checking poll availability..."));
         }
 
-        if let Some(parsed) = parse_petname_command(&body) {
+        if let Some(words) = pet_command_words(&body, "/pet") {
             self.clear_composer_after_submit();
-            match parsed {
-                PetnameParse::Invalid => {
-                    return Some(Banner::error(
-                        "Usage: /petname <name> (up to 24 chars), or /petname clear",
-                    ));
-                }
-                PetnameParse::Request(request) => {
-                    self.requested_petname = Some(request);
+            match crate::app::pet::input::parse_order(words) {
+                Some(order) => {
+                    self.requested_pet_order = Some(order);
                     return None;
                 }
+                None => return Some(Banner::error(crate::app::pet::input::ORDER_USAGE)),
+            }
+        }
+
+        if let Some(words) = pet_command_words(&body, "/petname") {
+            self.clear_composer_after_submit();
+            match crate::app::pet::input::parse_name_order(words) {
+                Some(order) => {
+                    self.requested_pet_order = Some(order);
+                    return None;
+                }
+                None => return Some(Banner::error(crate::app::pet::input::NAME_USAGE)),
             }
         }
 
@@ -8411,47 +8419,15 @@ fn moderation_server_toast(event: &ModerationEvent) -> Option<String> {
     }
 }
 
-/// A parsed `/petname` command, drained by `handle_post_submit_requests`
-/// (which has the `App` access needed to update the pet).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PetnameRequest {
-    /// `/petname` with no argument — show the current name.
-    Show,
-    /// `/petname <name>` — set it. Holds the normalised name.
-    Set(String),
-    /// `/petname clear` — remove the name.
-    Clear,
-}
-
-/// Outcome of parsing a `/petname` line.
-pub(crate) enum PetnameParse {
-    Request(PetnameRequest),
-    /// `/petname` with an argument that normalised to nothing.
-    Invalid,
-}
-
-/// Parse a `/petname` command. Returns `None` if the input isn't a
-/// `/petname` command so `/petnames` (typo) still falls through to the
-/// unknown-command handler.
-pub(crate) fn parse_petname_command(input: &str) -> Option<PetnameParse> {
-    let rest = input.trim().strip_prefix("/petname")?;
+/// The words after one of the pet's commands (`/pet`, `/petname`), `None`
+/// when the line is another command (the other of the two, a typo like
+/// `/petnames`): what the words mean is the pet's to say (`pet::input`).
+pub(crate) fn pet_command_words<'a>(input: &'a str, command: &str) -> Option<&'a str> {
+    let rest = input.trim().strip_prefix(command)?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    let arg = rest.trim();
-    if arg.is_empty() {
-        return Some(PetnameParse::Request(PetnameRequest::Show));
-    }
-    if matches!(
-        arg.to_ascii_lowercase().as_str(),
-        "clear" | "remove" | "none" | "off"
-    ) {
-        return Some(PetnameParse::Request(PetnameRequest::Clear));
-    }
-    match late_core::models::pet::normalize_pet_name(arg) {
-        Some(name) => Some(PetnameParse::Request(PetnameRequest::Set(name))),
-        None => Some(PetnameParse::Invalid),
-    }
+    Some(rest.trim())
 }
 
 /// Parse `/dm @username` or `/dm username` from the composer text.
@@ -8907,7 +8883,7 @@ const CUP_STEAM_VARIANTS: &[&str] = &[
 /// Parse `/coffee` or `/tea` (case-insensitive, no arguments) from the
 /// composer body. Returns `None` for anything else, including arguments
 /// like `/coffee please` so the unknown-command handler can still flag
-/// typos. Same shape as [`parse_petname_command`].
+/// typos.
 pub(crate) fn parse_cup_command(input: &str) -> Option<CupKind> {
     let trimmed = input.trim();
     let lower = trimmed.to_ascii_lowercase();

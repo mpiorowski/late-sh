@@ -1428,3 +1428,21 @@ pub async fn publish_test_splash(state: &State) -> Uuid {
     );
     piece.id
 }
+
+/// A pet's snapshot grown to `form` in memory, with the days its stage
+/// asks for: for tests of the session and the drawing that need a pet out
+/// of its egg and never touch the row.
+pub fn pet_grown_to(
+    mut pet: crate::app::pet::svc::PetSnapshot,
+    form: late_core::models::pet::Form,
+) -> crate::app::pet::svc::PetSnapshot {
+    let stage = form.stage();
+    pet.row.stage = stage.as_str().to_string();
+    pet.row.looks = form
+        .picks()
+        .into_iter()
+        .map(|pick| pick.as_str().to_string())
+        .collect();
+    pet.row.days_together = crate::app::pet::state::days_for(stage);
+    pet
+}

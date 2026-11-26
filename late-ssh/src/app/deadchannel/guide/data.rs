@@ -496,6 +496,10 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Keys(&[
                 Key {
+                    key: "r",
+                    does: "from anywhere on the street: {step up} to the ring",
+                },
+                Key {
                     key: "↑↓",
                     does: "{pick} a marked runner on the wire",
                 },
@@ -533,7 +537,10 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "a call waits *three minutes*. afterglow sends them a DM, so it finds them wherever they are, and the wire tells the street. one call out at a time, none while the ring is taken, the same runner not rung again until three minutes have passed, and the same two runners fight *once a day*.",
+                "a call waits *ten minutes*. afterglow sends them a DM and mentions them on the wire, so it finds them wherever they are, and the wire mentions you when they take it. one call out at a time, none while the ring is taken, the same runner not rung again until ten minutes have passed, and the same two runners fight *once a day*.",
+            ),
+            Block::Rule(
+                "a call to you, your own call out, a bout set or on: the street says so in a box at its bottom left, with the `r` that takes you there. nothing walks you to the ring.",
             ),
             Block::Rule(
                 "your deck at the ring is the ten, *four picks* of your own (one card of every draft, whatever your level), and the other card of every draft you inked. your level, your gear, your mark bonus, and the day's glass stay outside: both corners hit the same, block the same, and start at *45* signal.",
@@ -548,11 +555,14 @@ pub const SECTIONS: &[Section] = &[
                 "then the slots come out one at a time, both corners at once: blocks go up, a ‹mute› cancels the card across from it, and both hits land together. a hit that gets through leaves a ‹static› in the other deck, and a block stays up until a hit eats it, round to round.",
             ),
             Block::Rule(
+                "your hand is five cards on the panel: the number on a card is its key, inside is what it does at the ring's numbers, and its bottom edge is what it costs or, once laid, the slot it sits in. the round that came out is told slot by slot: what each card threw, how much of it the block ate, and both signals after.",
+            ),
+            Block::Rule(
                 "signal at zero puts you down. both down in the same slot is a draw. after round four the higher signal takes it on points.",
             ),
             Block::Figures(&[
                 Figure {
-                    value: "3m",
+                    value: "10m",
                     means: "for a call to be answered",
                 },
                 Figure {

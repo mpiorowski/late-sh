@@ -19,12 +19,12 @@ room is the chat surface, and the full history lives in #lounge on Home.
 | File | Owns |
 |---|---|
 | `map.rs` | The 184x50 generated floor plan (`MAP` literal, do not hand-edit; re-run `scripts/gen_clubhouse_map.py --write`), collision (`walkable`), `SEATS`/`STANDING_SPOTS`/`DOOR_STACK`, interactive zones (`BACK_DOOR` out to Nightcap among them), animation cell lists, `DOOR_SIGN`. **The generator's `RUST_TEMPLATE` has drifted behind this file** — it predates `DOOR_STACK`, `BOT_SPOT`, `DOG_HOME`/`DOG_WAYPOINTS`, `BAR_APPROACH` and the `dog` parameter on `nearest_interactive`, so a bare `--write` silently *reverts* all of them. Until it is resynced: author the art in the script, run it to validate, and splice only the `MAP` and `SEATS` blocks into this file. |
-| `crowd.rs` | Pure: the room derived from presence records (`crowd`: one `Patron` per user, contested spots settled, the door stack, emotes, the last pet), `pick_spot` / `first_stand` (where a session sits), `dog_at` (the dog as a function of the wall clock). |
+| `crowd.rs` | Pure: the room derived from presence records (`crowd`: one `Patron` per user, contested spots settled, the door stack, emotes, the last pet of the dog, the pet at each patron's heel), `pick_spot` / `first_stand` (where a session sits), `dog_at` (the dog as a function of the wall clock). |
 | `drunk.rs` | `DrunkMap`, the process's mirror of `user_drinks` (seeded by the ghost task, bumped on every local pour). |
-| `state.rs` | Per-session state: this session's own stand (its part of its presence record), `settle` (follow a newer stand on another device, pick again after losing a spot or when a seat frees), the derived `Crowd`, camera target, animation clock, arrival/departure door events, the `Tutorial` state machine. |
+| `state.rs` | Per-session state: this session's own stand (its part of its presence record, the pet at its heel set by `set_pet`), `settle` (follow a newer stand on another device, pick again after losing a spot or when a seat frees), the derived `Crowd`, camera target, animation clock, arrival/departure door events, the `Tutorial` state machine. |
 | `fight.rs` | The tour's dungeon stop: a scripted fight as pure data (`BEATS`) plus its renderer. Not a game; see §5. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, `n` out back to Nightcap (the avatar first steps onto `map::BACK_DOOR_MAT`, in its published stand too, so the room sees them leave by the door), Enter on landmarks/dog/the back door, tutorial Enter. Returns `false` for globals. |
-| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays (the boxes, the table, fight and board headers), prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
+| `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, the pets at heel (`draw_pets`), door ambience, tutorial overlays (the boxes, the table, fight and board headers), prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
 | `nightcap/` | Nightcap, the small bar out back (`n` from the tavern or Enter at the back door, `map::BACK_DOOR`, past the end of the counter; Esc back): its own `Screen::Nightcap`, the stools from presence (`stools.rs`), `SharedWall`, and `CONTEXT.md`. A sub-slice, not a sibling domain. The generator script carries the door art (`back_door`), but `RUST_TEMPLATE` still lacks the `BACK_DOOR` zone and the `Interactive::BackDoor` arm, same drift as the rest. |
 
 ## 3. The crowd (multiplayer contract)
@@ -32,7 +32,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - The room is derived from presence (`app/presence`): one record per
   logged-in session on every replica, carrying its `ClubhouseStand` (the
   spot it picked or the cell it walked to, when, its last emote, its last
-  pet). Every replica holding the same records draws the same room
+  pet of the dog, the pet at its heel). Every replica holding the same records draws the same room
   (`crowd::crowd`). No process-global seat map: presence is replica-clean
   (root CONTEXT.md, multi-replica rule; `SCALE.md`, Pain Point 2 ledger).
 - **Everyone who logs in is in the room**, whether or not they ever open
@@ -71,6 +71,26 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - Emotes (`w` wave, `x` dance) and dog pets are stamps on the stand, played
   for their wall-clock windows (`EMOTE_MS`, `DOG_PET_MS`) by every session
   on every replica.
+- **The pet at heel.** A patron whose own pet (`app/pet`) is out and
+  hatched has it at their heel: `ClubhouseStand.pet_at_heel` is its
+  species, `None` with no pet, one put away, or an egg. The publishing
+  session sets it on every presence sync (`App::sync_presence` hands
+  `State::set_pet` the `PetState::portrait` while `App::pet_out`), so it
+  rides the patron's own record to every replica and there is no other
+  registry. It changes only when the pet comes out, goes away, hatches or
+  changes species, so it compares equal between ticks and the record is
+  not republished for it. Mixed versions during a deploy: the field is
+  skipped on the wire while `None` and defaults to `None` when absent, a
+  species this build does not know reads as `None` rather than failing
+  the record (and with it the batch), and a replica a deploy behind
+  ignores the field. `crowd` copies it onto the `Patron` (two devices:
+  the latest mover's). `ui::draw_pets` draws it last, one letter in the
+  patron's color (`c` cat, `d` dog, `b` bird, the room's Dwarf Fortress
+  letters) two cells right of their feet or stool, only on free floor: a
+  floor cell nothing else drew on this frame, so never over furniture, a
+  wall, another patron, the dog, a label or a bubble. A taken cell means
+  no pet that frame. It walks with a walker; no collision, no seat,
+  nothing to click.
 - **The dog** is a pure function of the wall clock (`crowd::dog_at`): cycle
   `k` trots from waypoint `k` to waypoint `k + 1` along the shortest open
   path (found once, `dog_paths`), then naps there. Nothing to sync, and it

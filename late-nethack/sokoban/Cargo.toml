@@ -1,0 +1,20 @@
+[package]
+name = "late-nethack-sokoban"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Local-only Sokoban solver and autoplayer for the NetHack door, run by hand
+# on the player's desktop. Its own workspace (below), so the root workspace,
+# CI and prod builds never see it; kept out of the Docker context by
+# .dockerignore. Usage and workflow in SOKOBAN.md.
+
+[workspace]
+
+[[bin]]
+name = "sokoban"
+path = "src/main.rs"
+
+[dependencies]
+# `hyprctl clients -j`, to find the game window
+serde_json = "1"

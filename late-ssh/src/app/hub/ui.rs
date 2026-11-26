@@ -13,7 +13,6 @@ use crate::app::{
 
 pub(crate) struct HubDrawProps<'a> {
     pub shop_state: &'a ShopState,
-    pub pet: crate::app::hub::shop::ui::ShopPet,
     /// The session's tank care: the Sprout and Fry rows read their clocks
     /// off it.
     pub aquarium_care: &'a AquariumCare,
@@ -27,12 +26,11 @@ struct HubLayout {
 pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let HubDrawProps {
         shop_state,
-        pet,
         aquarium_care,
     } = props;
 
     let layout = draw_hub_shell(frame, area);
-    crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, pet, aquarium_care);
+    crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, aquarium_care);
     draw_footer(frame, layout.footer);
 }
 

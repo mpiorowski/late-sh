@@ -91,6 +91,9 @@ fn a_block_laid_in_the_same_slot_eats_the_hit_and_what_lands_leaves_static() {
             0
         )
     );
+    // The tape keeps what was thrown as well as what landed: the
+    // difference is what the block ate.
+    assert_eq!((caller.hit, called.hit), (p.surge, 0));
     assert_eq!(
         duel.corner(Side::Called).signal,
         SIGNAL - (p.surge - p.block)

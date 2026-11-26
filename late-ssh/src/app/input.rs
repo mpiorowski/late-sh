@@ -974,6 +974,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_pet_modal {
+        crate::app::pet::input::handle_modal_input(app, event);
+        return;
+    }
+
     if app.show_lobby_modal {
         crate::app::lobby::modal_input::handle_input(app, event);
         return;
@@ -1957,6 +1962,10 @@ fn dispatch_escape(app: &mut App) {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
+    if app.show_pet_modal {
+        crate::app::pet::input::handle_escape(app);
+        return;
+    }
     if app.show_lobby_modal {
         crate::app::lobby::modal_input::handle_escape(app);
         return;
@@ -2634,22 +2643,17 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
-/// A left-click on the pet's render-recorded rect pets it. The rect is only
-/// set on frames where the box drew, so this is a no-op wherever the box is
-/// hidden.
+/// A left-click on the pet's tile as the frame recorded it: the pet, a
+/// treat in its pouch, its rows, its floor (`pet::input::handle_click`).
+/// The slots are only set on frames where the box drew, so this is a no-op
+/// wherever the box is hidden.
 fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
     // The box renders under the global modals; don't let clicks on a
     // modal that happens to overlap it fall through to the pet.
     if chat_scroll_clicks_blocked(app) {
         return false;
     }
-    if let Some(rect) = app.last_pet_rect.get()
-        && rect_contains(rect, x, y)
-    {
-        pet_the_pet_globally(app);
-        return true;
-    }
-    false
+    crate::app::pet::input::handle_click(app, x, y)
 }
 
 /// A left-click on the reef or the tank tile feeds it, the pet's way: a
@@ -2674,7 +2678,7 @@ fn handle_tank_click(app: &mut App, x: u16, y: u16) -> bool {
 }
 
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
-    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+    if mouse.kind != MouseEventKind::Down {
         return false;
     }
     let Some(x) = mouse.x.checked_sub(1) else {
@@ -2683,6 +2687,16 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
+    match mouse.button {
+        Some(MouseButton::Left) => {}
+        // The one right click the app takes: on the pet's tile it opens
+        // the care box, under the same modal guard as the left one.
+        Some(MouseButton::Right) => {
+            return !chat_scroll_clicks_blocked(app)
+                && crate::app::pet::input::handle_right_click(app, x, y);
+        }
+        Some(MouseButton::Middle) | None => return false,
+    }
     // Petting the pet is a passing gesture, not a move: it takes the click
     // before the tile focus, so a click on the pet leaves the keys with the
     // chat tile the page opened on.
@@ -2914,6 +2928,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.chat.cyberspace.modal_active()
         || app.show_quit_confirm
         || app.show_bonsai_modal
+        || app.show_pet_modal
         || app.show_lobby_modal
         || app.icon_picker_open
 }
@@ -3340,6 +3355,7 @@ fn close_overlays_for_modal(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3379,6 +3395,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3407,6 +3424,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_hub_modal = false;
     app.show_settings = false;
@@ -3420,7 +3438,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
         .set_shelf(crate::app::directory::state::Shelf::Map);
 }
 
-/// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.
+/// Shared Shop entry point for Ctrl+S, `/shop`, and the status bar's Shop hint.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3432,6 +3450,7 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3442,16 +3461,16 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-/// A click on the pet: it purrs for a bit, and the first click of the day
-/// pays (`PetState::pet`). The box only draws for a pet that is out, so the
-/// click can only land on one here; the service's claim decides the payout
-/// off the row, since another session may have put it away since.
+/// The pet's daily pat from a surface that is not the pet itself (the
+/// attention row): it purrs, and the first of the day pays
+/// (`PetState::pat`). The service's claim decides the payout off the row,
+/// since another session may have put the pet away since.
 pub(crate) fn pet_the_pet_globally(app: &mut App) {
     if !app.pet_out() {
         return;
     }
     app.pet_state
-        .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
+        .pat(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
 /// The tank's free daily meal, from any surface that shows it (`a` on its
@@ -3473,6 +3492,15 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
     }
 }
 
+/// Open the pet's care box over whatever is up (`pet::input::open_care`,
+/// whose callers gate it on the pet being out).
+pub(crate) fn open_pet_modal_globally(app: &mut App) {
+    close_overlays_for_modal(app);
+    // A piece picker left open over Home would take the modal's keys.
+    app.piece_picker.close();
+    app.show_pet_modal = true;
+}
+
 fn open_bonsai_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3485,6 +3513,7 @@ fn open_bonsai_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3509,6 +3538,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3715,6 +3745,7 @@ fn close_modals_for_page_change(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_settings = false;
     app.show_lobby_modal = false;
 }
