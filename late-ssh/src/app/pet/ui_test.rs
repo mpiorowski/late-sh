@@ -894,12 +894,12 @@ async fn a_guest_stands_in_its_hosts_box_over_its_name() {
     let (_, frame) = draw_at(&mut state, 10, Rect::new(0, 0, 40, 6), ALONE);
     assert_eq!(frame.zone, Rect::new(0, 0, 26, 5));
 
-    // A box of three rows (the stock Home) has no row for names: the
+    // A box of three rows has no row for names: the
     // guests stand on its floor beside the host, unnamed.
-    let stock = Rect::new(0, 0, 60, 3);
-    let (_, frame) = draw_at(&mut state, 10, stock, ALONE);
+    let three_rows = Rect::new(0, 0, 60, 3);
+    let (_, frame) = draw_at(&mut state, 10, three_rows, ALONE);
     assert_eq!(frame.zone, Rect::new(0, 0, 32, 3));
-    let rows = box_rows(&state, stock);
+    let rows = box_rows(&state, three_rows);
     assert_eq!(
         rows.iter().map(|row| &row[32..]).collect::<Vec<_>>(),
         [
@@ -962,14 +962,19 @@ fn a_profile_portrait_runs_through_the_tricks_it_knows() {
     assert!(face(305).contains("u.u"), "the next round bows");
 }
 
-/// An egg sits where it is, and only moves once it has its days.
+/// An egg sits where it is, and only moves once it has its days or while a
+/// pat keeps it warm.
 #[test]
-fn an_egg_is_still_until_it_is_ready_and_then_rocks() {
+fn an_egg_is_still_until_it_is_patted_or_ready_and_then_rocks() {
     let egg = Body {
         form: Form::Egg,
         ..body(PetMood::Idle)
     };
     let ready = Body { ready: true, ..egg };
+    let patted = Body {
+        mood: PetMood::Purring,
+        ..egg
+    };
     assert_eq!(
         PetPose::for_frame(egg, GLASS, None, STROLL_TICKS),
         PetPose::Nest
@@ -988,5 +993,10 @@ fn an_egg_is_still_until_it_is_ready_and_then_rocks() {
         frames(ready),
         1000 / 8,
         "a ready one rocks on eight-tick edges"
+    );
+    assert_eq!(
+        frames(patted),
+        1000 / 8,
+        "so does one its owner just patted, for as long as it purrs"
     );
 }

@@ -8680,11 +8680,12 @@ async fn a_tile_kept_to_lounge_goes_down_in_other_rooms_and_comes_back() {
     );
 }
 
-/// The care click exists to reach the tank, and the stock reef keeps to
-/// #lounge. With the tank due the click takes the chat there, so it lands on a
-/// reef that can take the meal; with the tank fed, the room stays yours.
+/// The care click exists to reach what waits, and the stock reef and pet keep
+/// to #lounge. With the tank or the pet due the click takes the chat there,
+/// so it lands on a reef that can take the meal and a pet that can take the
+/// pat; with both tended, the room stays yours.
 #[tokio::test]
-async fn the_care_click_lands_on_the_reef_while_the_tank_is_due() {
+async fn the_care_click_lands_in_the_lounge_while_the_tank_or_the_pet_is_due() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "care-reef-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -8713,9 +8714,24 @@ async fn the_care_click_lands_on_the_reef_while_the_tank_is_due() {
     assert_eq!(app.chat.selected_room_id, Some(lounge.id));
     assert!(app.reef_tile_inner().is_some(), "the click found the reef");
 
+    // The tank fed, the pet still waits beside it.
     app.handle_input(b"\x1f");
     app.handle_input(b"announcements\r");
     app.aquarium_care.feed();
+    render_plain(&mut app);
+    assert_eq!(
+        app.last_pet_rect.get(),
+        None,
+        "the pet is down in this room"
+    );
+    crate::app::zen::input::open_care(&mut app);
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    render_plain(&mut app);
+    assert!(app.last_pet_rect.get().is_some(), "the click found the pet");
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"announcements\r");
+    crate::app::input::pet_the_pet_globally(&mut app);
     crate::app::zen::input::open_care(&mut app);
     assert_eq!(app.chat.selected_room_id, Some(announcements.id));
 }

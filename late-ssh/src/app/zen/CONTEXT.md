@@ -154,18 +154,24 @@ arrange mode the bottom row is the key footer,
 `App::home_tiles_area` and `App::home_tile_rects`, from the same pure
 functions the renderer uses. The stock
 Home (`RiceLayout::home`) is fixed and the same for every account: the
-room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
-chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip and kept to
+room rail (`rooms`, `HOME_RAIL_COLS`), a band across the top of the
+chat (`HOME_AQUARIUM_ROWS`), the reef (`aquarium`) hosting the now strip on
+two thirds of it (`HOME_REEF_SHARE`) and the `pet` on the last, both kept to
 #lounge (below, Tiles kept to a room), the chat
 under it (a `chat` bound to no room, so it shows the rail's; a stored
 `center` reads as one), and the stock right column (`HOME_RIGHT_COLS`):
 `presence`, then `visualizer` (the band's three rows), `music` (the dock's
 thirteen), `lobby` hosting attention (four rows: two tables over the status
-line and the keys), `live` at its panel rows, `pet` (its three-row box, no mood row) and
-`bonsai` taking the rest. The rail, the reef and `presence` take their
+line and the keys), `live` at its panel rows and
+`bonsai` taking the rest. The pet has the glass on its left, so it goes and
+watches the fish, and its box is tall enough for its status row, its pouch
+row and a guest's name; under about ninety columns its third is narrower
+than the pet and only the status row draws. The rail, the reef, the pet and
+`presence` take their
 title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
-reef keeps the row for water, so nothing moves when the mode comes up, and
-`presence` gets both its rows. A pet its owner put away (`/pet away`)
+band keeps the row for water and floor, so nothing moves when the mode comes
+up, and `presence` gets both its rows. The stock is what a new device and `R`
+get: a device keeps the `home` it already stored. A pet its owner put away (`/pet away`)
 draws a note in its tile saying `/pet out` brings it back. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
 arranges its own Home once and keeps it on its key.
@@ -190,8 +196,9 @@ other name with a banner (`Layouts::stock_of` is `None` for them,
 `LayoutsError::NoStock`). The status line's care click loads the layout
 named `home` (`zen::input::open_care`, `/layout home` by another
 route: Home first, and the `No layout by that name or number` banner on
-a device that deleted it). With the tank due it also takes the chat to the
-room the reef keeps to, so the click lands on a reef it can feed. Names are trimmed, one to
+a device that deleted it). With the tank or the pet due it also takes the
+chat to the room that tile keeps to, so the click lands on a reef it can feed
+or a pet it can pat. Names are trimmed, one to
 `MAX_LAYOUT_NAME_CHARS` (16) characters, unique case aside. Nothing
 switches a layout but the keys, `/layout` and the care click: not
 `/golive`, not a game waiting, not the screensaver, not the landing
@@ -294,8 +301,8 @@ anywhere else the tile goes down and its sibling takes its cells, so a reef
 and a pet kept to #lounge leave the chat their rows in every other room. The
 page only reflows on a room change, when the messages change anyway.
 
-- The stock reef keeps to #lounge by slug (`REEF_ROOM`, `Node::only_in`), and so
-  it takes the now strip it hosts with it. A device from before that gets the
+- The stock reef and the pet beside it keep to #lounge by slug (`REEF_ROOM`,
+  `Node::only_in`), and so the reef takes the now strip it hosts with it. A device from before that gets the
   same once on its next login (`Layouts::seed_stock`, `RiceLayout::keep_reefs_to_lounge`,
   a `stock_seen` mark): every reef still in every room, on any layout with a
   chat; a page with no chat keeps its reef, since nothing would take its space.

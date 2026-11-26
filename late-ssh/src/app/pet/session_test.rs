@@ -438,6 +438,27 @@ async fn the_first_key_of_a_day_counts_it_and_a_long_silence_gets_a_welcome() {
     );
 }
 
+/// An egg on its first day has nothing to show for a pat but the chips, so
+/// the pat names the wait.
+#[tokio::test]
+async fn a_pat_tells_a_day_old_egg_when_it_hatches() {
+    let (_test_db, svc, user_id) = owner("pet-state-warm").await;
+    let today = chrono::Utc::now().date_naive();
+    svc.act(user_id, PetCommand::CountDay, today)
+        .await
+        .expect("count the day");
+    let mut state = session(&svc, user_id).await;
+    let key = Instant::now();
+    state.tick(tick_after_key(1, key));
+
+    assert_eq!(state.click(key, today, false), Clicked::Done);
+    assert!(state.petted_on(today));
+    assert_eq!(
+        state.petted_line(),
+        "The egg is warm (+100 chips): it hatches tomorrow"
+    );
+}
+
 #[tokio::test]
 async fn a_ready_egg_asks_for_the_care_box_then_a_click_pats_and_gives_what_it_earned() {
     let (_test_db, svc, user_id) = owner("pet-state-click").await;
@@ -479,6 +500,7 @@ async fn a_ready_egg_asks_for_the_care_box_then_a_click_pats_and_gives_what_it_e
     assert!(!state.petted_on(today));
     assert_eq!(state.click(key, today, false), Clicked::Done);
     assert!(state.petted_on(today));
+    assert_eq!(state.petted_line(), "Petted (+100 chips)");
 
     // The day's first win earns the treat, of its family's kind; a win in
     // another family the same day asks for nothing more, and the click

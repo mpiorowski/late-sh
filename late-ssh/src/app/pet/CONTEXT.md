@@ -197,7 +197,15 @@ hands the order to `input::handle_order`.
 - **The Home tile** (`ui::draw_tile`, a `zen` tile): the box the pet
   roams, a status row above it and a pouch row under it when the tile is
   tall enough (five rows for the first, six for both). The stock Home
-  gives it three rows: the box alone.
+  gives it a third of the band over the chat beside the reef, kept to
+  #lounge with it (`zen/CONTEXT.md`, Home).
+- **An egg short of its days says when** (`Growth::days_to_hatch`,
+  `state::hatch_wait`, the one wording): `hatches tomorrow` on the pouch
+  row, `it hatches tomorrow` in the care box, and the day's paid pat reads
+  `The egg is warm (+100 chips): it hatches tomorrow`
+  (`PetState::petted_line`, which the glue's `PetPetted` banner asks for).
+  A patted egg rocks while the pat keeps it purring, as a ready one does
+  until it is hatched.
 - **Guests in the box** (`ui::draw_pet_box`, so the tile and the care
   box's pen alike): the newest two stand in a strip on the right,
   fourteen cells each, never more than half the box's width. The pet's
@@ -261,7 +269,8 @@ hands the order to `input::handle_order`.
   eye string is three cells with the nose in the middle.
 - Every body is seven cells plus one column (the tail, and on the floor
   row the carried glyph): eight, the box's `PET_WIDTH`.
-- The egg and a sleeping pet are fully static; `ui::frame_changed`
+- An egg short of its days that nobody just patted and a sleeping pet are
+  fully static; `ui::frame_changed`
   compares the same `PetArt` the draw uses, so a frame is only paid when
   the box changes.
 - A match win earns the day's treat only in a connected session: a daily

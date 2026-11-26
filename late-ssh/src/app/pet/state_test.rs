@@ -2,8 +2,8 @@ use chrono::NaiveDate;
 use late_core::models::pet::{Fed, Form, Pick, Stage, TreatKind, Trick};
 
 use super::{
-    DayCounted, Growth, Practiced, STAY_MINUTES, TRICK_DAYS, call_line, fed_today, stay_left,
-    stays_since, treat_for_win, treat_title,
+    DayCounted, Growth, Practiced, STAY_MINUTES, TRICK_DAYS, call_line, fed_today, hatch_wait,
+    stay_left, stays_since, treat_for_win, treat_title,
 };
 use crate::app::activity::event::GameFamily;
 
@@ -56,12 +56,17 @@ fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
     let mut growth = egg();
     let (one, two) = (Pick::One, Pick::Two);
 
+    assert_eq!(growth.days_to_hatch(), Some(2), "before its first day");
+    assert_eq!(hatch_wait(2), "in 2 days");
     live(&mut growth, 0..1);
     assert!(!growth.ready_to_hatch(), "the arrival day");
     assert!(!growth.hatch(), "an egg without its days stays an egg");
     assert_eq!(growth.days_to_next(), Some(1));
+    assert_eq!(growth.days_to_hatch(), Some(1));
+    assert_eq!(hatch_wait(1), "tomorrow");
     live(&mut growth, 1..5);
     assert!(growth.ready_to_hatch());
+    assert_eq!(growth.days_to_hatch(), None, "a ready egg waits on a pick");
     assert_eq!(growth.stage(), Stage::Egg, "days never hatch an egg");
     assert_eq!(
         growth.offers(),

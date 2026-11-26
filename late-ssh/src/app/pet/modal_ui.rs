@@ -13,7 +13,7 @@ use ratatui::{
 };
 
 use super::session::{PetState, visit_line};
-use super::state::{TRICK_DAYS, treat_title};
+use super::state::{TRICK_DAYS, hatch_wait, treat_title};
 use super::ui::{Neighbours, PetView, draw_pet_box, guest_label, pick_name, still_rows};
 use crate::app::common::theme;
 
@@ -134,7 +134,7 @@ fn care_lines(state: &PetState) -> Vec<Line<'static>> {
         (false, None) => vec![vec![
             label("grow"),
             text(&match (stage, stage.next(), growth.days_to_next()) {
-                (Stage::Egg, _, Some(days)) => format!("it hatches in {}", days_text(days)),
+                (Stage::Egg, _, Some(days)) => format!("it hatches {}", hatch_wait(days)),
                 (
                     Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder,
                     Some(next),

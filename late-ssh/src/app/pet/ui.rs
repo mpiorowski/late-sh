@@ -14,6 +14,7 @@ use super::session::{
     Body, Look, Moment, PET_HEIGHT, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTravel,
     Plaything, Toy, visit_line,
 };
+use super::state::hatch_wait;
 use crate::app::common::{
     primitives::{draw_centered_note, truncate_cells},
     theme,
@@ -157,7 +158,7 @@ pub fn draw_pet_box(
     // Guests stand in a strip on the right and the pet keeps the rest of
     // the box to itself. A box with a row to spare names each guest on its
     // bottom row, and everyone stands on the row over that; a box of three
-    // rows (the stock Home) has the bodies only.
+    // rows has the bodies only.
     let guests = &state.guests()[..guests_drawn(state.guests().len(), area)];
     let area = match guests.len() {
         0 => area,
@@ -425,7 +426,10 @@ fn pouch_row(state: &PetState, width: u16) -> Option<(Line<'static>, Option<(u16
     }
     let Some(kind) = state.waiting() else {
         return match state.visitors() {
-            [] => None,
+            [] => match state.growth().days_to_hatch() {
+                Some(days) => text(format!("hatches {}", hatch_wait(days)), dim),
+                None => None,
+            },
             [one] => text(visit_line(one, &state.display_name()), dim),
             many => text(format!("{} came by", many.len()), dim),
         };
@@ -620,7 +624,8 @@ fn art_lines(body: Body, art: PetArt, pad: usize) -> Vec<Line<'static>> {
 /// The three rows before the tail column, seven cells each so the face
 /// aligns across species and forms.
 ///
-/// The egg is a shell, and rocks (`rock`) once it has its days. A baby is
+/// The egg is a shell, and rocks (`rock`) once it has its days or while a
+/// pat keeps it warm. A baby is
 /// a head with the start of ears. A young one grows the ears (or the
 /// crest) its owner picked, full size on a small head, over small feet. An
 /// adult's head widens and it stands on the feet picked for it. An elder
@@ -801,13 +806,13 @@ impl PetArt {
         let position = pet_position(pose, tick, travel);
         let art = match pose {
             // A shell: no eyes, no tail. It rocks every second or so once
-            // it has its days.
+            // it has its days, and for as long as a pat keeps it warm.
             PetPose::Nest => PetArt {
                 position,
                 eyes: "   ",
                 tail: [" ", " "],
                 mouth: Mouth::Hush,
-                rock: body.ready && tick % 16 < 8,
+                rock: (body.ready || mood == PetMood::Purring) && tick % 16 < 8,
             },
             PetPose::Sulk | PetPose::Sleep | PetPose::Stroll => PetArt {
                 position,
@@ -981,7 +986,7 @@ fn pet_position(pose: PetPose, tick: usize, travel: PetTravel) -> (usize, usize)
 /// glass, a frame of a moment (a treat eaten, a trick), an egg rocking. It
 /// compares the same `PetArt` the draw uses, so the render gate only pays
 /// frames on ticks where the box actually changes; a sleeping pet and an
-/// egg still short of its days are fully static.
+/// egg short of its days that nobody just patted are fully static.
 pub fn frame_changed(
     body: Body,
     neighbours: Neighbours,

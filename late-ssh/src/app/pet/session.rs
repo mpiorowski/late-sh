@@ -10,7 +10,9 @@ use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use super::state::{self, Growth, Practiced};
-use super::svc::{Did, PetCommand, PetOutcome, PetService, PetSnapshot, Refusal, Visited};
+use super::svc::{
+    Did, PET_CHIP_BONUS, PetCommand, PetOutcome, PetService, PetSnapshot, Refusal, Visited,
+};
 use super::ui::Portrait;
 use crate::app::activity::event::GameFamily;
 use crate::app::common::primitives::{Banner, Screen};
@@ -619,6 +621,18 @@ impl PetState {
 
     pub fn petted_on(&self, today: NaiveDate) -> bool {
         self.last_petted == Some(today)
+    }
+
+    /// What the day's paid pat says: the chips, and for an egg short of its
+    /// days when it hatches, since a patted egg shows nothing else for it.
+    pub fn petted_line(&self) -> String {
+        match self.growth.days_to_hatch() {
+            Some(days) => format!(
+                "The egg is warm (+{PET_CHIP_BONUS} chips): it hatches {}",
+                state::hatch_wait(days)
+            ),
+            None => format!("Petted (+{PET_CHIP_BONUS} chips)"),
+        }
     }
 
     /// Give the treat that waits, if one does.

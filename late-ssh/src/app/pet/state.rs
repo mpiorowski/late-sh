@@ -352,6 +352,24 @@ impl Growth {
             .next()
             .map(|next| (days_for(next) - self.days_together).max(0))
     }
+
+    /// The days an egg still waits for. `None` once it has them, and for a
+    /// hatched pet.
+    pub fn days_to_hatch(&self) -> Option<i32> {
+        match self.form {
+            Form::Egg => self.days_to_next().filter(|days| *days > 0),
+            Form::Baby | Form::Young { .. } | Form::Adult { .. } | Form::Elder { .. } => None,
+        }
+    }
+}
+
+/// When an egg `days` short hatches, as its owner reads it: `tomorrow`,
+/// `in 3 days`. The tile, the care box and the pat all say it this way.
+pub fn hatch_wait(days: i32) -> String {
+    match days {
+        1 => "tomorrow".to_string(),
+        days => format!("in {days} days"),
+    }
 }
 
 #[cfg(test)]

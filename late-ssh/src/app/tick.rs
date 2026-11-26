@@ -1325,10 +1325,9 @@ impl App {
                     }
                     // And for the pet: the first pet of the day paid.
                     ActivityKind::PetPetted if user_id == self.user_id => {
-                        Some(crate::app::common::primitives::Banner::success(&format!(
-                            "Petted (+{} chips)",
-                            crate::app::pet::svc::PET_CHIP_BONUS
-                        )))
+                        Some(crate::app::common::primitives::Banner::success(
+                            &self.pet_state.petted_line(),
+                        ))
                     }
                     // The streak's fry: the sim learns which species to draw
                     // small; the shop snapshot reload brings the new count.

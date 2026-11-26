@@ -62,6 +62,10 @@ async fn a_right_click_or_the_status_row_opens_the_care_box_and_q_closes_it() {
     let (_test_db, mut app) = home_with_pet("pet-input-open", 1).await;
     let frame = app.last_pet_frame.get().expect("the tile drew");
     let status = frame.rows[0].expect("a tall tile has its status row");
+    assert!(
+        render_plain(&mut app).contains("hatches tomorrow"),
+        "the row under a day-old egg says when"
+    );
 
     click(&mut app, 2, frame.zone.x + 1, frame.zone.y + 1);
     assert!(app.show_pet_modal, "a right click on the tile");
@@ -70,7 +74,7 @@ async fn a_right_click_or_the_status_row_opens_the_care_box_and_q_closes_it() {
         assert!(plain.contains(row), "the care box lists {row}:\n{plain}");
     }
     assert!(plain.contains("an egg · day 1 · bond 0"), "{plain}");
-    assert!(plain.contains("it hatches in 1 day"), "{plain}");
+    assert!(plain.contains("it hatches tomorrow"), "{plain}");
     assert!(
         !plain.contains("/pet reset"),
         "an egg has nothing to change yet:\n{plain}"

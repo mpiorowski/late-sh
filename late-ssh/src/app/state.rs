@@ -1553,15 +1553,10 @@ impl App {
             aquarium_care.sprout_visible(),
         );
         aquarium_state.set_hungry(aquarium_care.hungry());
-        // What the login settlement did while the user was away, or the tank
-        // it planted: said once, on the first screen. A loss outranks the
-        // sprout news.
+        // What the login settlement did while the user was away: said once,
+        // on the first screen. A loss outranks the sprout news. A tank
+        // planted by this connect says nothing: a new account has the tour.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
-            [] if config.initial_aquarium_care.welcomed => {
-                Some(crate::app::common::primitives::Banner::info(
-                    "You have a tank, a fry and a sprout: click the tank or /aquarium feed daily, cut the sprout in /shop or let it root",
-                ))
-            }
             [] => match (
                 &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
