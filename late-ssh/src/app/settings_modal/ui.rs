@@ -1068,7 +1068,7 @@ fn draw_account_tab(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalSt
         (
             AccountRow::Invites,
             "Invites",
-            "Invite friends with your own SSH command. Regulars earn you chips.",
+            "A personal SSH command that signs friends up. Regulars earn you chips.",
             false,
         ),
         (
@@ -2168,7 +2168,7 @@ fn draw_chat_badges_dialog(frame: &mut Surface<'_>, area: Rect, state: &Settings
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
             Span::styled(
-                "Earn it, hide it. Games show their top badge.",
+                "Hide any badge you have earned. A game shows its top rung only.",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ])),

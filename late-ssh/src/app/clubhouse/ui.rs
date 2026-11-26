@@ -2208,7 +2208,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             vec![
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("step out to Nightcap, the quiet bar", text),
+                    Span::styled("step out to Nightcap, the ai-free bar", text),
                 ]),
                 Line::from(Span::styled(
                     "six stools · the seated may speak · n from anywhere in here",

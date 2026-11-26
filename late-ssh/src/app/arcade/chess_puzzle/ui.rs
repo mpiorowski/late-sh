@@ -68,6 +68,7 @@ pub fn draw_game(
             ("n/r", "new/restart"),
             ("d/p", "daily/personal"),
             ("i", pieces),
+            ("!", "rules"),
             ("q", "exit"),
         ]
     } else {
@@ -78,6 +79,7 @@ pub fn draw_game(
             ("n", "new"),
             ("d/p", "mode"),
             ("i", pieces),
+            ("!", "rules"),
             ("q", "exit"),
         ]
     };

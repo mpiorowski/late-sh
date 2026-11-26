@@ -142,7 +142,6 @@ pub struct State {
     /// The highest rank already sent to be banked. Ranks only rise, so
     /// every paid rank at or below it has been sent.
     banked: Rank,
-    show_rules: bool,
     message: String,
     /// Today's wheel while the board has none; see `poll_load`.
     load: DailyLoad<Today>,
@@ -166,7 +165,6 @@ impl State {
             rim: ['a'; WHEEL_LETTERS - 1],
             shuffles: 0,
             banked: Rank::Start,
-            show_rules: false,
             message: UNAVAILABLE.to_string(),
             load: DailyLoad::after_connect(today.is_some()),
         };
@@ -357,20 +355,8 @@ impl State {
             .map(|next| (next, next.needs(max).saturating_sub(self.score())))
     }
 
-    pub fn show_rules(&self) -> bool {
-        self.show_rules
-    }
-
     pub fn message(&self) -> &str {
         &self.message
-    }
-
-    pub fn open_rules(&mut self) {
-        self.show_rules = true;
-    }
-
-    pub fn close_rules(&mut self) {
-        self.show_rules = false;
     }
 
     /// Type a letter. Only the wheel's letters go in; another one is

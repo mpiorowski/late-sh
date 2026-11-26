@@ -214,7 +214,10 @@ fn a_listing_asked_for_before_a_take_down_cannot_put_the_piece_back() {
         .unwrap();
     assert!(state.tick());
     assert_eq!(state.section_pieces(mine), &[]);
-    assert_eq!(state.notice(), Some("Taken down. The wall forgets it."));
+    assert_eq!(
+        state.notice(),
+        Some("Taken down. It is off the wall for good.")
+    );
     drain(&mut state);
 
     // The second request's answer ran before the take-down, so it still

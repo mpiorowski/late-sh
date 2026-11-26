@@ -29,6 +29,8 @@ new one.
 
 Root context keeps only global Arcade shortcuts. Keep detailed per-game control copy in each game's `ui.rs` info panel and in help modal copy.
 
+`!` opens the selected or open game's rules card on every game in the roster (`rules.rs`), lobby or board. A lobby row carries no description, so that card is where a game's rules are written, and the chips on it are read from `DailyPuzzle::tiers` rather than spelled out (`DESIGN_GUIDE.md` §4.5).
+
 Current per-game basics:
 - 2048: `h/j/k/l` or arrows move, `r` restarts after game over.
 - Lateris: left/right move, down soft-drops, up rotates, `Space` hard-drops, `c` holds the current piece, `p` pauses, `r` restarts.

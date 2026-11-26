@@ -25,6 +25,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("hjkl/wsad", "direction"),
             ("p", "pause"),
             ("r", "restart"),
+            ("!", "rules"),
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),

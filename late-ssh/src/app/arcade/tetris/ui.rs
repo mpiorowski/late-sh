@@ -47,6 +47,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("c", "hold"),
             ("p", "pause"),
             ("r", "restart"),
+            ("!", "rules"),
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),

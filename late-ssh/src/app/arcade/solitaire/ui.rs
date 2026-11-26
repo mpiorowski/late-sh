@@ -46,6 +46,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 ("[ ]", "draw"),
                 ("r", "reset"),
                 ("g", "reroll"),
+                ("!", "rules"),
                 ("`", "dashboard"),
                 ("Esc", "exit"),
             ]

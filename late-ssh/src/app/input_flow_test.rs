@@ -7465,7 +7465,7 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     // glyphs, terminal images, then Chat badges.
     app.handle_input(b"jjjjjj\r");
     // The heading fits the dialog whole, not cut at its border.
-    wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
+    wait_for_render_contains(&mut app, "Hide any badge you have earned.").await;
     wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;
 
     // Picker rows in label order: the eight monthly rows, then Lateania.

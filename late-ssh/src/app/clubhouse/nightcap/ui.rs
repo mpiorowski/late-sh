@@ -113,7 +113,7 @@ fn draw_bar(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                "a quiet spot out back of the clubhouse. the seated may speak. no ai allowed.",
+                "out back of the clubhouse. the seated may speak. no ai allowed.",
                 Style::default().fg(theme::TEXT_DIM()),
             )),
         ]),

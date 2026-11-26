@@ -33,6 +33,25 @@ fn closes_board(byte: u8) -> bool {
 }
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
+    // The rules card owns the Arcade while it is up, lobby or board alike:
+    // `!`, `q` and Esc put it away, `?` trades it for the global guide, and
+    // nothing else gets through to the game behind it.
+    if app.arcade_rules_open {
+        if byte == b'?' {
+            app.arcade_rules_open = false;
+            open_global_help(app);
+            return true;
+        }
+        if byte == b'!' || closes_board(byte) {
+            app.arcade_rules_open = false;
+        }
+        return true;
+    }
+    if byte == b'!' {
+        app.arcade_rules_open = true;
+        return true;
+    }
+
     if app.is_playing_game {
         // Backtick hops the workspace cycle out of daily puzzles. Real-time
         // games (Lateris, Snake, Traffic) and personal (non-daily) boards
@@ -97,14 +116,13 @@ fn handle_puzzle_key(app: &mut App, puzzle: DailyPuzzle, byte: u8) -> bool {
     match puzzle {
         DailyPuzzle::LeWord => {
             if byte == b'?' {
-                app.le_word_state.close_rules();
                 open_global_help(app);
                 return true;
             }
             // Le Word is a text-entry game where `q`/`Q` are valid letters,
             // so only `Esc` exits to the lobby; `q`/`Q` fall through to the
             // letter handler below.
-            if byte == 0x1B && !app.le_word_state.show_rules {
+            if byte == 0x1B {
                 app.is_playing_game = false;
                 return true;
             }
@@ -169,20 +187,19 @@ fn handle_puzzle_key(app: &mut App, puzzle: DailyPuzzle, byte: u8) -> bool {
         }
         DailyPuzzle::WordWheel => {
             if byte == b'?' {
-                app.word_wheel_state.close_rules();
                 open_global_help(app);
                 return true;
             }
             // Word Wheel types letters, `q` among them, so only `Esc`
             // leaves, as in Le Word.
-            if byte == 0x1B && !app.word_wheel_state.show_rules() {
+            if byte == 0x1B {
                 app.is_playing_game = false;
                 return true;
             }
             super::word_wheel::input::handle_key(&mut app.word_wheel_state, byte)
         }
         DailyPuzzle::Quartets => {
-            if closes_board(byte) && !app.quartets_state.show_rules() {
+            if closes_board(byte) {
                 app.is_playing_game = false;
                 return true;
             }
@@ -298,11 +315,11 @@ fn selected_daily_is_available(app: &App) -> bool {
     }
 }
 
-/// Whether Esc on the Arcade page belongs to this domain: an open board, or
-/// the lobby's solvers roster. `app/input.rs` asks before treating Esc as
-/// the page's.
+/// Whether Esc on the Arcade page belongs to this domain: an open board,
+/// the lobby's solvers roster, or a rules card over either. `app/input.rs`
+/// asks before treating Esc as the page's.
 pub(crate) fn claims_escape(app: &App) -> bool {
-    app.is_playing_game || app.arcade_solvers_open
+    app.is_playing_game || app.arcade_solvers_open || app.arcade_rules_open
 }
 
 /// The share card of the daily on screen, once it is finished.

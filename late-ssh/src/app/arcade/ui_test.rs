@@ -48,7 +48,6 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
 
     let lobby = render_plain(&mut app);
     assert!(lobby.contains("Sliding Puzzle"));
-    assert!(lobby.contains("Slide tiles into order by number or image."));
     assert!(lobby.contains("✗100✗250✗500"));
 
     app.handle_input(b"\r");
@@ -325,16 +324,24 @@ async fn the_lobby_draws_the_week_and_marks_the_rungs_card() {
     let lobby = render_plain(&mut app);
     assert!(!lobby.contains("┌───────┐"), "no week at 80x24: {lobby}");
     assert!(lobby.contains("─── Daily Games ───"), "{lobby}");
-    assert!(lobby.contains("Win once per UTC day"), "{lobby}");
+    assert!(
+        lobby.contains("Earn chips by playing games per UTC day!"),
+        "{lobby}"
+    );
     app.resize(170, 50).expect("resize test terminal");
     let lobby = render_plain(&mut app);
-    let share_line = lobby
-        .lines()
-        .find(|line| line.contains("Share your day card"))
-        .expect("the intro keeps its line");
+    // The section header and the share key are the whole intro: a lobby row
+    // carries its game's title and what changes about it, never a standing
+    // description (`DESIGN_GUIDE.md` §4.5).
     assert!(
-        share_line.contains("Every finished puzzle has one too."),
-        "{share_line}"
+        lobby
+            .lines()
+            .any(|line| line.contains("Share your day card")),
+        "{lobby}"
+    );
+    assert!(
+        !lobby.contains("Klondike with daily and personal deals"),
+        "no per-game description on a lobby row: {lobby}"
     );
 }
 

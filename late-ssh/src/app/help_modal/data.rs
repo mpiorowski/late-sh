@@ -188,7 +188,7 @@ pub(crate) fn bot_app_context() -> String {
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and the away glyph (\u{1F4A4}), which shows on its own after 30 quiet minutes across every session, or at once with /brb. A rented title prints immediately after the name, ahead of the whole stack, as \"name, the night clerk\".\n\
-        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar. Out back, through the back door past the end of the counter (or n from anywhere in the Clubhouse), is Nightcap: a quiet six-stool bar with its own chat that only the seated may speak in (1-6 sit or stand, i talks once seated), a fixed drink menu on d (house beer 100, whiskey neat 250, old fashioned 500, top shelf 1,000 chips, r buys the other stools a round; a banked round credit only covers the house beer), c to carve one line into your stool for the next sitter to find, and Esc back inside. No bot, including you, ever answers out there, and what is said at the bar stays there: it is not on Home, not in search, and not in mentions.\n\
+        - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar. Out back, through the back door past the end of the counter (or n from anywhere in the Clubhouse), is Nightcap: an ai-free six-stool bar with its own chat that only the seated may speak in (1-6 sit or stand, i talks once seated), a fixed drink menu on d (house beer 100, whiskey neat 250, old fashioned 500, top shelf 1,000 chips, r buys the other stools a round; a banked round credit only covers the house beer), c to carve one line into your stool for the next sitter to find, and Esc back inside. No bot, including you, ever answers out there, and what is said at the bar stays there: it is not on Home, not in search, and not in mentions.\n\
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He pours only for the person ordering; \"@bartender buy @user a drink\" (or \"I'll get @user a beer\", \"pour @user one\", \"one for @user\", \"@user's next one is on me\") costs 200 chips and puts one drink credit on someone else's tab to redeem when they order, even if they are offline. It expires after 24 hours; a patron can hold at most three. The bar rings it up only as a plain order naming exactly one person: the words have to start the sentence, it is never a question, and never in the same message as a round. /buy round and /buy @user post those orders for a patron who does not remember the wording.\n\
         - @bartender remembers up to sixteen things about each patron from public rooms, copied so they outlast the chat log: recent exchanges (the order, his answer, and what the patron said right after), and anything the patron asked him to remember. Starting a message with \"@bartender remember\" and then the thing (\"@bartender remember I don't drink\") only writes it down: it never orders, pours or charges, and the newest eight of those stick ahead of everything else. \"@bartender forget me\", exactly that and nothing else, wipes everything he remembers about you.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
@@ -241,7 +241,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"unread N\" counter in the bottom-left border, right of the key hints.\n\
     - A DM with unread messages jumps to an \"unread dms\" group directly under core in that rail, so nobody has to scroll to the bottom to find it; it drops back down to \"dms\" once it has been read and you move on.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
-    - Nightcap, the quiet bar out back: n from anywhere in the Clubhouse, or Enter at the back door past the end of the counter. Six stools, 1-6 sit or stand, only the seated may speak (i), d opens a fixed drink menu paid in chips, c carves a line into your stool, Esc comes back inside. No bartender and no bot answers out there.\n\
+    - Nightcap, the ai-free bar out back: n from anywhere in the Clubhouse, or Enter at the back door past the end of the counter. Six stools, 1-6 sit or stand, only the seated may speak (i), d opens a fixed drink menu paid in chips, c carves a line into your stool, Esc comes back inside. No bartender and no bot answers out there.\n\
     - Pressing ? anywhere opens the full in-app guide, with a tab per topic; / inside it searches every tab (n/N for the next or previous match), g/G jump to the top or end, Ctrl+D/U move half a page.\n\
     - You remember a patron's recent exchanges with you in public rooms, and anything they asked you to remember by starting a message with \"@bartender remember\" (that only writes it down, never orders); \"@bartender forget me\", exactly that, wipes them all.\n\
     - For anything past basic directions (commands, game rules, settings, IRC, account stuff) don't guess: tell the patron to go ask @bot, that's what he's for.\n"
@@ -1036,6 +1036,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  2                 open The Arcade",
         "  j / k or ↑ / ↓   browse games",
         "  Enter             play selected game",
+        "  !                 the selected or open game's rules and what it pays; the only place a game's rules are written",
         "  Esc / q           leave current game",
         "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies, live dungeons)",
         "  s                 in the lobby: copy your day card (one square per daily won today, its icon beneath, plus your streak)",
@@ -1043,7 +1044,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  s                 on a finished daily: copy that puzzle's share card, ready to paste anywhere",
         "",
         "Notes",
-        "  Game-specific controls appear inside the Arcade page.",
+        "  Game-specific controls appear inside the Arcade page; ! opens the rules of whichever game is selected or open.",
         "  Sliding Puzzle: the tiles are a gallery piece, yesterday's most applauded first, one piece a day. i toggles numbered tiles; the view is session only and keeps the same board and rewards.",
         "  Daily puzzle completions, run scores, chips, payouts, and leaderboards are covered in Economy.",
         "",
@@ -1437,7 +1438,7 @@ fn overview_lines() -> Vec<String> {
         "their pages, the big table opens the Lobby, and the pool table under it",
         "opens the Lobby on a fresh eight-ball challenge.",
         "n (or Enter at the back door past the counter) steps out to Nightcap,",
-        "the quiet bar: 1-6 sit or stand, i talks once you hold a stool, d opens",
+        "the ai-free bar: 1-6 sit or stand, i talks once you hold a stool, d opens",
         "the drink menu, c carves a line into your stool, Esc comes back inside.",
         "",
         "The Games hub is a grouped sidebar: arrow keys or j/k move between its",

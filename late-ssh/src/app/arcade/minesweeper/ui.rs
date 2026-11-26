@@ -60,6 +60,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 ("[ ]", "diff"),
                 ("o", "cell style"),
                 ("{ }", "scroll"),
+                ("!", "rules"),
                 ("`", "dashboard"),
                 ("Esc", "exit"),
             ]

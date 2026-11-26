@@ -224,6 +224,81 @@ See [calendar rendering](late-ssh/src/app/calendar/ui.rs).
 prefer tint, bold, a marker, or reversal for new emphasis. Their suitability
 outside Calendar is still a design question.
 
+### 4.5 User-facing copy — agreed direction
+
+**The test.** A line of text earns its place only if the reader cannot get the
+same thing by looking at the screen or by opening what the line describes. If
+that thing is one keypress away, the description is the wrong place for the
+content: move the content there and delete the line. Shortening a line that
+fails the test does not fix it.
+
+Less is more. The app has far more features than any one screen can introduce,
+so someone learns it through a small cycling tip, not through a paragraph
+standing permanently beside every feature. Permanent prose costs a row on every
+terminal forever; a tip costs nothing when it is not shown.
+
+**Where copy may live.** These slots, and nothing else:
+
+| Slot | Carries | Voice |
+| :--- | :--- | :--- |
+| Rules page (`!` on the thing's own screen) | How it works, in full | Declarative facts |
+| Catalog row | Title and state only — no description | — |
+| Section header | One short line, only where it helps someone new | Imperative, second person |
+| Tip line | Transient and situational, on the screen it applies to | Declarative, short |
+| Setting helper | What the setting does, then the consequence | Declarative facts |
+
+**Rules pages.** [`arcade/word_wheel/ui.rs::rules_lines`](late-ssh/src/app/arcade/word_wheel/ui.rs)
+is the model: plain statements of rule and payout, with every number
+interpolated from the source of truth (`Rank::percent`, `Difficulty::chips`,
+`word_score`) rather than typed as a literal, so the page cannot drift from the
+code. A number that exists in code is read, never written.
+
+**Catalog rows.** A list carries each entry's title and whatever changes about
+it: a best score, a `✓`, a solved count, `Coming soon`. A line that reads the
+same every day is not state; it belongs on the rules page behind the row.
+
+**Section headers.** Minimal, or absent. A header orients someone who has not
+used the section before, so it gives a reason to act rather than a summary of
+the contents: "Earn chips by playing games per UTC day!", "Grab a spot on the
+leaderboard page." One line. A section whose purpose is clear from its rows
+gets no header at all.
+
+**Setting helpers.** One line: what the setting does, then the consequence
+worth knowing before committing. "Move this SSH key onto another late.sh
+account. No data is merged." No second-person address, no exclamation, no
+wordplay.
+
+**Words to avoid.**
+
+- **Anthropomorphism.** A feature does not want, remember, notice, miss,
+  forget, or feel anything. "Your bonsai missed you" and "the wall forgets
+  it" give a program an inner life it does not have, and they cost the
+  reader the fact they came for. Say what happened: the piece is down, the
+  tree was not watered.
+- **"quiet".** It is atmosphere standing in for a fact. If a room has no
+  messages, say it has no messages.
+- **"lives"** for where something is. A key, a setting, or a board is *on*,
+  *in*, or *under* something; it does not live there. (This is a rule for
+  the interface. Context files and this guide may keep it.)
+- **"wait"** for unread items. Unread messages do not wait for anyone;
+  there are four of them, or there are none.
+
+**Writing new copy.** This section governs explanatory text: headings, section
+intros, taglines, blurbs, and any line whose job is to describe a feature
+rather than to do something. Default to none, and when a change adds one, ask
+the owner whether it is needed before writing it; "it explains the feature" is
+not a reason when the feature explains itself one keypress in.
+
+Text that does a job in the moment is not in question and is never trimmed for
+being prose: state, key hints, errors, confirmations, empty states, and tips.
+Write those as plainly and as fully as they need to be.
+
+**Out of scope.** Door games (`late-ssh/src/app/door`) own their copy: they are
+separate games with no rules page under our control. Game-world prose — a room
+description, an item blurb, a combat log — is content, not UI chrome. Help
+topics (`help_modal/data.rs`, `artboard/data.rs`) are long-form by design and
+also feed the bots' app context. Splash tips answer to their own needs.
+
 ## 5. Color, theming, and selection
 
 ### 5.1 Palette roles and scope — observed, with suggested use

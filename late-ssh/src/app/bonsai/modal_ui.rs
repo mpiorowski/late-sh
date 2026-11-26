@@ -142,10 +142,7 @@ fn detail_line(selected: &str, message: Option<&str>) -> Line<'static> {
     } else if selected != "no branch selected" {
         (selected, Style::default().fg(theme::TEXT_BRIGHT()))
     } else {
-        (
-            "select a branch, steer its future, prune its mistakes",
-            Style::default().fg(theme::TEXT_DIM()),
-        )
+        (selected, Style::default().fg(theme::TEXT_DIM()))
     };
 
     Line::from(Span::styled(text.to_string(), style)).centered()

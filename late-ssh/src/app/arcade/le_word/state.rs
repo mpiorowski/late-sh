@@ -27,7 +27,6 @@ pub struct State {
     pub current_guess: String,
     pub is_game_over: bool,
     pub won: bool,
-    pub show_rules: bool,
     pub message: String,
     /// Today's word while the board has none; see `poll_load`.
     load: DailyLoad<Today>,
@@ -47,7 +46,6 @@ impl State {
             current_guess: String::new(),
             is_game_over: false,
             won: false,
-            show_rules: false,
             message: "Le Word is unavailable. Try again soon.".to_string(),
             load: DailyLoad::after_connect(today.is_some()),
             svc,
@@ -218,14 +216,6 @@ impl State {
 
     pub fn score_for_keyboard_letter(&self, letter: char) -> Option<LetterScore> {
         score_letter_from_guesses(&self.guesses, &self.answer, letter)
-    }
-
-    pub fn open_rules(&mut self) {
-        self.show_rules = true;
-    }
-
-    pub fn close_rules(&mut self) {
-        self.show_rules = false;
     }
 
     fn save_async(&self) {

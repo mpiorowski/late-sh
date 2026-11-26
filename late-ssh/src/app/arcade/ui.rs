@@ -367,6 +367,9 @@ pub struct ArcadeHubView<'a> {
     pub username: &'a str,
     /// The solvers roster is open over the selected daily.
     pub show_solvers: bool,
+    /// The selected or open game's `!` rules card is up over everything
+    /// else on the page.
+    pub show_rules: bool,
     /// The terminal's image protocol, for Chess Puzzle's PNG pieces.
     pub image_protocol: Option<TerminalImageProtocol>,
 }
@@ -403,6 +406,7 @@ pub fn draw_arcade_hub(
             }
             ArcadeGame::Score(game) => draw_score_game(frame, area, view, game, show_bottom_bar),
         }
+        draw_rules_card(frame, area, view);
         return;
     }
 
@@ -496,6 +500,27 @@ pub fn draw_arcade_hub(
             .roster(chrono::Utc::now().date_naive(), game);
         draw_solvers_modal(frame, content_area, game, view.username, &roster);
     }
+
+    draw_rules_card(frame, content_area, view);
+}
+
+/// The `!` rules card of the selected game, over the lobby or over the
+/// board. One card for the whole roster (`super::rules`), since a lobby row
+/// carries no description and this is where the rules are read.
+fn draw_rules_card(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
+    if !view.show_rules {
+        return;
+    }
+    let rules = super::rules::rules_for(view.game_selection);
+    draw_rules_modal(
+        frame,
+        area,
+        super::rules::WIDTH,
+        rules.height(),
+        &rules.title,
+        rules.body,
+        super::rules::CLOSE_KEYS,
+    );
 }
 
 fn draw_puzzle(
@@ -711,7 +736,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung:
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Win once per UTC day for chips. Replay for practice and leaderboard.",
+            "Earn chips by playing games per UTC day!",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
@@ -731,32 +756,23 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung:
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            ": copies a spoiler-free score for today's dailies. Every finished puzzle has one too.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
     ]));
     lines.push(Line::from(""));
 
     let today = view.today_solvers();
     let show_hint = area.width >= SOLVERS_HINT_MIN_WIDTH;
     for puzzle in DailyPuzzle::ALL.iter().copied() {
-        let card = lobby_card(view, puzzle);
+        let available = daily_available(puzzle, view.nonogram_state);
         let game = ArcadeGame::Puzzle(puzzle);
         let title_style = Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD);
-        let normal_style = if card.available {
+        let normal_style = if available {
             Style::default().fg(theme::TEXT())
         } else {
             Style::default().fg(theme::TEXT_MUTED())
         };
-        let desc_style = if card.available {
-            Style::default().fg(theme::TEXT_DIM())
-        } else {
-            Style::default().fg(theme::TEXT_MUTED())
-        };
-        let status = if card.available {
+        let status = if available {
             let mut status = Vec::new();
             if puzzle == rung.puzzle {
                 status.push(Span::styled(
@@ -785,10 +801,8 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung:
             GameEntry {
                 game,
                 name: puzzle.title(),
-                descriptions: &[card.description],
                 selected_style: title_style,
                 normal_style,
-                description_style: desc_style,
                 status,
                 label_width: 16,
             },
@@ -801,14 +815,13 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung:
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Chase personal bests and monthly leaderboard spots.",
+            "Grab a spot on the leaderboard page.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
     lines.push(Line::from(""));
 
     for game in ScoreGame::ALL.iter().copied() {
-        let card = score_card(view, game);
         draw_game_entry(
             &mut lines,
             &mut selected_line,
@@ -816,14 +829,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung:
             GameEntry {
                 game: ArcadeGame::Score(game),
                 name: game.title(),
-                descriptions: &[card.description],
                 selected_style: Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
                 normal_style: Style::default().fg(theme::TEXT()),
-                description_style: Style::default().fg(theme::TEXT_DIM()),
                 status: vec![Span::styled(
-                    card.best,
+                    score_best(view, game),
                     Style::default().fg(theme::SUCCESS()),
                 )],
                 label_width: 16,
@@ -856,68 +867,26 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>, rung:
     frame.render_widget(paragraph, layout[1]);
 }
 
-/// A daily's lobby card: its line under the title, and whether it can be
-/// played today.
-struct DailyRow {
-    description: &'static str,
-    available: bool,
-}
-
-fn lobby_card(view: &ArcadeHubView<'_>, puzzle: DailyPuzzle) -> DailyRow {
-    let description = match puzzle {
-        DailyPuzzle::LeWord => "Guess the daily five-letter word in six tries.",
-        DailyPuzzle::RubiksCube => "Solve today's shared scramble through an angled cube view.",
-        DailyPuzzle::SlidingPuzzle => "Slide tiles into order by number or image.",
-        DailyPuzzle::Sudoku => "Classic newspaper puzzle, rebuilt for the terminal.",
-        DailyPuzzle::Nonogram => "Pixel puzzles painted by logic, one clue at a time.",
-        DailyPuzzle::Minesweeper => "Flag mines, clear the field. Three lives.",
-        DailyPuzzle::Solitaire => "Klondike with daily and personal deals over SSH.",
-        DailyPuzzle::Netwalk => "Turn the tiles until one network lights every one.",
-        DailyPuzzle::ChessPuzzle => "Find the winning moves of a real game. Three lives.",
-        DailyPuzzle::WordWheel => {
-            "Spell words from a wheel of seven letters. Bronze, Silver, Gold."
-        }
-        DailyPuzzle::Quartets => "Sort sixteen words into four quartets. Three strikes.",
-    };
-    DailyRow {
-        description,
-        available: daily_available(puzzle, view.nonogram_state),
-    }
-}
-
-/// A score game's lobby card: its line under the title and its best.
-struct ScoreRow {
-    description: &'static str,
-    best: String,
-}
-
-fn score_card(view: &ArcadeHubView<'_>, game: ScoreGame) -> ScoreRow {
+/// A score game's lobby card carries only what changes: the player's best.
+/// How a game is played lives on its own `!` rules page (`DESIGN_GUIDE.md`
+/// §4.5), never on the row.
+fn score_best(view: &ArcadeHubView<'_>, game: ScoreGame) -> String {
     match game {
-        ScoreGame::TwentyFortyEight => ScoreRow {
-            description: "Slide, merge, and chase the warmest tile.",
-            best: format!(
-                "Best {}",
-                view.twenty_forty_eight_state
-                    .best_score
-                    .max(view.twenty_forty_eight_state.score)
-            ),
-        },
-        ScoreGame::Lateris => ScoreRow {
-            description: "Endless falling blocks. Speed rises as you survive.",
-            best: format!("Best {}", view.tetris_state.best_score),
-        },
-        ScoreGame::Snake => ScoreRow {
-            description: "Eat grow and avoid danger. Speed rises as you survive.",
-            best: format!("Best {}", view.snake_state.best_score),
-        },
-        ScoreGame::Traffic => ScoreRow {
-            description: "You're LATE and stuck in TRAFFIC. Overtake or crash.",
-            best: if view.traffic_state.best_score > 0 {
+        ScoreGame::TwentyFortyEight => format!(
+            "Best {}",
+            view.twenty_forty_eight_state
+                .best_score
+                .max(view.twenty_forty_eight_state.score)
+        ),
+        ScoreGame::Lateris => format!("Best {}", view.tetris_state.best_score),
+        ScoreGame::Snake => format!("Best {}", view.snake_state.best_score),
+        ScoreGame::Traffic => {
+            if view.traffic_state.best_score > 0 {
                 format!("Best {:>11}", view.traffic_state.best_score)
             } else {
                 "No runs yet".to_string()
-            },
-        },
+            }
+        }
     }
 }
 
@@ -993,10 +962,8 @@ fn daily_reward_status_spans(
 struct GameEntry<'a> {
     game: ArcadeGame,
     name: &'a str,
-    descriptions: &'a [&'a str],
     selected_style: Style,
     normal_style: Style,
-    description_style: Style,
     status: Vec<Span<'static>>,
     label_width: usize,
 }
@@ -1025,12 +992,5 @@ fn draw_game_entry(
     title_line.push(Span::raw(" ".repeat(padding_len.max(1))));
     title_line.extend(entry.status);
     lines.push(Line::from(title_line));
-
-    for description in entry.descriptions {
-        lines.push(Line::from(vec![
-            Span::raw("      "),
-            Span::styled((*description).to_string(), entry.description_style),
-        ]));
-    }
     lines.push(Line::from(""));
 }

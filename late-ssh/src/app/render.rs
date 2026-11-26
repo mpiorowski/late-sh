@@ -100,6 +100,7 @@ struct DrawContext<'a> {
     /// This screen answers backtick (`workspace::cycle::title_offers_hop`).
     title_offers_hop: bool,
     arcade_solvers_open: bool,
+    arcade_rules_open: bool,
     door_delete_confirm: bool,
     usernames: &'a crate::usernames::UsernameLookup<'a>,
     /// Embedded match chat for the daily board; `None` while spectating,
@@ -1699,6 +1700,7 @@ impl App {
                         is_playing_game: self.is_playing_game,
                         title_offers_hop,
                         arcade_solvers_open: self.arcade_solvers_open,
+                        arcade_rules_open: self.arcade_rules_open,
                         door_delete_confirm: self.door_delete_confirm,
                         usernames: chat_usernames,
                         daily_chat_view,
@@ -2657,6 +2659,7 @@ impl App {
                         user_id: ctx.user_id,
                         username: ctx.clubhouse_own_username,
                         show_solvers: ctx.arcade_solvers_open,
+                        show_rules: ctx.arcade_rules_open,
                         image_protocol: ctx.terminal_image_protocol,
                     },
                     terminal_images,

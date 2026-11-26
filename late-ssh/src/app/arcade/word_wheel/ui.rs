@@ -14,8 +14,8 @@ use ratatui::{
 use super::state::{Rank, State, word_score};
 use crate::app::{
     arcade::ui::{
-        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, draw_rules_modal,
-        game_content_area, keys_line, share_hints, status_line, tip_line,
+        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, game_content_area,
+        keys_line, share_hints, status_line, tip_line,
     },
     common::theme,
 };
@@ -131,17 +131,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             layout.meter,
         );
         draw_found(frame, layout.words, state);
-    }
-    if state.show_rules() {
-        draw_rules_modal(
-            frame,
-            board_area,
-            60,
-            19,
-            "Word Wheel Rules",
-            rules_lines(),
-            "Tab shuffles the rim · ! / Esc closes",
-        );
     }
 }
 
@@ -369,7 +358,7 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
-fn rules_lines() -> Vec<Line<'static>> {
+pub(crate) fn rules_lines() -> Vec<Line<'static>> {
     vec![
         Line::from("Spell words from the seven letters on the wheel."),
         Line::from(

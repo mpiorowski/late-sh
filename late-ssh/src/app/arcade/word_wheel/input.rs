@@ -6,19 +6,7 @@ use super::state::State;
 use super::ui::WheelCell;
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
-    if state.show_rules() {
-        match byte {
-            b'!' | 0x1B => state.close_rules(),
-            _ => {}
-        }
-        return true;
-    }
-
     match byte {
-        b'!' => {
-            state.open_rules();
-            true
-        }
         b'\r' | b'\n' => state.submit(),
         0x08 | 0x7F => state.pop_letter(),
         b'\t' => state.shuffle(),
@@ -33,9 +21,6 @@ pub fn handle_arrow(_state: &mut State, key: u8) -> bool {
 
 /// A left click on a wheel letter types it.
 pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
-    if state.show_rules() {
-        return true;
-    }
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }

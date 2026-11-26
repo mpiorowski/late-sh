@@ -145,6 +145,28 @@ Every chip movement is a `ChipMove` variant written through
 the Shop prices, and each mechanic's own context its numbers (gilds, the
 round, the pot, invites).
 
+### User-facing copy
+
+Default to no prose. A line of UI text earns its place only if the reader
+cannot get the same thing by looking at the screen or by opening what the line
+describes; when that is one keypress away, the content belongs behind the key,
+not in a line beside it. Catalog rows carry a title and what changes about it,
+never a standing description; how a thing works lives on its own rules page,
+with its numbers read from code rather than written; section headers are
+minimal or absent. This governs explanatory text — a heading, a section intro,
+a tagline, a blurb — and a change that adds one asks the owner whether the
+line is needed before writing it. Text that does a job in the moment (state,
+key hints, errors, confirmations, empty states, tips) is not in question and
+is never trimmed for being prose. No user-facing line anthropomorphises a
+feature (nothing wants, remembers, notices, misses or forgets), calls a
+room quiet, says a key or a board "lives" somewhere, or has unread
+messages "waiting". The slots, the two voices, and what is out
+of scope (door games, game-world prose, help topics, splash tips) are in
+`DESIGN_GUIDE.md` §4.5.
+The Arcade is the worked example: a lobby row carries a title and its marks,
+and every game in the roster has an `!` rules card
+(`app/arcade/rules.rs`). Copy elsewhere predates the rule.
+
 ## 4. Pages
 
 | Key | Page | Lives in |

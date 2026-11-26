@@ -30,6 +30,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         keys: keys_line(vec![
             ("h/j/k/l", "move"),
             ("r", "restart"),
+            ("!", "rules"),
             ("`", "dashboard"),
             ("Esc", "exit"),
         ]),

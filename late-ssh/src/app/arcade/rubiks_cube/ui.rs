@@ -42,6 +42,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 ("Shift", "inverse"),
                 ("0", "reset daily"),
                 ("v/arrows", "rotate view"),
+                ("!", "rules"),
                 ("Esc", "exit"),
             ]
             .into_iter()

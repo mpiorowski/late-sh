@@ -13,7 +13,7 @@ past the counter (`clubhouse/input.rs`, `map::BACK_DOOR`), Esc returns
 there (handled centrally in `app/input.rs::dispatch_escape`, which drops
 the carving knife and peels the drink menu first if either is open). Deliberately much smaller than the Clubhouse: no
 walking, no floor plan, no AI bartender, and the opposite temperament. The
-tavern is loud and everyone is in it; the bar out back is quiet, and only
+tavern is loud and everyone is in it; out back no bot answers, and only
 the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 
 ## 2. Module map

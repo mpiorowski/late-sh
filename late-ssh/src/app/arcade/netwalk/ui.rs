@@ -90,6 +90,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("[]", "change diff"),
             ("n/r", "new/reset"),
             ("d/p", "daily/personal"),
+            ("!", "rules"),
             ("q", "exit"),
         ]
     } else {
@@ -100,6 +101,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("[]", "diff"),
             ("r", "reset"),
             ("d/p", "mode"),
+            ("!", "rules"),
             ("q", "exit"),
         ]
     };

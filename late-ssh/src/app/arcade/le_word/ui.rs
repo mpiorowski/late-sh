@@ -10,8 +10,8 @@ use late_core::models::leaderboard::DailyPuzzle;
 
 use super::state::{LetterScore, MAX_GUESSES, State, WORD_LEN};
 use crate::app::arcade::ui::{
-    GameBottomBar, centered_rect, draw_game_frame, draw_rules_modal, keys_line, single_board_chips,
-    status_line, tip_line,
+    GameBottomBar, centered_rect, draw_game_frame, keys_line, single_board_chips, status_line,
+    tip_line,
 };
 use crate::app::common::theme;
 
@@ -106,21 +106,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             theme::ERROR(),
         );
     }
-
-    if state.show_rules {
-        draw_rules_modal(
-            frame,
-            board_area,
-            58,
-            16,
-            "Le Word Rules",
-            rules_lines(),
-            "! / q / Esc closes",
-        );
-    }
 }
 
-fn rules_lines() -> Vec<Line<'static>> {
+pub(crate) fn rules_lines() -> Vec<Line<'static>> {
     vec![
         Line::from("Guess the hidden five-letter word in six tries."),
         Line::from("Each guess must be a valid word."),

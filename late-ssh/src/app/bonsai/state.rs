@@ -469,7 +469,7 @@ impl BonsaiState {
             return false;
         };
         if id == ROOT_BRANCH_ID {
-            self.message = Some("The trunk remembers, but it will not wire".to_string());
+            self.message = Some("The trunk will not wire".to_string());
             return false;
         }
         if !self.graph.is_tip(id) {

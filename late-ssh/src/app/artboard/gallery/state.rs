@@ -813,7 +813,8 @@ impl GalleryState {
                     match outcome {
                         TakeDownOutcome::TakenDown { .. } => {
                             self.drop_piece(piece_id);
-                            self.notice = Some("Taken down. The wall forgets it.".to_string());
+                            self.notice =
+                                Some("Taken down. It is off the wall for good.".to_string());
                             self.service
                                 .counts_task(self.viewer_id, self.results_tx.clone());
                         }

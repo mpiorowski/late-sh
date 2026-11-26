@@ -16,8 +16,8 @@ use ratatui::{
 use super::state::{MAX_STRIKES, Outcome, Puzzle, QUARTETS, State};
 use crate::app::{
     arcade::ui::{
-        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, draw_rules_modal,
-        game_content_area, keys_line, share_hints, single_board_chips, status_line, tip_line,
+        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, game_content_area,
+        keys_line, share_hints, single_board_chips, status_line, tip_line,
     },
     common::theme,
 };
@@ -96,17 +96,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         frame.render_widget(
             Paragraph::new(status_text(state)).alignment(Alignment::Center),
             layout.status,
-        );
-    }
-    if state.show_rules() {
-        draw_rules_modal(
-            frame,
-            board_area,
-            62,
-            21,
-            "Quartets Rules",
-            rules_lines(),
-            "Space picks · x clears · Tab shuffles · ! / Esc closes",
         );
     }
 }
@@ -298,7 +287,7 @@ fn status_text(state: &State) -> Line<'static> {
     Line::from(spans)
 }
 
-fn rules_lines() -> Vec<Line<'static>> {
+pub(crate) fn rules_lines() -> Vec<Line<'static>> {
     let chips = single_board_chips(DailyPuzzle::Quartets);
     vec![
         Line::from("Sixteen words hide four quartets: four words that share a link."),

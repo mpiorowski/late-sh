@@ -8,6 +8,7 @@ pub mod netwalk;
 pub mod nonogram;
 pub mod quartets;
 pub mod rubiks_cube;
+pub mod rules;
 pub mod save_queue;
 pub mod share;
 pub mod sliding_puzzle;

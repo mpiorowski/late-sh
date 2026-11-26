@@ -12,8 +12,7 @@ fn the_board_leaves_the_background_to_the_terminal() {
     let canvas = theme::BG_CANVAS();
     let mut state = state_for(chrono::Utc::now().date_naive(), "crane");
     state.guesses.push("trace".to_string());
-    for show_rules in [false, true] {
-        state.show_rules = show_rules;
+    {
         let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
         terminal
             .draw(|frame| draw_game(frame, frame.area(), &state, true))
@@ -25,11 +24,7 @@ fn the_board_leaves_the_background_to_the_terminal() {
             .filter(|position| buffer[*position].bg == canvas)
             .map(|position| (position.x, position.y))
             .collect();
-        assert_eq!(
-            painted,
-            Vec::new(),
-            "rules open: {show_rules}: cells painted with the canvas"
-        );
+        assert_eq!(painted, Vec::new(), "cells painted with the canvas");
     }
 }
 

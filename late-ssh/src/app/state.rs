@@ -836,6 +836,10 @@ pub struct App {
     pub(crate) is_playing_game: bool,
     /// The Arcade lobby's solvers roster (`o`) is open over the selected daily.
     pub(crate) arcade_solvers_open: bool,
+    /// The selected or open Arcade game's rules card (`!`) is up. One flag
+    /// for the whole roster: the card is `arcade::rules`, drawn over the
+    /// lobby or over the board, and it swallows every key while it is up.
+    pub(crate) arcade_rules_open: bool,
     pub(crate) door_delete_confirm: bool,
     /// Highlighted row on the Lateania character-select landing (0-based
     /// slot index). Also which slot a confirmed `d` delete targets.
@@ -1922,6 +1926,7 @@ impl App {
             game_selection: ArcadeGame::Puzzle(DailyPuzzle::LeWord),
             is_playing_game: false,
             arcade_solvers_open: false,
+            arcade_rules_open: false,
             door_delete_confirm: false,
             lateania_slot_cursor: 0,
             lateania_slots_seen: crate::app::door::lateania::svc::SlotList::Loading,

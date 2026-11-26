@@ -208,7 +208,6 @@ pub struct State {
     /// A position in `wall`.
     cursor: usize,
     shuffles: u64,
-    show_rules: bool,
     message: String,
     /// Today's wall while the board has none; see `poll_load`.
     load: DailyLoad<Today>,
@@ -233,7 +232,6 @@ impl State {
             picked: Vec::new(),
             cursor: 0,
             shuffles: 0,
-            show_rules: false,
             message: UNAVAILABLE.to_string(),
             load: DailyLoad::after_connect(today.is_some()),
         };
@@ -395,20 +393,8 @@ impl State {
         }
     }
 
-    pub fn show_rules(&self) -> bool {
-        self.show_rules
-    }
-
     pub fn message(&self) -> &str {
         &self.message
-    }
-
-    pub fn open_rules(&mut self) {
-        self.show_rules = true;
-    }
-
-    pub fn close_rules(&mut self) {
-        self.show_rules = false;
     }
 
     pub fn move_cursor(&mut self, step: Step) -> bool {

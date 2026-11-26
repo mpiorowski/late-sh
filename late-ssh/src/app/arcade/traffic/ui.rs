@@ -229,6 +229,7 @@ fn draw_race(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool
             ("p", "pause"),
             ("r", "restart"),
             ("t", "tracks"),
+            ("!", "rules"),
             ("Esc", "exit"),
         ]),
         tip: Some(crate::app::arcade::ui::tip_line(

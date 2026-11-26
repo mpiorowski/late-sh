@@ -270,7 +270,7 @@ pub const JUKEBOX: Zone = Zone {
     y1: 6,
 };
 /// The back door, just past the end of the counter: out to Nightcap, the
-/// quiet bar (`nightcap/`).
+/// ai-free bar (`nightcap/`).
 pub const BACK_DOOR: Zone = Zone {
     x0: 58,
     y0: 1,
