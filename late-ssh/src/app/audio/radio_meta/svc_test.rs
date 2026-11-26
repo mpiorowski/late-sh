@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parse_meta_line_reads_station_records() {
     let line = r#"data: [{"station":"chillsynth","artist":"An Artist","title":"A Track"},{"station":"datawave","artist":"Other","title":"Song"}]"#;
-    let stations = parse_meta_line(line).unwrap();
+    let stations = parse_meta_line(line).unwrap().unwrap();
     assert_eq!(stations.len(), 2);
     assert_eq!(stations["chillsynth"].artist, "An Artist");
     assert_eq!(stations["chillsynth"].title, "A Track");
@@ -13,49 +13,29 @@ fn parse_meta_line_reads_station_records() {
 #[test]
 fn parse_meta_line_skips_records_missing_fields() {
     let line = r#"data: [{"station":"chillsynth","artist":"","title":"A Track"},{"station":"datawave","artist":"Other","title":"Song"}]"#;
-    let stations = parse_meta_line(line).unwrap();
+    let stations = parse_meta_line(line).unwrap().unwrap();
     assert_eq!(stations.len(), 1);
     assert!(stations.contains_key("datawave"));
 }
 
 #[test]
 fn parse_meta_line_ignores_non_data_lines() {
-    assert!(parse_meta_line(": keep-alive").is_none());
-    assert!(parse_meta_line("event: meta").is_none());
-    assert!(parse_meta_line("").is_none());
-    assert!(parse_meta_line("data:").is_none());
+    assert!(matches!(parse_meta_line(": keep-alive"), Ok(None)));
+    assert!(matches!(parse_meta_line("event: meta"), Ok(None)));
+    assert!(matches!(parse_meta_line(""), Ok(None)));
+    assert!(matches!(parse_meta_line("data:"), Ok(None)));
 }
 
 #[test]
-fn parse_meta_line_ignores_keepalive_without_logging() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    let events = Arc::new(AtomicUsize::new(0));
-    let count = Arc::clone(&events);
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_writer(move || {
-            count.fetch_add(1, Ordering::Relaxed);
-            std::io::sink()
-        })
-        .finish();
-
-    tracing::subscriber::with_default(subscriber, || {
-        assert!(parse_meta_line("data: \tkeepalive ").is_none());
-        assert_eq!(events.load(Ordering::Relaxed), 0);
-
-        assert!(parse_meta_line("data: keepalive extra").is_none());
-        assert_eq!(events.load(Ordering::Relaxed), 1);
-    });
+fn parse_meta_line_skips_keepalives() {
+    assert!(matches!(parse_meta_line("data: \tkeepalive "), Ok(None)));
+    assert!(parse_meta_line("data: keepalive extra").is_err());
 }
 
 #[test]
-fn parse_meta_line_ignores_invalid_json() {
-    assert!(parse_meta_line("data: not json").is_none());
-    assert!(parse_meta_line(r#"data: {"station":"chillsynth"}"#).is_none());
+fn parse_meta_line_rejects_invalid_json() {
+    assert!(parse_meta_line("data: not json").is_err());
+    assert!(parse_meta_line(r#"data: {"station":"chillsynth"}"#).is_err());
 }
 
 fn track(artist: &str, title: &str) -> ArtistTitle {
