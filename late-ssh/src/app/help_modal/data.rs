@@ -1375,6 +1375,8 @@ fn vintagestory_help_lines() -> Vec<String> {
         "  Inside a claim only its owner and those granted can build, break, or use things.",
         "  Outside claims anything goes. PvP is on. Fire spreads, so keep it off wood.",
         "  The world's clock stops while nobody is online.",
+        "  Iron, meteoric iron, and steel arrows never break on impact.",
+        "  X-ray mods (Block Overlay and its kind) are refused when you join.",
     ]
     .into_iter()
     .map(str::to_string)
