@@ -1,4 +1,4 @@
-//! Per-session gallery state: the page rail, the four listings, the piece
+//! Per-session gallery state: the page rail, the listings, the piece
 //! being looked at, and the hang flow. Pure apart from handing tasks to the
 //! service and draining what they send back in `tick`.
 
