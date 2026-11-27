@@ -161,3 +161,88 @@ fn the_tank_tiles_never_send_anyone_to_the_shop() {
         assert!(!text.contains("no tank"), "reef {reef}: {text}");
     }
 }
+
+/// The full view is the reef bound to the water inside its border, the
+/// care bar on the surface, and under the water the day's word and the
+/// keys that answer.
+#[test]
+fn the_full_view_draws_the_reef_over_its_footer() {
+    let area = Rect::new(0, 0, 90, 26);
+    let mut state = tank_with(&[("anchovy", 2), ("boxfish", 2), ("seatuft", 1)]);
+    for _ in 0..8 {
+        state.tick();
+    }
+    let water = full_view_water(area);
+    assert_eq!(
+        water,
+        Rect::new(1, 1, 88, 23),
+        "inside the border, over the footer"
+    );
+    state.handle_resize(water.width, water.height);
+    let care = AquariumCare::new(None, Vec::new());
+    let today = chrono::Utc::now().date_naive();
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_full_view(
+                frame,
+                area,
+                &TankView {
+                    state: &state,
+                    care: &care,
+                },
+                today,
+            )
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        })
+        .collect();
+    let plain = rows.join("\n");
+    assert!(rows[0].starts_with("┌ reef "), "{plain}");
+    assert!(
+        rows[1].contains("○○○○○○○○○○○○○○"),
+        "the bar on the surface:\n{plain}"
+    );
+    assert!(
+        rows[24].contains("not fed today · f feed · s more fish · q close"),
+        "the footer under the water:\n{plain}"
+    );
+    assert!(rows[25].starts_with('└'), "{plain}");
+}
+
+/// A reef or tank tile names Home's key for the full view beside its care
+/// bar when the surface has room for both, and keeps the bar alone when
+/// it has not.
+#[test]
+fn a_tile_names_its_key_beside_the_care_bar_when_it_fits() {
+    let state = AquariumState::default_for_area(Rect::new(0, 0, 60, 16)).expect("aquarium");
+    let care = AquariumCare::new(None, Vec::new());
+    let view = TankView {
+        state: &state,
+        care: &care,
+    };
+    for (width, named) in [(60, true), (22, false)] {
+        let area = Rect::new(0, 0, width, 16);
+        let mut terminal = Terminal::new(TestBackend::new(width, 16)).expect("terminal");
+        terminal
+            .draw(|frame| draw_tank_tile(frame, area, &view, 0))
+            .expect("draw");
+        let surface: String = (0..width)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(surface.contains("○○○○○○○○○○○○○○"), "{width}: {surface}");
+        // The bar, then the key, a blank cell parting each end from the
+        // water.
+        assert_eq!(
+            surface.contains(" ○○○○○○○○○○○○○○ a reef "),
+            named,
+            "{width} wide: {surface}"
+        );
+    }
+}

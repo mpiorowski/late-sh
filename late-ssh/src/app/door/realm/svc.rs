@@ -1678,7 +1678,11 @@ impl RealmService {
             crate::metrics::record_realm_payout(RealmPayout::Unearned);
             return Ok(());
         }
-        let plan = payout_plan(paying_players(&state), state.ruleset.pot_scale);
+        let plan = payout_plan(
+            paying_players(&state),
+            state.ruleset.pot_scale,
+            state.ruleset.win_min,
+        );
         let event_key = game.id.to_string();
         let mut failed: Option<anyhow::Error> = None;
         let mut failures = 0usize;
@@ -2173,14 +2177,15 @@ fn ended_news(state: &RealmGameState, end: ResolveEnd, now: DateTime<Utc>) -> Op
     }
 }
 
-/// Chips in the pot per player who started the game.
+/// Chips in the pot per player who played as long as a win takes
+/// (`paying_players`), at the reference tempo.
 ///
 /// The pot scales with the roster because placing in a big game is the hard
 /// part: being one of ten is a different feat from being one of two, and the
-/// game also runs longer for it. A duel is worth 6k, a full table 30k —
-/// which puts a realm win in the same class as the door-game milestones
-/// (Green Dragon 10k, A Dark Room 15-20k) rather than below a daily puzzle,
-/// where it sat when it paid a flat 2000.
+/// game also runs longer for it. A full table is worth 30k, which puts a
+/// realm win in the same class as the door-game milestones (Green Dragon
+/// 10k, A Dark Room 15-20k) rather than below a daily puzzle, where it sat
+/// when it paid a flat 2000.
 pub const REALM_POT_PER_PLAYER: i64 = 3_000;
 
 /// The most a single realm can ever pay, however many players and however
@@ -2230,7 +2235,11 @@ pub struct FinalPlace {
 /// ledger, and the ledger would be right.
 pub fn final_table(state: &RealmGameState, game_id: Uuid, winner: Option<Uuid>) -> Vec<FinalPlace> {
     let ranking = resolver::final_ranking(state, winner, day_seed(game_id, 0));
-    let plan = payout_plan(paying_players(state), state.ruleset.pot_scale);
+    let plan = payout_plan(
+        paying_players(state),
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    );
     let mut paid = 0usize;
     ranking
         .into_iter()
@@ -2316,13 +2325,18 @@ pub fn paying_players(state: &RealmGameState) -> u8 {
 
 /// Rank -> (reward-template key, chips), for a game whose pot is sized on
 /// `paying_count` players at `pot_scale` (the pace's multiplier: a blitz
-/// pays a quarter of the reference tempo, an epic three times it). The template carries the policy and the
-/// floor of its tier; the amount is the event's own.
-pub fn payout_plan(paying_count: u8, pot_scale: f64) -> Vec<(&'static str, i64)> {
-    let pot = (((REALM_POT_PER_PLAYER * i64::from(paying_count.max(2))) as f64)
-        * pot_scale.max(0.05))
-    .min(REALM_POT_MAX as f64) as i64;
-    payout_shares(paying_count)
+/// pays a quarter of the reference tempo, an epic three times it), raised
+/// until the winner's share reaches `win_min` (the ruleset's floor, frozen
+/// in the game's state, so the places behind rise with it and a crowded war
+/// never pays its winner less than a duel). The template carries the policy
+/// and the floor of its tier; the amount is the event's own.
+pub fn payout_plan(paying_count: u8, pot_scale: f64, win_min: i64) -> Vec<(&'static str, i64)> {
+    let shares = payout_shares(paying_count);
+    let (_, winner_share) = shares[0];
+    let base = ((REALM_POT_PER_PLAYER * i64::from(paying_count)) as f64)
+        .max(win_min as f64 / winner_share);
+    let pot = (base * pot_scale.max(0.05)).min(REALM_POT_MAX as f64) as i64;
+    shares
         .iter()
         .map(|(key, share)| {
             // Round to whole chips, to the nearest 50 so the figures read
@@ -2976,10 +2990,22 @@ mod tests {
         assert_eq!(utc_day(later), 20_000);
     }
 
+    /// The campaign's floor under a winner, as its worlds freeze it.
+    const FLOOR: i64 = crate::app::door::realm::rulesets::CAMPAIGN.win_min;
+
+    /// A world frozen before the floor existed has none, so its results
+    /// and any settlement still owed stay what it was played for: season 2,
+    /// two paying players at the fast pace, paid its winner 3k.
+    #[test]
+    fn a_world_frozen_without_a_floor_pays_the_plain_rate() {
+        assert_eq!(payout_plan(2, 0.5, 0), vec![("realm_win_small", 3_000)]);
+        assert_eq!(payout_plan(2, 0.5, FLOOR)[0].1, FLOOR / 2);
+    }
+
     #[test]
     fn the_pot_grows_with_the_roster() {
         let total = |n: u8| {
-            payout_plan(n, 1.0)
+            payout_plan(n, 1.0, FLOOR)
                 .iter()
                 .map(|(_, chips)| chips)
                 .sum::<i64>()
@@ -2993,9 +3019,13 @@ mod tests {
             );
         }
         assert!(total(10) > total(2), "ten players must beat two");
-        // And it is roughly the per-player rate times the roster, until the
-        // ceiling takes over.
-        for n in 2..=10u8 {
+        // The winner is never paid under the floor, whatever the roster.
+        for n in 2..=20u8 {
+            assert!(payout_plan(n, 1.0, FLOOR)[0].1 >= FLOOR, "{n} players");
+        }
+        // And once the roster outgrows the floor the pot is the per-player
+        // rate times the roster, until the ceiling takes over.
+        for n in 12..=20u8 {
             let expected = (REALM_POT_PER_PLAYER * i64::from(n)).min(REALM_POT_MAX);
             let slack = (expected as f64 * 0.02) as i64 + 50;
             assert!(
@@ -3009,24 +3039,26 @@ mod tests {
     #[test]
     fn payout_tiers_pay_more_places_as_the_game_grows() {
         // A duel pays the survivor, a mid game pays two, a full table three.
-        assert_eq!(payout_plan(2, 1.0).len(), 1);
-        assert_eq!(payout_plan(3, 1.0).len(), 1);
-        assert_eq!(payout_plan(5, 1.0).len(), 2);
-        assert_eq!(payout_plan(9, 1.0).len(), 3);
+        assert_eq!(payout_plan(2, 1.0, FLOOR).len(), 1);
+        assert_eq!(payout_plan(3, 1.0, FLOOR).len(), 1);
+        assert_eq!(payout_plan(5, 1.0, FLOOR).len(), 2);
+        assert_eq!(payout_plan(9, 1.0, FLOOR).len(), 3);
         // Ranks are ordered, and the keys are the seeded templates.
         for n in [2u8, 5, 9] {
-            let plan = payout_plan(n, 1.0);
+            let plan = payout_plan(n, 1.0, FLOOR);
             assert!(
                 plan.windows(2).all(|w| w[0].1 > w[1].1),
                 "ranks out of order"
             );
             assert!(plan.iter().all(|(key, _)| key.starts_with("realm_")));
         }
-        // Winning a crowded game beats winning a duel.
-        assert!(payout_plan(10, 1.0)[0].1 > payout_plan(2, 1.0)[0].1);
+        // Winning a crowded game never pays less than a duel, and past the
+        // winner's floor it pays more.
+        assert!(payout_plan(10, 1.0, FLOOR)[0].1 >= payout_plan(2, 1.0, FLOOR)[0].1);
+        assert!(payout_plan(15, 1.0, FLOOR)[0].1 > payout_plan(2, 1.0, FLOOR)[0].1);
         // A realm win is worth more than a day's Asterion escape (4000),
         // which is the whole reason these numbers moved.
-        assert!(payout_plan(2, 1.0)[0].1 > 4_000);
+        assert!(payout_plan(2, 1.0, FLOOR)[0].1 > 4_000);
     }
 
     /// The headline that a world fell names what the conquest paid, and the
@@ -3133,13 +3165,16 @@ mod tests {
             2,
             "padding the roster must not pay anyone"
         );
-        let padded: i64 = payout_plan(paying_players(&state), 1.0)
+        let padded: i64 = payout_plan(paying_players(&state), 1.0, FLOOR)
             .iter()
             .map(|(_, chips)| chips)
             .sum();
         assert_eq!(
             padded,
-            payout_plan(2, 1.0).iter().map(|(_, c)| c).sum::<i64>()
+            payout_plan(2, 1.0, FLOOR)
+                .iter()
+                .map(|(_, c)| c)
+                .sum::<i64>()
         );
 
         // The same eight, having actually played, are worth eight players.
@@ -3148,7 +3183,7 @@ mod tests {
         }
         assert_eq!(paying_players(&state), 8);
         assert!(
-            payout_plan(paying_players(&state), 1.0)
+            payout_plan(paying_players(&state), 1.0, FLOOR)
                 .iter()
                 .map(|(_, c)| c)
                 .sum::<i64>()
@@ -3199,7 +3234,7 @@ mod tests {
         }
         assert_eq!(paying_players(&state), 2, "nine alts are not nine players");
         assert_eq!(
-            payout_plan(paying_players(&state), 1.0).len(),
+            payout_plan(paying_players(&state), 1.0, FLOOR).len(),
             1,
             "and they open no places"
         );
@@ -3210,7 +3245,7 @@ mod tests {
         use super::super::rulesets::{PACES, STANDARD, pace_by_id};
         let pot_of = |pace_id: &str| -> i64 {
             let pace = pace_by_id(pace_id).expect("pace");
-            payout_plan(5, pace.pot_scale)
+            payout_plan(5, pace.pot_scale, FLOOR)
                 .iter()
                 .map(|(_, chips)| chips)
                 .sum::<i64>()
@@ -3225,7 +3260,10 @@ mod tests {
         // Normal is the reference: what the game paid before paces existed.
         assert_eq!(
             pot_of("normal"),
-            payout_plan(5, 1.0).iter().map(|(_, c)| c).sum::<i64>()
+            payout_plan(5, 1.0, FLOOR)
+                .iter()
+                .map(|(_, c)| c)
+                .sum::<i64>()
         );
 
         // Nobody can farm chips-per-day by spamming the quickest variant: a

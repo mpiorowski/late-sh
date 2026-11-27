@@ -296,10 +296,10 @@ pub struct RealmRuleset {
     pub contest_exponent: f64,
     /// `(max_war_roster_inclusive, share)` tiers, the lookup the budget
     /// tiers use: the share of the world a player has to hold to be
-    /// dominating it, by how many have been in the war (`war_roster`). Each
-    /// tier is about twice the average player's share: the simulation's
-    /// leaders plateau near that from mid-season, since every budget is the
-    /// same size, and a bar above it only ever left the clock to decide.
+    /// dominating it, by how many have been in the war (`war_roster`). The
+    /// campaign has one tier, half the world: its season 2 tiers sat near
+    /// twice the average share, and the land rush's leader cleared them
+    /// without a fight.
     pub domination_share_tiers: &'static [(u8, f64)],
     /// Consecutive nights at or above the share that win the game.
     pub domination_nights: u8,
@@ -314,6 +314,15 @@ pub struct RealmRuleset {
     /// mild because a runaway leader was the standard ruleset's whole
     /// problem. Zero on the standard ruleset.
     pub land_points: f64,
+    /// The least a winner is paid at the reference tempo, before the pace's
+    /// multiplier (`svc::payout_plan`): the pot is raised until the winner's
+    /// share reaches it. Zero on the standard ruleset, which has no floor.
+    /// The campaign's is 20k, 10k at the house's fast pace: season 2, sized
+    /// on the per-player rate alone, paid its winner 3k for fifteen days,
+    /// because only two players had played as long as a win takes. A floor
+    /// cannot be farmed with alts: it is paid once per house world, to
+    /// whoever wins it.
+    pub win_min: i64,
 }
 
 /// How a ruleset turns moves into results. Closed: the engine and the
@@ -384,20 +393,22 @@ pub const STANDARD: RealmRuleset = RealmRuleset {
     domination_nights: 0,
     season_days: 0,
     land_points: 0.0,
+    win_min: 0,
 };
 
-/// Season 2 on: orders by day, the night resolves them, and a share of the
-/// world held for three nights wins inside a season clock. The banking,
-/// decay and the payouts are the standard ruleset's, which is why
-/// everything not named here is copied from it; the budget, the opening
-/// days, the doors and the days a win takes are its own, sized by the
-/// simulation (`RULES.md` "Orders" has the table and the reasons).
+/// Season 2 on: orders by day, the night resolves them, and half the world
+/// held for three nights wins inside a season clock, which otherwise goes to
+/// the biggest share. The banking, decay and the payouts are the standard
+/// ruleset's, which is why everything not named here is copied from it; the
+/// budget, the opening days, the doors, the clock and the days a win takes
+/// are its own, sized by the simulation (`RULES.md` "Orders" has the table
+/// and the reasons).
 pub const CAMPAIGN: RealmRuleset = RealmRuleset {
     id: "campaign",
     display_name: "Campaign",
     tagline: "write your orders by day, the night resolves them",
     max_players: 20,
-    actions_per_day_tiers: &[(4, 5), (7, 4), (10, 3), (20, 2)],
+    actions_per_day_tiers: &[(4, 6), (10, 5), (20, 4)],
     resolution: Resolution::Orders,
     garrison_weight: 1.0,
     garrison_per_wall: 0.5,
@@ -409,20 +420,15 @@ pub const CAMPAIGN: RealmRuleset = RealmRuleset {
     support_factor: 0.5,
     neutral_factor: 0.6,
     contest_exponent: 2.0,
-    domination_share_tiers: &[
-        (4, 0.50),
-        (6, 0.40),
-        (8, 0.28),
-        (10, 0.21),
-        (13, 0.18),
-        (16, 0.145),
-        (20, 0.12),
-    ],
+    domination_share_tiers: &[(20, 0.50)],
     domination_nights: 3,
-    season_days: 80,
+    // 20 days at the house pace.
+    season_days: 57,
     land_points: 4.0,
+    win_min: 20_000,
     join_max_claimed: 0.9,
-    min_active_days_to_win: 40,
+    // 10 days at the house pace: half the clock.
+    min_active_days_to_win: 29,
     attack_grace_days: 6,
     distant_attack_grace_days: 9,
     newcomer_shield_max_days: 8,
@@ -562,6 +568,10 @@ pub struct RealmRulesetSnapshot {
     pub season_days: u16,
     #[serde(default)]
     pub land_points: f64,
+    /// Frozen with the rest so a finished game keeps the pot it was played
+    /// for: a world opened before the floor existed has none.
+    #[serde(default)]
+    pub win_min: i64,
 }
 
 impl From<&RealmRuleset> for RealmRulesetSnapshot {
@@ -631,6 +641,7 @@ impl From<&RealmRuleset> for RealmRulesetSnapshot {
             domination_nights: rs.domination_nights,
             season_days: rs.season_days,
             land_points: rs.land_points,
+            win_min: rs.win_min,
         }
     }
 }
@@ -1139,15 +1150,15 @@ mod tests {
         let campaign: RealmRulesetSnapshot = (&CAMPAIGN).into();
         assert_eq!(campaign.resolution, Resolution::Orders);
         assert_eq!(campaign.max_players, 20);
-        // Eleven to twenty involved players get the fourth tier.
-        assert_eq!(campaign.actions_per_day(10), 3);
-        assert_eq!(campaign.actions_per_day(11), 2);
-        assert_eq!(campaign.actions_per_day(20), 2);
-        // The share a domination needs falls as the war's roster grows, so
-        // twenty players are not asked for half the world.
+        // Eleven to twenty involved players get the third tier.
+        assert_eq!(campaign.actions_per_day(10), 5);
+        assert_eq!(campaign.actions_per_day(11), 4);
+        assert_eq!(campaign.actions_per_day(20), 4);
+        // Half the world, whoever is in the war: a share the land rush alone
+        // never reaches in a crowded world.
         assert_eq!(campaign.domination_share(2), 0.50);
-        assert_eq!(campaign.domination_share(10), 0.21);
-        assert_eq!(campaign.domination_share(15), 0.145);
+        assert_eq!(campaign.domination_share(10), 0.50);
+        assert_eq!(campaign.domination_share(20), 0.50);
         assert_eq!(snap().resolution, Resolution::Instant);
     }
 
@@ -1156,11 +1167,11 @@ mod tests {
         let days = |pace: &str| {
             RealmRulesetSnapshot::at_pace(&CAMPAIGN, pace_by_id(pace).expect("pace")).season_days
         };
-        assert_eq!(days("slow"), 80, "slow is the rules as written");
-        assert_eq!(days("normal"), 48);
-        assert_eq!(days("fast"), 28);
-        assert_eq!(days("epic"), 120);
-        assert_eq!(days("blitz"), 16);
+        assert_eq!(days("slow"), 57, "slow is the rules as written");
+        assert_eq!(days("normal"), 34);
+        assert_eq!(days("fast"), 20, "the house pace");
+        assert_eq!(days("epic"), 86);
+        assert_eq!(days("blitz"), 11);
         // A tiny clock stops at a week.
         let tiny = RealmRuleset {
             season_days: 10,
@@ -1201,6 +1212,7 @@ mod tests {
             "domination_nights",
             "season_days",
             "land_points",
+            "win_min",
         ] {
             assert!(fields.remove(key).is_some(), "{key} is serialized");
         }

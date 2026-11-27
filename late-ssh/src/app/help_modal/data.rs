@@ -233,7 +233,7 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Zork Trilogy, Minecraft, Vintage Story), 4 Artboard (shared ASCII canvas), 5 People (three sections: the map of who is where, the people's projects and open-to-work cards, and the job feed), 6 Leaderboards (every board, monthly and all-time), 7 Calendars (the events board: anyone posts, i says I'm in; your own private events beside it).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
-    - Home is tiles you arrange yourself: Ctrl+E or /edit enters arrange mode (Esc when done), where Tab and the arrows focus any tile, space opens the tile picker for it, S splits, X closes, < > change width and { } height, F flips, R resets home, t walks a tile's title through named, a bare rule and hidden, b gives the page a border (boxed tiles), and + gives a tile a guest, the now strip or attention (your move or a result in a daily match, unread DMs and mentions, a companion uncared for today), which takes the tile over only while it has something. O keeps the focused tile to the room the rail is on: in any other room it goes down and the tiles beside it take its space, and O again brings it back everywhere (the rail and chat tiles always stay). Tiles: the room rail, chat (up to ten, each bound to a room; the focused one is the page's chat and the rail follows it, the others watch; Alt+arrows, Alt+J/K or a click move the focus between them, and Space or Ctrl+/ on a room another tile shows goes to that tile), your bonsai, the reef (everyone has one, a fry and a sprout to start, more fish and plants in the Shop), the pet, music, the visualizer, a clock, the lobby, the live panel, an ascii piece, the pulse and more; each names its own keys on the right of its title while you arrange. Home keeps up to nine named layouts per device, saved on the SSH key: 1 is home, 2 is street (an ascii piece and the tank over two chats, news and #announcements, with the clock, pulse, friends and activity, boxed), yours to arrange or delete. Ctrl+E then a digit loads one (Alt and the digit too, in one chord, on Home), Ctrl+E L lists them (Enter loads, n saves the page as a new layout, d deletes, R resets home), and /layout, /layout <name>, /layout save <name> do the same from any composer. Nothing switches a layout for you. The pet has no key outside arrange mode: click it to pet it (the first pet of the day pays 100 chips), to hatch its egg, or to give it a treat a win earned; right-click its tile for its care box (growing up, toys, tricks), and it reads the rest of your session itself.\n\
+    - Home is tiles you arrange yourself: Ctrl+E or /edit enters arrange mode (Esc when done), where Tab and the arrows focus any tile, space opens the tile picker for it, S splits, X closes, < > change width and { } height, F flips, R resets home, t walks a tile's title through named, a bare rule and hidden, b gives the page a border (boxed tiles), and + gives a tile a guest, the now strip or attention (your move or a result in a daily match, unread DMs and mentions, a companion uncared for today), which takes the tile over only while it has something. O keeps the focused tile to the room the rail is on: in any other room it goes down and the tiles beside it take its space, and O again brings it back everywhere (the rail and chat tiles always stay). Tiles: the room rail, chat (up to ten, each bound to a room; the focused one is the page's chat and the rail follows it, the others watch; Alt+arrows, Alt+J/K or a click move the focus between them, and Space or Ctrl+/ on a room another tile shows goes to that tile), your bonsai, the reef (everyone has one, a fry and a sprout to start, more fish and plants in the Shop), the pet, music, the visualizer, a clock, the lobby, the live panel, an ascii piece, the pulse and more; each names its own keys on the right of its title while you arrange. Home keeps up to nine named layouts per device, saved on the SSH key: 1 is home, 2 is street (an ascii piece and the tank over two chats, news and #announcements, with the clock, pulse, friends and activity, boxed), yours to arrange or delete. Ctrl+E then a digit loads one (Alt and the digit too, in one chord, on Home), Ctrl+E L lists them (Enter loads, n saves the page as a new layout, d deletes, R resets home), and /layout, /layout <name>, /layout save <name> do the same from any composer. Nothing switches a layout for you. On Home, w opens the bonsai, p the pet's care box (growing up, toys, tricks) and a the reef full screen (f feeds it), with or without their tiles on the page. Click the pet to pet it (the first pet of the day pays 100 chips), to hatch its egg, or to give it a treat a win earned, and it reads the rest of your session itself.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
     - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened: a track queued in the YouTube booth stays at least two minutes, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over whatever is up while the cue moves. A link shared to News is not on the strip: it goes into #lounge as the sharer's own line, drawn as a card with the story's title, summary points and art, and Enter on the card opens the story. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
     - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /edit (Ctrl+E), /layout (Ctrl+E L), /redraw (Ctrl+R), /guide (?).\n\
@@ -1485,11 +1485,11 @@ fn overview_lines() -> Vec<String> {
         "  /edit /layout     Ctrl+R and ?, for terminals that swallow those keys",
         "  /redraw /guide",
         "  Ctrl+S / /shop    open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
-        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home",
+        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home, and a on Home shows it full screen",
         "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here; / searches every tab, n/N repeat",
-        "  w                 open Bonsai Care when not composing",
+        "  w  p  a           on Home: Bonsai Care, the pet's care box, the reef full screen (not while composing)",
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
@@ -1748,16 +1748,17 @@ fn layouts_help_lines() -> Vec<String> {
         "Tile keys, in arrange mode",
         "  j k  Enter        on attention, pick a row and do it (a DM or mention opens in the first chat tile)",
         "  [ ]  Enter        on an ascii tile, step through the pieces, or pick one from the list",
-        "  a                 on the reef or the tank, feed it (free, once a day, +100 chips)",
         "  random            one random scene/style per visit to Home or screensaver activation",
         "  randomer          a different landscape every five minutes, in dots or pixels",
         "  Screensaver       the same choices in Settings > Tweaks > Screensaver",
         "",
         "Everywhere on Home",
-        "  w                 open Bonsai Care, as on every page",
+        "  w                 open Bonsai Care, tile or no tile, arranging or not",
+        "  p                 open the pet's care box, the same (with a message selected, p is its author's profile)",
+        "  a                 the reef full screen, the same: f feeds it, s opens the Shop for more fish, q or a closes",
         "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
         "  click             the pet: pet it, give it a waiting treat, or pick what it hatches or grows into; its floor: throw a ball",
-        "  right-click       the pet's tile: its care box (Enter on the tile in arrange mode, or a click on its status row)",
+        "  right-click       the pet's tile: its care box (or a click on its status row)",
         "  click             on the reef or the tank, feed it (free, once a day, +100 chips)",
         "  s1-4              with a live tile on the page, open that row of it (outside arrange mode)",
         "  click             on a row of the live tile, the same",
@@ -2225,10 +2226,11 @@ fn bonsai_help_lines() -> Vec<String> {
         "  it hatches        the day after it arrives the egg is ready: click it, and in the care box press 1 for a cat, 2 for a dog",
         "                    or 3 for a bird. The egg waits as long as you like. Until it is ready the row under it",
         "                    says when, and a pat makes it rock",
-        "  it grows up       young at 7 days together, adult at 30, elder at 100. When it has the days, click it: the care box",
-        "                    shows it drawn two ways and 1 or 2 picks one. You pick its ears (or crest) at young, its feet at",
-        "                    adult and its face (the bird's wings) at elder, and the picks stay: eight different elders each",
-        "  days together     a day together is any UTC day you press a key with it out. Nothing ever goes down: stay away",
+        "  it grows up       on treats: young after 5 treats eaten, adult after 20, elder after 60, one earned a day at most. When it",
+        "                    has them, click it: the care box shows it drawn two ways and 1 or 2 picks one. You pick its ears",
+        "                    (or crest) at young, its feet at adult and its face (the bird's wings) at elder, and the picks stay:",
+        "                    eight different elders each",
+        "  days together     a day together is any UTC day you press a key with it out; they hatch the egg. Nothing goes down: stay away",
         "                    and it only sleeps, and it is glad when you are back",
         "  nothing to feed   it reads your session: a win makes it proud for half an hour, a loss makes it sulk for ten minutes,",
         "                    a message you send makes it chatty, music makes it vibe, ten quiet minutes and it sleeps",
@@ -2241,7 +2243,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "                    it carries beside its feet. Tomorrow it goes by whatever you feed it then",
         "  click it          the first click of the day pets it for 100 chips; after that a click gives a waiting treat, or it purrs",
         "                    and does a trick it knows. Move the cursor in its tile and it walks after it; click the floor to throw a ball",
-        "  care box          right-click its tile, click its status row, or Enter on the tile in arrange mode (Ctrl+E):",
+        "  care box          p on Home, right-click its tile, or click its status row:",
         "                    f give the treat, 1 2 3 hatch a ready egg, 1 2 pick how it grows, b ball, m toy mouse,",
         "                    t p r pick, practise and perform a trick",
         "  tricks            spin, bow, hop, dance: three separate days of practice each, one practice a day; switching trick starts over",

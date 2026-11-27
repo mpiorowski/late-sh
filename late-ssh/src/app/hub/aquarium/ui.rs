@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
+use chrono::NaiveDate;
 use ratatui::{
     Frame,
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
 use late_core::models::aquarium_care::CARE_DAYS;
@@ -591,7 +592,7 @@ pub(crate) fn draw_reef_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>)
         return;
     }
     draw(frame, area, view.state);
-    draw_care_bar(frame, area, view.care.bar());
+    draw_tile_surface(frame, area, view.care.bar());
 }
 
 /// Home's tank tile, the small tank the tile's whole size: the
@@ -605,7 +606,76 @@ pub(crate) fn draw_tank_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>,
         view.care.hungry(),
         wall_tick,
     );
-    draw_care_bar(frame, area, view.care.bar());
+    draw_tile_surface(frame, area, view.care.bar());
+}
+
+/// The reef full screen (`a` on Home): the water fills a box over the
+/// page with the care bar on its surface, and the row under the water says
+/// how the tank is doing today and which keys answer.
+pub(crate) fn draw_full_view(frame: &mut Frame, area: Rect, view: &TankView<'_>, today: NaiveDate) {
+    frame.render_widget(Clear, area);
+    let block = Block::new()
+        .title(" reef ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    frame.render_widget(block, area);
+    let water = full_view_water(area);
+    draw(frame, water, view.state);
+    draw_care_bar(frame, water, view.care.bar_on(today));
+    let footer = Rect {
+        y: water.bottom(),
+        height: 1,
+        ..water
+    };
+    frame.render_widget(
+        Paragraph::new(full_view_footer(view.care, today).centered()),
+        footer,
+    );
+}
+
+/// The water of the full view drawn over `area`: inside the border, over
+/// the footer row. The simulation binds to it while the view is up
+/// (`App::sync_aquarium_bounds`).
+pub(crate) fn full_view_water(area: Rect) -> Rect {
+    let inner = Block::new().borders(Borders::ALL).inner(area);
+    Rect {
+        height: inner.height.saturating_sub(1),
+        ..inner
+    }
+}
+
+/// `fed today · next fry in 9 fed days · f feed · s more fish · q close`.
+fn full_view_footer(care: &AquariumCare, today: NaiveDate) -> Line<'static> {
+    let said = match (care.fed_on_day(today), care.minded_on(today)) {
+        (true, _) => match care.fed_days_to_next_fry_on(today) {
+            1 => "fed today · a fry hatches on the next fed day".to_string(),
+            days => format!("fed today · next fry in {days} fed days"),
+        },
+        (false, true) => "the shield minds it today".to_string(),
+        (false, false) => "not fed today".to_string(),
+    };
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let sep = Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
+    let key = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    Line::from(vec![
+        Span::styled(said, dim),
+        sep.clone(),
+        Span::styled("f", key),
+        Span::styled(" feed", dim),
+        sep.clone(),
+        Span::styled("s", key),
+        Span::styled(" more fish", dim),
+        sep,
+        Span::styled("q", key),
+        Span::styled(" close", dim),
+    ])
 }
 
 /// Whether an aquarium tile's inner area is big enough for the reef:
@@ -627,6 +697,29 @@ fn draw_care_bar(frame: &mut Frame, area: Rect, bar: CareBar) {
     }
     let row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
     frame.render_widget(Paragraph::new(bar).right_aligned(), row);
+}
+
+/// A tile's surface row: the care bar, then Home's key for the full view,
+/// `a reef`, as the bonsai names `w care` under its tree: the letter in
+/// amber, the word dim. A blank cell each side parts them from the water.
+/// A tile too narrow for both keeps the bar.
+fn draw_tile_surface(frame: &mut Frame, area: Rect, bar: CareBar) {
+    let italic = Style::default().add_modifier(Modifier::ITALIC);
+    let dim = italic.fg(theme::TEXT_DIM());
+    let mut spans = vec![Span::styled(" ", dim)];
+    spans.extend(care_bar_spans(bar));
+    spans.extend([
+        Span::styled(" ", dim),
+        Span::styled("a", italic.fg(theme::AMBER_DIM())),
+        Span::styled(" reef ", dim),
+    ]);
+    let line = Line::from(spans);
+    if area.height == 0 || (area.width as usize) < line.width() + 2 {
+        draw_care_bar(frame, area, bar);
+        return;
+    }
+    let row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
+    frame.render_widget(Paragraph::new(line).right_aligned(), row);
 }
 
 /// The care bar: one dot per day of the fourteen both clocks run on.

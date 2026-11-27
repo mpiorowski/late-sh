@@ -572,10 +572,14 @@ fn assert_sane_finish(outcome: &Outcome) {
             "a winner with rivals still standing and less than the whole map"
         );
         // The prize is sane and scales with who actually played.
-        let pot: i64 = payout_plan(paying_players(state), state.ruleset.pot_scale)
-            .iter()
-            .map(|(_, chips)| chips)
-            .sum();
+        let pot: i64 = payout_plan(
+            paying_players(state),
+            state.ruleset.pot_scale,
+            state.ruleset.win_min,
+        )
+        .iter()
+        .map(|(_, chips)| chips)
+        .sum();
         assert!(
             (1_000..=crate::app::door::realm::svc::REALM_POT_MAX).contains(&pot),
             "pot of {pot} is outside anything reasonable"

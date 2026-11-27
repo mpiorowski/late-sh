@@ -186,11 +186,11 @@ impl TileKind {
             TileKind::Bonsai => &[TileHint::Names(HouseKey::Tend)],
             TileKind::Ascii => &[TileHint::Takes(TileKey::PickPiece)],
             TileKind::Aquarium | TileKind::Tank => &[
-                TileHint::Takes(TileKey::Feed),
+                TileHint::Names(HouseKey::Reef),
                 TileHint::Names(HouseKey::FeedClick),
             ],
             TileKind::Pet => &[
-                TileHint::Takes(TileKey::Care),
+                TileHint::Names(HouseKey::Care),
                 TileHint::Names(HouseKey::PetClick),
             ],
             TileKind::Chat => &[
@@ -246,14 +246,8 @@ pub enum TileKey {
     /// `[` `]` step an ascii tile through the pieces, Enter opens the
     /// picker.
     PickPiece,
-    /// `a` feeds the tank, on the reef or the tank tile (a click does
-    /// the same from any mode, `HouseKey::FeedClick`).
-    Feed,
     /// `[` `]` rebind a chat tile to the previous or next room.
     CycleRoom,
-    /// Enter opens the pet's care box (a click on the tile's rows does the
-    /// same from any mode).
-    Care,
 }
 
 impl TileKey {
@@ -261,9 +255,7 @@ impl TileKey {
         match self {
             TileKey::Attend => ("j k Enter", "act"),
             TileKey::PickPiece => ("[ ] Enter", "pick"),
-            TileKey::Feed => ("a", "feed"),
             TileKey::CycleRoom => ("[ ]", "cycle"),
-            TileKey::Care => ("Enter", "care"),
         }
     }
 
@@ -272,9 +264,7 @@ impl TileKey {
         match self {
             TileKey::Attend => matches!(byte, b'j' | b'J' | b'k' | b'K' | b'\r' | b'\n'),
             TileKey::PickPiece => matches!(byte, b'[' | b']' | b'\r' | b'\n'),
-            TileKey::Feed => byte == b'a',
             TileKey::CycleRoom => matches!(byte, b'[' | b']'),
-            TileKey::Care => matches!(byte, b'\r' | b'\n'),
         }
     }
 }
@@ -285,6 +275,10 @@ impl TileKey {
 pub enum HouseKey {
     /// `w`: the bonsai's care modal.
     Tend,
+    /// `p`: the pet's care box.
+    Care,
+    /// `a`: the reef, full screen.
+    Reef,
     /// `Ctrl+/`: the room picker, for a chat tile.
     PickRoom,
     /// `m`: mute the paired client.
@@ -303,6 +297,8 @@ impl HouseKey {
     pub fn text(self) -> (&'static str, &'static str) {
         match self {
             HouseKey::Tend => ("w", "tend"),
+            HouseKey::Care => ("p", "care"),
+            HouseKey::Reef => ("a", "reef"),
             HouseKey::PickRoom => ("ctrl+/", "room"),
             HouseKey::Mute => ("m", "mute"),
             HouseKey::OpenLobby => ("^G", "open"),
@@ -318,6 +314,8 @@ impl HouseKey {
     pub fn taken_by(self) -> TakenBy {
         match self {
             HouseKey::Tend => TakenBy::Letter(b'w'),
+            HouseKey::Care => TakenBy::Letter(b'p'),
+            HouseKey::Reef => TakenBy::Letter(b'a'),
             HouseKey::Mute => TakenBy::Letter(b'm'),
             HouseKey::OpenLive => TakenBy::Letter(b's'),
             HouseKey::PickRoom | HouseKey::OpenLobby => TakenBy::Chord,

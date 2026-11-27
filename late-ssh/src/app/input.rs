@@ -979,6 +979,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.show_aquarium_modal {
+        crate::app::hub::aquarium::input::handle_modal_input(app, event);
+        return;
+    }
+
     if app.show_lobby_modal {
         crate::app::lobby::modal_input::handle_input(app, event);
         return;
@@ -1966,6 +1971,10 @@ fn dispatch_escape(app: &mut App) {
         crate::app::pet::input::handle_escape(app);
         return;
     }
+    if app.show_aquarium_modal {
+        crate::app::hub::aquarium::input::handle_escape(app);
+        return;
+    }
     if app.show_lobby_modal {
         crate::app::lobby::modal_input::handle_escape(app);
         return;
@@ -2929,6 +2938,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_pet_modal
+        || app.show_aquarium_modal
         || app.show_lobby_modal
         || app.icon_picker_open
 }
@@ -3356,6 +3366,7 @@ fn close_overlays_for_modal(app: &mut App) {
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_pet_modal = false;
+    app.show_aquarium_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3382,26 +3393,9 @@ pub(crate) fn open_message_search_modal_globally(app: &mut App, query: &str) {
 }
 
 fn open_settings_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
+    close_overlays_for_modal(app);
     // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_lobby_modal = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
     app.settings_modal_state
         .open_from_profile(app.profile_state.profile(), device_artboard_disclaimer);
@@ -3414,25 +3408,7 @@ fn open_settings_modal_globally(app: &mut App) {
 /// shelf. It closes the modal stack the same way every other opener does,
 /// since a modal left up would cover the page it just went to.
 pub(crate) fn open_usermap_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_lobby_modal = false;
-    app.show_hub_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
+    close_overlays_for_modal(app);
     app.set_screen(Screen::Profiles);
     app.directory_state
         .set_shelf(crate::app::directory::state::Shelf::Map);
@@ -3440,24 +3416,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
 
 /// Shared Shop entry point for Ctrl+S, `/shop`, and the status bar's Shop hint.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_lobby_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
+    close_overlays_for_modal(app);
     app.show_hub_modal = true;
 }
 
@@ -3473,10 +3432,10 @@ pub(crate) fn pet_the_pet_globally(app: &mut App) {
         .pat(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
-/// The tank's free daily meal, from any surface that shows it (`a` on its
-/// tile in arrange mode, a click on it, `/aquarium feed`, the attention
-/// row): the flakes are the immediate feedback, the chips banner follows
-/// when the service's event comes back.
+/// The tank's free daily meal, from any surface that shows it (a click on
+/// its tile, `f` or a click in the reef full screen, `/aquarium feed`, the
+/// attention row): the flakes are the immediate feedback, the chips banner
+/// follows when the service's event comes back.
 pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
     match app.aquarium_care.feed() {
@@ -3501,50 +3460,26 @@ pub(crate) fn open_pet_modal_globally(app: &mut App) {
     app.show_pet_modal = true;
 }
 
+/// The reef full screen over Home (`a`), whether or not the layout has
+/// an aquarium tile. The simulation binds to the view's water at once, so
+/// the first frame is already the whole reef.
+fn open_aquarium_modal_globally(app: &mut App) {
+    close_overlays_for_modal(app);
+    // A piece picker left open over Home would take the modal's keys.
+    app.piece_picker.close();
+    app.show_aquarium_modal = true;
+    app.sync_aquarium_bounds();
+}
+
 fn open_bonsai_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_lobby_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
+    close_overlays_for_modal(app);
     app.show_bonsai_modal = true;
 }
 
 pub(crate) fn open_daily_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
+    close_overlays_for_modal(app);
     // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
     app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;
 }
@@ -3746,6 +3681,7 @@ fn close_modals_for_page_change(app: &mut App) {
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_pet_modal = false;
+    app.show_aquarium_modal = false;
     app.show_settings = false;
     app.show_lobby_modal = false;
 }
@@ -3855,12 +3791,20 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     // The Artboard owns its letters. The paired-client hotkeys (`m` mute,
-    // `+`/`-` volume, `v` the music prefix) and `w` (Bonsai Care) stay off
-    // that page entirely, the way the voice chords do: the page spends
-    // those letters itself (`v` applauds a piece), and every one of them is
-    // a printable that a piece title may want. Only quit, the page
-    // switches, and the guide stay global there.
+    // `+`/`-` volume, `v` the music prefix) stay off that page entirely,
+    // the way the voice chords do: the page spends those letters itself
+    // (`v` applauds a piece), and every one of them is a printable that a
+    // piece title may want. Only quit, the page switches, and the guide
+    // stay global there.
     let global_letter_keys = ctx.screen != Screen::Artboard;
+    // Home's own letters, outside any composer: the Live panel's `s`
+    // prefix, and the keepsakes' keys (`w` the bonsai, `p` the pet's care
+    // box, `a` the reef full screen), which work whether or not the layout
+    // shows a tile for them.
+    let home_letter_keys = ctx.screen == Screen::Dashboard
+        && !ctx.chat_composing
+        && !ctx.feeds_processing
+        && !ctx.news_composing;
 
     match byte {
         b'q' | b'Q' => {
@@ -3957,10 +3901,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         // story); on every other page `s` is the page's (the Directory's
         // search, the Clubhouse's seat).
         b's' | b'S'
-            if ctx.screen == Screen::Dashboard
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
+            if home_letter_keys
                 && !app.chat.room_jump_active
                 && !app.chat.feeds_selected
                 && !app.chat.discover_selected
@@ -3969,13 +3910,23 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.live_prefix_armed = true;
             true
         }
-        b'w' | b'W'
-            if global_letter_keys
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing =>
-        {
+        b'w' | b'W' if home_letter_keys => {
             open_bonsai_modal_globally(app);
+            true
+        }
+        // `p` on a selected message opens its author's profile, and the
+        // cyberspace pane composes with it: both keep it.
+        b'p' | b'P'
+            if home_letter_keys
+                && app.chat.selected_message_id.is_none()
+                && !app.chat.cyberspace_selected
+                && !app.chat.cyberspace_notifications_selected =>
+        {
+            crate::app::pet::input::open_care_from_key(app);
+            true
+        }
+        b'a' | b'A' if home_letter_keys => {
+            open_aquarium_modal_globally(app);
             true
         }
         b'o' | b'O'

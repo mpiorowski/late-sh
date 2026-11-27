@@ -542,6 +542,11 @@ pub struct App {
     pub(crate) show_bonsai_modal: bool,
     /// The pet's care box (`pet/modal_ui.rs`).
     pub(crate) show_pet_modal: bool,
+    /// The reef full screen (`a` on Home, `hub/aquarium/ui.rs`).
+    pub(crate) show_aquarium_modal: bool,
+    /// Whether the reef was last bound to the full view's water: the tick
+    /// rebinds it to the tile when the view closes, whoever closed it.
+    pub(crate) aquarium_bound_to_view: bool,
     pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     /// Edge detector for the cooldown label's ready flip: the countdown is
@@ -1237,6 +1242,7 @@ impl App {
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
         self.show_pet_modal = false;
+        self.show_aquarium_modal = false;
         self.show_lobby_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
@@ -1683,6 +1689,8 @@ impl App {
             show_gild_modal: false,
             show_bonsai_modal: false,
             show_pet_modal: false,
+            show_aquarium_modal: false,
+            aquarium_bound_to_view: false,
             show_lobby_modal: false,
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
@@ -3116,6 +3124,7 @@ impl App {
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_pet_modal
+            || self.show_aquarium_modal
             || self.show_lobby_modal
             || self.paper.modal.is_some()
             || self.comeback.is_open()
@@ -3656,9 +3665,10 @@ impl App {
     /// the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         let (cols, rows) = self.size;
-        match self.reef_tile_inner() {
-            Some(inner) => inner,
-            None => aquarium_area_for_terminal(cols, rows),
+        match (self.show_aquarium_modal, self.reef_tile_inner()) {
+            (true, _) => crate::app::hub::aquarium::ui::full_view_water(self.content_area()),
+            (false, Some(inner)) => inner,
+            (false, None) => aquarium_area_for_terminal(cols, rows),
         }
     }
 
@@ -3688,6 +3698,7 @@ impl App {
 
     /// Re-bind the reef to the rect the current screen draws it in.
     pub(crate) fn sync_aquarium_bounds(&mut self) {
+        self.aquarium_bound_to_view = self.show_aquarium_modal;
         let area = self.aquarium_area_for_screen();
         self.aquarium_state.handle_resize(area.width, area.height);
     }

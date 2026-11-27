@@ -2,8 +2,9 @@ use chrono::NaiveDate;
 use late_core::models::pet::{Fed, Form, Pick, Stage, TreatKind, Trick};
 
 use super::{
-    DayCounted, Growth, Practiced, STAY_MINUTES, TRICK_DAYS, call_line, fed_today, hatch_wait,
-    stay_left, stays_since, treat_for_win, treat_title,
+    DayCounted, Growth, HATCH_DAYS, Need, Practiced, STAY_MINUTES, TRICK_DAYS, call_line,
+    fed_today, hatch_wait, need_for, stay_left, stays_since, treat_for_win, treat_title,
+    treat_wait,
 };
 use crate::app::activity::event::GameFamily;
 
@@ -22,6 +23,7 @@ fn egg() -> Growth {
         learning: None,
         learning_days: 0,
         last_practice: None,
+        treats_eaten: 0,
     }
 }
 
@@ -51,8 +53,15 @@ fn a_day_counts_once_and_never_backwards() {
     assert_eq!((growth.days_together, growth.last_day), (3, Some(day(6))));
 }
 
+/// Feed it `treats` treats.
+fn feed(growth: &mut Growth, treats: i32) {
+    for _ in 0..treats {
+        growth.eat();
+    }
+}
+
 #[test]
-fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
+fn an_egg_hatches_by_its_days_and_grows_by_its_treats_into_its_owners_picks() {
     let mut growth = egg();
     let (one, two) = (Pick::One, Pick::Two);
 
@@ -61,7 +70,7 @@ fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
     live(&mut growth, 0..1);
     assert!(!growth.ready_to_hatch(), "the arrival day");
     assert!(!growth.hatch(), "an egg without its days stays an egg");
-    assert_eq!(growth.days_to_next(), Some(1));
+    assert_eq!(growth.still_needs(), Some((Stage::Baby, Need::Days(1))));
     assert_eq!(growth.days_to_hatch(), Some(1));
     assert_eq!(hatch_wait(1), "tomorrow");
     live(&mut growth, 1..5);
@@ -76,20 +85,34 @@ fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
     assert_eq!(growth.grow(one), None);
     assert!(growth.hatch());
     assert!(!growth.hatch(), "once");
-    assert_eq!(growth.days_to_next(), Some(2));
+    assert_eq!(growth.still_needs(), Some((Stage::Young, Need::Treats(5))));
+    assert_eq!(
+        growth.days_to_hatch(),
+        None,
+        "a hatched pet waits on treats"
+    );
 
-    assert_eq!(growth.offers(), None, "a baby without its days");
+    live(&mut growth, 5..200);
+    assert_eq!(growth.offers(), None, "days never grow a hatched pet");
     assert_eq!(growth.grow(two), None);
-    live(&mut growth, 5..40);
-    assert_eq!(growth.stage(), Stage::Baby, "days never enter a stage");
+    feed(&mut growth, 4);
+    assert_eq!(growth.still_needs(), Some((Stage::Young, Need::Treats(1))));
+    assert_eq!(treat_wait(Stage::Young, 1), "young after 1 more treat");
+    assert_eq!(growth.offers(), None, "a baby a treat short");
+    feed(&mut growth, 1);
+    assert_eq!(growth.stage(), Stage::Baby, "treats never enter a stage");
     assert_eq!(
         growth.offers(),
         Some([Form::Young { top: one }, Form::Young { top: two }]),
         "the top, drawn each way"
     );
     assert_eq!(growth.grow(two), Some(Stage::Young));
+    assert_eq!(growth.still_needs(), Some((Stage::Adult, Need::Treats(15))));
+    assert_eq!(treat_wait(Stage::Adult, 15), "adult after 15 more treats");
 
-    // It has the days for an adult already: the next pick waits at once.
+    // Treats given while a pick waits still count: the adult's treats are
+    // there already, so the next pick waits at once.
+    feed(&mut growth, 15);
     assert_eq!(
         growth.offers(),
         Some([
@@ -105,16 +128,16 @@ fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
         "the feet, under the top it kept"
     );
     assert_eq!(growth.grow(one), Some(Stage::Adult));
-    assert_eq!(growth.offers(), None, "an elder is sixty days off");
-    assert_eq!(growth.days_to_next(), Some(60));
+    assert_eq!(growth.offers(), None, "an elder is forty treats off");
+    assert_eq!(growth.still_needs(), Some((Stage::Elder, Need::Treats(40))));
 
-    live(&mut growth, 40..100);
+    feed(&mut growth, 40);
     assert_eq!(growth.grow(two), Some(Stage::Elder));
     assert_eq!(
         growth,
         Growth {
-            days_together: 100,
-            last_day: Some(day(99)),
+            days_together: 200,
+            last_day: Some(day(199)),
             form: Form::Elder {
                 top: two,
                 feet: one,
@@ -126,12 +149,26 @@ fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
             learning: None,
             learning_days: 0,
             last_practice: None,
+            treats_eaten: 60,
         }
     );
-    live(&mut growth, 100..120);
+    feed(&mut growth, 20);
     assert_eq!(growth.offers(), None, "an elder is fully grown");
     assert_eq!(growth.grow(one), None);
-    assert_eq!(growth.days_to_next(), None);
+    assert_eq!(growth.still_needs(), None);
+}
+
+#[test]
+fn the_hatch_asks_for_days_and_every_stage_after_for_treats() {
+    assert_eq!(
+        [Stage::Baby, Stage::Young, Stage::Adult, Stage::Elder].map(need_for),
+        [
+            Need::Days(HATCH_DAYS),
+            Need::Treats(5),
+            Need::Treats(20),
+            Need::Treats(60)
+        ]
+    );
 }
 
 #[test]
@@ -139,6 +176,7 @@ fn a_reset_starts_over_as_an_egg_on_its_first_day() {
     let mut growth = egg();
     live(&mut growth, 0..10);
     growth.hatch();
+    feed(&mut growth, 5);
     growth.bond(day(9));
     assert_eq!(growth.grow(Pick::Two), Some(Stage::Young));
     for n in 0..TRICK_DAYS as i64 {

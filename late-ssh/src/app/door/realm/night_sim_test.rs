@@ -205,9 +205,9 @@ const ROSTERS: [Roster; 6] = [
         arrivals: &[(5, 5), (10, 5)],
     },
     Roster {
-        label: "10p+5@20",
+        label: "10p+5@12",
         starters: 10,
-        arrivals: &[(20, 5)],
+        arrivals: &[(12, 5)],
     },
 ];
 
@@ -294,6 +294,8 @@ struct Season {
     nights: u32,
     /// Territories that changed hands over the season.
     taken: u32,
+    /// Of those, the ones taken from a player rather than claimed: the war.
+    fought: u32,
     /// Takes the field ordered against a player at the bar.
     alarm: u32,
     bounces: u32,
@@ -1201,6 +1203,7 @@ impl Sim {
             }),
             nights: self.nights,
             taken: self.taken,
+            fought: self.lost.values().sum(),
             alarm: self.alarm,
             bounces: self.bounces,
             fizzles: self.fizzles,
@@ -1337,17 +1340,18 @@ fn table(seasons: &[Season]) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{:<13} {:<5} {:>5} {:>11} {:>14} {:>14} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>11} {:>11} {:>6} {:>5} {:>6} {:>4} {:>4}",
+        "{:<13} {:<5} {:>5} {:>11} {:>14} {:>14} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>11} {:>11} {:>6} {:>5} {:>6} {:>4} {:>4}",
         "roster",
         "world",
         "seeds",
         "days",
         "dom/clk/ls/x",
-        "top7/14/21",
+        "top5/10/15",
         "top%",
         "led",
         "d5",
         "take",
+        "war",
         "alarm",
         "bnc",
         "fiz",
@@ -1379,7 +1383,7 @@ fn table(seasons: &[Season]) -> String {
         };
         let _ = writeln!(
             out,
-            "{:<13} {:<5} {:>5} {:>11} {:>14} {:>14} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>11} {:>11} {:>6} {:>5} {:>6} {:>4} {:>4}",
+            "{:<13} {:<5} {:>5} {:>11} {:>14} {:>14} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>11} {:>11} {:>6} {:>5} {:>6} {:>4} {:>4}",
             label,
             world.name(),
             batch.len(),
@@ -1405,7 +1409,7 @@ fn table(seasons: &[Season]) -> String {
                             .map(|(_, top)| top * 100.0)
                     })))
                 };
-                format!("{}/{}/{}", at(7), at(14), at(21))
+                format!("{}/{}/{}", at(5), at(10), at(15))
             },
             show_f(mean(batch.iter().map(|s| s.top_share * 100.0))),
             show_f(mean(
@@ -1415,6 +1419,7 @@ fn table(seasons: &[Season]) -> String {
             )),
             show_f(mean(d5.iter().map(|won| f64::from(u8::from(*won))))),
             per(batch.iter().map(|s| s.taken).sum(), nights),
+            per(batch.iter().map(|s| s.fought).sum(), nights),
             batch.iter().map(|s| s.alarm).sum::<u32>(),
             per(batch.iter().map(|s| s.bounces).sum(), nights),
             per(batch.iter().map(|s| s.fizzles).sum(), nights),
@@ -1478,13 +1483,13 @@ fn table(seasons: &[Season]) -> String {
 fn csv(seasons: &[Season]) -> String {
     let mut out = String::from(
         "roster,world,seed,days,finish,winner_policy,top_share,winner_first_led,day5_leader_won,\
-         nights,taken,bounces,fizzles,winner_walls,loser_walls,frontier_lost,warlord_lost,\
+         nights,taken,fought,bounces,fizzles,winner_walls,loser_walls,frontier_lost,warlord_lost,\
          free_day10,alive_share,absentee_held,joins_refused,orders_refused\n",
     );
     for s in seasons {
         let _ = writeln!(
             out,
-            "{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{:.3},{},{},{}",
+            "{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{:.3},{},{},{}",
             s.label,
             s.world.name(),
             s.seed,
@@ -1496,6 +1501,7 @@ fn csv(seasons: &[Season]) -> String {
             show(s.day5_leader_won),
             s.nights,
             s.taken,
+            s.fought,
             s.bounces,
             s.fizzles,
             show(s.winner_walls),
@@ -1525,45 +1531,42 @@ fn accept(seasons: &[Season]) {
     };
     let roster = |label: &'static str| seasons.iter().filter(move |s| s.label == label);
 
-    // Ten players and twenty, at the house pace: a winner between days 14
-    // and 28, and the clock deciding at most half of them.
+    // Ten players and twenty, at the house pace: a winner by the bell, and
+    // a war fought for it. Half the world is out of reach of a crowded
+    // field, so the clock is the expected end; what it must not be is a
+    // season of settling and walls, which is what season 2 was. The old
+    // knobs fought 11 to 15 takes from a player a night here.
+    let clock = i32::from(World::Earth.ruleset(0).season_days);
     for label in ["10p", "20p"] {
-        let batch: Vec<&Season> = roster(label).collect();
-        for s in &batch {
+        for s in roster(label) {
             check(
-                matches!(s.finish, Finish::Won { .. }) && (14..=28).contains(&s.days),
+                matches!(s.finish, Finish::Won { .. }) && s.days <= clock,
                 format!(
-                    "{label} should leave a winner between days 14 and 28: {}",
+                    "{label} should leave a winner by day {clock}: {}",
                     s.summary()
                 ),
             );
         }
-        let by_clock = batch
-            .iter()
-            .filter(|s| {
-                matches!(
-                    s.finish,
-                    Finish::Won {
-                        kind: WinKind::SeasonOver,
-                        ..
-                    }
-                )
-            })
-            .count();
-        check(
-            by_clock * 2 <= batch.len(),
-            format!(
-                "the clock decided {by_clock} of {} {label} seasons",
-                batch.len()
-            ),
-        );
+        for world in [World::Earth, World::Drawn] {
+            let batch: Vec<&Season> = roster(label).filter(|s| s.world == world).collect();
+            let nights: u32 = batch.iter().map(|s| s.nights).sum();
+            let fought: u32 = batch.iter().map(|s| s.fought).sum();
+            check(
+                nights > 0 && f64::from(fought) >= 16.0 * f64::from(nights),
+                format!(
+                    "{label} on {} took {} from a player a night, under 16",
+                    world.name(),
+                    per(fought, nights)
+                ),
+            );
+        }
     }
 
     // A duel ends inside the clock: with a winner, or dissolved when
     // neither player kept playing it.
     for s in roster("2p") {
         check(
-            s.days < 28 || matches!(s.finish, Finish::Won { .. }),
+            s.days < clock || matches!(s.finish, Finish::Won { .. }),
             format!("the duel should end: {}", s.summary()),
         );
     }

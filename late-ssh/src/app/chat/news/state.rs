@@ -685,7 +685,7 @@ impl State {
     }
 
     /// Whether the selected card is a video: the one case `w` in the News
-    /// room is "watch" and not the global Bonsai shortcut.
+    /// room is "watch" and not Home's Bonsai key.
     pub(crate) fn selected_card_is_watchable(&self) -> bool {
         self.selected_item()
             .is_some_and(|item| is_watchable(&item.article.url))

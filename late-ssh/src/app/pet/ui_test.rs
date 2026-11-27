@@ -333,6 +333,41 @@ fn draw_at(
     )
 }
 
+/// `p care` keeps its room on the status row: a tile too narrow for every
+/// segment loses the ones before it, not the key, and only a tile without
+/// room for the name and the key drops it (what fits is still shown).
+#[tokio::test]
+async fn the_status_row_keeps_room_for_its_key() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "pet-status-key").await;
+    let svc = crate::app::pet::svc::PetService::new(
+        test_db.db.clone(),
+        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
+    );
+    let pet = svc.bootstrap(user.id).await.expect("bootstrap");
+    let mut state = PetState::new(
+        user.id,
+        svc,
+        Some(crate::test_helpers::pet_grown_to(pet, ADULT)),
+    );
+    state.name = Some("Biscuit".to_string());
+
+    let wide = status_line(&state, ALONE, 80).to_string();
+    // The details (its age among them) are the care box's.
+    assert!(wide.starts_with("Biscuit · adult · "), "{wide}");
+    assert!(!wide.contains("day "), "{wide}");
+    assert!(wide.ends_with(" · p care"), "{wide}");
+
+    let narrow = status_line(&state, ALONE, 24).to_string();
+    assert_eq!(narrow, "Biscuit · adult · p care");
+
+    let name_and_key = status_line(&state, ALONE, 16).to_string();
+    assert_eq!(name_and_key, "Biscuit · p care");
+
+    let no_key = status_line(&state, ALONE, 15).to_string();
+    assert_eq!(no_key, "Biscuit · adult");
+}
+
 #[tokio::test]
 async fn an_awake_pet_roams_the_whole_box_and_a_watching_one_sits_at_the_glass() {
     let test_db = new_test_db().await;

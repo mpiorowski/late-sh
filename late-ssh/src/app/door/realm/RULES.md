@@ -27,11 +27,11 @@ world; domination ends a season once it is decided. Walls were a losing
 trade by design; here they are the strength, and size is the score.
 
 - **The day: orders.** The budget is the shared one (below): tiers by the
-  involved count, `[(4, 5), (7, 4), (10, 3), (20, 2)]` on the campaign
-  (the standard's `(4, 7), (7, 5), (10, 4)` made every player turn over
-  nearly three territories a night at the fast pace, which ate anyone who
-  missed a weekend), banking, the allowance frozen at the first order of
-  the day, plus what the land pays: `land_points` (4.0, pace-scaled like
+  involved count, `[(4, 6), (10, 5), (20, 4)]` on the campaign, so 18, 15
+  and 12 a night at the fast pace (season 2's `(4, 5), (7, 4), (10, 3),
+  (20, 2)` gave ten players 9, spent on settling and walls with nothing left
+  for a war), banking, the allowance frozen at the first order of the day,
+  plus what the land pays: `land_points` (4.0, pace-scaled like
   the tiers) per hundred territories held, rounded down, banking nothing
   (`land_points`, `DayStanding::land`). At the fast pace that is one point
   per eight territories: the mild lift that lets a lead be pressed home,
@@ -126,20 +126,18 @@ trade by design; here they are the strength, and size is the score.
   land only and cannot be taken from; **ramping up** takes from, and is
   taken by, land neighbours only, so no landings either way; **involved**
   takes anything with a front. The doors stay open to `join_max_claimed`
-  0.9 (0.5 shut them on day two). A win needs `min_active_days_to_win` 40
-  as written, 14 at the fast pace: half the season, so the land rush alone
-  never ends a twenty-player world (it did, on day 7). Checked at placement
-  and again
-  at the night.
+  0.9 (0.5 shut them on day two). A win needs `min_active_days_to_win` 29
+  as written, 10 at the fast pace: half the clock, so a part-timer who
+  plays most days can still be handed it at the bell. Checked at placement
+  and again at the night.
 - **Twenty players.** `max_players` 20, `PALETTE_SLOTS` 20. Everything sized
   by the roster reads one of two numbers: `involved_count(day)` (the budget
   tier: the living, past their opening days) or `war_roster(day)` (the
-  domination bar: everyone who has been past their opening days, the fallen
-  included). Knocking rivals out never raises the winner's own bar, and a
-  late arrival lowers it only once they are out of protection and able to
-  fight the leader: measured by `start_player_count` (the most the roster
-  ever held) five arrivals on day 5 handed a leader standing just over the
-  lower bar the world on day 9.
+  domination bar's tier: everyone who has been past their opening days, the
+  fallen included). The campaign has one bar for every roster, so only a
+  ruleset with tiered bars feels the second: there, knocking rivals out
+  never raises the winner's own bar, and a late arrival lowers it only once
+  they are out of protection and able to fight the leader.
   Drawn worlds have 300 territories (`GeneratedMapSpec::default`); Earth has
   242.
 - **Winning**, checked at the night only, never on an order
@@ -155,15 +153,20 @@ trade by design; here they are the strength, and size is the score.
   - **Dominated**: holding the bar for `domination_nights` (3) nights running
     (`RealmPlayer::dominating_nights`, +1 a night at or over the bar, back to
     0 under it), and `can_win`. The bar is `domination_share_tiers` by
-    `war_roster(day)`: `[(4, 0.50), (6, 0.36), (8, 0.27), (10, 0.21),
-    (13, 0.165), (16, 0.135), (20, 0.11)]`, each about twice the average
-    player's share. The three nights are the coalition's window.
+    `war_roster(day)`, one tier on the campaign: `[(20, 0.50)]`, half the
+    world whoever is in the war. Season 2 had tiers at about twice the
+    average share (21% for ten), free land counted towards them, and the
+    land rush's leader cleared the bar without a fight on day 15, the first
+    day a win was allowed. Half the world is out of reach of settling alone
+    in a crowded field, so outside a duel the clock is the expected end and
+    a domination is a war won early. The three nights are the coalition's
+    window.
   - **Season over**: the night that closes `start_day + season_days` (day
     `start_day + 1` is the first played) ends it after its fights: the
     biggest share among those who `can_win` takes it, a tie going to the
-    final ranking; nobody eligible dissolves it. `season_days` is 80 as
-    written, pace-scaled with a floor of 7: slow 80, normal 48, fast 28,
-    epic 120, blitz 16.
+    final ranking; nobody eligible dissolves it. `season_days` is 57 as
+    written, pace-scaled with a floor of 7: slow 57, normal 34, fast 20,
+    epic 86, blitz 11.
   Payouts, ranking and the pot are the shared ones; a win on the clock pays
   like any other.
 - **The knobs above are what the simulation settled on.**
@@ -174,51 +177,55 @@ trade by design; here they are the strength, and size is the score.
   and everyone but a turtle presses whoever stood at the domination bar
   last night, by land or by sea, the way the standings' `dom 1/3` asks the
   field to) on rosters of 2, 5, 10 and 20, ten joined by five on day 5 and
-  five on day 10, ten joined by five on day 20, and five with two pure
+  five on day 10, ten joined by five on day 12, and five with two pure
   turtles, on Earth and on a drawn world. After every night it checks that
   the dead hold nothing, no budget is overspent, walls stay in bounds, a
   run of dominating nights moves by one or starts over, a bounce leaves the
   holder, every fight's odds are `projection` on the board the night opened
   on with its engagements, and nothing only a night may do happens by day;
   and the same seed plays the same season. The ignored full-scale run
-  reports every missed bar together: ten players and twenty each reach a
-  result between days 14 and 28, the clock deciding at most half; a duel
+  reports every missed bar together: ten players and twenty each leave a
+  winner by the bell (day 20), and take at least 16 territories from a
+  player a night on either world (season 2's knobs took 11 to 15); a duel
   ends; the day-5 leader wins under 60% of seasons; a pure turtle never
   takes the world and is handed it at the bell in fewer than one of its
   seasons in five; a frontier loses fewer territories a season than a
   warlord; three in four absentees who were there for the opening are
   alive on day 7; most day-10 arrivals hold more than their spawn when their
   shield ends. Measured at 8 seeds a roster (days min/mean/max; results
-  dominated/clock/last standing/dissolved; the biggest share after days 7,
-  14 and 21; takes a night):
+  dominated/clock/last standing/dissolved; the biggest share after days 5,
+  10 and 15; territories changing hands a night; of those, taken from a
+  player):
 
-  | roster | world | days | dom/clk/ls/x | top 7/14/21 | takes |
-  |---|---|---|---|---|---|
-  | 2p | earth | 14/20/28 | 6/2/0/0 | 24/44/35 | 11.0 |
-  | 5p | earth | 24/28/28 | 2/6/0/0 | 18/27/33 | 18.1 |
-  | 10p | earth | 14/23/28 | 4/4/0/0 | 15/20/19 | 22.7 |
-  | 20p | earth | 14/18/28 | 7/1/0/0 | 11/14/13 | 26.6 |
-  | 10p+5@5+5@10 | earth | 14/16/24 | 8/0/0/0 | 15/16/15 | 25.6 |
-  | 10p+5@20 | earth | 14/23/28 | 5/3/0/0 | 15/20/19 | 22.7 |
-  | 5p+2turtles | earth | 16/26/28 | 3/5/0/0 | 19/32/34 | 16.2 |
-  | 2p | drawn | 14/21/28 | 5/2/0/1 | 21/42/42 | 12.5 |
-  | 5p | drawn | 17/25/28 | 3/5/0/0 | 18/31/36 | 17.3 |
-  | 10p | drawn | 14/22/28 | 6/2/0/0 | 14/21/19 | 22.1 |
-  | 20p | drawn | 14/20/28 | 5/3/0/0 | 11/13/11 | 26.0 |
-  | 10p+5@5+5@10 | drawn | 14/20/28 | 6/2/0/0 | 14/16/15 | 24.4 |
-  | 10p+5@20 | drawn | 14/22/28 | 6/2/0/0 | 14/21/19 | 22.2 |
-  | 5p+2turtles | drawn | 17/25/28 | 4/4/0/0 | 16/29/32 | 14.2 |
+  | roster | world | days | dom/clk/ls/x | top 5/10/15 | takes | war |
+  |---|---|---|---|---|---|---|
+  | 2p | earth | 13/17/20 | 6/2/0/0 | 21/34/39 | 12.7 | 4.1 |
+  | 5p | earth | 20/20/20 | 0/8/0/0 | 16/25/31 | 22.2 | 11.9 |
+  | 10p | earth | 20/20/20 | 0/8/0/0 | 14/18/20 | 31.8 | 21.2 |
+  | 20p | earth | 20/20/20 | 0/8/0/0 | 10/13/15 | 36.3 | 26.1 |
+  | 10p+5@5+5@10 | earth | 20/20/20 | 0/8/0/0 | 14/17/18 | 32.6 | 21.9 |
+  | 10p+5@12 | earth | 20/20/20 | 0/8/0/0 | 14/18/20 | 32.0 | 21.2 |
+  | 5p+2turtles | earth | 20/20/20 | 0/8/0/0 | 15/28/33 | 19.0 | 7.8 |
+  | 2p | drawn | 14/18/20 | 3/4/1/0 | 16/33/43 | 14.4 | 2.9 |
+  | 5p | drawn | 16/20/20 | 1/7/0/0 | 14/27/35 | 21.2 | 7.1 |
+  | 10p | drawn | 20/20/20 | 0/8/0/0 | 13/21/23 | 30.6 | 17.1 |
+  | 20p | drawn | 20/20/20 | 0/8/0/0 | 10/12/13 | 36.0 | 22.8 |
+  | 10p+5@5+5@10 | drawn | 20/20/20 | 0/8/0/0 | 13/17/17 | 31.6 | 18.2 |
+  | 10p+5@12 | drawn | 20/20/20 | 0/8/0/0 | 13/21/22 | 30.8 | 17.2 |
+  | 5p+2turtles | drawn | 20/20/20 | 0/8/0/0 | 12/24/33 | 18.1 | 4.5 |
 
   Share of the world held at the end, per player of each policy over every
-  season: cautious 11.5%, coalition 11.5%, frontier 10.8%, warlord 10.8%,
-  settler 10.1%, turtle 7.7%, absentee 2.9%. What moved from the values as
+  season: frontier 13.7%, coalition 12.8%, cautious 11.6%, settler 9.6%,
+  warlord 9.5%, turtle 8.7%, absentee 2.8%; turtles won 5 of the 112 seasons.
+  The simulated players play every day they are meant to, so a real season
+  of part-timers fights less than the table. What moved from the values as
   first written, and why, is beside each knob above: the share by weight
-  (raw population and area made four countries the whole game), the tiers
-  of the domination bar (every budget being the same size caps a lead near
-  twice the average share), `war_roster` under the bar (five arrivals on
-  day 5 handed a leader the world on day 9), `land_points` (without it the
-  clock decided every ten-player season), the budget tiers (three
-  territories a night turning over per player ate the part-timers),
+  (raw population and area made four countries the whole game), the
+  domination bar at half the world (tiers near twice the average share were
+  cleared by the land rush), the clock at 20 days, `land_points` (with
+  every budget the same size a lead plateaued at twice the average share),
+  the budget tiers (season 2's
+  left nothing over for a war),
   `garrison_per_wall` and `front_factor` (a border dug to 3 then won by
   never being attacked), `sea_reach_km` 3000 (1500 left whole continents
   nobody could reach, and a settler alone on one held a quarter of the
@@ -255,15 +262,15 @@ None of it is read by the campaign's night except the phases and the decay.
 - **The daily budget follows the involved**, not the roster (`daily_base` → `involved_count`): a realm whose players are all still finding their feet pays the most generous tier, which is right when one or two people are alone on a whole world.
 - **The day turning over is announced twice.** Every player on the roster gets `RealmEvent::DayRolled` — derived by each replica from `last_resolved_day` advancing in its snapshot, and carrying the game's *name*, because the session raises it as a banner wherever they are in the app ("The Realm calls you! (name)"), not only with the board open. And the lounge ticker gets one line (`svc::announce_day_rolled`, from the write that won the CAS), `ActivityKind::RealmCalls` → "realm <name> calls its players", attributed to no user because the summons is the game's. That line is gated on more than one living player: a realm somebody made and sat in alone would otherwise post about nothing, daily, for as long as the row lives. The repeat key is `realm-calls:<game>:<day>`, so a rollover announced twice posts once.
 - **Reset hour** (`realm_games.reset_hour_utc`, 0-23, held by the column's CHECK): when this game's points come back, every day. The house world refills at `HOUSE_RESET_HOUR_UTC` (18), an evening in Europe and an afternoon in the Americas; the column stays per row so a world's hour is its own data. Every surface writes it in both clocks (`svc::reset_hour_label`, `RealmState::viewer_tz`, mirrored from `App` like the chat pane's zone).
-- Actions/day follow the involved count (above), by tier: 2-4 → 7, 5-7 → 5, 8-10 → 4 on the standard ruleset, and 2-4 → 5, 5-7 → 4, 8-10 → 3, 11-20 → 2 on the campaign, plus what its land pays (`actions_per_day_tiers`, as written; the pace's `action_scale` multiplies them). A point is spent on the attempt (an order, on the campaign), won or lost; a *refused* one costs nothing.
+- Actions/day follow the involved count (above), by tier: 2-4 → 7, 5-7 → 5, 8-10 → 4 on the standard ruleset, and 2-4 → 6, 5-10 → 5, 11-20 → 4 on the campaign, plus what its land pays (`actions_per_day_tiers`, as written; the pace's `action_scale` multiplies them). A point is spent on the attempt (an order, on the campaign), won or lost; a *refused* one costs nothing.
 - Probability on the standard ruleset (pure fn `action_probability`; the campaign's odds are under "Orders"): territory weight `w = (ln pop + ln area normalized)/2`; strength `S = 1 + Σ held weights` (the defender's after decay); claim `0.90 − 0.25w`; attack `(0.45·(2S_att/(S_att+S_def))^1.6 − 0.15w) × fortification`; then `× distance_decay^(cost−1)`; clamp to [0.05, 0.95] on your border, [0.01, 0.95] beyond it. The UI's projected % is the same function on the same state — it is the real number, it can just go stale the moment someone else acts.
 - Exits: a voluntary leave frees the territories (the last player leaving cancels the world, and the next sweep opens the next one); nobody is kicked for going quiet, a dormant empire just decays (`decay_multiplier`) until someone takes it; losing your last territory = **Eliminated**, stays spectator. On the standard ruleset one alive player left (every rival conquered) finishes the game, as does someone owning every territory — the same finish reached from either end; the campaign adds domination and the clock (under "Orders"). Free land left on the map does not hold it open. A world nobody has marched into yet stands until somebody does: an empty roster is an invitation, not an abandoned game, so the first reset never dissolves it mid-muster. A roster with nobody alive dissolves it (no winner, no payouts), as does a realm every living player has been quiet in for `REALM_ABANDON_DAYS`.
 - **Pace** (`rulesets::PACES`, `HOUSE_PACE` for the house world, frozen into the snapshot by `RealmRulesetSnapshot::at_pace`). Orthogonal to the ruleset: the rules say how a conquest works, the pace says how long it takes. `action_scale` multiplies the daily points, `day_scale` multiplies every window measured in days (opening protection, the week a win takes, dormancy, banking), and `pot_scale` multiplies the prize. Floors keep a blitz playable — a win you could reach in a day, or an opening with no protection, would be a different game rather than a faster one. Measured on the standard ruleset with five mixed policies: **epic 158 days, slow 68, normal 39, fast 17, blitz 12** (`simulation_test.rs`). `slow` is the rules exactly as written, and `normal` is the reference tempo whose pot is the plain per-player rate.
 - **A finished world stays listed for `REALM_RESULTS_HOURS` (24)**, so everyone gets to read the result on the hub card and the strip while the next world musters, then drops out of the listing. The row is never deleted: the history and the archived day logs outlive the listing.
-- **Ranked payouts** (migration 194, rescaled by 197). The pot is computed per game: `REALM_POT_PER_PLAYER` (3000) × `paying_players`, everyone who played as long as a win takes (`min_active_days_to_win`), floored at two. Counting the roster would let a colluder walk alts in without taking a turn, and counting the podium bar (`min_payout_active_days`) let nine alts clicking a few days each bank a whole 60/25/15 split; at the win bar every padded body costs as many days as the conquest. It is a mitigation, not a cure: the pot still scales with headcount, which is what alts fake. The cost accepted: an honest player knocked out before the win bar does not grow the pot. So a duel is worth 6k and a ten-player war 30k — placing in a crowded game is the harder feat and pays like it. Multiplied by the pace's `pot_scale` (epic 3.0 → blitz 0.25) and capped at `REALM_POT_MAX` (60k, because ten players at the epic tempo would otherwise compute a prize bigger than anything else on the platform pays). Split by tier (`payout_plan`): ≤3 winner takes all; 4-6 → 70/30; 7+ → 60/25/15, rounded to the nearest 50. That puts a realm win in the door-game milestone class (Green Dragon 10k, A Dark Room 15-20k) instead of below a daily Asterion escape (4000). The six `reward_templates` rows still own the claim policy (`per_event`, one payment per rank per game) and the game/payout_kind identity; `reward_chips` on them is the floor of each tier, and `credit_per_event_reward_template_amount` passes the computed figure. Ledger reason is `ChipMove::RealmConquest` (`realm_conquest`), which counts as earnings on the Top Chips board.
+- **Ranked payouts** (migration 194, rescaled by 197). The pot is computed per game: `REALM_POT_PER_PLAYER` (3000) × `paying_players`, everyone who played as long as a win takes (`min_active_days_to_win`), raised until the winner's share is at least the ruleset's `win_min` (the campaign's is 20k at the reference tempo, 10k at the house's fast pace; the standard ruleset has none; season 2 paid its winner 3k, since only two players had played as long as a win took). The floor is frozen in the world's ruleset snapshot like the pace, so a world opened before it existed keeps the plain rate on its results card and in any settlement still owed. The floor cannot be farmed with alts, being paid once per house world to whoever wins it, and raising the pot rather than the winner's place lifts the places behind it too, so a crowded war never pays its winner less than a duel. Counting the roster would let a colluder walk alts in without taking a turn, and counting the podium bar (`min_payout_active_days`) let nine alts clicking a few days each bank a whole 60/25/15 split; at the win bar every padded body costs as many days as the conquest. It is a mitigation, not a cure: the pot still scales with headcount, which is what alts fake. The cost accepted: an honest player knocked out before the win bar does not grow the pot. So at the reference tempo a duel's winner takes 20k and a ten-player war pays 33k over three places, the per-player rate taking over from twelve players: placing in a crowded game is the harder feat and pays like it. Multiplied by the pace's `pot_scale` (epic 3.0 → blitz 0.25) and capped at `REALM_POT_MAX` (60k, because ten players at the epic tempo would otherwise compute a prize bigger than anything else on the platform pays). Split by tier (`payout_plan`): ≤3 winner takes all; 4-6 → 70/30; 7+ → 60/25/15, rounded to the nearest 50. That puts a realm win in the door-game milestone class (Green Dragon 10k, A Dark Room 15-20k) instead of below a daily Asterion escape (4000). The six `reward_templates` rows still own the claim policy (`per_event`, one payment per rank per game) and the game/payout_kind identity; `reward_chips` on them is the floor of each tier, and `credit_per_event_reward_template_amount` passes the computed figure. Ledger reason is `ChipMove::RealmConquest` (`realm_conquest`), which counts as earnings on the Top Chips board.
 - **The pot is settled after the finish, and recorded** (`svc::settle_payouts`, `realm_games.payout`, migration 242). `finish_cas` makes the finish durable; the credits run after it, from the row as stored, and `payout` is written only once every place in the plan has been credited (`paid`), or the game turned out not to pay (`unearned`: a winner who did not clear the week or the territory floor; `dissolved`: no winner). A failed credit leaves `payout` NULL and the sweeper settles it on its next tick (`list_finished_unpaid`), the per-event claims making the retry pay nothing twice. Every place lands on the dashboard by outcome (`record_realm_payout`: paid, already paid, unearned, dissolved, failed). The results card reads the column: until it is set, the pot line says the chips are on their way rather than paid.
 - **You can withdraw on your first day, and not after.** While you are `New` nothing has happened to you and nothing has happened because of you, so leaving is free; past that you are committed, because a late quit would hand the game to whoever was left. The last player in a realm may always pack the whole thing up (`RealmGame::cancel`), since there is nobody to hand it to. Stopping otherwise is something you do by not playing: your land stays yours and stays takeable.
-- **Winning takes days of play, against real rivals.** `can_win` wants `min_players` on the roster (a realm sat in alone is not a conquest) and `min_active_days_to_win` (7 on the standard ruleset, 40 on the campaign: half its season) *distinct days the player acted*, tracked as `RealmPlayer::active_days` — elapsed days would be farmable by waiting. Eliminating everyone sooner does not end the game (`check_end` returns `Ongoing`); you hold the field until the days are in. Every way to win, on either ruleset, goes through the same bar, which never bites on Earth (a conquest there is weeks of work) but stops a 12-territory map being swept in an afternoon with an obliging friend.
+- **Winning takes days of play, against real rivals.** `can_win` wants `min_players` on the roster (a realm sat in alone is not a conquest) and `min_active_days_to_win` (7 on the standard ruleset, 29 on the campaign as written, 10 at the fast pace: half its clock) *distinct days the player acted*, tracked as `RealmPlayer::active_days`, since elapsed days would be farmable by waiting. Eliminating everyone sooner does not end the game (`check_end` returns `Ongoing`); you hold the field until the days are in. Every way to win, on either ruleset, goes through the same bar, which never bites on Earth (a conquest there is weeks of work) but stops a 12-territory map being swept in an afternoon with an obliging friend.
 - **Missed days bank, on a ladder** (`standing`, `bank_rate`), one rung per missed day: the first banks 75%, each further one to `bank_missed_cutoff` (3) banks 50%, and each past that banks nothing, without taking back what the earlier rungs banked. The bank is capped at `bank_cap_days` (3) days' worth, which is what stops a fortnight away from becoming one flattening blitz. The day's allowance is **frozen at the first action of the day** (`RealmPlayer::actions_allowance`) — the gap it is computed from closes the moment you act, so without freezing it the bank would evaporate on the first spend.
 - **An abandoned empire crumbles** (`decay_multiplier`): after `dormancy_grace_days` (3) quiet days a player's strength falls `decay_per_day` (10%) per further day, floored at `decay_floor` (0.40). Their land defends with less than its size suggests, so quiet players get carved up rather than freezing the game — and nobody is removed, which is what keeps "go quiet" from laundering into an exit. On the standard ruleset `effective_strength` is what the odds use (`strength` stays the raw figure); on the campaign the decay walks each wall back towards 1 (`walls_eff`).
 - **The sweeper never kicks.** It rolls days over, and dissolves a game only when *every* living player has been quiet for `resolver::REALM_ABANDON_DAYS` (5 days, flat — not scaled by ruleset or pace, because what it measures is whether anybody still comes back). A player who never acted counts from their join day, so a realm nobody ever played clears itself too. That path pays nothing, so it cannot be farmed, and the next sweep opens the next world.

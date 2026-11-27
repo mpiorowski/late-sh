@@ -114,7 +114,8 @@ pub(crate) enum Refusal {
     /// The owner put it away. Only a session that has not heard of the
     /// switch yet gets here.
     Away,
-    /// It does not have its days for the next stage yet, or the pick is
+    /// It does not have the days (an egg) or the treats (a hatched pet)
+    /// for the next stage yet, or the pick is
     /// for a stage it is not at (a hatch for a hatched pet, a drawing for
     /// an egg or an elder).
     NotReady,
@@ -515,13 +516,16 @@ impl PetService {
             PetCommand::Give => match hatched {
                 false => (Did::Refused(Refusal::Egg), false),
                 true => match PetCompanion::give_treat(&*tx, user_id, today).await? {
-                    Some(kind) => (
-                        Did::Gave {
-                            kind,
-                            bonded: growth.bond(today),
-                        },
-                        true,
-                    ),
+                    Some(kind) => {
+                        growth.eat();
+                        (
+                            Did::Gave {
+                                kind,
+                                bonded: growth.bond(today),
+                            },
+                            true,
+                        )
+                    }
                     None => (Did::NothingToGive, false),
                 },
             },

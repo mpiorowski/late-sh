@@ -349,8 +349,10 @@ fn waits_on(state: &PetState) -> Option<&'static str> {
 }
 
 /// The row over the pet's box: its name and today's title, what it waits
-/// on, its stage, its days and its mood, and what it is up to when that is more
-/// than a stroll. Segments are kept left to right while they fit `width`.
+/// on, its stage and its mood, what it is up to when that is more
+/// than a stroll, and `p care`. The key's room is kept first, so a long
+/// segment cannot push it off; the rest are kept left to right while they
+/// fit what is left of `width`.
 pub fn status_line(state: &PetState, neighbours: Neighbours, width: u16) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let growth = state.growth();
@@ -374,7 +376,6 @@ pub fn status_line(state: &PetState, neighbours: Neighbours, width: u16) -> Line
         staying => segments.push((format!("{staying} guests"), dim)),
     }
     segments.push((growth.stage().as_str().to_string(), dim));
-    segments.push((format!("day {}", growth.days_together), dim));
     match growth.stage() {
         Stage::Egg => {}
         Stage::Baby | Stage::Young | Stage::Adult | Stage::Elder => {
@@ -391,6 +392,25 @@ pub fn status_line(state: &PetState, neighbours: Neighbours, width: u16) -> Line
         PetPose::At(_) => segments.push(("at your cursor".to_string(), dim)),
         PetPose::Stroll | PetPose::Sulk | PetPose::Sleep | PetPose::Nest => {}
     }
+    // Home's key for the care box, as the bonsai names `w care` beside its
+    // tree: the letter in amber, the word dim. It drops only when the name
+    // leaves no room for it.
+    let key = [
+        Span::styled(" · ", dim),
+        Span::styled(
+            "p",
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled(" care", dim.add_modifier(Modifier::ITALIC)),
+    ];
+    let key_cost: usize = key.iter().map(Span::width).sum();
+    let with_key = name.width() + key_cost <= usize::from(width);
+    let room = match with_key {
+        true => usize::from(width) - key_cost,
+        false => usize::from(width),
+    };
 
     let mut used = name.width();
     let mut spans = vec![Span::styled(
@@ -401,12 +421,15 @@ pub fn status_line(state: &PetState, neighbours: Neighbours, width: u16) -> Line
     )];
     for (text, style) in segments {
         let cost = text.width() + 3;
-        if used + cost > usize::from(width) {
+        if used + cost > room {
             break;
         }
         used += cost;
         spans.push(Span::styled(" · ", dim));
         spans.push(Span::styled(text, style));
+    }
+    if with_key {
+        spans.extend(key);
     }
     Line::from(spans)
 }

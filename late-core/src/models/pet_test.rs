@@ -213,6 +213,7 @@ async fn a_fresh_row_is_an_egg_and_a_stored_growth_bumps_the_revision() {
             learning: Some(Trick::Bow),
             learning_days: 2,
             last_practice: Some(today),
+            treats_eaten: 21,
         },
     )
     .await
@@ -232,8 +233,13 @@ async fn a_fresh_row_is_an_egg_and_a_stored_growth_bumps_the_revision() {
     assert_eq!(stored.tricks(), vec![Trick::Spin]);
     assert_eq!(stored.learning(), Some(Trick::Bow));
     assert_eq!(
-        (stored.days_together, stored.bond_days, stored.learning_days),
-        (8, 3, 2)
+        (
+            stored.days_together,
+            stored.bond_days,
+            stored.learning_days,
+            stored.treats_eaten
+        ),
+        (8, 3, 2, 21)
     );
     assert_eq!(
         stored.name.as_deref(),
@@ -493,6 +499,7 @@ async fn a_calling_pet_is_its_hosts_guest_as_it_looks_now() {
         learning: None,
         learning_days: 0,
         last_practice: None,
+        treats_eaten: 20,
     };
     let adult = Form::Adult {
         top: Pick::Two,

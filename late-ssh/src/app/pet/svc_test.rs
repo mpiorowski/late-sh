@@ -57,6 +57,21 @@ async fn did(svc: &PetService, user_id: Uuid, command: PetCommand, today: NaiveD
     svc.act(user_id, command, today).await.expect("act").did
 }
 
+/// Earn the day's treat and give it, on each of `days`: one a UTC day is
+/// all a pet eats.
+async fn feed(svc: &PetService, user_id: Uuid, days: std::ops::Range<i64>) {
+    for n in days {
+        assert_eq!(
+            did(svc, user_id, PetCommand::Earn(TreatKind::Puzzle), day(n)).await,
+            Did::Earned(TreatKind::Puzzle)
+        );
+        assert!(matches!(
+            did(svc, user_id, PetCommand::Give, day(n)).await,
+            Did::Gave { .. }
+        ));
+    }
+}
+
 async fn balance(test_db: &TestDb, user_id: Uuid) -> i64 {
     let client = test_db.db.get().await.expect("db client");
     UserChips::ensure(&client, user_id)
@@ -253,18 +268,26 @@ async fn an_egg_hatches_as_its_owners_pick_and_grows_by_its_owners_picks() {
         "once"
     );
 
-    // Its days make it ready and enter no stage: young is its owner's
-    // pick of a top, from the seventh day.
+    // Treats make it ready and enter no stage: young is its owner's pick
+    // of a top, from the fifth treat. Days do nothing past the hatch.
     assert_eq!(
         did(&svc, user_id, PetCommand::Grow(Pick::One), day(1)).await,
         Did::Refused(Refusal::NotReady),
-        "a baby without its days"
+        "a baby without its treats"
     );
     live(&svc, user_id, 2..7).await;
+    feed(&svc, user_id, 2..6).await;
     assert_eq!(
-        svc.bootstrap(user_id).await.expect("reload").row.form(),
-        Form::Baby,
-        "the seventh day alone grows nothing"
+        did(&svc, user_id, PetCommand::Grow(Pick::One), day(5)).await,
+        Did::Refused(Refusal::NotReady),
+        "seven days and four treats"
+    );
+    feed(&svc, user_id, 6..7).await;
+    let row = svc.bootstrap(user_id).await.expect("reload").row;
+    assert_eq!(
+        (row.form(), row.treats_eaten),
+        (Form::Baby, 5),
+        "the fifth treat alone grows nothing"
     );
     let acted = svc
         .act(user_id, PetCommand::Grow(Pick::Two), day(6))
@@ -275,7 +298,7 @@ async fn an_egg_hatches_as_its_owners_pick_and_grows_by_its_owners_picks() {
     assert_eq!(
         did(&svc, user_id, PetCommand::Grow(Pick::One), day(6)).await,
         Did::Refused(Refusal::NotReady),
-        "an adult is twenty three days off"
+        "an adult is fifteen treats off"
     );
 
     // `/pet dog`: another animal, the same pet.
@@ -416,6 +439,7 @@ async fn a_reset_turns_it_back_into_an_egg_and_keeps_its_name() {
     }
     let today = day(6);
     live(&svc, user_id, 5..7).await;
+    feed(&svc, user_id, 1..6).await;
     assert_eq!(
         did(&svc, user_id, PetCommand::Grow(Pick::Two), today).await,
         Did::Grew(Stage::Young)
@@ -449,6 +473,7 @@ async fn a_reset_turns_it_back_into_an_egg_and_keeps_its_name() {
         (Form::Egg, 0, None, 0, Vec::new(), None),
         "the drawings it picked go with the rest"
     );
+    assert_eq!(row.treats_eaten, 0, "and the treats it ate");
     assert_eq!(row.name.as_deref(), Some("Rex"), "the name stays");
     assert_eq!(
         row.last_petted,

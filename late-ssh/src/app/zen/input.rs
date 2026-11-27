@@ -548,22 +548,9 @@ fn act(app: &mut App, key: TileKey, byte: u8) -> bool {
             }
             true
         }
-        TileKey::Feed => {
-            crate::app::input::feed_aquarium_globally(app);
-            true
-        }
         TileKey::CycleRoom => {
             cycle_room(app, if byte == b']' { 1 } else { -1 });
             true
-        }
-        // With the pet put away the tile holds a note and Enter is the
-        // page's.
-        TileKey::Care => {
-            let out = app.pet_out();
-            if out {
-                crate::app::pet::input::open_care(app);
-            }
-            out
         }
     }
 }

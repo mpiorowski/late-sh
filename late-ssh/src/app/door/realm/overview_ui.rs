@@ -265,7 +265,11 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
 
     // What the game is playing for. The pot follows the players who have
     // actually played, so it grows as a realm fills with people who stay.
-    let plan = super::svc::payout_plan(super::svc::paying_players(state), state.ruleset.pot_scale);
+    let plan = super::svc::payout_plan(
+        super::svc::paying_players(state),
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    );
     let pot: i64 = plan.iter().map(|(_, chips)| chips).sum();
     let places = match plan.len() {
         // One paid place: saying the same figure twice helps nobody.

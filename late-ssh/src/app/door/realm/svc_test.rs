@@ -1131,10 +1131,14 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
     assert_eq!(row.winner_user_id, Some(alice));
 
     // Three players at start: the whole pot, winner takes all.
-    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
-        .iter()
-        .map(|(_, chips)| chips)
-        .sum();
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(
+        3,
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    )
+    .iter()
+    .map(|(_, chips)| chips)
+    .sum();
     assert_eq!(wait_for_payout(&test_db, alice).await, Some(pot));
     assert!(pot >= 9_000, "a three-player pot should be worth winning");
     // The three-player tier pays one place: the runners-up grew the pot and
@@ -2270,10 +2274,14 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
     svc.sweep(Utc::now()).await.expect("sweep");
     let row = svc.load_game(game_id).await.expect("load").expect("row");
     assert_eq!(row.payout.as_deref(), Some(RealmGame::PAYOUT_PAID));
-    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
-        .iter()
-        .map(|(_, chips)| chips)
-        .sum();
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(
+        3,
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    )
+    .iter()
+    .map(|(_, chips)| chips)
+    .sum();
     assert_eq!(wait_for_payout(&test_db, alice).await, Some(pot));
 
     // Settled is settled: another tick pays nothing twice.
@@ -2575,8 +2583,8 @@ async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
         .expect("the order stands");
     let placed = load_state(&svc, game_id).await;
     assert_eq!(placed.player(alice).unwrap().orders, vec![take(target, 2)]);
-    // Five points a day for two players, as the campaign's tiers pay.
-    assert_eq!(placed.points_left(alice, today), 3);
+    // Six points a day for two players, as the campaign's tiers pay.
+    assert_eq!(placed.points_left(alice, today), 4);
     // Ordered, not taken: nothing moves until the night.
     assert_eq!(placed.ownership.get(&target), None);
     let answers: Vec<RealmEvent> = drained(&mut events)
@@ -2586,7 +2594,7 @@ async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
         .collect();
     assert!(matches!(
         answers.as_slice(),
-        [RealmEvent::OrderPlaced { user_id, order, probability: Some(_), points_left: 3, .. }]
+        [RealmEvent::OrderPlaced { user_id, order, probability: Some(_), points_left: 4, .. }]
             if *user_id == alice && *order == take(target, 2)
     ));
 
@@ -2608,7 +2616,7 @@ async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
         .expect("withdrawn");
     let withdrawn = load_state(&svc, game_id).await;
     assert!(withdrawn.player(alice).unwrap().orders.is_empty());
-    assert_eq!(withdrawn.points_left(alice, today), 5);
+    assert_eq!(withdrawn.points_left(alice, today), 6);
 }
 
 #[tokio::test]
@@ -2721,8 +2729,8 @@ async fn an_order_read_after_the_day_turned_lands_on_the_open_day() {
     assert_eq!(player.orders, vec![walls, take(target, 2)]);
     assert_eq!(
         state.points_left(alice, today + 1),
-        2,
-        "five points, one on walls, two on the take"
+        3,
+        "six points, one on walls, two on the take"
     );
 }
 
@@ -2852,10 +2860,14 @@ async fn the_season_clock_gives_the_world_to_the_biggest_share_and_pays() {
                 LogEntry::Won { user_id, kind: WinKind::SeasonOver } if *user_id == biggest
             ))
     );
-    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
-        .iter()
-        .map(|(_, chips)| chips)
-        .sum();
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(
+        3,
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    )
+    .iter()
+    .map(|(_, chips)| chips)
+    .sum();
     assert_eq!(wait_for_payout(&test_db, biggest).await, Some(pot));
 }
 
