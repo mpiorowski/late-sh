@@ -1151,6 +1151,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         cards: None,
         inks: None,
         poster: None,
+        ring_cleared: 0,
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": [], "bright": false,
@@ -1326,6 +1327,8 @@ fn at_the_top(marks: i32) -> Sheet {
     sheet.peak_level = MAX_LEVEL;
     sheet.draft_up();
     sheet.marks = marks;
+    // The road to the top went through every ring gate on the way.
+    sheet.ring_cleared = DRAFTS[DRAFTS.len() - 1].level;
     sheet.exp = exp_to_seek();
     sheet.weapon_tier = MAX_TIER;
     sheet.armor_tier = MAX_TIER;
@@ -1464,6 +1467,8 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
         // The drafted cards go with the level; the inks do not.
         cards: Vec::new(),
         inks: vec![3],
+        // The mark puts every ring gate back in the road.
+        ring_cleared: 0,
     };
     assert_eq!(sheet, expected);
     assert_eq!(outcome.lines.len(), 4, "{:?}", outcome.lines);
@@ -1816,6 +1821,7 @@ fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
         // The drafted cards go with the level; the inks do not.
         cards: Vec::new(),
         inks: vec![3],
+        ring_cleared: 0,
     };
     assert_eq!(sheet, expected);
     assert!(
@@ -2485,6 +2491,7 @@ fn row_of(sheet: &Sheet) -> DeadchannelRunner {
         cards: write.cards,
         inks: write.inks,
         poster: None,
+        ring_cleared: write.ring_cleared,
         fight: write.fight,
         user_id: write.user_id,
         look: serde_json::json!({}),
@@ -2916,4 +2923,108 @@ fn the_crossing_order_holds_still_for_a_day_and_an_attacker() {
         once != other_day || once != other_attacker,
         "the order moves with the day or the attacker"
     );
+}
+
+/// A runner on a second climb at `level`, the level's drafts taken, no
+/// bout fought yet.
+fn marked_at(level: i32) -> Sheet {
+    let mut sheet = fresh();
+    sheet.marks = 1;
+    sheet.level = level;
+    sheet.peak_level = MAX_LEVEL;
+    sheet.draft_up();
+    sheet.signal = sheet.max_signal();
+    sheet
+}
+
+#[test]
+fn a_ring_gate_shuts_the_road_the_crossing_and_the_answer_until_a_bout_is_fought() {
+    let mut sheet = marked_at(3);
+    let mut rng = StdRng::seed_from_u64(1);
+    assert_eq!(sheet.ring_gate(), Some(3));
+
+    let step = sheet.apply(STEP_IN, &mut rng);
+    let answer = sheet.answer(Answer::Prey(tom(90, true)), &mut rng);
+
+    assert_eq!(step.applied, Applied::Refused(Refusal::RingOwed));
+    assert_eq!(answer.applied, Applied::Refused(Refusal::RingOwed));
+    assert_eq!(sheet.crossing_refused(1), Some(Refusal::RingOwed));
+    assert_eq!(
+        (sheet.rations_left, sheet.fight.is_some()),
+        (RATIONS_PER_DAY, false)
+    );
+
+    let fought = sheet.apply(Command::RingFought, &mut rng);
+
+    assert_eq!(fought.applied, Applied::RingFought { cleared: Some(3) });
+    assert_eq!(sheet.ring_gate(), None);
+    assert_eq!(
+        sheet.apply(STEP_IN, &mut rng).applied,
+        Applied::Started { pick: Pick::Fair }
+    );
+}
+
+#[test]
+fn a_first_climb_owes_the_ring_nothing_and_one_bout_clears_every_gate_behind_it() {
+    let mut first = marked_at(12);
+    first.marks = 0;
+    assert_eq!(first.ring_gate(), None);
+
+    // Between gates nothing is owed until the next draft's level.
+    let mut sheet = marked_at(10);
+    let mut rng = StdRng::seed_from_u64(1);
+    assert_eq!(sheet.ring_gate(), Some(9));
+    sheet.apply(Command::RingFought, &mut rng);
+    assert_eq!((sheet.ring_cleared, sheet.ring_gate()), (9, None));
+    sheet.level = 12;
+    assert_eq!(sheet.ring_gate(), Some(12));
+
+    // A bout with no gate standing changes nothing.
+    sheet.level = 11;
+    let before = sheet.clone();
+    let idle = sheet.apply(Command::RingFought, &mut rng);
+    assert_eq!(idle.applied, Applied::RingFought { cleared: None });
+    assert_eq!(sheet, before);
+}
+
+#[test]
+fn the_ledge_puts_the_ring_gates_back() {
+    let mut sheet = marked_at(7);
+    let mut rng = StdRng::seed_from_u64(1);
+    sheet.apply(Command::RingFought, &mut rng);
+    assert_eq!(sheet.ring_cleared, 6);
+
+    assert_eq!(
+        sheet.apply(Command::Reset, &mut rng).applied,
+        Applied::Reset
+    );
+
+    assert_eq!(sheet.ring_cleared, 0);
+}
+
+#[test]
+fn a_stake_comes_off_the_hand_whole_or_not_at_all_and_the_ring_pays_past_the_machine() {
+    let mut sheet = fresh();
+    let mut rng = StdRng::seed_from_u64(1);
+    sheet.bits = 50;
+    sheet.debt = 40;
+
+    let short = sheet.apply(Command::Stake { bits: 80 }, &mut rng);
+    assert_eq!(short.applied, Applied::Refused(Refusal::Short { by: 30 }));
+    assert_eq!(sheet.bits, 50);
+
+    let staked = sheet.apply(Command::Stake { bits: 30 }, &mut rng);
+    assert_eq!(staked.applied, Applied::Staked { bits: 30 });
+    assert_eq!(sheet.bits, 20);
+
+    // What comes back is not a kill's pay: the machine takes no garnish.
+    let paid = sheet.apply(Command::Collect { bits: 100 }, &mut rng);
+    assert_eq!(paid.applied, Applied::Collected { bits: 100 });
+    assert_eq!((sheet.bits, sheet.debt), (120, 40));
+
+    // The bits carried into a fight are the bits risked in it.
+    sheet.apply(STEP_IN, &mut rng);
+    let waiting = sheet.apply(Command::Stake { bits: 10 }, &mut rng);
+    assert_eq!(waiting.applied, Applied::Refused(Refusal::FightWaiting));
+    assert_eq!(sheet.bits, 120);
 }

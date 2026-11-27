@@ -1,6 +1,6 @@
 //! The tavern's crowd, derived from presence (`app/presence`): every
 //! logged-in session on every replica, where it sits or walks, its wave or
-//! dance, the last pet of the dog, and the dog itself. Pure: no I/O, no
+//! dance, the last pet of the dog, the pet at its heel, and the dog itself. Pure: no I/O, no
 //! clock reads (every `now_ms` is handed in), so every replica holding the
 //! same records draws the same room.
 //!
@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+use late_core::models::pet::PetSpecies;
 use late_core::models::presence::{ClubhouseStand, Emote, PresenceRecord, Spot};
 use uuid::Uuid;
 
@@ -67,6 +68,8 @@ pub struct Patron {
     pub emote: Option<Emote>,
     /// Current drunk level 0 (sober) through 4 (wasted), already decayed.
     pub drunk_level: u8,
+    /// The hatched pet at their heel, as their record carries it.
+    pub pet: Option<PetSpecies>,
 }
 
 /// The dog as a render view: where it is and how the tail should behave.
@@ -304,6 +307,7 @@ fn patron(
             .filter(|(_, at)| (0..EMOTE_MS).contains(&(now_ms - at)))
             .map(|(emote, _)| *emote),
         drunk_level: drunk.get(&entry.user_id).copied().unwrap_or(0),
+        pet: entry.stand.pet_at_heel,
     }
 }
 
@@ -399,12 +403,14 @@ pub fn first_stand(
             since_ms: record.clubhouse.since_ms,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         None => ClubhouseStand {
             spot: pick_spot(records, user_id, rng),
             since_ms: now_ms,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
     }
 }

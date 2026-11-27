@@ -6,7 +6,9 @@
 //! the door. Dwarf Fortress vibes, single-width glyphs only: walking people
 //! are 3-row stick figures (`o` head, `/|\` arms, `Λ` legs; you get an `@`),
 //! a seated user is an `o` perched on their stool, and the dog is a pocket
-//! `(ᴥ)` with a wagging tail that trots on the clock (`crowd::dog_at`).
+//! `(ᴥ)` with a wagging tail that trots on the clock (`crowd::dog_at`). A
+//! patron's own pet, when it is out, is one letter at their heel (`c` cat,
+//! `d` dog, `b` bird).
 
 use crate::app::common::text_layout;
 
@@ -30,9 +32,10 @@ use late_core::models::daily_rung::rung_for;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 use late_core::models::user::{RADIO_SLOTS, RadioStation};
 
+use late_core::models::pet::PetSpecies;
 use late_core::models::presence::Emote;
 
-use super::crowd::Placement;
+use super::crowd::{Patron, Placement};
 use super::map;
 use super::state::{BannerLine, BoardStop, ClubhouseHit, State, TableStop, TourRoute, Tutorial};
 use crate::app::lobby::daily::pool_ui;
@@ -108,6 +111,7 @@ fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     let (anchors, map_hits) = place_people(&mut cells, view);
     draw_door_events(&mut cells, view);
     draw_bubbles(&mut cells, view, &anchors);
+    draw_pets(&mut cells, &state.crowd.people, state.own_user_id());
 
     // Camera: follow the player, clamped to the map; center when the
     // viewport is larger than the room.
@@ -993,6 +997,48 @@ fn draw_emote(cells: &mut Cells, placement: Placement, emote: Emote, tick: u64, 
             }
         }
     }
+}
+
+/// The pets at their patrons' heels: one glyph in the patron's own color,
+/// two cells right of their feet (a seated patron's stool), so it walks
+/// with a walker. Drawn last and only on free floor, a floor cell nothing
+/// else drew on this frame: never over furniture, a wall, another patron,
+/// the dog, a label or a speech bubble. Where the cell is taken, the pet
+/// is not drawn. No collision, no seat, nothing to click.
+fn draw_pets(cells: &mut Cells, people: &[Patron], own_id: Uuid) {
+    for who in people {
+        let Some(species) = who.pet else {
+            continue;
+        };
+        let (x, y) = who.placement.position();
+        let (x, y) = (x + 2, y);
+        if !free_floor(cells, x, y) {
+            continue;
+        }
+        let color = match who.user_id == own_id {
+            true => theme::AMBER_GLOW(),
+            false => occupant_color(who.user_id),
+        };
+        set(cells, x, y, pet_glyph(species), Style::default().fg(color));
+    }
+}
+
+/// A pet at heel, one cell: the room's Dwarf Fortress letters.
+fn pet_glyph(species: PetSpecies) -> char {
+    match species {
+        PetSpecies::Cat => 'c',
+        PetSpecies::Dog => 'd',
+        PetSpecies::Bird => 'b',
+    }
+}
+
+/// A floor cell still exactly as the base grid drew it.
+fn free_floor(cells: &Cells, x: u16, y: u16) -> bool {
+    if x >= map::MAP_W || y >= map::MAP_H {
+        return false;
+    }
+    let ch = map::char_at(x, y);
+    matches!(ch, ' ' | '░') && cells[usize::from(y)][usize::from(x)] == (ch, base_style(ch, x, y))
 }
 
 /// `* name slipped in` lines stacked over the welcome mat.

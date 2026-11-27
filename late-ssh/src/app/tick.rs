@@ -338,6 +338,9 @@ impl App {
         // runner's `/hit`, the word it came back with, and the scene's
         // strike and countdown frames.
         changed |= crate::app::deadchannel::lounge::svc::tick(self, anim_half);
+        // The ring (`app/deadchannel/ring`): the board copy, the answer
+        // to a request, and the sheet re-read when a bout moved bits.
+        changed |= crate::app::deadchannel::ring::session::tick(self);
         changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
@@ -569,7 +572,10 @@ impl App {
             changed = true;
         }
         if daily_tick.own_win {
-            self.pet_state.note_win(Instant::now());
+            self.pet_state.note_win(
+                Instant::now(),
+                crate::app::activity::event::GameFamily::Match,
+            );
         }
         if daily_tick.own_loss {
             self.pet_state.note_loss(Instant::now());
@@ -1196,21 +1202,31 @@ impl App {
         if let Some(at) = self.chat.last_own_send_at() {
             self.pet_state.note_spoke(at);
         }
-        changed |= self.pet_state.tick(crate::app::pet::state::PetTick {
+        let utc_now = chrono::Utc::now();
+        let pet_ticked = self.pet_state.tick(crate::app::pet::session::PetTick {
             wall_tick: self.marquee_tick,
             now: Instant::now(),
-            ambient: crate::app::pet::state::Ambient {
+            ambient: crate::app::pet::session::Ambient {
                 last_input: self.last_input_at,
                 music_playing: self.music_playing(),
             },
             frame: pet_frame,
             cursor: self.last_mouse,
-            persist: self.shop_state.entitlements().has_pet_companion(),
+            out: self.pet_out(),
+            today: utc_now.date_naive(),
+            day_age: std::time::Duration::from_secs(u64::from(
+                chrono::Timelike::num_seconds_from_midnight(&utc_now),
+            )),
         });
+        changed |= pet_ticked.changed;
+        if let Some(banner) = pet_ticked.banner {
+            self.banner = Some(banner);
+            changed = true;
+        }
         if let Some(inputs) = pet_frame {
             changed |= anim_half
                 && crate::app::pet::ui::frame_changed(
-                    self.pet_state.mood(),
+                    self.pet_state.body(),
                     inputs.neighbours,
                     self.pet_state.perch(),
                     self.pet_state.animation_ticks(),
@@ -1278,7 +1294,7 @@ impl App {
                                 difficulty.clone(),
                             );
                         }
-                        self.pet_state.note_win(Instant::now());
+                        self.pet_state.note_win(Instant::now(), game.family());
                         None
                     }
                     // Any other win of the session's own, and any death: the
@@ -1287,12 +1303,12 @@ impl App {
                     // names only the winner of a win and one player of a
                     // draw, so it cannot tell pride from a draw or reach the
                     // loser at all.
-                    ActivityKind::GameWon { .. }
-                    | ActivityKind::GameScored { .. }
-                    | ActivityKind::BossSlain { .. }
+                    ActivityKind::GameWon { game, .. }
+                    | ActivityKind::GameScored { game, .. }
+                    | ActivityKind::BossSlain { game, .. }
                         if user_id == self.user_id =>
                     {
-                        self.pet_state.note_win(Instant::now());
+                        self.pet_state.note_win(Instant::now(), game.family());
                         None
                     }
                     ActivityKind::GameLost { .. } if user_id == self.user_id => {
@@ -1309,10 +1325,9 @@ impl App {
                     }
                     // And for the pet: the first pet of the day paid.
                     ActivityKind::PetPetted if user_id == self.user_id => {
-                        Some(crate::app::common::primitives::Banner::success(&format!(
-                            "Petted (+{} chips)",
-                            crate::app::pet::svc::PET_CHIP_BONUS
-                        )))
+                        Some(crate::app::common::primitives::Banner::success(
+                            &self.pet_state.petted_line(),
+                        ))
                     }
                     // The streak's fry: the sim learns which species to draw
                     // small; the shop snapshot reload brings the new count.
@@ -1674,13 +1689,16 @@ impl App {
             self.attention_spot = spot;
             crate::metrics::record_place_visit(self.screen, place, tenure);
         }
-        crate::metrics::record_attention(
-            self.screen,
-            place,
-            self.attention_presence(),
-            tenure,
-            seconds,
-        );
+        let presence = self.attention_presence();
+        crate::metrics::record_attention(self.screen, place, presence, tenure, seconds);
+        // The pet's door treat counts the same seconds: keys landing, in a
+        // door.
+        match presence {
+            crate::metrics::Presence::Active => {
+                self.pet_state.note_active_seconds(self.screen, seconds);
+            }
+            crate::metrics::Presence::Idle => {}
+        }
     }
 
     /// How old the account behind this session is right now, for the

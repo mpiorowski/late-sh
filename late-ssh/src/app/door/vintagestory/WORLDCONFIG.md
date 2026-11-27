@@ -62,6 +62,11 @@ reverts on restart):
 | `AllowPvP` | `true` |
 | `AllowFireSpread` | `true` |
 | `PassTimeWhenEmpty` | `false` |
+| `ModIdBlackList` | `["blocksoverlay", "orexrayserver", "golb"]` (x-ray mods; `CONTEXT.md`, Server) |
+
+Arrow breakage is not a world option: iron, meteoric iron, and steel arrows
+never break because our server-side `latearrows` mod patches the arrow item
+(`CONTEXT.md`, Server, Mods).
 
 World: `PlayStyle` `surviveandbuild`, `WorldType` `standard`, `Seed`
 `"-1224630403"`, and this block in `WorldConfig.WorldConfiguration`, written

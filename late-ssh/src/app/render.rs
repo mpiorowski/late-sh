@@ -20,7 +20,7 @@ use super::{
     chat::{mod_modal, room_info_modal, room_search_modal, sheet_modal},
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        text_layout, theme,
+        terminal_colors, text_layout, theme,
         time::clock_text,
     },
     help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
@@ -255,6 +255,7 @@ struct DrawContext<'a> {
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_poster: crate::app::deadchannel::poster::ui::PosterView<'a>,
+    city_ring: crate::app::deadchannel::ring::ui::RingView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
     /// The other runners on the shared street, their marks, and (through
     /// `usernames`) their names.
@@ -291,7 +292,6 @@ struct DrawContext<'a> {
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
-    pet_state: &'a crate::app::pet::state::PetState,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
@@ -311,6 +311,8 @@ struct DrawContext<'a> {
     /// against the pinned rail list, which lives on the pane.
     cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
     show_bonsai_modal: bool,
+    /// The care box's pen, `Some` while the box is up.
+    pet_care: Option<crate::app::pet::ui::PetView<'a>>,
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
@@ -409,6 +411,9 @@ struct DrawContext<'a> {
     /// the page's chat: the card carries it itself).
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
+    /// This session's pet while it is out, for the corner beside an open
+    /// Arcade game.
+    arcade_pet: Option<crate::app::pet::ui::Portrait<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     /// Today's board posts for the banner over Home's tiles; empty on a day
     /// the board has nothing.
@@ -546,9 +551,24 @@ impl App {
             } else {
                 b"\x1b]111\x1b\\".to_vec()
             };
+            // While synced, an OSC 11 answer was the theme's canvas, not the
+            // terminal's own: forget it and ask again once the reset puts the
+            // terminal's back. A query a palette notice queued this frame
+            // would go out ahead of the reset and bring the canvas back, so
+            // it is dropped for the one behind the reset.
+            if current_bg.is_none() {
+                self.terminal_colors.bg = None;
+                self.pending_terminal_commands
+                    .retain(|command| command != terminal_colors::QUERY);
+            }
             self.pending_terminal_commands.push(cmd);
+            if current_bg.is_none() {
+                terminal_colors::queue_query(&mut self.pending_terminal_commands);
+            }
             self.last_terminal_bg = current_bg;
         }
+        // After the sync above, which may just have dropped a stale background.
+        theme::set_terminal_colors(self.terminal_colors);
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
         // Draft-aware live preview: the user-arranged bottom-left components;
@@ -1537,6 +1557,7 @@ impl App {
             pet_rect_slot: Some(&self.last_pet_rect),
             frame_slot: Some(&self.last_pet_frame),
         });
+        let arcade_pet = pet_out.then(|| self.pet_state.portrait());
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.
@@ -1607,6 +1628,7 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_pet_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
             || self.comeback.is_open()
@@ -1632,6 +1654,7 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_pet_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
             || self.comeback.is_open()
@@ -1816,6 +1839,13 @@ impl App {
                             writing: self.poster.writing,
                             word: self.poster.word.as_deref(),
                         },
+                        city_ring: crate::app::deadchannel::ring::ui::RingView::new(
+                            &self.ring,
+                            &self.presence.records,
+                            &self.runner_looks,
+                            self.user_id,
+                            self.fight.sheet.as_ref(),
+                        ),
                         city_guide: &self.guide.state,
                         city_street: &self.street.view,
                         city_own_user_id: self.user_id,
@@ -1842,7 +1872,6 @@ impl App {
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
-                        pet_state: &self.pet_state,
                         leaderboard_page: &self.leaderboard_page,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
@@ -1862,6 +1891,11 @@ impl App {
                             .modal_active()
                             .then_some(&self.chat.cyberspace),
                         show_bonsai_modal: self.show_bonsai_modal,
+                        pet_care: self.show_pet_modal.then_some(crate::app::pet::ui::PetView {
+                            state: &self.pet_state,
+                            pet_rect_slot: Some(&self.last_pet_rect),
+                            frame_slot: Some(&self.last_pet_frame),
+                        }),
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
@@ -1960,6 +1994,7 @@ impl App {
                         home_chat_tiles,
                         guest_live_strip,
                         home_pet_strip,
+                        arcade_pet,
                         home_active_friends: &self.active_friends,
                         home_board_day,
                         pulse_history: self.presence.history.clone(),
@@ -2650,6 +2685,8 @@ impl App {
                         username: ctx.clubhouse_own_username,
                         show_solvers: ctx.arcade_solvers_open,
                         image_protocol: ctx.terminal_image_protocol,
+                        pet: ctx.arcade_pet,
+                        wall_tick: ctx.marquee_tick,
                     },
                     terminal_images,
                 );
@@ -2692,6 +2729,7 @@ impl App {
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     poster: ctx.city_poster,
+                    ring: ctx.city_ring,
                     guide: ctx.city_guide,
                     own_user_id: ctx.city_own_user_id,
                     street: ctx.city_street,
@@ -2824,10 +2862,6 @@ impl App {
                 inner,
                 crate::app::hub::ui::HubDrawProps {
                     shop_state: ctx.shop_state,
-                    pet: crate::app::hub::shop::ui::ShopPet {
-                        species: ctx.pet_state.species,
-                        enabled: ctx.pet_state.enabled,
-                    },
                     aquarium_care: ctx.aquarium_care,
                 },
             );
@@ -2866,6 +2900,10 @@ impl App {
 
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(frame, inner, ctx.bonsai, ctx.marquee_tick);
+        }
+
+        if let Some(pet_care) = &ctx.pet_care {
+            crate::app::pet::modal_ui::draw(frame, inner, pet_care);
         }
 
         if ctx.show_lobby_modal {

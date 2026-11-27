@@ -41,8 +41,8 @@ internals stay in each door's own `CONTEXT.md` (`../dcss`, `../nethack`,
   parsing lives in late-ssh, so a parser fix never needs a door redeploy, and
   door pods never hold DB credentials. dopewars is the one host that parses:
   its game writes a binary top-18 table, not a log, so `late-dopewars`
-  (`scorelog.rs`) turns that table into the log lines it streams, and a fix to
-  that step does need a host redeploy. Chosen over a new HTTP ingest surface
+  (`scorelog.rs`) gives every game session its own table and turns it into
+  the log lines it streams, and a fix to that step does need a host redeploy. Chosen over a new HTTP ingest surface
   because it reuses the russh servers and shared secrets already there.
 - **Client side.** `app/door/ingest/`: `svc.rs` orchestration (one
   connect-with-retry task per enabled door, spawned from `main.rs` behind that

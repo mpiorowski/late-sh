@@ -272,94 +272,47 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
     assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
 }
 
-/// Top Drinkers crowns last month's biggest drinker alone, bare `DRNK`, a
-/// tie at the top shared like Late Time's, and this month's drinks are not
-/// last month's standings.
+/// Top Drinkers is retired: last month's biggest drinker gets no new `DRNK`
+/// from the snapshot, while a `DRNK` granted before the retirement still
+/// lists on the profile, bare like Late Time's.
 #[tokio::test]
-async fn top_drinkers_first_place_gets_the_badge_and_a_tie_shares_it() {
+async fn top_drinkers_grants_no_new_badge_and_keeps_the_old_ones() {
     let test_db = test_db().await;
     let mut client = test_db.db.get().await.expect("db client");
-    let first = create_test_user(&test_db.db, "drnk-first").await;
-    let tied = create_test_user(&test_db.db, "drnk-tied").await;
-    let runner_up = create_test_user(&test_db.db, "drnk-runner-up").await;
-
-    UserDrinks::record_purchase(&client, first.id, Bar::Tavern, 1_000, true)
-        .await
-        .expect("pour");
-    UserDrinks::record_comped_pour(&client, first.id, Bar::Nightcap, 400, true)
-        .await
-        .expect("round credit");
-    UserDrinks::record_purchase(&client, tied.id, Bar::Nightcap, 1_000, true)
-        .await
-        .expect("pour");
-    UserDrinks::record_comped_pour(&client, tied.id, Bar::Tavern, 400, true)
-        .await
-        .expect("round credit");
-    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 500, true)
+    let barfly = create_test_user(&test_db.db, "drnk-barfly").await;
+    UserDrinks::record_purchase(&client, barfly.id, Bar::Tavern, 1_000, true)
         .await
         .expect("pour");
     roll_drink_pours_back_a_month(&client).await;
-    // This month's binge is not last month's standings.
-    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 1_000, true)
+    // A badge from before the retirement, the row the snapshot used to write.
+    let held_month = NaiveDate::from_ymd_opt(2026, 1, 1).expect("month");
+    client
+        .execute(
+            "INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
+             VALUES ($1, $2, $3, 1, 1400)",
+            &[&barfly.id, &TOP_DRINKERS_AWARD_CATEGORY, &held_month],
+        )
         .await
-        .expect("pour this month");
+        .expect("historical award");
 
     snapshot_previous_month_profile_awards(&mut client)
         .await
         .expect("snapshot");
 
-    for winner in [&first, &tied] {
-        let won: Vec<_> = list_profile_awards_for_user(&client, winner.id)
-            .await
-            .expect("awards")
-            .into_iter()
-            .filter(|award| award.category == TOP_DRINKERS_AWARD_CATEGORY)
-            .collect();
-        assert_eq!(won.len(), 1, "{} shares first place", winner.username);
-        assert_eq!(won[0].rank, 1);
-        assert_eq!(won[0].score_value, 1_400);
-        assert_eq!(won[0].badge(), "DRNK");
-    }
-    let lost: Vec<_> = list_profile_awards_for_user(&client, runner_up.id)
+    let held: Vec<_> = list_profile_awards_for_user(&client, barfly.id)
         .await
         .expect("awards")
         .into_iter()
         .filter(|award| award.category == TOP_DRINKERS_AWARD_CATEGORY)
         .collect();
-    assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
-
+    assert_eq!(held.len(), 1, "the snapshot grants no new DRNK: {held:?}");
+    assert_eq!(held[0].period_month, held_month);
+    assert_eq!(held[0].badge(), "DRNK");
     assert!(is_rankless_award(TOP_DRINKERS_AWARD_CATEGORY));
     assert!(!is_milestone_award(TOP_DRINKERS_AWARD_CATEGORY));
     assert_eq!(
         format_score_value(TOP_DRINKERS_AWARD_CATEGORY, 1_400),
         "1400 buzz"
-    );
-}
-
-#[tokio::test]
-async fn non_intoxicating_pours_cannot_win_the_top_drinkers_badge() {
-    let test_db = test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let sober = create_test_user(&test_db.db, "drnk-sober").await;
-    UserDrinks::record_purchase(&client, sober.id, Bar::Tavern, 50, false)
-        .await
-        .expect("coffee");
-    UserDrinks::record_comped_pour(&client, sober.id, Bar::Nightcap, 400, false)
-        .await
-        .expect("comped water");
-    roll_drink_pours_back_a_month(&client).await;
-
-    snapshot_previous_month_profile_awards(&mut client)
-        .await
-        .expect("snapshot");
-    let awards = list_profile_awards_for_user(&client, sober.id)
-        .await
-        .expect("awards");
-    assert!(
-        awards
-            .iter()
-            .all(|award| award.category != TOP_DRINKERS_AWARD_CATEGORY),
-        "a month with only non-intoxicating pours has no Top Drinkers winner"
     );
 }
 

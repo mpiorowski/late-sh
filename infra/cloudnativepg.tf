@@ -104,6 +104,22 @@ resource "kubernetes_manifest" "postgres_cluster" {
     spec = {
       instances = 2
 
+      # glibc starts by giving every allocation of 128 kB or more its own
+      # mapping, returned to the kernel when freed, but raises that line
+      # to the size of the first such block a process frees (up to 32 MB).
+      # From then on a backend's multi-megabyte buffers (an art board
+      # snapshot is 7 MB on the wire) come out of its heap, and one cache
+      # entry allocated above a buffer keeps the hole for the life of the
+      # connection. Setting the threshold pins it: large buffers always go
+      # back (infra/RUNBOOK.md, 2026-11-14). Changing this restarts
+      # Postgres.
+      env = [
+        {
+          name  = "MALLOC_MMAP_THRESHOLD_"
+          value = "131072"
+        }
+      ]
+
       storage = {
         size         = "10Gi"
         storageClass = "local-path"

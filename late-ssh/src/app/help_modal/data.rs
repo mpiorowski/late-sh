@@ -206,7 +206,7 @@ pub(crate) fn bot_app_context() -> String {
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
         - People page 5 has three sections, stepped with [ and ]: the Map (the Earth shaded by who is where, online now, this month or everyone; /map lands on it; a user with no country set is not on it, Ctrl+O sets one), Profiles (one row per user who shared a project or posted a work card; s searches names, cards and projects), and Jobs (the remote job feed; /jobs lands on it, s searches postings, / keeps the ones that carry the user's tags, n posts one). Artboard has detailed page-local editing keybinds.\n\
         - Calendars page 7 is the events board. Anyone can post an event to the board (five a day), everyone sees it, and i says I'm in or I'm out; the count of who is in shows on the event. Your own events live on the same grid, drawn green against the board's amber, and nobody else ever sees them; b hides the board to see only yours. n creates a private event (type a title like movie night tomorrow at 9pm and the time fills in; flip the where-it-goes control to put it on the board), e edits your own (including changing between private and board), c duplicates any visible event into a new personal draft, d deletes your own; moderators can delete any post. v switches Month and List, [ and ] move a month, t is today; landing on a day marks its first event, j/k move along the day's events, click or Enter opens the marked event (an empty day starts a new one), right-click offers the actions you are allowed. A post shows up as a line in #lounge; every board event on today sits in one row across the top of Home for the whole day, a timed one with its start time and dimmed once it is over, and when a timed event starts #lounge gets a headline. Your own events show on page 7 only. Times use the account timezone or UTC; start and end accept hour-only 24-hour values. Making a board event private clears its RSVPs.\n\
-        - Leaderboards page 6 holds every board. The Boards section leads: Top Drinkers (buzz from drinks taken, monthly + yearly), Top Chips, Arcade Wins, Top Chat (public messages, messages outside the lounge, longest chat streak in days, and News posts, all monthly in UTC), and Late Time (monthly + all-time). Top Chat excludes bots, system lines, bartender mentions and generated News cards from chat totals and streaks; one News item adds exactly one to news posts only. Then the Games section: Lateania Adventurers (living characters by level, class shown on the row) and Lateania PvP (rivals slain in the Wildbound Waste), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. The Games section closes with dopewars Top Score: each player's best final cash on the street (monthly + all-time), fed the same way from the dopewars host's run log. Then per-game daily win counts and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
+        - Leaderboards page 6 holds every board. The Boards section leads: Top Chips, Arcade Wins, Top Chat (public messages, messages outside the lounge, longest chat streak in days, and News posts, all monthly in UTC), and Late Time (monthly + all-time). Top Chat excludes bots, system lines, bartender mentions and generated News cards from chat totals and streaks; one News item adds exactly one to news posts only. Then the Games section: Lateania Adventurers (living characters by level, class shown on the row) and Lateania PvP (rivals slain in the Wildbound Waste), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. The Games section closes with dopewars Top Score: each player's best final cash on the street (monthly + all-time), fed the same way from the dopewars host's run log. Then per-game daily win counts and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -233,7 +233,7 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Zork Trilogy, Minecraft, Vintage Story), 4 Artboard (shared ASCII canvas), 5 People (three sections: the map of who is where, the people's projects and open-to-work cards, and the job feed), 6 Leaderboards (every board, monthly and all-time), 7 Calendars (the events board: anyone posts, i says I'm in; your own private events beside it).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
-    - Home is tiles you arrange yourself: Ctrl+E or /edit enters arrange mode (Esc when done), where Tab and the arrows focus any tile, space opens the tile picker for it, S splits, X closes, < > change width and { } height, F flips, R resets home, t walks a tile's title through named, a bare rule and hidden, b gives the page a border (boxed tiles), and + gives a tile a guest, the now strip or attention (your move or a result in a daily match, unread DMs and mentions, a companion uncared for today), which takes the tile over only while it has something. O keeps the focused tile to the room the rail is on: in any other room it goes down and the tiles beside it take its space, and O again brings it back everywhere (the rail and chat tiles always stay). Tiles: the room rail, chat (up to ten, each bound to a room; the focused one is the page's chat and the rail follows it, the others watch; Alt+arrows, Alt+J/K or a click move the focus between them, and Space or Ctrl+/ on a room another tile shows goes to that tile), your bonsai, the reef (everyone has one, a fry and a sprout to start, more fish and plants in the Shop), the pet, music, the visualizer, a clock, the lobby, the live panel, an ascii piece, the pulse and more; each names its own keys on the right of its title while you arrange. Home keeps up to nine named layouts per device, saved on the SSH key: 1 is home, 2 is street (an ascii piece and the tank over two chats, news and #announcements, with the clock, pulse, friends and activity, boxed), yours to arrange or delete. Ctrl+E then a digit loads one (Alt and the digit too, in one chord, on Home), Ctrl+E L lists them (Enter loads, n saves the page as a new layout, d deletes, R resets home), and /layout, /layout <name>, /layout save <name> do the same from any composer. Nothing switches a layout for you. The pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself.\n\
+    - Home is tiles you arrange yourself: Ctrl+E or /edit enters arrange mode (Esc when done), where Tab and the arrows focus any tile, space opens the tile picker for it, S splits, X closes, < > change width and { } height, F flips, R resets home, t walks a tile's title through named, a bare rule and hidden, b gives the page a border (boxed tiles), and + gives a tile a guest, the now strip or attention (your move or a result in a daily match, unread DMs and mentions, a companion uncared for today), which takes the tile over only while it has something. O keeps the focused tile to the room the rail is on: in any other room it goes down and the tiles beside it take its space, and O again brings it back everywhere (the rail and chat tiles always stay). Tiles: the room rail, chat (up to ten, each bound to a room; the focused one is the page's chat and the rail follows it, the others watch; Alt+arrows, Alt+J/K or a click move the focus between them, and Space or Ctrl+/ on a room another tile shows goes to that tile), your bonsai, the reef (everyone has one, a fry and a sprout to start, more fish and plants in the Shop), the pet, music, the visualizer, a clock, the lobby, the live panel, an ascii piece, the pulse and more; each names its own keys on the right of its title while you arrange. Home keeps up to nine named layouts per device, saved on the SSH key: 1 is home, 2 is street (an ascii piece and the tank over two chats, news and #announcements, with the clock, pulse, friends and activity, boxed), yours to arrange or delete. Ctrl+E then a digit loads one (Alt and the digit too, in one chord, on Home), Ctrl+E L lists them (Enter loads, n saves the page as a new layout, d deletes, R resets home), and /layout, /layout <name>, /layout save <name> do the same from any composer. Nothing switches a layout for you. The pet has no key outside arrange mode: click it to pet it (the first pet of the day pays 100 chips), to hatch its egg, or to give it a treat a win earned; right-click its tile for its care box (growing up, toys, tricks), and it reads the rest of your session itself.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
     - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened: a track queued in the YouTube booth stays at least two minutes, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over whatever is up while the cue moves. A link shared to News is not on the strip: it goes into #lounge as the sharer's own line, drawn as a card with the story's title, summary points and art, and Enter on the card opens the story. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
     - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /edit (Ctrl+E), /layout (Ctrl+E L), /redraw (Ctrl+R), /guide (?).\n\
@@ -553,7 +553,7 @@ fn chips_help_lines() -> Vec<String> {
         "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, sharing news, bringing music, and inviting friends who stay.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
-        "  The Shop (/shop) for badge, flag, title and name-effect rentals, the Bonsai Decay Shield, the pet companion, fish and plants for your tank, and the Aquarium Shield that minds it while you are away.".to_string(),
+        "  The Shop (/shop) for badge, flag, title and name-effect rentals, the Bonsai Decay Shield, fish and plants for your tank, and the Aquarium Shield that minds it while you are away.".to_string(),
         "  Badges, flags, titles, and name effects are rented for 24 hours or 30 days, one live at a time per slot.".to_string(),
         "  The one title on sale is Your Own Title (1,000 / 24h, 40,000 / 30d): you write it, up to 20 characters.".to_string(),
         "  It is screened before the chips move, so a refused title costs you nothing.".to_string(),
@@ -591,6 +591,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /picker            open the room picker (same as Ctrl+/)",
         "  /fav               favorite / unfavorite the room you are typing in, game and stream chats included",
         "  /petname [name]    show or set your pet's name",
+        "  /pet <order>       cat, dog or bird changes what your hatched pet is; away and out put it away and bring it back; reset starts it over as an egg",
         "  /brb [reason]      away until your next key, a reason is posted here (the screensaver covers the screen; Settings, Tweaks, Screensaver)",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
@@ -1058,8 +1059,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  [SN]      Snake",
         "  [LATE]    Late Time, to whoever spent the most time online that month.",
         "            First place only, so no rank digit.",
-        "  [DRNK]    Top Drinkers, to whoever took the most buzz from drinks that month.",
-        "            First place only, no rank digit, no chips.",
+        "  [DRNK]    Top Drinkers, retired: no longer awarded. Holders keep it; it went to",
+        "            whoever took the most buzz from drinks in a month. No rank digit, no chips.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
         "            3 applause to count, and the one ranked badge that pays: 40,000 / 15,000 / 10,000 chips.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",
@@ -1374,6 +1375,8 @@ fn vintagestory_help_lines() -> Vec<String> {
         "  Inside a claim only its owner and those granted can build, break, or use things.",
         "  Outside claims anything goes. PvP is on. Fire spreads, so keep it off wood.",
         "  The world's clock stops while nobody is online.",
+        "  Iron, meteoric iron, and steel arrows never break on impact.",
+        "  X-ray mods (Block Overlay and its kind) are refused when you join.",
     ]
     .into_iter()
     .map(str::to_string)
@@ -1724,7 +1727,7 @@ fn layouts_help_lines() -> Vec<String> {
         "  ←↓↑→              move focus",
         "  space             open the tile picker for the focused tile: j k or arrows move, Enter picks, Esc closes",
         "  +                 the guest picker: the now strip or attention, which take the tile over while they have something",
-        "  O                 keep the focused tile to the room the rail is on: in any other room it goes down and the tiles beside it take its space; O again frees it (the rail and chat tiles always stay; the stock reef keeps to #lounge)",
+        "  O                 keep the focused tile to the room the rail is on: in any other room it goes down and the tiles beside it take its space; O again frees it (the rail and chat tiles always stay; the stock reef and pet keep to #lounge)",
         "  S                 split the focused tile (side by side when wide, stacked when tall)",
         "  X                 close the focused tile (the last one stays)",
         "  < >               trade one column of width with the nearest side-by-side split",
@@ -1753,7 +1756,8 @@ fn layouts_help_lines() -> Vec<String> {
         "Everywhere on Home",
         "  w                 open Bonsai Care, as on every page",
         "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
-        "  click             pet the pet; it reads the rest of your session itself",
+        "  click             the pet: pet it, give it a waiting treat, or pick what it hatches or grows into; its floor: throw a ball",
+        "  right-click       the pet's tile: its care box (Enter on the tile in arrange mode, or a click on its status row)",
         "  click             on the reef or the tank, feed it (free, once a day, +100 chips)",
         "  s1-4              with a live tile on the page, open that row of it (outside arrange mode)",
         "  click             on a row of the live tile, the same",
@@ -2216,14 +2220,42 @@ fn bonsai_help_lines() -> Vec<String> {
         "────────────────────────────────────────",
         "",
         "Pet Companion",
-        "  Unlock            Shop companion bought with Late Chips (/shop); t there picks cat, dog, or bird",
-        "  tile              a tile of Home once unlocked, beside the tank if you put it there",
+        "  yours already     every account has one, an egg at first: nothing about it is bought",
+        "  tile              a tile of Home, beside the tank if you put it there",
+        "  it hatches        the day after it arrives the egg is ready: click it, and in the care box press 1 for a cat, 2 for a dog",
+        "                    or 3 for a bird. The egg waits as long as you like. Until it is ready the row under it",
+        "                    says when, and a pat makes it rock",
+        "  it grows up       young at 7 days together, adult at 30, elder at 100. When it has the days, click it: the care box",
+        "                    shows it drawn two ways and 1 or 2 picks one. You pick its ears (or crest) at young, its feet at",
+        "                    adult and its face (the bird's wings) at elder, and the picks stay: eight different elders each",
+        "  days together     a day together is any UTC day you press a key with it out. Nothing ever goes down: stay away",
+        "                    and it only sleeps, and it is glad when you are back",
         "  nothing to feed   it reads your session: a win makes it proud for half an hour, a loss makes it sulk for ten minutes,",
         "                    a message you send makes it chatty, music makes it vibe, ten quiet minutes and it sleeps",
-        "  click it          and it purrs for a couple of minutes (the first pet of the day pays 100 chips); move the cursor in its tile and it walks after it",
-        "  the mood shows on your profile, so friends can see how your night is going",
+        "  a treat a day     the first win of a UTC day in any game earns it, and so do ten active minutes in one door. It is named",
+        "                    for where it came from: puzzle (a daily puzzle), arcade (a score game), match (a daily match), table (a card",
+        "                    or casino table), door. It waits in the pouch under the tile: click it, or the pet, to give it.",
+        "                    While one waits no other is earned",
+        "  today's title     the treat it ate today shows until the UTC day ends: a title after its name (the bookish for puzzle,",
+        "                    the quick for arcade, the cunning for match, the lucky for table, the brave for door) and a small thing",
+        "                    it carries beside its feet. Tomorrow it goes by whatever you feed it then",
+        "  click it          the first click of the day pets it for 100 chips; after that a click gives a waiting treat, or it purrs",
+        "                    and does a trick it knows. Move the cursor in its tile and it walks after it; click the floor to throw a ball",
+        "  care box          right-click its tile, click its status row, or Enter on the tile in arrange mode (Ctrl+E):",
+        "                    f give the treat, 1 2 3 hatch a ready egg, 1 2 pick how it grows, b ball, m toy mouse,",
+        "                    t p r pick, practise and perform a trick",
+        "  tricks            spin, bow, hop, dance: three separate days of practice each, one practice a day; switching trick starts over",
+        "  visitors          on someone else's profile, p pets their pet (once a day) and v sends yours over (one call a day).",
+        "                    A pet sent over stays an hour: it stands in their pet's box, care box and profile under your name,",
+        "                    and your own tile says where it is. Your tile and care box show who came by and who is over now",
+        "  its stage, title and mood show on your profile, so friends can see how your night is going",
+        "  it comes along    once hatched it sits in a corner beside an open Arcade game when the board leaves room, and follows",
+        "                    you in the Clubhouse as one letter at your heel (c cat, d dog, b bird) that everyone in the room sees",
         "  /petname [name]   show or set your pet's name",
-        "  o in the Shop     puts it away and brings it back: while away its Home tile only holds a note, it has no panel or profile portrait, asks for no petting, and pays no chips",
+        "  /pet cat          or dog, or bird: changes what a hatched pet is. Its days, picks, tricks and name stay",
+        "  /pet away         puts it away, /pet out brings it back: while away its Home tile only holds a note, it has no profile",
+        "                    portrait, Arcade corner or Clubhouse heel, asks for no petting, and pays no chips",
+        "  /pet reset        turns it back into an egg on its first day (it asks first: /pet reset yes does it). Its name stays",
     ]
     .into_iter()
     .map(str::to_string)

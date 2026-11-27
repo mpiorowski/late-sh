@@ -2,9 +2,10 @@
 //! (`app/presence`, `crowd.rs`): every logged-in session on every replica
 //! sits where it picked, walkers carry live positions, and every session
 //! draws the same room. This struct owns this session's part of it (its
-//! own stand: the spot it picked or the cell it walked to, its last emote
-//! and pet), the camera target (your own cell, mirrored from the crowd),
-//! animation clock, the derived crowd, door arrival/departure ambience,
+//! own stand: the spot it picked or the cell it walked to, its last emote,
+//! its last pet of the dog, the pet at its heel), the camera target (your
+//! own cell, mirrored from the crowd), animation clock, the derived crowd,
+//! door arrival/departure ambience,
 //! and the first-visit tutorial state machine. Pure: every `now_ms` is
 //! handed in.
 
@@ -17,6 +18,7 @@ use late_core::models::presence::{ClubhouseStand, Emote, Spot};
 use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
+use crate::app::pet::ui::Portrait;
 use crate::app::presence::svc::Records;
 
 use super::crowd::{self, Crowd, Own};
@@ -546,6 +548,17 @@ impl State {
     /// This session's part of its presence record.
     pub fn stand(&self) -> ClubhouseStand {
         self.own
+    }
+
+    /// The owner's pet while it is out (`None` while it is not): a hatched
+    /// one walks at this patron's heel, an egg stays home. Called on every
+    /// presence sync; the stand only changes when the answer does, so the
+    /// record is not republished for it.
+    pub fn set_pet(&mut self, pet: Option<Portrait<'_>>) {
+        self.own.pet_at_heel = match pet {
+            None => None,
+            Some(pet) => pet.animal(),
+        };
     }
 
     fn next_rand(&mut self) -> u64 {

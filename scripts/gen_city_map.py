@@ -100,7 +100,7 @@ TITLE = '╡ ▚ STATIC ROW ▞ ╞'
 # The landmark order is the popover priority; map.rs lists it the same way.
 LANDMARKS = ['Armorer', 'Tailor', 'Lockers', 'Bands', 'Bar', 'Screen', 'Repairs',
              'Board', 'Bits', 'Noodles', 'Umbrellas', 'Blades', 'Reader', 'Stairs', 'Wire',
-             'Ledge', 'Ink', 'Prints', 'Baths', 'Sleep', 'Shrine', 'Market', 'Coin', 'Vids',
+             'Ledge', 'Ink', 'Prints', 'Ring', 'Baths', 'Sleep', 'Shrine', 'Market', 'Vids',
              'Pawn']
 
 
@@ -437,13 +437,23 @@ def layout_tiles():
     grate(230, 6)
     walker(200, 258, 5, '@', 4)
 
-    # the arcade: cabinets in rows, two people playing. Not open yet.
+    # the ring: ropes strung between four posts in the middle of the
+    # floor, a lantern hung over it, two runners squared up inside, the
+    # street along the walls betting bits on it. RING: two runners who
+    # have put down the Old Signal fight each other with cards. Its whole
+    # floor is in reach; the ropes keep the runner outside them.
     room(199, 7, 217, 18, MAGENTA, doors=[(212, 18), (208, 7)], windows=[(215, 18)],
-         sign=(202, 18, 'COIN'), closed='Coin')
-    for y in (10, 13):
-        for gx in range(201, 216, 3):
-            tile(gx, y, '▓')
-    tile(203, 11, '@'); tile(212, 14, '@')
+         sign=(202, 18, 'RING'), shop='Ring')
+    for rx in range(204, 213):
+        tile(rx, 10, '─'); tile(rx, 14, '─')
+    for ry in range(11, 14):
+        tile(203, ry, '│'); tile(213, ry, '│')
+    for (px, py) in ((203, 10), (213, 10), (203, 14), (213, 14)):
+        tile(px, py, 'o')
+    tile(206, 12, '@'); tile(210, 12, '@')
+    lantern(208, 12)
+    for (wx, wy) in ((204, 8), (200, 11), (200, 13), (216, 12)):
+        tile(wx, wy, '@')
 
     carve(218, 14, 218, 18); grate(218, 16)
 
@@ -1034,13 +1044,15 @@ pub enum Landmark {
     Ink,
     /// PRINTS: the poster, painted here and hung on the profile.
     Prints,
+    /// RING: two runners off the Old Signal fight each other with cards,
+    /// and the street bets bits on it.
+    Ring,
     // The shops that are not open yet (`DARK_SIGNS`): Enter at the door
     // says so. Opening one gives it a panel in `city/state.rs`.
     Baths,
     Sleep,
     Shrine,
     Market,
-    Coin,
     Vids,
     Pawn,
 }
@@ -1066,11 +1078,11 @@ impl Landmark {
         Landmark::Ledge,
         Landmark::Ink,
         Landmark::Prints,
+        Landmark::Ring,
         Landmark::Baths,
         Landmark::Sleep,
         Landmark::Shrine,
         Landmark::Market,
-        Landmark::Coin,
         Landmark::Vids,
         Landmark::Pawn,
     ];

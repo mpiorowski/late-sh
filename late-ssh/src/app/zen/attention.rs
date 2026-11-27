@@ -142,7 +142,7 @@ pub fn items(inputs: Inputs) -> Vec<Item> {
 }
 
 /// Today's care for one companion: tended, still due, or not asked for
-/// (`NotOwned`: not bought, or a pet its owner put away, `App::pet_out`).
+/// (`NotOwned`: a pet its owner put away, `App::pet_out`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chore {
     Done,

@@ -6804,11 +6804,7 @@ async fn a_chat_tile_names_no_room_until_the_rooms_load() {
 
 #[tokio::test]
 async fn home_pet_tile_is_petted_without_moving_the_focus() {
-    use crate::app::hub::shop::{
-        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
-    };
     use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
-    use late_core::models::marketplace::PET_COMPANION_SKU;
     use late_core::models::pet::PetMood;
 
     let test_db = new_test_db().await;
@@ -6823,10 +6819,6 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
 
     let (cols, rows) = (160u16, 40u16);
     let mut app = make_app(test_db.db.clone(), viewer.id, "rail-pet-flow-it");
-    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
-        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
-        ..Default::default()
-    });
     // A Home arranged with the pet alone beside the chat, as its owner
     // would with Ctrl+E.
     let arranged = RiceLayout {
@@ -6871,20 +6863,12 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
 
 #[tokio::test]
 async fn a_pet_put_away_leaves_its_tile_and_stops_asking_for_care() {
-    use crate::app::hub::shop::{
-        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
-    };
     use crate::app::zen::attention::{Chore, Item};
     use crate::app::zen::state::{Dir, Guest, Look, Node, RiceLayout, TileKind, ZenState};
-    use late_core::models::marketplace::PET_COMPANION_SKU;
 
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "pet-away-viewer").await;
     let mut app = make_app(test_db.db.clone(), viewer.id, "pet-away-flow-it");
-    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
-        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
-        ..Default::default()
-    });
     let arranged = RiceLayout {
         root: Node::split_second(
             Dir::Row,
@@ -6905,7 +6889,10 @@ async fn a_pet_put_away_leaves_its_tile_and_stops_asking_for_care() {
     app.pet_state.set_enabled(false);
     let frame = render_plain(&mut app);
     assert!(app.last_pet_rect.get().is_none(), "no click target is left");
-    assert!(frame.contains("no pet out"), "the tile says so: {frame}");
+    assert!(
+        frame.contains("back with /pet out"),
+        "the tile says so: {frame}"
+    );
     assert_eq!(app.care_today().pet, Chore::NotOwned);
     assert!(!app.attention_items().contains(&Item::PetPet));
 
@@ -6915,62 +6902,55 @@ async fn a_pet_put_away_leaves_its_tile_and_stops_asking_for_care() {
     assert!(app.attention_items().contains(&Item::PetPet));
 }
 
-/// The stock Home hosts a pet tile, and a pet put away leaves it holding a
-/// note, so the Shop's answer to `o` must not promise the tile is gone.
+/// Nobody buys a pet: a brand new account has an egg on the stock Home.
+/// `/pet away` typed in the composer puts it away, the tile stays and says
+/// how to bring it back, and `/pet out` does.
 #[tokio::test]
-async fn putting_the_pet_away_on_the_stock_home_says_what_the_home_then_shows() {
-    use crate::app::hub::shop::{catalog::ShopCategory, state::ShopState, svc::ShopService};
+async fn a_new_account_has_an_egg_and_pet_away_and_out_are_typed_in_chat() {
     use crate::app::zen::state::{RiceLayout, ZenState};
-    use late_core::models::chips::UserChips;
-    use late_core::models::marketplace::{PET_COMPANION_SKU, purchase_durable_item_by_sku};
 
     let test_db = new_test_db().await;
     let owner = create_test_user(&test_db.db, "pet-away-stock").await;
-    let mut client = test_db.db.get().await.expect("db client");
-    UserChips::admin_grant(&**client, owner.id, 1_000_000)
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
         .await
-        .expect("fund chips");
-    purchase_durable_item_by_sku(&mut client, owner.id, PET_COMPANION_SKU)
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, owner.id)
         .await
-        .expect("buy the pet");
+        .expect("join lounge");
     let mut app = make_app(test_db.db.clone(), owner.id, "pet-away-stock-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     let stock = RiceLayout::home();
     app.home = ZenState::new(stock.clone(), Some(stock));
-    // The catalog and the purchase as the session's bootstrap loads them.
-    app.shop_state = ShopState::for_test_snapshot(
-        ShopService::new(test_db.db.clone())
-            .refresh_user(owner.id)
-            .await
-            .expect("the shop's snapshot"),
-    );
+    wait_for_render_contains(&mut app, "lounge").await;
+    assert!(app.pet_out(), "an egg, out, with nothing bought");
+    assert!(app.last_pet_rect.get().is_some(), "the egg drew");
 
-    app.handle_input(b"\x13");
-    assert!(app.show_hub_modal, "Ctrl+S opens the Shop");
-    app.shop_state.select_category(ShopCategory::Companions);
-    let pet_row = app
-        .shop_state
-        .visible_items()
-        .iter()
-        .position(|item| item.is_pet_companion())
-        .expect("the pet's row");
-    app.shop_state.select_item(pet_row);
-    app.handle_input(b"o");
-    assert!(!app.pet_out(), "o puts it away");
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+    app.handle_input(b"/pet away\r");
+    assert!(!app.pet_out(), "/pet away puts it away");
     let answer = app
         .banner
         .as_ref()
-        .expect("the switch answers")
+        .expect("the order answers")
         .message
         .clone();
-
-    app.show_hub_modal = false;
+    assert!(answer.contains("/pet out"), "{answer}");
     let frame = render_plain(&mut app);
-    assert!(frame.contains("no pet out"), "the tile stays: {frame}");
     assert!(
-        !answer.contains("no tile"),
-        "the answer agrees with the tile: {answer}"
+        frame.contains("back with /pet out"),
+        "the tile stays and says so: {frame}"
     );
+
+    app.handle_input(b"/pet out\r");
+    assert!(app.pet_out(), "/pet out brings it back");
+
+    // Words that are no order get the usage, and nothing happens.
+    app.handle_input(b"/pet fish\r");
+    let usage = app.banner.as_ref().expect("the usage").message.clone();
+    assert!(usage.contains("/pet cat"), "{usage}");
+    assert!(app.pet_out());
 }
 
 #[tokio::test]
@@ -8702,11 +8682,12 @@ async fn a_tile_kept_to_lounge_goes_down_in_other_rooms_and_comes_back() {
     );
 }
 
-/// The care click exists to reach the tank, and the stock reef keeps to
-/// #lounge. With the tank due the click takes the chat there, so it lands on a
-/// reef that can take the meal; with the tank fed, the room stays yours.
+/// The care click exists to reach what waits, and the stock reef and pet keep
+/// to #lounge. With the tank or the pet due the click takes the chat there,
+/// so it lands on a reef that can take the meal and a pet that can take the
+/// pat; with both tended, the room stays yours.
 #[tokio::test]
-async fn the_care_click_lands_on_the_reef_while_the_tank_is_due() {
+async fn the_care_click_lands_in_the_lounge_while_the_tank_or_the_pet_is_due() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "care-reef-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -8735,9 +8716,24 @@ async fn the_care_click_lands_on_the_reef_while_the_tank_is_due() {
     assert_eq!(app.chat.selected_room_id, Some(lounge.id));
     assert!(app.reef_tile_inner().is_some(), "the click found the reef");
 
+    // The tank fed, the pet still waits beside it.
     app.handle_input(b"\x1f");
     app.handle_input(b"announcements\r");
     app.aquarium_care.feed();
+    render_plain(&mut app);
+    assert_eq!(
+        app.last_pet_rect.get(),
+        None,
+        "the pet is down in this room"
+    );
+    crate::app::zen::input::open_care(&mut app);
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    render_plain(&mut app);
+    assert!(app.last_pet_rect.get().is_some(), "the click found the pet");
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"announcements\r");
+    crate::app::input::pet_the_pet_globally(&mut app);
     crate::app::zen::input::open_care(&mut app);
     assert_eq!(app.chat.selected_room_id, Some(announcements.id));
 }
@@ -8836,4 +8832,93 @@ async fn the_guide_searches_every_topic() {
 
     app.handle_input(b"\x1b");
     wait_for_esc_effect(&mut app, |app| !app.show_help, "the guide").await;
+}
+
+/// The terminal reporting its colors is not a person. A light/dark switch
+/// while the session sits away on the splash answers with a DEC 2031
+/// notice and, once asked, two OSC replies: the colors land, one query goes
+/// out, and the session stays away with its splash up.
+#[tokio::test]
+async fn terminal_color_reports_are_not_a_person() {
+    use crate::app::common::{away::AWAY_AFTER, terminal_colors};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "colors-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "colors-flow-it");
+    app.show_splash = true;
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away(), "the session starts away");
+    app.pending_terminal_commands.clear();
+
+    app.handle_input(b"\x1b[?997;2n");
+    app.handle_input(
+        b"\x1b[?997;2n\x1b]10;rgb:d5d5/d4d4/d6d6\x1b\\\x1b]11;rgb:1515/1414/1b1b\x1b\\",
+    );
+
+    assert!(app.away, "a color report brought the session back");
+    assert!(app.show_splash, "a color report dismissed the splash");
+    assert_eq!(
+        app.terminal_colors,
+        terminal_colors::TerminalColors {
+            fg: Some((0xD5, 0xD4, 0xD6)),
+            bg: Some((0x15, 0x14, 0x1B)),
+        }
+    );
+    assert_eq!(
+        app.pending_terminal_commands,
+        vec![terminal_colors::QUERY.to_vec()],
+        "two notices ask once"
+    );
+}
+
+/// Leaving a synced background (here: previewing the Terminal theme in
+/// Settings) resets it with OSC 111 and asks for the colors again. The
+/// background held until then may be the synced canvas, latte's near-white
+/// on a dark profile, so the reset frame must already draw without it:
+/// reverse video until the terminal's own answer lands.
+#[tokio::test]
+async fn leaving_a_synced_background_forgets_it_before_drawing() {
+    use crate::app::common::{terminal_colors, theme};
+    use late_core::models::profile::Profile;
+    use ratatui::style::{Color, Modifier};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "sync-reset-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "sync-reset-flow-it");
+    let client = test_db.db.get().await.unwrap();
+    let mut profile = Profile::load(&client, user.id).await.unwrap();
+    profile.theme_id = Some("terminal".to_string());
+    profile.enable_background_color = true;
+    app.settings_modal_state
+        .open_from_profile(&profile, app.artboard_disclaimer_enabled());
+    app.show_settings = true;
+    let latte = (0xEF, 0xF1, 0xF5);
+    app.last_terminal_bg = Some(Color::Rgb(latte.0, latte.1, latte.2));
+    app.terminal_colors = terminal_colors::TerminalColors {
+        fg: Some((0xD5, 0xD4, 0xD6)),
+        bg: Some(latte),
+    };
+    app.pending_terminal_commands.clear();
+    // A palette notice earlier in the frame already asked: that query would
+    // go out ahead of the reset and be answered with the synced canvas.
+    terminal_colors::queue_query(&mut app.pending_terminal_commands);
+
+    render_plain(&mut app);
+
+    assert_eq!(app.terminal_colors.bg, None);
+    let reset = b"\x1b]111\x1b\\".to_vec();
+    let at = |cmd: &[u8]| app.pending_terminal_commands.iter().position(|c| c == cmd);
+    assert!(
+        at(&reset) < at(terminal_colors::QUERY) && at(&reset).is_some(),
+        "the reset goes out before the query: {:?}",
+        app.pending_terminal_commands
+    );
+    // The colors the frame was drawn with are still installed on this thread.
+    theme::set_current_by_id("terminal");
+    let drawn = theme::selection_style();
+    theme::set_current_by_id("contrast");
+    assert!(
+        drawn.add_modifier.contains(Modifier::REVERSED),
+        "the reset frame filled from the synced canvas: {drawn:?}"
+    );
 }

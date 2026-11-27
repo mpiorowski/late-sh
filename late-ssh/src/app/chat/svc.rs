@@ -542,6 +542,8 @@ enum SendPath {
     },
     /// A game line on the wire, from the voice.
     Wire,
+    /// A game line to one runner, a DM from the voice.
+    VoiceDm,
 }
 
 impl SendPath {
@@ -552,6 +554,7 @@ impl SendPath {
             Self::BotReply => "chat_bot_send_failed",
             Self::Lounge { .. } => "chat_lounge_send_failed",
             Self::Wire => "deadchannel_wire_line_failed",
+            Self::VoiceDm => "deadchannel_voice_dm_failed",
         }
     }
 
@@ -563,6 +566,7 @@ impl SendPath {
             Self::BotReply => "a bot reply",
             Self::Lounge { what } => what,
             Self::Wire => "a wire line",
+            Self::VoiceDm => "a dm from the voice",
         }
     }
 }
@@ -3420,6 +3424,56 @@ impl ChatService {
                 }
             }
             .instrument(info_span!("chat.post_wire_line_task")),
+        );
+    }
+
+    /// A line of the game's for one runner: a DM from the voice, for what
+    /// a runner must not miss (a call to the ring). The DM room is the one
+    /// the first contact invitation opened, or made here; the message is a
+    /// real one, so it is unread until read and notifies like any DM.
+    /// Fire-and-forget, accounted here like the wire's lines.
+    pub fn post_voice_dm_task(&self, target_user_id: Uuid, body: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let posted: Result<(), SendError> = async {
+                    let (voice_id, room_id) = async {
+                        let voice = service.ensure_first_contact_voice().await?;
+                        let client = service.db.get().await?;
+                        let room =
+                            ChatRoom::get_or_create_dm(&client, voice.id, target_user_id).await?;
+                        ChatRoomMember::join(&client, room.id, voice.id).await?;
+                        ChatRoomMember::join(&client, room.id, target_user_id).await?;
+                        VoiceChannel::upsert_for_target(
+                            &client,
+                            TARGET_CHAT_ROOM,
+                            room.id,
+                            "dm",
+                            true,
+                        )
+                        .await?;
+                        anyhow::Ok((voice.id, room.id))
+                    }
+                    .await?;
+                    service
+                        .send_message(SendMessageParams {
+                            user_id: voice_id,
+                            room_id,
+                            room_slug: None,
+                            body,
+                            reply_to_message_id: None,
+                            reply_to_user_id: None,
+                            is_admin: false,
+                            wording: Wording::Typed,
+                        })
+                        .await
+                }
+                .await;
+                if let Err(error) = posted {
+                    account_send_error(SendPath::VoiceDm, &error);
+                }
+            }
+            .instrument(info_span!("chat.post_voice_dm_task", user_id = %target_user_id)),
         );
     }
 

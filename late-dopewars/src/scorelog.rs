@@ -1,24 +1,24 @@
-// Append-only log of every run that ever reached dopewars' high-score table.
+// Append-only log of every finished dopewars game, the leaderboard's source.
 //
-// Upstream rewrites its score file in place (`HighScoreWrite` in
-// src/serverside.c: ftruncate + rewind + the whole table again), so the
-// binary `-f` file holds only the current top `NUMHISCORE` (18) and forgets
-// every run that dropped off it. The leaderboard needs the history, so after
-// every game we diff the table against `<score_file>.runs.log` (one
-// TAB-separated line per run logged) and append only the entries not seen
-// before.
+// Upstream keeps no per-run log: a finished game only lands in its binary
+// `-f` high-score table, which holds the top `NUMHISCORE` (18) and is
+// rewritten in place (`HighScoreWrite` in src/serverside.c: ftruncate +
+// rewind + the whole table again). A game enters the table when it beats a
+// held entry or finds an empty slot (`SendHighScores`, serverside.c:2159), so
+// a table shared by everyone logs only games that beat its 18th place: one
+// player with 18 big runs shuts every other player out of the board.
 //
-// The first sync on a volume appends nothing: it writes the table as it
-// stands to `<score_file>.runs.seen`, which the diff counts and the stats
-// stream never reads. Those entries predate the run log. On a host upgraded
-// from the name prompt they carry whatever name the player typed, which is no
-// account's, so ingesting them would credit a stranger's fortune to whoever
-// owns that username. The host syncs once at startup so that first sync never
-// swallows a real game.
+// So every game session gets its own table, empty at the start
+// (`SessionTable`, the file in the session's scratch `HOME`): every game it
+// plays finds an empty slot, until a session past 18 games pushes its own
+// lowest off. The host syncs the table on a timer and at the session's end,
+// appending to `<score_file>.runs.log` (one TAB-separated line per run) the
+// entries this session has not logged yet. Nothing writes the configured
+// `score_file` itself; it only names the run log.
 //
 // File format, from `HighScoreTypeWrite` (dopewars 1.6.2, src/serverside.c:
 // 1770): the NUL-terminated header "DOPEWARS SCORES V.1", then two arrays of
-// 18 entries (antique mode first — always empty here — then the regular
+// 18 entries (antique mode first, always empty here, then the regular
 // table). Each entry is a NUL-terminated name, a NUL-terminated date
 // ("%d-%m-%Y", UTC), a NUL-terminated price (`pricetostr`: ASCII digits with
 // an optional leading '-', "" for zero), and one byte `dead` (non-zero =
@@ -26,15 +26,18 @@
 //
 // `runs.log` line: `<name>\t<money>\t<dead:0|1>\t<ended_epoch>\t<sco_date>`.
 //
-// shortcut: the table keeps only the best 18 runs, so a game that never made
-// the table is never logged. Logging every game needs an upstream change;
-// upgrade when dopewars grows a per-run log.
+// shortcut: a session past 18 games can push its own lowest off before a
+// sync sees it, and a host killed without its shutdown signal (SIGKILL, a
+// crash) loses what finished since the last timer tick. Logging every game
+// exactly needs an upstream per-run log.
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+use anyhow::Context;
 
 /// `HighScoreWriteHeader`: "DOPEWARS SCORES V." + version 1, NUL-terminated.
 const SCORE_HEADER: &[u8] = b"DOPEWARS SCORES V.1\0";
@@ -55,9 +58,9 @@ pub(crate) struct ScoEntry {
     pub(crate) date: String,
 }
 
-/// The startup sync and a game's post-exit sync can race; one writer at a
-/// time keeps the diff honest.
-static SYNC: Mutex<()> = Mutex::new(());
+/// Concurrent sessions append to the one run log; one writer at a time keeps
+/// each sync's lines together.
+static APPEND: Mutex<()> = Mutex::new(());
 
 /// Parse a whole score file. A missing header yields nothing; a truncated
 /// tail (a killed game mid-write) yields the complete records before it.
@@ -107,132 +110,150 @@ pub(crate) fn runs_log_path(score_file: &str) -> PathBuf {
     PathBuf::from(format!("{score_file}.{RUNS_FILE}.log"))
 }
 
-/// The table as the first sync found it, beside the run log
-/// (`dopewars.sco` -> `dopewars.sco.runs.seen`): counted by the diff, never
-/// streamed.
-pub(crate) fn seen_path(score_file: &str) -> PathBuf {
-    PathBuf::from(format!("{score_file}.{RUNS_FILE}.seen"))
+/// One game session's own high-score table, and the entries of it already
+/// appended to the run log (see the header).
+pub(crate) struct SessionTable {
+    score_file: PathBuf,
+    /// Counted, not a set: two games of one session can end on the same
+    /// money the same day, and both are runs.
+    logged: HashMap<ScoEntry, usize>,
 }
 
-/// Append this score file's not-yet-seen entries to `runs_log`. Returns how
-/// many lines were appended.
-///
-/// A volume with no `seen` file yet is on its first sync: whatever the table
-/// holds goes to `seen` instead, and the log gets nothing (see the header).
-pub(crate) fn sync_from_sco(
-    score_file: &Path,
-    runs_log: &Path,
-    seen: &Path,
-    now_epoch: i64,
-) -> anyhow::Result<usize> {
-    let _guard = SYNC.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let first_sync = !seen.try_exists()?;
-    let entries = match fs::read(score_file) {
-        Ok(bytes) => parse_sco(&bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(e.into()),
+impl SessionTable {
+    /// The table in the session's scratch `HOME`, which the host hands over
+    /// empty. The game creates the file on launch (`OpenHighScoreFile`,
+    /// serverside.c:1982), so the table starts empty.
+    pub(crate) fn new(home: &Path) -> Self {
+        Self {
+            score_file: home.join("dopewars.sco"),
+            logged: HashMap::new(),
+        }
+    }
+
+    /// The path the game gets as `-f`.
+    pub(crate) fn score_file(&self) -> &Path {
+        &self.score_file
+    }
+
+    /// Append the table's entries this session has not logged yet to
+    /// `runs_log`. Returns how many lines were appended. An append that
+    /// fails partway counts the lines that landed as logged and returns the
+    /// error: the next sync retries only the rest.
+    pub(crate) fn sync(&mut self, runs_log: &Path, now_epoch: i64) -> anyhow::Result<usize> {
+        self.sync_with(now_epoch, |lines| append(runs_log, lines))
+    }
+
+    /// [`Self::sync`] with the append passed in, so a test can stop one short.
+    fn sync_with(
+        &mut self,
+        now_epoch: i64,
+        append: impl FnOnce(&[String]) -> Result<(), ShortAppend>,
+    ) -> anyhow::Result<usize> {
+        let entries = match fs::read(&self.score_file) {
+            Ok(bytes) => parse_sco(&bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e.into()),
+        };
+
+        // Multiset difference: an entry still in the table that this session
+        // already logged must not be appended twice, however many times the
+        // table is rewritten.
+        let mut remaining = self.logged.clone();
+        let mut lines = Vec::new();
+        let mut fresh = Vec::new();
+        for entry in entries {
+            match remaining.get_mut(&entry) {
+                Some(count) if *count > 0 => *count -= 1,
+                Some(_) | None => {
+                    lines.push(format!(
+                        "{}\t{}\t{}\t{}\t{}\n",
+                        entry.name,
+                        entry.money,
+                        u8::from(entry.dead),
+                        ended_epoch(&entry.date, now_epoch),
+                        entry.date
+                    ));
+                    fresh.push(entry);
+                }
+            }
+        }
+        if fresh.is_empty() {
+            return Ok(0);
+        }
+        let (landed, outcome) = match append(&lines) {
+            Ok(()) => (fresh.len(), Ok(fresh.len())),
+            Err(short) => (short.landed, Err(short.error)),
+        };
+        for entry in fresh.into_iter().take(landed) {
+            *self.logged.entry(entry).or_default() += 1;
+        }
+        outcome
+    }
+}
+
+/// An append that stopped before its last line: the first `landed` lines are
+/// in the log, whole, and the rest are not.
+struct ShortAppend {
+    landed: usize,
+    error: anyhow::Error,
+}
+
+/// Append `lines`, each ending in its newline, to the run log at `path`.
+fn append(path: &Path, lines: &[String]) -> Result<(), ShortAppend> {
+    let _guard = APPEND
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let opened = fs::OpenOptions::new().create(true).append(true).open(path);
+    let mut file = match opened {
+        Ok(file) => file,
+        Err(e) => {
+            return Err(ShortAppend {
+                landed: 0,
+                error: anyhow::Error::new(e).context("opening the dopewars run log"),
+            });
+        }
     };
-
-    // Multiset difference: an entry still in the table that was already
-    // seen (same player, money, death flag and date) must not be appended
-    // twice, however many times the table is rewritten.
-    let mut remaining = read_runs_log(runs_log)?;
-    for (key, count) in read_runs_log(seen)? {
-        *remaining.entry(key).or_default() += count;
-    }
-    let mut out = String::new();
-    let mut appended = 0;
-    for entry in entries {
-        let key = (
-            entry.name.clone(),
-            entry.money,
-            entry.dead,
-            entry.date.clone(),
-        );
-        match remaining.get_mut(&key) {
-            Some(count) if *count > 0 => *count -= 1,
-            _ => {
-                out.push_str(&format!(
-                    "{}\t{}\t{}\t{}\t{}\n",
-                    entry.name,
-                    entry.money,
-                    u8::from(entry.dead),
-                    ended_epoch(&entry.date, now_epoch),
-                    entry.date
-                ));
-                appended += 1;
-            }
+    for (landed, line) in lines.iter().enumerate() {
+        if let Err(error) = append_line(&mut file, line) {
+            return Err(ShortAppend { landed, error });
         }
     }
-    match first_sync {
-        // Written even when empty: the file existing is what ends the
-        // first sync.
-        true => {
-            append(seen, &out)?;
-            Ok(0)
-        }
-        false => {
-            if appended > 0 {
-                append(runs_log, &out)?;
-            }
-            Ok(appended)
-        }
-    }
-}
-
-fn append(path: &Path, lines: &str) -> anyhow::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    file.write_all(lines.as_bytes())?;
     Ok(())
 }
 
+/// Append one line whole, or none of it. A write that fails partway (a full
+/// volume) leaves the start of a line behind, and the next append would run
+/// into it and spoil both, so the log is cut back to where the line began.
+/// The stats stream ships whole lines only, so it has read nothing past the
+/// cut.
+fn append_line(file: &mut fs::File, line: &str) -> anyhow::Result<()> {
+    let start = file
+        .metadata()
+        .context("reading the dopewars run log's length")?
+        .len();
+    let written = match file.write_all(line.as_bytes()) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    match file.set_len(start) {
+        Ok(()) => Err(anyhow::Error::new(written).context("appending a run to the dopewars log")),
+        Err(cut) => Err(anyhow::Error::new(written).context(format!(
+            "appending a run to the dopewars log, and its partial line stays: {cut}"
+        ))),
+    }
+}
+
 /// When a newly seen run ended: now, the game having just finished, unless
-/// the table dates it to another UTC day (a host that died between the
-/// game's write and this sync catches up later, maybe in another month).
-/// Then it is noon of the day the table recorded, so the run lands on the
-/// board of the month it was played.
+/// the table dates it to another UTC day (a game that ended before midnight
+/// and was synced after it, maybe in another month). Then it is noon of the
+/// day the table recorded, so the run lands on the board of the month it was
+/// played.
 fn ended_epoch(date: &str, now_epoch: i64) -> i64 {
     const HALF_DAY: i64 = 12 * 60 * 60;
     match date_noon_epoch(date) {
         Some(noon) if !(-HALF_DAY..HALF_DAY).contains(&(now_epoch - noon)) => noon,
         Some(_) | None => now_epoch,
     }
-}
-
-type LoggedKey = (String, i64, bool, String);
-
-/// Count a run log's (or the `seen` file's) lines by identity. Malformed
-/// lines are skipped rather than fatal: the log is a cache of history, not a
-/// source of record.
-fn read_runs_log(runs_log: &Path) -> anyhow::Result<HashMap<LoggedKey, usize>> {
-    let text = match fs::read_to_string(runs_log) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(e) => return Err(e.into()),
-    };
-    let mut counts: HashMap<LoggedKey, usize> = HashMap::new();
-    for line in text.lines() {
-        let mut fields = line.split('\t');
-        let (Some(name), Some(money), Some(dead), Some(_ended), Some(date)) = (
-            fields.next(),
-            fields.next(),
-            fields.next(),
-            fields.next(),
-            fields.next(),
-        ) else {
-            continue;
-        };
-        let (Ok(money), Ok(dead)) = (money.parse::<i64>(), dead.parse::<u8>()) else {
-            continue;
-        };
-        *counts
-            .entry((name.to_string(), money, dead != 0, date.to_string()))
-            .or_default() += 1;
-    }
-    Ok(counts)
 }
 
 fn read_cstr(bytes: &[u8], pos: usize) -> Option<(String, usize)> {

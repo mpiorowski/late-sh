@@ -14,7 +14,6 @@ use super::{
     username_effect::{USERNAME_EFFECT_KIND, UsernameEffect},
 };
 
-pub const PET_COMPANION_SKU: &str = "pet_companion";
 pub const BONSAI_CONSUMABLE_ITEM_KIND: &str = "bonsai_consumable";
 pub const BONSAI_DECAY_SHIELD_SKU: &str = "bonsai_decay_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Bonsai Decay
@@ -552,17 +551,6 @@ async fn purchase_item_by_sku_inner(
     if let Some(slot) = &item.slot {
         equip_purchase_in_tx(&tx, user_id, item.id, slot).await?;
     }
-    if item.sku == PET_COMPANION_SKU {
-        tx.execute(
-            "INSERT INTO pet_companions (user_id, adopted_at)
-             VALUES ($1, current_timestamp)
-             ON CONFLICT (user_id) DO UPDATE
-             SET adopted_at = COALESCE(pet_companions.adopted_at, current_timestamp),
-                 updated = current_timestamp",
-            &[&user_id],
-        )
-        .await?;
-    }
 
     let refresh_all_active_users =
         activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
@@ -1056,20 +1044,6 @@ async fn activate_aquarium_shield_in_tx(
     )
     .await?;
     Ok(Some(effect))
-}
-
-/// Whether the user owns the Pet Companion: what puts a pet on a profile.
-pub async fn user_owns_pet_companion(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
-    let row = client
-        .query_opt(
-            "SELECT 1
-             FROM user_purchases p
-             JOIN marketplace_items i ON i.id = p.item_id
-             WHERE p.user_id = $1 AND i.sku = $2",
-            &[&user_id, &PET_COMPANION_SKU],
-        )
-        .await?;
-    Ok(row.is_some())
 }
 
 /// One species in a user's tank: what the care rolls (fry, starvation)

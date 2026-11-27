@@ -150,3 +150,15 @@ fn enter_alt_screen_withholds_mouse_tracking_in_keyboard_mode() {
     assert!(has(&with_mouse, b"\x1b[?2004h"));
     assert!(has(&no_mouse, b"\x1b[?2004h"));
 }
+
+#[test]
+fn alt_screen_asks_for_the_terminal_colors_and_stops_palette_notices() {
+    use crate::app::common::terminal_colors::QUERY;
+    let has = |buf: &[u8], seq: &[u8]| buf.windows(seq.len()).any(|w| w == seq);
+
+    let enter = App::enter_alt_screen(true);
+    assert!(has(&enter, b"\x1b[?2031h"), "{enter:?}");
+    assert!(has(&enter, QUERY), "{enter:?}");
+    let leave = App::leave_alt_screen();
+    assert!(has(&leave, b"\x1b[?2031l"), "{leave:?}");
+}

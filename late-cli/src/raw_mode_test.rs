@@ -10,6 +10,7 @@ fn session_end_turns_off_every_mode_the_server_turns_on() {
         "[?1003l",
         "[?1006l",
         "[?2004l",
+        "[?2031l",
         "[?25h",
         "]111\x1b\\",
     ] {

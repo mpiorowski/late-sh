@@ -46,7 +46,9 @@ pub const AWAY_GLYPH: &str = "💤";
 /// reports a terminal sends on its own is a person. Those are a bare mouse
 /// move (SGR `ESC [ < Cb ; Cx ; Cy M` with the motion bit and no button
 /// held) and a focus report (`ESC [ I`, `ESC [ O`). Keys, clicks, drags,
-/// scrolls and pastes are a person.
+/// scrolls and pastes are a person. The terminal's complete color reports
+/// never get here: `App::handle_input` takes them out first
+/// (`terminal_colors.rs`, which says what a split one does).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresenceInput {
     /// Nothing a person did: an empty chunk, or unattended reports alone.

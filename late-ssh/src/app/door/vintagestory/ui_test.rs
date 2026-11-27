@@ -113,4 +113,8 @@ fn quoted_settings_match_the_terraform_and_the_image() {
     assert_eq!(tf_value(&server, "AllowPvP"), "true");
     assert_eq!(tf_value(&server, "AllowFireSpread"), "true");
     assert_eq!(tf_value(&server, "PassTimeWhenEmpty"), "false");
+    assert!(
+        tf_value(&server, "ModIdBlackList").contains("\"blocksoverlay\""),
+        "the card says Block Overlay is refused"
+    );
 }

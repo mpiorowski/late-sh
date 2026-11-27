@@ -3,7 +3,6 @@ use crate::app::common::text_layout;
 use super::*;
 use crate::app::hub::shop::catalog::CompanionSection;
 
-use crate::app::hub::shop::entitlements::ShopEntitlements;
 use crate::app::hub::shop::svc::ShopSnapshot;
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::marketplace::{BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU};
@@ -91,7 +90,6 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         user_id: None,
         balance: 1_000,
         items: vec![bonsai_shield_item()],
-        entitlements: ShopEntitlements::default(),
         active_room_effects: HashMap::new(),
         active_username_effect: None,
         active_bonsai_decay_protection: protection,
@@ -272,13 +270,12 @@ fn chat_tab_rows_open_each_group_with_a_section_label() {
 }
 
 #[test]
-fn companions_tab_rows_split_pet_bonsai_the_tank_its_growth_plants_and_fish() {
+fn companions_tab_rows_split_bonsai_the_tank_its_growth_plants_and_fish() {
     use late_core::models::marketplace::{
         AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
-        AQUARIUM_SHIELD_SKU, PET_COMPANION_SKU,
+        AQUARIUM_SHIELD_SKU,
     };
 
-    let pet = chat_item(PET_COMPANION_SKU, "feature_unlock");
     let bonsai_shield = bonsai_shield_item();
     let tank_shield = chat_item(AQUARIUM_SHIELD_SKU, AQUARIUM_CONSUMABLE_ITEM_KIND);
     let fry = ShopCatalogItem {
@@ -297,33 +294,23 @@ fn companions_tab_rows_split_pet_bonsai_the_tank_its_growth_plants_and_fish() {
     // runs the fry before the fish and the fish before the sprout and the
     // plants; the sort moves the tank's growth and its plants in between
     // its shield and the fish.
-    let mut items = vec![
-        &pet,
-        &bonsai_shield,
-        &tank_shield,
-        &fry,
-        &fish,
-        &sprout,
-        &plant,
-    ];
+    let mut items = vec![&bonsai_shield, &tank_shield, &fry, &fish, &sprout, &plant];
     items.sort_by_key(|item| CompanionSection::of(item));
     let rows = item_list_rows(ShopCategory::Companions, &items);
     assert_eq!(
         row_labels(&rows),
         vec![
-            "[Pet]",
-            "0:pet_companion",
             "[Bonsai]",
-            "1:bonsai_decay_shield_two_weeks",
+            "0:bonsai_decay_shield_two_weeks",
             "[Aquarium]",
-            "2:aquarium_shield_two_weeks",
+            "1:aquarium_shield_two_weeks",
             "[Growing]",
-            "3:aquarium_fish_fry",
-            "4:aquarium_sprout",
+            "2:aquarium_fish_fry",
+            "3:aquarium_sprout",
             "[Plants]",
-            "5:aquarium_plant_seatuft",
+            "4:aquarium_plant_seatuft",
             "[Fish]",
-            "6:aquarium_fish_mj",
+            "5:aquarium_fish_mj",
         ]
     );
     for item in [&fish, &plant, &sprout, &fry] {

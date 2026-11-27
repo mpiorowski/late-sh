@@ -763,7 +763,7 @@ fn commit_floating_moves_selected_region() {
 
 /// Edits read only the cells they can reach, a column either side included
 /// for wide glyphs. These are the edges where a bounded diff could miss a
-/// change; debug builds check every edit against the whole-board diff, so a
+/// change; debug unit tests check every edit against the whole-board diff, so a
 /// miss fails here.
 #[test]
 fn edits_beside_wide_glyphs_reach_the_other_half() {

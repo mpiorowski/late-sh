@@ -16,14 +16,13 @@ pub(crate) const FEED_CHIP_BONUS: i64 = 100;
 
 /// What a session learns about its tank at connect: the care row (`None`
 /// only when the bootstrap failed and the session runs on the default),
-/// whether this connect planted the tank, every shield window ever bought,
+/// every shield window ever bought,
 /// the fish the starvation settlement took just now, and what the sprout
 /// clock did: what became of a sprout that passed its week while the owner
 /// was away, and whether a new one came up.
 #[derive(Debug, Clone, Default)]
 pub struct CareBootstrap {
     pub care: Option<AquariumCare>,
-    pub welcomed: bool,
     pub shields: Vec<AquariumShield>,
     pub lost: Vec<String>,
     pub rooted: Option<SproutFate>,
@@ -160,7 +159,6 @@ impl AquariumService {
                 },
                 ..care
             }),
-            welcomed,
             shields,
             lost,
             rooted,

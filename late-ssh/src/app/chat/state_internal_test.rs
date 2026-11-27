@@ -1945,41 +1945,17 @@ fn unknown_slash_command_ignores_regular_messages_and_multiline_text() {
     assert_eq!(unknown_slash_command("/bin/ls\nstill talking"), None);
 }
 
-fn petname_request(input: &str) -> Option<PetnameRequest> {
-    match parse_petname_command(input) {
-        Some(PetnameParse::Request(r)) => Some(r),
-        _ => None,
-    }
-}
-
 #[test]
-fn parse_petname_show_set_clear() {
-    assert_eq!(petname_request("/petname"), Some(PetnameRequest::Show));
-    assert_eq!(petname_request("/petname    "), Some(PetnameRequest::Show));
+fn the_pets_commands_are_told_apart_and_from_typos() {
+    assert_eq!(pet_command_words("/pet", "/pet"), Some(""));
+    assert_eq!(pet_command_words("/pet  cat ", "/pet"), Some("cat"));
+    assert_eq!(pet_command_words("/petname Mochi", "/pet"), None);
     assert_eq!(
-        petname_request("/petname Whiskers"),
-        Some(PetnameRequest::Set("Whiskers".to_string()))
+        pet_command_words("/petname  Sir   Hopkins", "/petname"),
+        Some("Sir   Hopkins")
     );
-    // Inner whitespace runs collapse to a single space.
-    assert_eq!(
-        petname_request("/petname Sir   Hopkins"),
-        Some(PetnameRequest::Set("Sir Hopkins".to_string()))
-    );
-    for word in ["clear", "remove", "none", "off", "CLEAR"] {
-        assert_eq!(
-            petname_request(&format!("/petname {word}")),
-            Some(PetnameRequest::Clear),
-            "{word}"
-        );
-    }
-}
-
-#[test]
-fn parse_petname_ignores_non_petname_lines() {
-    assert!(parse_petname_command("/petnames").is_none());
-    assert!(parse_petname_command("/petnamer").is_none());
-    assert!(parse_petname_command("rename my pet").is_none());
-    assert!(parse_petname_command("/dm @alice").is_none());
+    assert_eq!(pet_command_words("/petnames", "/petname"), None);
+    assert_eq!(pet_command_words("rename my pet", "/petname"), None);
 }
 
 #[test]
