@@ -267,7 +267,7 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
         ])),
         rows[1],
     );
-    frame.render_widget(Paragraph::new(notice_line(gallery)), rows[2]);
+    frame.render_widget(Paragraph::new(notice_line(gallery.notice())), rows[2]);
 
     // Your own piece cannot be applauded and only it can be taken down,
     // so the hint names the key that works on the selected piece.
@@ -416,7 +416,7 @@ pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State) {
         )),
         rows[1],
     );
-    frame.render_widget(Paragraph::new(notice_line(gallery)), rows[2]);
+    frame.render_widget(Paragraph::new(notice_line(gallery.notice())), rows[2]);
     draw_piece_canvas(frame, rows[3], piece);
     // The id is what `/mod artboard remove <id-prefix>` takes, and this is
     // the only place it is shown; without it a mod has nothing to type.
@@ -654,7 +654,7 @@ pub fn draw_hang_modal(frame: &mut Frame, area: Rect, state: &State) {
             &framed.canvas,
         );
     }
-    frame.render_widget(Paragraph::new(notice_line(gallery)), rows[3]);
+    frame.render_widget(Paragraph::new(notice_line(gallery.notice())), rows[3]);
     let field = if submitting {
         Line::from(Span::styled(
             "hanging…",
@@ -683,7 +683,7 @@ pub fn draw_hang_modal(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-fn caption_line(piece: &GalleryPiece) -> Line<'static> {
+pub(super) fn caption_line(piece: &GalleryPiece) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("\"{}\"", piece.title),
@@ -716,7 +716,11 @@ fn caption_line(piece: &GalleryPiece) -> Line<'static> {
 
 /// "with @bob 6%, @ann 3% · hung Sep 3" style credits: every hand but the
 /// hanger's, then the month.
-fn credits_line(credits: &[Credit], hanger: &str, month: chrono::NaiveDate) -> Line<'static> {
+pub(super) fn credits_line(
+    credits: &[Credit],
+    hanger: &str,
+    month: chrono::NaiveDate,
+) -> Line<'static> {
     let total: usize = credits
         .iter()
         .map(|credit| credit.glyphs)
@@ -763,8 +767,8 @@ fn hung_label(shown_on: chrono::NaiveDate, created: chrono::DateTime<chrono::Utc
     }
 }
 
-fn notice_line(gallery: &GalleryState) -> Line<'static> {
-    match gallery.notice() {
+pub(super) fn notice_line(notice: Option<&str>) -> Line<'static> {
+    match notice {
         Some(notice) => Line::from(Span::styled(
             format!("  {notice}"),
             Style::default()
@@ -784,7 +788,7 @@ fn section_heading(text: &str) -> Line<'static> {
     ))
 }
 
-fn key_hint_line(keys: &[(&str, &str)]) -> Line<'static> {
+pub(super) fn key_hint_line(keys: &[(&str, &str)]) -> Line<'static> {
     let mut spans = vec![Span::raw("  ")];
     for (index, (key, desc)) in keys.iter().enumerate() {
         if index > 0 {

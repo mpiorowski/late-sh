@@ -141,7 +141,7 @@ impl StreamService {
     }
 
     pub fn watch_url(&self, stream_id: &str) -> String {
-        format!("{}/live/{stream_id}", self.web_url)
+        watch_page_url(&self.web_url, stream_id, WatchPageVoices::On)
     }
 
     fn publish_url(&self, publish_token: &str) -> String {
@@ -631,9 +631,73 @@ impl StreamService {
     }
 
     /// `/watch @user`: the live stream's watch URL, if that user is live.
-    pub fn watch_url_for_username(&self, username: &str) -> Option<String> {
+    /// `viewer_voice_channel` is the voice channel the viewer sits in right
+    /// now: when it is this stream's channel, the viewer already hears the
+    /// room's voices through the terminal, so the URL asks the page to
+    /// start with voices off (one audio path per sound).
+    pub fn watch_url_for_username(
+        &self,
+        username: &str,
+        viewer_voice_channel: Option<Uuid>,
+    ) -> Option<String> {
         let view = self.registry.stream_for_username(username)?;
-        view.live.then(|| self.watch_url(&view.stream_id))
+        self.watch_url_for_view(&view, viewer_voice_channel)
+    }
+
+    /// A stream room playing its stream in the terminal: what the paired
+    /// CLI needs to receive the room's stream itself and play it there.
+    /// `None` unless the stream is live. The ticket is the watch page's
+    /// (`watch_grant`), under this session's `watcher_id`, and the voices
+    /// rule is `/watch @user`'s: a viewer already in the room's voice
+    /// channel gets the stream's own audio only.
+    pub fn cli_watch(
+        &self,
+        room_id: Uuid,
+        watcher_id: &str,
+        viewer_voice_channel: Option<Uuid>,
+    ) -> anyhow::Result<Option<CliWatch>> {
+        let Some(view) = self.registry.snapshot().for_room(room_id).cloned() else {
+            return Ok(None);
+        };
+        let Some(watch_url) = self.watch_url_for_view(&view, viewer_voice_channel) else {
+            return Ok(None);
+        };
+        let Some(ticket) = self.watch_grant(&view.stream_id, watcher_id)? else {
+            return Ok(None);
+        };
+        let voices = cli_plays_voices(&view, viewer_voice_channel);
+        Ok(Some(CliWatch {
+            stream_id: view.stream_id,
+            streamer_id: view.user_id,
+            streamer_username: view.username,
+            title: view.title,
+            watch_url,
+            livekit_url: ticket.url,
+            token: ticket.token,
+            voices,
+        }))
+    }
+
+    /// Whether the CLI playing `room_id`'s stream plays the room's voices
+    /// now, for a play already running: the viewer may have joined or left
+    /// the stream's voice channel since `cli_watch`. `None` once the room
+    /// has no stream.
+    pub fn cli_voices(&self, room_id: Uuid, viewer_voice_channel: Option<Uuid>) -> Option<bool> {
+        let snapshot = self.registry.snapshot();
+        let view = snapshot.for_room(room_id)?;
+        Some(cli_plays_voices(view, viewer_voice_channel))
+    }
+
+    fn watch_url_for_view(
+        &self,
+        view: &super::registry::LiveStreamView,
+        viewer_voice_channel: Option<Uuid>,
+    ) -> Option<String> {
+        if !view.live {
+            return None;
+        }
+        let voices = watch_voices(view, viewer_voice_channel);
+        Some(watch_page_url(&self.web_url, &view.stream_id, voices))
     }
 
     /// Ingress status poll for OBS streams; run right before [`sweep`] from
@@ -686,6 +750,62 @@ impl StreamService {
         for ended in self.registry.sweep() {
             self.end_stream_task(ended);
         }
+    }
+}
+
+/// A live stream as the paired CLI plays it (`StreamService::cli_watch`):
+/// the subscribe-only LiveKit ticket, and what the player shows around it.
+pub struct CliWatch {
+    pub stream_id: String,
+    pub streamer_id: Uuid,
+    pub streamer_username: String,
+    pub title: String,
+    /// The watch page, for a viewer whose play fails.
+    pub watch_url: String,
+    pub livekit_url: String,
+    pub token: String,
+    /// Whether the CLI plays the room's voices too.
+    pub voices: bool,
+}
+
+/// How the watch page starts its room-voices audio. `Off` is the query the
+/// page understands (`?voices=off`); `On` is the page's own default and
+/// adds nothing, so the URL the room header shows stays short.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WatchPageVoices {
+    On,
+    Off,
+}
+
+/// The one rule for whether a stream's viewer gets the room's voices with
+/// it, on the watch page and in the CLI alike: not while they sit in the
+/// stream's voice channel, where the terminal already plays them (one audio
+/// path per sound).
+pub(super) fn watch_voices(
+    view: &super::registry::LiveStreamView,
+    viewer_voice_channel: Option<Uuid>,
+) -> WatchPageVoices {
+    match viewer_voice_channel == Some(view.voice_channel_id) {
+        true => WatchPageVoices::Off,
+        false => WatchPageVoices::On,
+    }
+}
+
+/// `watch_voices` as the flag the CLI is sent.
+pub(super) fn cli_plays_voices(
+    view: &super::registry::LiveStreamView,
+    viewer_voice_channel: Option<Uuid>,
+) -> bool {
+    match watch_voices(view, viewer_voice_channel) {
+        WatchPageVoices::On => true,
+        WatchPageVoices::Off => false,
+    }
+}
+
+pub(super) fn watch_page_url(web_url: &str, stream_id: &str, voices: WatchPageVoices) -> String {
+    match voices {
+        WatchPageVoices::On => format!("{web_url}/live/{stream_id}"),
+        WatchPageVoices::Off => format!("{web_url}/live/{stream_id}?voices=off"),
     }
 }
 

@@ -5,7 +5,8 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-use super::render_scrolled;
+use super::{render_scrolled, reward};
+use crate::app::games::chips::cooldown::PayoutWindow;
 
 /// Draw `paragraph` into a 20-column, `height`-row terminal scrolled by
 /// `scroll`, and return the reported scroll range plus the top visible row.
@@ -49,4 +50,41 @@ fn wrapped_lines_count_toward_the_range() {
     let long = "x".repeat(45);
     let paragraph = Paragraph::new(vec![Line::from(long); 4]).wrap(Wrap { trim: false });
     assert_eq!(draw(paragraph, 10, 0).0, 2);
+}
+
+fn line_text(line: &ratatui::text::Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// A reward row says what it pays, and once the timers are read, when it
+/// pays this account again, under the value it belongs to. Before the read
+/// it is the plain row, never a guess.
+#[test]
+fn a_reward_row_carries_its_window_once_the_timers_are_read() {
+    let unread = reward("Ascension", "40,000 chips", 12, None);
+    assert_eq!(unread.len(), 1);
+    assert_eq!(line_text(&unread[0]), "  Ascension   40,000 chips");
+
+    let closed = reward(
+        "Ascension",
+        "40,000 chips",
+        12,
+        Some(PayoutWindow::Closed {
+            remaining: chrono::Duration::days(12) + chrono::Duration::hours(4),
+        }),
+    );
+    let lines: Vec<String> = closed.iter().map(line_text).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "  Ascension   40,000 chips".to_string(),
+            "              pays again in 12d 4h".to_string(),
+        ]
+    );
+
+    let open = reward("Ascension", "40,000 chips", 12, Some(PayoutWindow::Open));
+    assert_eq!(line_text(&open[1]), "              pays now");
 }

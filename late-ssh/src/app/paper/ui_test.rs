@@ -15,7 +15,7 @@ fn edition() -> PaperEdition {
             room_id: Uuid::from_u128(1),
             label: "lounge".to_string(),
             member_count: 11,
-            kind: "lounge".to_string(),
+            kind: late_core::models::chat_room::RoomKind::Lounge,
             permanent: true,
             status: PaperStatus::Ready,
             message_count: 42,

@@ -7,7 +7,7 @@
 
 use late_core::models::statusline::{StatusComponent, StatusVariant};
 
-use crate::app::{chat::ui::truncate_cells, common::primitives::thousands};
+use crate::app::common::primitives::{thousands, truncate_cells};
 
 /// Columns any title on the bar gets: the station's track and the live
 /// strip's line alike, cut with an ellipsis past it. A segment fits whole or

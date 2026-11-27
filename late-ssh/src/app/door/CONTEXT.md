@@ -43,6 +43,21 @@ YESTERDAY column reads the day's openings of every card through
 `leaderboard::day_tallies` (`DayGame::Door`, `app/paper/CONTEXT.md`), the
 runs won for the three roguelikes beside them.
 
+**Payout timers.** Every card whose milestones sit behind a 30-day window
+(Night City's Old Signal, Lateania's four crowns, the roguelike pairs, A Dark
+Room's two endings, the Green Dragon kill) prints each milestone's window
+under its reward row: `pays now`, or `pays again in 12d 4h`. The window is
+the grant's own (`app/games/chips/cooldown.rs`: the milestone's newest
+`cooldown` claim plus its template's `cooldown_seconds`), read once each time
+the hub or Lateania's screen opens (`App::set_screen` →
+`GamesHubService::load_timers_task`, counted in
+`late_ssh_payout_timer_reads_total{result}`), held in `hub::state::State` and
+drawn against the frame's clock, so the per-minute frame keeps the countdown
+moving with no polling. A milestone paid while the hub sits open shows on the
+next visit. Until the read lands, or when it fails, the landings print only
+their fixed window line. Lateania's crown timer is the account's: a character
+that already took a crown is done with it whatever the timer says.
+
 Door screens are never top-level tabs: they are entered only from the hub
 (the Realm also from the #lounge live strip) and return to it on exit (`Esc`
 in Lateania; quitting the game in the PTY doors, e.g. `Ctrl-C`, `Q` at

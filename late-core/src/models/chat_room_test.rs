@@ -1,7 +1,7 @@
 use crate::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams},
-        chat_room::{ChatRoom, WatchDoor},
+        chat_room::{ChatRoom, RoomKind, RoomVisibility, WatchDoor},
         chat_room_member::ChatRoomMember,
         user::{User, UserParams},
     },
@@ -16,9 +16,8 @@ async fn test_chat_room_lounge_and_language() {
     let lounge1 = ChatRoom::ensure_lounge(&client)
         .await
         .expect("ensure lounge");
-    assert_eq!(lounge1.kind, "lounge");
+    assert_eq!(lounge1.kind, RoomKind::Lounge);
     assert_eq!(lounge1.slug.as_deref(), Some("lounge"));
-    assert_eq!(lounge1.visibility, "public");
     assert!(lounge1.auto_join);
 
     let lounge2 = ChatRoom::find_lounge(&client).await.unwrap().unwrap();
@@ -27,10 +26,9 @@ async fn test_chat_room_lounge_and_language() {
     let lang = ChatRoom::get_or_create_language(&client, "es")
         .await
         .expect("create lang");
-    assert_eq!(lang.kind, "language");
+    assert_eq!(lang.kind, RoomKind::Language);
     assert_eq!(lang.language_code.as_deref(), Some("es"));
     assert_eq!(lang.slug.as_deref(), Some("lang-es"));
-    assert_eq!(lang.visibility, "public");
     assert!(!lang.auto_join);
 }
 
@@ -47,9 +45,8 @@ async fn ensure_nightcap_is_idempotent_and_auto_joined() {
         .expect("ensure nightcap again");
 
     assert_eq!(first.id, again.id);
-    assert_eq!(first.kind, "nightcap");
+    assert_eq!(first.kind, RoomKind::Nightcap);
     assert_eq!(first.slug.as_deref(), Some("nightcap"));
-    assert_eq!(first.visibility, "public");
     assert!(first.auto_join);
     assert!(first.permanent);
 
@@ -78,7 +75,7 @@ async fn ensure_nightcap_seats_accounts_that_predate_the_room() {
     let before = ChatRoom::list_for_user(&client, regular.id)
         .await
         .expect("rooms before");
-    assert!(before.iter().all(|room| room.kind != "nightcap"));
+    assert!(before.iter().all(|room| room.kind != RoomKind::Nightcap));
 
     let room = ChatRoom::ensure_nightcap(&client)
         .await
@@ -107,9 +104,9 @@ async fn test_chat_room_public_and_private_topics() {
         .expect("create private room");
 
     assert_eq!(public_room.id, public_room_again.id);
-    assert_eq!(public_room.visibility, "public");
+    assert_eq!(public_room.kind, RoomKind::Topic(RoomVisibility::Public));
     assert!(!public_room.auto_join);
-    assert_eq!(private_room.visibility, "private");
+    assert_eq!(private_room.kind, RoomKind::Topic(RoomVisibility::Private));
     assert!(!private_room.auto_join);
     assert_ne!(public_room.id, private_room.id);
 
@@ -152,26 +149,39 @@ async fn irc_channel_namespaces_preserve_same_slug_rooms_and_private_membership(
 
     // A single hash must not fall back to a private room, even for a member.
     assert!(
-        ChatRoom::find_irc_channel_by_slug_for_user(&client, "public", "compel", member.id)
-            .await
-            .unwrap()
-            .is_none()
+        ChatRoom::find_irc_channel_by_slug_for_user(
+            &client,
+            RoomVisibility::Public,
+            "compel",
+            member.id
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
     let public = ChatRoom::get_or_create_public_room(&client, "compel")
         .await
         .unwrap();
 
     for user in [&member, &outsider] {
-        let found =
-            ChatRoom::find_irc_channel_by_slug_for_user(&client, "public", "compel", user.id)
-                .await
-                .unwrap()
-                .unwrap();
+        let found = ChatRoom::find_irc_channel_by_slug_for_user(
+            &client,
+            RoomVisibility::Public,
+            "compel",
+            user.id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(found.id, public.id);
-        let found_private =
-            ChatRoom::find_irc_channel_by_slug_for_user(&client, "private", "compel", user.id)
-                .await
-                .unwrap();
+        let found_private = ChatRoom::find_irc_channel_by_slug_for_user(
+            &client,
+            RoomVisibility::Private,
+            "compel",
+            user.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             found_private.map(|room| room.id),
             (user.id == member.id).then_some(private.id)
@@ -245,7 +255,7 @@ async fn test_chat_room_dm() {
         .unwrap();
 
     assert_eq!(dm1.id, dm2.id);
-    assert_eq!(dm1.kind, "dm");
+    assert_eq!(dm1.kind, RoomKind::Dm);
 }
 
 #[tokio::test]
@@ -558,8 +568,7 @@ async fn test_watch_room_is_one_per_player_per_door() {
     let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Dcss, "Alice_B")
         .await
         .expect("watch room");
-    assert_eq!(room.kind, "game");
-    assert_eq!(room.visibility, "public");
+    assert_eq!(room.kind, RoomKind::Game(RoomVisibility::Public));
     assert!(!room.auto_join);
     assert_eq!(room.slug.as_deref(), Some("dcss-alice_b"));
 
@@ -625,7 +634,7 @@ async fn the_deadchannel_room_is_seeded_once_and_hidden_from_every_listing() {
     let room = ChatRoom::get_or_create_deadchannel_room(&client)
         .await
         .expect("seed deadchannel");
-    assert_eq!(room.kind, "deadchannel");
+    assert_eq!(room.kind, RoomKind::Deadchannel);
     assert_eq!(room.slug.as_deref(), Some("deadchannel"));
     assert!(!room.auto_join);
     let again = ChatRoom::get_or_create_deadchannel_room(&client)
@@ -655,4 +664,69 @@ async fn the_deadchannel_room_is_seeded_once_and_hidden_from_every_listing() {
         .await
         .expect("irc listing");
     assert!(irc.iter().all(|entry| entry.id != room.id));
+}
+
+/// Every `(kind, visibility)` pair a writer produces reads as its own
+/// `RoomKind`, the private match chats from when those were players-only
+/// included: no writer makes them any more, and the rows are still there.
+#[test]
+fn room_kind_reads_every_pair_the_writers_produce() {
+    for (kind, visibility, expected) in [
+        ("lounge", "public", RoomKind::Lounge),
+        ("language", "public", RoomKind::Language),
+        ("topic", "public", RoomKind::Topic(RoomVisibility::Public)),
+        ("topic", "private", RoomKind::Topic(RoomVisibility::Private)),
+        ("dm", "dm", RoomKind::Dm),
+        ("game", "public", RoomKind::Game(RoomVisibility::Public)),
+        ("game", "private", RoomKind::Game(RoomVisibility::Private)),
+        ("deadchannel", "public", RoomKind::Deadchannel),
+        ("nightcap", "public", RoomKind::Nightcap),
+    ] {
+        assert_eq!(RoomKind::from_columns(kind, visibility), expected);
+        assert_eq!(expected.as_str(), kind);
+    }
+}
+
+/// A pair outside the nine is one the table refuses, so reading one stops
+/// at the boundary instead of travelling on as a room nothing knows how to
+/// treat.
+#[test]
+#[should_panic(expected = "unknown room kind in the database: lounge (private)")]
+fn room_kind_refuses_a_pair_no_writer_produces() {
+    RoomKind::from_columns("lounge", "private");
+}
+
+/// The schema holds the same nine pairs `RoomKind` reads, so the parser's
+/// panic guards a row the database cannot store. Each row below is refused
+/// as private and stored as public, so the pair is what refuses it.
+#[tokio::test]
+async fn the_schema_refuses_a_pair_room_kind_cannot_read() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    for (kind, columns) in [
+        (
+            "language",
+            "slug, language_code) VALUES ('language', 'private', false, 'lang-xx', 'xx'",
+        ),
+        (
+            "deadchannel",
+            "slug) VALUES ('deadchannel', 'private', false, 'off-pair'",
+        ),
+        (
+            "lounge",
+            "slug) VALUES ('lounge', 'private', false, 'lounge'",
+        ),
+    ] {
+        let insert = format!("INSERT INTO chat_rooms (kind, visibility, auto_join, {columns})");
+        let refused = client.execute(&insert, &[]).await;
+        assert!(refused.is_err(), "a private {kind} room was stored");
+        let stored = client
+            .execute(&insert.replace("'private'", "'public'"), &[])
+            .await;
+        assert!(
+            stored.is_ok(),
+            "a public {kind} room was refused: {stored:?}"
+        );
+    }
 }

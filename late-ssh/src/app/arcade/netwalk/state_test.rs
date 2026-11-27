@@ -389,3 +389,28 @@ fn reset_restores_the_scramble_and_is_refused_on_a_solved_daily() {
         "Today's board is solved and banked; try another difficulty or p for a personal board."
     );
 }
+
+/// The board the first-visit tour borrows is today's daily at the easiest
+/// difficulty, whatever board was up before: the same scramble everyone
+/// gets, unsolved, with the cursor on the source.
+#[test]
+fn the_lent_board_is_todays_easiest_daily() {
+    let user_id = Uuid::now_v7();
+    let mut state = State::new_for_date(user_id, service(), date(), Vec::new());
+    state.show_personal();
+    state.next_difficulty();
+    assert_eq!(state.mode(), Mode::Personal);
+
+    state.open_lent_daily();
+    assert_eq!(state.mode(), Mode::Daily);
+    assert_eq!(state.difficulty(), LENT_DIFFICULTY);
+    assert_eq!(state.dimension(), 5);
+    assert_eq!(state.puzzle_date(), date());
+    assert_eq!(
+        state.board(),
+        generate(LENT_DIFFICULTY, daily_seed(date(), LENT_DIFFICULTY)).scrambled
+    );
+    assert!(!state.is_solved());
+    assert_eq!(state.cursor(), source_index(5));
+    assert_eq!(state.message(), "Daily easy 5×5 board.");
+}

@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme;
 #[derive(Debug, Clone)]
@@ -373,6 +373,65 @@ pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
         spans.push(Span::styled(format!(" {desc}"), desc_style));
     }
     Line::from(spans)
+}
+
+/// `text` in at most `max_width` terminal cells: whole when it fits, else
+/// cut with an ellipsis as its last cell.
+pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    let ellipsis_width = UnicodeWidthStr::width("…");
+    for ch in text.chars() {
+        let width = UnicodeWidthStr::width(ch.to_string().as_str());
+        if used + width + ellipsis_width > max_width {
+            break;
+        }
+        out.push(ch);
+        used += width;
+    }
+    out.push('…');
+    out
+}
+
+/// `spans` cut to `width` columns: a card's meta row on a narrow chat (a
+/// News share's, a hung piece's). A row that runs over keeps `width - 1`
+/// columns and ends with an ellipsis in the style of the span it cuts
+/// into, even when the cut falls between two spans, so a cut row always
+/// reads as cut.
+pub(crate) fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(Span::width).sum();
+    if total <= width {
+        return spans;
+    }
+    let mut room = width.saturating_sub(1);
+    let mut clipped = Vec::new();
+    for span in spans {
+        let span_width = span.width();
+        if span_width <= room {
+            room -= span_width;
+            clipped.push(span);
+            continue;
+        }
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if ch_width > room {
+                break;
+            }
+            room -= ch_width;
+            kept.push(ch);
+        }
+        kept.push('…');
+        clipped.push(Span::styled(kept, span.style));
+        break;
+    }
+    clipped
 }
 
 /// Group digits with commas: `10000` → `"10,000"`. The shared formatter for

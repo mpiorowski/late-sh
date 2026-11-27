@@ -45,6 +45,178 @@ fn refusal(error: CalendarError) -> CalendarRefusal {
     }
 }
 
+#[tokio::test]
+async fn visibility_conversion_keeps_identity_and_clears_board_state() {
+    let db = test_db().await;
+    let owner = create_test_user(&db.db, "cal_owner").await;
+    let guest = create_test_user(&db.db, "cal_guest").await;
+    let store = CalendarStore::new(db.db.clone());
+    let draft = timed_at(Utc::now(), -Duration::minutes(10));
+    let personal = store
+        .save(owner.id, CalendarSource::Personal, None, &draft)
+        .await
+        .unwrap();
+    assert!(personal.created && !personal.board_posted);
+    let published = store
+        .save(
+            owner.id,
+            CalendarSource::Board,
+            Some((personal.event.id, personal.event.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+    assert!(!published.created && published.board_posted);
+    let published = published.event;
+    assert_eq!(published.id, personal.event.id);
+    assert_eq!(published.creator_id, owner.id);
+    assert_eq!(published.timing, personal.event.timing);
+    assert_eq!(published.revision, personal.event.revision + 1);
+    store.set_rsvp(guest.id, published.id, true).await.unwrap();
+    assert_eq!(store.claim_started(Utc::now()).await.unwrap().len(), 1);
+
+    // Staff may delete a post, but cannot convert one they do not own.
+    let c = db.db.get().await.unwrap();
+    c.execute("UPDATE users SET is_admin=true WHERE id=$1", &[&guest.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal(
+            store
+                .save(
+                    guest.id,
+                    CalendarSource::Personal,
+                    Some((published.id, published.revision)),
+                    &draft
+                )
+                .await
+                .unwrap_err()
+        ),
+        CalendarRefusal::ReadOnly
+    );
+    assert_eq!(
+        refusal(
+            store
+                .save(
+                    owner.id,
+                    CalendarSource::Personal,
+                    Some((published.id, personal.event.revision)),
+                    &draft
+                )
+                .await
+                .unwrap_err()
+        ),
+        CalendarRefusal::Revision
+    );
+    assert_eq!(store.rsvps(guest.id).await.unwrap(), vec![published.id]);
+
+    let private = store
+        .save(
+            owner.id,
+            CalendarSource::Personal,
+            Some((published.id, published.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+    assert!(!private.created && !private.board_posted);
+    assert_eq!(private.event.id, published.id);
+    assert_eq!(private.event.going, 0);
+    assert!(store.rsvps(guest.id).await.unwrap().is_empty());
+    assert_eq!(
+        refusal(store.event(guest.id, published.id).await.unwrap_err()),
+        CalendarRefusal::Gone
+    );
+    assert!(store.today_board(Utc::now()).await.unwrap().is_empty());
+    let announced: Option<chrono::DateTime<Utc>> = c
+        .query_one(
+            "SELECT announced_at FROM calendar_events WHERE id=$1",
+            &[&published.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(announced.is_none());
+    let again = store
+        .save(
+            owner.id,
+            CalendarSource::Board,
+            Some((private.event.id, private.event.revision)),
+            &draft,
+        )
+        .await
+        .unwrap();
+    assert!(again.board_posted);
+    assert_eq!(again.event.going, 0);
+    assert_eq!(store.claim_started(Utc::now()).await.unwrap().len(), 1);
+    let posts: i64 = c
+        .query_one(
+            "SELECT count(*) FROM calendar_posts WHERE user_id=$1",
+            &[&owner.id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(posts, 2, "every publication uses a slot");
+}
+
+#[tokio::test]
+async fn publishing_conversions_obey_bans_and_the_concurrent_daily_cap() {
+    let db = test_db().await;
+    let owner = create_test_user(&db.db, "cal_publish").await;
+    let staff = create_test_user(&db.db, "cal_staff").await;
+    let store = CalendarStore::new(db.db.clone());
+    let event = store
+        .save(owner.id, CalendarSource::Personal, None, &draft())
+        .await
+        .unwrap()
+        .event;
+    let c = db.db.get().await.unwrap();
+    CalendarBan::activate(&c, owner.id, staff.id, "spam", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal(
+            store
+                .save(
+                    owner.id,
+                    CalendarSource::Board,
+                    Some((event.id, event.revision)),
+                    &draft()
+                )
+                .await
+                .unwrap_err()
+        ),
+        CalendarRefusal::Banned
+    );
+    assert!(!store.event(owner.id, event.id).await.unwrap().is_board());
+    CalendarBan::delete_for_user(&c, owner.id).await.unwrap();
+    for _ in 0..BOARD_POSTS_PER_DAY - 1 {
+        store
+            .save(owner.id, CalendarSource::Board, None, &draft())
+            .await
+            .unwrap();
+    }
+    let d = draft();
+    let (publish, create) = tokio::join!(
+        store.save(
+            owner.id,
+            CalendarSource::Board,
+            Some((event.id, event.revision)),
+            &d
+        ),
+        store.save(owner.id, CalendarSource::Board, None, &d),
+    );
+    let mut successes = 0;
+    for result in [publish, create] {
+        match result {
+            Ok(_) => successes += 1,
+            Err(e) => assert_eq!(refusal(e), CalendarRefusal::DailyCap),
+        }
+    }
+    assert_eq!(successes, 1);
+}
+
 #[test]
 fn calendar_dst_and_inclusive_dates() {
     let tz = chrono_tz::America::New_York;
@@ -400,20 +572,63 @@ async fn the_daily_cap_resets_at_utc_midnight_in_any_session_zone() {
     }
 }
 
+/// An all-day post is a civil date, so it is on the shared board for every
+/// zone whose today that date is, and on a viewer's today by their own
+/// date, whatever zone it was posted from.
+#[tokio::test]
+async fn an_all_day_post_is_on_the_board_wherever_its_date_is_today() {
+    let db = test_db().await;
+    let poster = create_test_user(&db.db, "cal_zones").await;
+    let store = CalendarStore::new(db.db.clone());
+    // Midday UTC on the 13th: still the 13th at UTC-12 (00:00), already
+    // the 14th at UTC+14 (02:00). Nobody's today is the 12th or the 15th.
+    let now: DateTime<Utc> = "2026-10-13T12:00:00Z".parse().unwrap();
+    let mut posts = Vec::new();
+    for day in ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"] {
+        posts.push(
+            store
+                .save(
+                    poster.id,
+                    CalendarSource::Board,
+                    None,
+                    &all_day_on(day.parse().unwrap()),
+                )
+                .await
+                .unwrap()
+                .event,
+        );
+    }
+    let (thirteenth, fourteenth) = (&posts[1], &posts[2]);
+
+    let board: Vec<_> = store
+        .today_board(now)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(board, vec![thirteenth.id, fourteenth.id]);
+
+    let (utc, ahead) = (chrono_tz::UTC, chrono_tz::Pacific::Kiritimati);
+    assert!(thirteenth.on_day(now, utc) && !thirteenth.on_day(now, ahead));
+    assert!(fourteenth.on_day(now, ahead) && !fourteenth.on_day(now, utc));
+}
+
 #[tokio::test]
 async fn rsvps_count_and_the_start_is_claimed_once() {
-    // Five minutes ago is yesterday just after UTC midnight: a timed event
-    // can sort before today's all-day event. Cover both orders independently
-    // of the wall clock, including the boundary that failed in CI.
-    for (timestamp, all_day_first) in [
+    // Just after UTC midnight the timed events that began earlier are
+    // yesterday's and sort before today's all-day event; at midday they are
+    // all today's and sort after it. Cover both independently of the wall
+    // clock, including the boundary that failed in CI.
+    for (timestamp, midday) in [
         ("2026-10-13T00:01:00Z", false),
         ("2026-10-13T12:00:00Z", true),
     ] {
-        rsvps_and_start_claim_at(timestamp.parse().unwrap(), all_day_first).await;
+        rsvps_and_start_claim_at(timestamp.parse().unwrap(), midday).await;
     }
 }
 
-async fn rsvps_and_start_claim_at(now: DateTime<Utc>, all_day_first: bool) {
+async fn rsvps_and_start_claim_at(now: DateTime<Utc>, midday: bool) {
     let db = test_db().await;
     let poster = create_test_user(&db.db, "cal_host").await;
     let guest = create_test_user(&db.db, "cal_guest").await;
@@ -489,25 +704,31 @@ async fn rsvps_and_start_claim_at(now: DateTime<Utc>, all_day_first: bool) {
     assert!(store.rsvps(guest.id).await.unwrap().is_empty());
     store.set_rsvp(poster.id, soon.id, true).await.unwrap();
 
-    // Live is the window: the one three days out is not in it, the one
-    // five hours over is not either, the one on now and the one an hour
-    // out are, and the all-day one is for its whole day.
-    let live: Vec<_> = store
-        .live_board(now)
+    // Today's board is the window around now: the one three days out is
+    // not in it; the one five hours over, the one on now, the one half an
+    // hour out and the all-day one are, soonest first.
+    let board: Vec<_> = store
+        .today_board(now)
         .await
         .unwrap()
         .into_iter()
         .map(|e| e.id)
         .collect();
-    let expected = if all_day_first {
-        vec![day.id, on.id, soon.id]
+    let expected = if midday {
+        vec![day.id, over.id, on.id, soon.id]
     } else {
-        vec![on.id, day.id, soon.id]
+        vec![over.id, on.id, day.id, soon.id]
     };
-    assert_eq!(live, expected);
-    assert!(soon.live(now) && on.live(now) && day.live(now));
-    assert!(!far.live(now) && !over.live(now));
-    assert!(on.started(now) && !soon.started(now));
+    assert_eq!(board, expected);
+    // A viewer's today is every date a post covers in their zone. The one
+    // that ended is still today's at midday, and was yesterday's alone
+    // just after midnight; the one on now began yesterday then and runs
+    // into today.
+    let utc = chrono_tz::UTC;
+    assert!(soon.on_day(now, utc) && on.on_day(now, utc) && day.on_day(now, utc));
+    assert!(!far.on_day(now, utc));
+    assert_eq!(over.on_day(now, utc), midday);
+    assert!(over.over(now) && !on.over(now) && !soon.over(now));
 
     // The sweeper claims what started and is not over, once. The all-day
     // post is on and is never claimed.

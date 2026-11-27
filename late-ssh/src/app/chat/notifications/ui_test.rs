@@ -1,4 +1,4 @@
-use super::preview_rows;
+use super::{mention_preview, preview_rows};
 
 #[test]
 fn preview_rows_wraps_into_two_rows() {
@@ -32,4 +32,17 @@ fn preview_rows_handles_empty_preview() {
     let rows = preview_rows("", 20, 2);
 
     assert_eq!(rows, vec!["\"\"".to_string()]);
+}
+
+/// The Mentions list reads a cut of the body, so the mask has to land
+/// first: a cut through a spoiler would leave its opening words in clear.
+#[test]
+fn a_mention_preview_masks_spoilers_before_it_cuts() {
+    assert_eq!(mention_preview("hi ||CRANE||"), "hi ▒▒▒▒▒");
+
+    let long = format!("{} ||the butler did it||", "x".repeat(110));
+    assert_eq!(
+        mention_preview(&long),
+        format!("{} {}", "x".repeat(110), "▒".repeat(9))
+    );
 }

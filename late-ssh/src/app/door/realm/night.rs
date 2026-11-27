@@ -103,8 +103,8 @@ impl Tonight {
 }
 
 /// Who is behind a take on a target: the taker's land that borders it, and
-/// their shores within sailing reach of it. Each holding counts once, by
-/// land when it borders the target.
+/// their shores within sailing reach of it or joined to it by a sea lane.
+/// Each holding counts once, by land when it borders the target.
 struct Front {
     land: Vec<TerritoryId>,
     sea: Vec<TerritoryId>,
@@ -130,7 +130,9 @@ impl Front {
         land.sort_unstable();
         land.dedup();
         // A landing needs a shore to land on and, unless the game lets
-        // inland players sail, a shore to sail from.
+        // inland players sail, a shore to sail from, within sailing reach
+        // or at the far end of one of the map's sea lanes (the crossings
+        // that keep every landmass in the world, however far it lies).
         let any_launch = state.option(OPTION_LANDLOCKED_SEA);
         let sea: Vec<TerritoryId> = if territory.coastal {
             state
@@ -138,7 +140,10 @@ impl Front {
                 .into_iter()
                 .filter(|from| !land.contains(from))
                 .filter(|from| any_launch || map.territory(*from).is_some_and(|t| t.coastal))
-                .filter(|from| map.distance_km(*from, target) <= state.ruleset.sea_reach_km)
+                .filter(|from| {
+                    map.distance_km(*from, target) <= state.ruleset.sea_reach_km
+                        || territory.sea_lanes.contains(from)
+                })
                 .collect()
         } else {
             Vec::new()

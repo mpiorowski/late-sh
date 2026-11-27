@@ -172,8 +172,10 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
 
     let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "strip-key-me").await;
-    let them = create_test_user(&test_db.db, "strip-key-them").await;
+    // Short names: on the test terminal the strip's one line names each
+    // player in ten cells.
+    let me = create_test_user(&test_db.db, "key-me").await;
+    let them = create_test_user(&test_db.db, "key-them").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -200,7 +202,7 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "strip-key-them v strip-key-me").await;
+    wait_for_render_contains(&mut app, "key-them v key-me").await;
 
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
@@ -218,8 +220,10 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
 
     let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "strip-close-me").await;
-    let them = create_test_user(&test_db.db, "strip-close-them").await;
+    // Short names: on the test terminal the strip's one line names each
+    // player in ten cells.
+    let me = create_test_user(&test_db.db, "shut-me").await;
+    let them = create_test_user(&test_db.db, "shut-them").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -246,7 +250,7 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
         .await
         .expect("post the open one");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "strip-close-them v strip-close-me").await;
+    wait_for_render_contains(&mut app, "shut-them v shut-me").await;
     assert!(app.lobby.glow(), "the open challenge glows");
 
     app.handle_input(b"o");
@@ -614,6 +618,237 @@ async fn enter_on_a_lounge_card_opens_the_reader() {
         app.chat.reader().map(|reader| reader.url()),
         Some(url),
         "Enter opens the story"
+    );
+}
+
+/// A session in #lounge with one hung piece's card in it: the piece is
+/// hung through the gallery service, the way the Artboard page hangs it,
+/// and the cards are re-read as the notify worker would.
+async fn app_with_a_gallery_card(
+    test_db: &late_core::test_utils::TestDb,
+    name: &str,
+    title: &str,
+) -> (
+    crate::app::state::App,
+    crate::app::artboard::gallery::svc::GalleryService,
+    late_core::models::user::User,
+    uuid::Uuid,
+) {
+    use crate::app::artboard::gallery::frame::FramedPiece;
+    use crate::app::artboard::gallery::svc::{GalleryResult, GalleryService};
+    use crate::app::chat::notifications::svc::NotificationService;
+    use crate::app::chat::svc::ChatService;
+    use late_core::models::artboard_piece::ArtboardPiece;
+
+    let me = create_test_user(&test_db.db, &format!("{name}-me")).await;
+    let artist = create_test_user(&test_db.db, &format!("{name}-artist")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let gallery = GalleryService::new(
+        test_db.db.clone(),
+        chat.clone(),
+        "http://localhost:3000".to_string(),
+    );
+    let mut canvas = dartboard_core::Canvas::with_size(12, 4);
+    canvas.set(dartboard_core::Pos { x: 0, y: 0 }, '#');
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    gallery.hang_task(
+        artist.id,
+        title.to_string(),
+        FramedPiece {
+            width: 12,
+            height: 4,
+            canvas,
+            provenance: Default::default(),
+            glyph_count: 40,
+            own_share_percent: 100,
+            credits: Vec::new(),
+            content_hash: format!("hash-{name}"),
+        },
+        tx,
+    );
+    let Some(GalleryResult::Hung(piece)) = rx.recv().await else {
+        panic!("the piece did not hang");
+    };
+    crate::test_helpers::wait_until(
+        || async {
+            ArtboardPiece::find(&client, artist.id, piece.id)
+                .await
+                .expect("piece row")
+                .is_some_and(|row| row.lounge_message_id.is_some())
+        },
+        "the piece has its card",
+    )
+    .await;
+    gallery
+        .refresh_lounge_cards()
+        .await
+        .expect("refresh lounge cards");
+
+    let world = crate::test_helpers::SessionWorld {
+        gallery_service: Some(gallery.clone()),
+        chat_service: Some(chat),
+        ..Default::default()
+    };
+    let mut app = crate::test_helpers::make_app_in_world(test_db.db.clone(), me.id, name, world);
+    app.resize(160, 40).expect("resize test terminal");
+    (app, gallery, artist, piece.id)
+}
+
+/// The card stands in for its line. While the content disclaimer is still
+/// to answer it shows no piece and Enter goes to the Artboard to ask;
+/// after that Enter opens the piece over the chat, where `v` applauds it
+/// and `o` opens it in the gallery.
+#[tokio::test]
+async fn enter_on_a_gallery_lounge_card_opens_the_piece_over_the_chat() {
+    use crate::app::artboard::gallery::state::Focus;
+    use crate::app::common::primitives::Screen;
+    use late_core::models::artboard_piece::ArtboardPiece;
+
+    let test_db = new_test_db().await;
+    let (mut app, _gallery, _artist, piece_id) =
+        app_with_a_gallery_card(&test_db, "gallery-card-flow-it", "Sunset Over Late").await;
+    let client = test_db.db.get().await.expect("db client");
+
+    wait_for_render_contains(&mut app, "Artboard content disclaimer is on").await;
+    let gated = render_plain(&mut app);
+    assert!(gated.contains("🎨 \"Sunset Over Late\""), "{gated}");
+    assert!(
+        !gated.contains("http://localhost:3000/gallery/pieces/"),
+        "the card stands in for the raw line: {gated}"
+    );
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+    assert!(app.gallery_cards.modal().is_none());
+
+    // Answered for this device: the piece that was waiting opens.
+    app.handle_input(b"A");
+    assert!(!app.artboard_disclaimer_visible());
+    let gallery_view = |app: &crate::app::state::App| {
+        app.dartboard_state.as_ref().map(|state| {
+            (
+                state.gallery().selected_piece().map(|piece| piece.id),
+                state.gallery().focus(),
+            )
+        })
+    };
+    assert_eq!(gallery_view(&app), Some((Some(piece_id), Focus::Piece)));
+
+    app.set_screen(Screen::Dashboard);
+    wait_for_render_contains(&mut app, "Enter to view").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Dashboard);
+    wait_for_render_contains(&mut app, " Artboard piece ").await;
+    wait_for_render_contains(&mut app, "v applaud").await;
+
+    // `v` is the modal's, never the page's under it.
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "Applauded. 1 applause.").await;
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(
+        ArtboardPiece::applause_count(&client, piece_id)
+            .await
+            .expect("applause count"),
+        1
+    );
+    wait_for_render_contains(&mut app, "(yours too)").await;
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "Applause withdrawn. 0 applause.").await;
+
+    app.handle_input(b"o");
+    assert!(app.gallery_cards.modal().is_none());
+    assert_eq!(app.screen, Screen::Artboard);
+    assert_eq!(gallery_view(&app), Some((Some(piece_id), Focus::Piece)));
+}
+
+/// A piece taken down while it is open over the chat closes the modal and
+/// says why, with no key pressed.
+#[tokio::test]
+async fn a_piece_taken_down_under_its_open_card_closes_the_modal() {
+    use crate::app::artboard::gallery::svc::GalleryResult;
+    use late_core::models::artboard_piece::TakeDownOutcome;
+
+    let test_db = new_test_db().await;
+    let (mut app, gallery, artist, piece_id) =
+        app_with_a_gallery_card(&test_db, "gallery-card-gone-it", "Dawn Canvas").await;
+    app.set_device_artboard_disclaimer(false);
+    wait_for_render_contains(&mut app, "Enter to view").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, " Artboard piece ").await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    gallery.take_down_task(piece_id, artist.id, tx);
+    let Some(GalleryResult::TakeDown {
+        outcome: TakeDownOutcome::TakenDown { .. },
+        ..
+    }) = rx.recv().await
+    else {
+        panic!("the piece did not come down");
+    };
+
+    gallery
+        .refresh_lounge_cards()
+        .await
+        .expect("refresh lounge cards");
+    wait_for_render_contains(&mut app, "That piece was taken down.").await;
+    assert!(app.gallery_cards.modal().is_none());
+}
+
+/// A piece taken down while the content disclaimer waits for its answer:
+/// consent lands on the Artboard without the piece.
+#[tokio::test]
+async fn a_piece_taken_down_behind_the_disclaimer_does_not_open() {
+    use crate::app::artboard::gallery::svc::GalleryResult;
+    use crate::app::common::primitives::Screen;
+    use late_core::models::artboard_piece::TakeDownOutcome;
+
+    let test_db = new_test_db().await;
+    let (mut app, gallery, artist, piece_id) =
+        app_with_a_gallery_card(&test_db, "gallery-card-gated-it", "Dusk Canvas").await;
+    wait_for_render_contains(&mut app, "Artboard content disclaimer is on").await;
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    gallery.take_down_task(piece_id, artist.id, tx);
+    let Some(GalleryResult::TakeDown {
+        outcome: TakeDownOutcome::TakenDown { .. },
+        ..
+    }) = rx.recv().await
+    else {
+        panic!("the piece did not come down");
+    };
+    gallery
+        .refresh_lounge_cards()
+        .await
+        .expect("refresh lounge cards");
+    render_plain(&mut app);
+
+    app.handle_input(b"A");
+    assert!(!app.artboard_disclaimer_visible());
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .and_then(|state| state.gallery().selected_piece())
+            .map(|piece| piece.id),
+        None
     );
 }
 

@@ -19,7 +19,7 @@ Part of Dead Channel (`../CONTEXT.md`; design in `../GAME.md`). The round and th
 | `fight/input.rs` | Keys while the road or a scene is open |
 | `fight/ui.rs` | `draw_picker` (the road) and `draw_scene` (a fight, the Old Signal's torn frame) |
 
-Every file with logic has a `*_test.rs` sibling. Detail per file: `MACHINE.md`, "Files in depth". Run the slice scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(deadchannel::fight)'"`.
+Every file with logic has a `*_test.rs` sibling. Detail per file: `MACHINE.md`, "Files in depth". Run the slice scoped: `make test ARGS="-p late-ssh --lib -E 'test(deadchannel::fight)'"`.
 
 ../GAME.md, "The road pass": the screen closing the street is where the
 day's road starts. Enter there (`Enter::Fight`) walks up to it: the road
@@ -112,7 +112,12 @@ so (`Undercity · f road · p patch · ? guide`,
   on the clubhouse, or Enter on the hub card), on every walk up to the static, and on every
   directory edge in `tick.rs` (a leaver drops the mirror there instead),
   so the strip never shows yesterday's bars and the road is today's;
-  each action answers with the stored sheet. Another device's action
+  each action answers with the stored sheet. A reload and an action
+  answer race each other and can land out of order: a reload carries
+  the session's count of answers from when it was asked
+  (`answers_seen`), and `FightSession::tick` drops one an answer has
+  overtaken and asks again, so a late reload never takes the mirror
+  back behind an action. Another device's action
   shows up on the next descent, action, or level change (the migration
   202 trigger notifies on `level`), the acceptable case (root
   CONTEXT.md, "Replica-ready, not over-engineered"): no per-card notify.
@@ -182,6 +187,39 @@ so (`Undercity · f road · p patch · ? guide`,
   240). The contract (who is met and in what order, the caps as
   indexes, the settle, the day roll dropping a hanging fight, the
   lookout the session reads, the wire lines) is `CROSSING.md`.
+- **The ring's gate.** ../GAME.md, "The arena pass": the ring
+  (`../ring/CONTEXT.md`) is a slice of its own, and the sheet still has
+  one writer, so what it needs of the sheet is three commands and the
+  gate. `Sheet::ring_gate` is the gate owed: for a runner with a mark,
+  the highest draft level (3, 6, 9, 12) at or under the level and above
+  `ring_cleared` (the column, migration 287); `None` on a first climb.
+  While one stands, `step_to`, `crossing_refused` and `answer` refuse
+  with `Refusal::RingOwed` (after a draft owed, so the card comes
+  first), spending nothing, and the road panel shows why in place of
+  the node under the cursor (`ui.rs::ring_owed_lines`, the draft
+  offer's spot) and where to go. `Command::Stake { bits }` takes a bet
+  off the hand (refused short, `Refusal::Short`, or with a glyph
+  waiting, `FightWaiting`); `Command::Collect { bits }` puts the ring's
+  pay on the hand (winnings, a refund, the purse), the machine's
+  garnish left out because most of it is the runner's own stake coming
+  back, never refused; `Command::RingFought` sets `ring_cleared` to the
+  gate that stood, clearing every gate up to the level, never refused.
+  `slay` (a mark) and `reset` (the ledge) put `ring_cleared` back to 0.
+  The ring applies them through `FightService::apply_in`: one command
+  on the locked row inside a transaction the ring owns, so a stake and
+  its bet row, a pay and its claim, a bout's end and the gate it clears
+  commit together or not at all; the ring locks its own rows first, and
+  hands each outcome to `FightService::landed` after its commit, which
+  is where the beat is counted. `act` asks the ring's rows one thing
+  (`Bout::holds`) before a `Command::Reset`, and refuses the ledge with
+  `Refusal::RingHolds` while a bet or a bout of the runner's is out. The
+  ring fights on flat numbers through `Powers::of`, the one constructor
+  that `Sheet::powers_under` also calls, so the cards' shares stay in
+  one place. `sim.rs` takes the bout as fought the day the gate stands
+  (another runner's to give, no part of the road's balance). Beats:
+  `staked`, `collected`, `ring_fought`, and `ring_owed`, the gate's
+  refusal counted apart from `refused` because there is no fallback
+  opponent and how often the road is found shut is the cost.
 - **Not yet:** bands and charge (the surge and the wipe are the
   bandless deck's two moves; a band's replace them), events and card
   drops on the road, the operators (levels climb on exp until they

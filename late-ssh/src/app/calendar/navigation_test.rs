@@ -190,6 +190,7 @@ async fn context_menus_follow_the_three_rules() {
         s.context_menu.as_ref().unwrap().items,
         vec![
             MenuAction::Open,
+            MenuAction::Duplicate,
             MenuAction::Rsvp(true),
             MenuAction::Edit,
             MenuAction::Delete
@@ -198,7 +199,11 @@ async fn context_menus_follow_the_three_rules() {
     s.open_context_menu(ClickTarget::Event(their_post.id), (0, 0));
     assert_eq!(
         s.context_menu.as_ref().unwrap().items,
-        vec![MenuAction::Open, MenuAction::Rsvp(false)],
+        vec![
+            MenuAction::Open,
+            MenuAction::Duplicate,
+            MenuAction::Rsvp(false)
+        ],
         "already in, so the menu offers out; not theirs to edit"
     );
     s.staff = true;
@@ -207,6 +212,7 @@ async fn context_menus_follow_the_three_rules() {
         s.context_menu.as_ref().unwrap().items,
         vec![
             MenuAction::Open,
+            MenuAction::Duplicate,
             MenuAction::Rsvp(false),
             MenuAction::Delete
         ],
@@ -215,7 +221,12 @@ async fn context_menus_follow_the_three_rules() {
     s.open_context_menu(ClickTarget::Event(mine.id), (0, 0));
     assert_eq!(
         s.context_menu.as_ref().unwrap().items,
-        vec![MenuAction::Open, MenuAction::Edit, MenuAction::Delete]
+        vec![
+            MenuAction::Open,
+            MenuAction::Duplicate,
+            MenuAction::Edit,
+            MenuAction::Delete
+        ]
     );
     s.open_context_menu(ClickTarget::Date(date(4)), (0, 0));
     assert_eq!(

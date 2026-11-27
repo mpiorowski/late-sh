@@ -27,7 +27,7 @@ pub struct NotificationView {
     pub room_id: Uuid,
     pub actor_username: String,
     pub room_slug: Option<String>,
-    pub message_preview: String,
+    pub message_body: String,
     /// When this mention was read, `None` while it is unread: the one signal
     /// behind [`Notification::unread_count`], the list's dot and the attention
     /// guest's rows.
@@ -75,7 +75,7 @@ impl Notification {
                 "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id,
                         COALESCE(u.username, '') AS actor_username,
                         r.slug AS room_slug,
-                        LEFT(m.body, 120) AS message_preview,
+                        m.body AS message_body,
                         n.read_at
                  FROM notifications n
                  JOIN users u ON u.id = n.actor_id
@@ -113,7 +113,7 @@ impl Notification {
                 room_id: row.get("room_id"),
                 actor_username: row.get("actor_username"),
                 room_slug: row.get("room_slug"),
-                message_preview: row.get("message_preview"),
+                message_body: row.get("message_body"),
                 read_at: row.get("read_at"),
             })
             .collect())

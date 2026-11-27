@@ -821,7 +821,7 @@ impl russh::server::Handler for ClientHandler {
                 .send(ActivityEvent::joined(user_id, user.username.clone()));
         }
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let mut session_config = build_session_config(
+        let session_config = build_session_config(
             &self.state,
             SessionBootstrapInputs {
                 user,
@@ -835,10 +835,10 @@ impl russh::server::Handler for ClientHandler {
                 key_fingerprint: self.auth_fingerprint.clone(),
                 supports_reconnect_on_drain: false,
                 reconnect_reason: None,
+                resume,
             },
         )
         .await;
-        session_config.resume = resume;
         let mut app = crate::app::state::App::new(session_config)
             .context("failed to initialize app for PTY session")?;
         // Count a resumed session only once its app is ready.

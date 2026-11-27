@@ -17,6 +17,7 @@ use futures_util::{SinkExt, StreamExt};
 use ipnet::IpNet;
 use late_core::MutexRecover;
 use late_core::models::server_ban::{ServerBan, ServerBanActivation};
+use late_core::models::user::User;
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::create_test_user;
 use late_core::tunnel_protocol::{ControlFrame, ENV_LATE_CLI_MODE};
@@ -357,6 +358,12 @@ async fn tunnel_old_cleanup_does_not_unregister_a_replacement_session() {
     );
     let (mut new, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     start_shell_and_wait_first(&mut new).await;
+    let db_client = state.db.get().await.unwrap();
+    let user = User::find_by_fingerprint(&db_client, "SHA256:smoke-fp")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(user.login_count, 1, "only the first shell counted");
     old.close(None).await.unwrap();
     drop(old);
     timeout(Duration::from_secs(5), async {

@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::chat_room::{RoomKind, RoomVisibility};
 use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
 use late_core::models::work_profile::WorkStatus;
@@ -42,6 +43,12 @@ pub(crate) struct PaperState {
 impl PaperState {
     pub(crate) fn modal_visible(&self) -> bool {
         self.modal.is_some()
+    }
+
+    /// A comeback moment's box took the paper's place after the splash
+    /// (`app/comeback`): one box at login, never two.
+    pub(crate) fn disarm_login_pop(&mut self) {
+        self.login_pop_pending = false;
     }
 
     /// Esc on the modal: closes it, and if it was still at the press or
@@ -247,7 +254,16 @@ fn heading(text: &str) -> PaperLine {
 /// rooms count "people".
 fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> PaperLine {
     let people = if elsewhere { "members" } else { "people" };
-    let joinable = elsewhere && page.kind == "topic";
+    let joinable = match page.kind {
+        RoomKind::Topic(RoomVisibility::Public) => elsewhere,
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Private)
+        | RoomKind::Dm
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => false,
+    };
     let mut spans = vec![
         PaperSpan::new(format!("#{}", page.label), PaperInk::Title),
         PaperSpan::new(
@@ -467,8 +483,17 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
             page.status == PaperStatus::Ready && !member_room_ids.contains(&page.room_id)
         })
         .collect();
-    let is_bumped = |page: &PaperRoomPage| {
-        page.kind == "topic" && !page.permanent && bumped_labels.contains(&page.label)
+    let is_bumped = |page: &PaperRoomPage| match page.kind {
+        RoomKind::Topic(RoomVisibility::Public) => {
+            !page.permanent && bumped_labels.contains(&page.label)
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Private)
+        | RoomKind::Dm
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => false,
     };
     elsewhere.sort_by_key(|page| !is_bumped(page));
     elsewhere.truncate(PAPER_ELSEWHERE_LIMIT);

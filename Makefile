@@ -24,18 +24,15 @@ ENV_TEMPLATE = .env.dev
 
 CHECK_PACKAGES = -p late-bastion -p late-cli -p late-core -p late-ssh -p late-web -p late-webview -p late-zork
 # `env -u MAKEFLAGS -u MFLAGS`: make exports command-line variables (the
-# `ARGS="..."` in `make test-llm ARGS=...`) through MAKEFLAGS, cargo forwards
+# `ARGS="..."` in `make test ARGS=...`) through MAKEFLAGS, cargo forwards
 # it to build scripts, and tikv-jemalloc-sys's nested make then parses ARGS'
 # words as targets and dies on a fresh build. Cargo gives build scripts its
 # own jobserver, so dropping make's costs no parallelism.
-# Incremental, since a check or a test-llm run is usually a rerun after a
+# Incremental, since a check or a test run is usually a rerun after a
 # small edit: a warm late-ssh test rebuild after a one-line edit takes about
 # 25s and 5G, a cold one about 70s and 7.5G. CI runs cargo itself, without
 # incremental.
 CHECK_CARGO_ENV = env -u MAKEFLAGS -u MFLAGS CARGO_INCREMENTAL=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-# Cap parallel compile/link jobs locally; 16-way builds spike past RAM on a
-# swapless machine and freeze the desktop. CI overrides via CHECK_BUILD_JOBS.
-CHECK_BUILD_JOBS ?= 8
 CHECK_INSTANCE ?= late-check
 CHECK_PG_HOST_PORT ?= 55433
 CHECK_PG_USER ?= postgres
@@ -47,6 +44,7 @@ CHECK_DB_START = $(CHECK_DB_RESET); $(CHECK_COMPOSE) up -d --wait postgres
 
 # Isolated bastion qualification; never loads .env/.env.local. The database and
 # packaged stack are disposable, while evidence is retained under target/.
+CHECK_BUILD_JOBS ?= 8
 BASTION_CHECK_INSTANCE ?= late-bastion-check
 BASTION_CHECK_PG_HOST_PORT ?= 55437
 BASTION_CHECK_COMPOSE = CHECK_PG_HOST_PORT=$(BASTION_CHECK_PG_HOST_PORT) docker compose --env-file /dev/null -p $(BASTION_CHECK_INSTANCE) -f docker-compose.check.yml
@@ -118,43 +116,23 @@ check-db:
 check-db-down:
 	$(CHECK_DB_STOP)
 
-# Targeted, memory-capped test run for LLM agents.
-# Usage: make test-llm ARGS="-p late-ssh --lib -E 'test(chat)'"
+# A targeted test run: the check database, then nextest.
+# Usage: make test ARGS="-p late-ssh --lib -E 'test(chat)'"
 # (`--lib` on a crate with a lib and a main: without it nextest builds the lib
 # a second time for the binary's empty test target, doubling the heaviest
 # compile.)
 # Each `-p` set builds its own late-ssh test binary with its own incremental
 # cache, so a set the machine has not built yet starts cold. The cold peak is
-# rustc's frontend holding the whole late-ssh crate: 4 build jobs instead of 8
-# saves under 0.5G of it.
-# The run is a scope in background.slice, whose CPU weight (30, to app.slice's
-# 100) lets the browser, audio and other sessions win the CPU. Its memory cap
-# follows what is free at launch: MemAvailable less TEST_LLM_HEADROOM_G, never
-# above TEST_LLM_MEM_MAX_G. A fixed cap larger than what is free never trips
-# on a loaded swapless machine, and the global OOM killer takes the browser
-# instead. MemoryMax kills inside the scope, not the desktop, and systemd then
-# stops the whole scope (exit 143, which test-llm names). There is no
-# MemoryHigh: with no swap a build over it cannot be reclaimed, only
-# throttled, and it stalls for half an hour instead of failing. Under
-# TEST_LLM_MEM_MIN_G the run refuses to start, since a cold build needs it.
-TEST_LLM_MEM_MAX_G ?= 12
-TEST_LLM_HEADROOM_G ?= 3
-TEST_LLM_MEM_MIN_G ?= 9
-.PHONY: test-llm
-test-llm: .env
+# rustc's frontend holding the whole late-ssh crate, so fewer build jobs
+# barely lower it.
+# Nothing here limits cpu or memory: a ceiling on a build is the machine's
+# to set, not this Makefile's.
+.PHONY: test
+test: .env
 	@set -e; \
-	avail_g=$$(awk '/^MemAvailable:/ {print int($$2 / 1048576)}' /proc/meminfo); \
-	max_g=$$((avail_g - $(TEST_LLM_HEADROOM_G))); \
-	if [ $$max_g -gt $(TEST_LLM_MEM_MAX_G) ]; then max_g=$(TEST_LLM_MEM_MAX_G); fi; \
-	if [ $$max_g -lt $(TEST_LLM_MEM_MIN_G) ]; then \
-		echo "test-llm: $${avail_g}G free, needs $$(($(TEST_LLM_MEM_MIN_G) + $(TEST_LLM_HEADROOM_G)))G; free some memory and retry" >&2; \
-		exit 1; \
-	fi; \
-	echo "test-llm: memory cap $${max_g}G ($${avail_g}G free)"; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q --slice=background.slice -p MemoryMax=$${max_g}G cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS) \
-		|| { status=$$?; case $$status in 137|143) echo "test-llm: killed at the $${max_g}G memory cap; free some memory and retry" >&2;; esac; exit $$status; }
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --no-fail-fast --failure-output final $(ARGS)
 
 # The Lateania battle arena: every balance contract and both report parts
 # (late-ssh/target/lateania-arena*.md). Thousands of real engine fights, so
@@ -162,7 +140,7 @@ test-llm: .env
 # change. Serial (-j1): the report tests each need most of a CPU-minute budget.
 .PHONY: arena
 arena:
-	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all -j1 -E 'test(lateania::svc::arena)'"
+	$(MAKE) test ARGS="-p late-ssh --lib --run-ignored all -j1 -E 'test(lateania::svc::arena)'"
 
 # The deadchannel balance arena (late-ssh/src/app/deadchannel/fight/BALANCE.md):
 # every contract plus the report, every table for the live rules, written to
@@ -170,21 +148,21 @@ arena:
 # rules change.
 .PHONY: deadchannel-arena
 deadchannel-arena:
-	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep) and not test(arena_crystals)'"
+	$(MAKE) test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep) and not test(arena_crystals)'"
 
 # The balance sweep: one reading per candidate set of rules in
 # arena_test.rs::SWEEP, side by side, written to
 # late-ssh/target/deadchannel-sweep.md. Edit SWEEP, run this, read the table.
 .PHONY: deadchannel-sweep
 deadchannel-sweep:
-	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_sweep)'"
+	$(MAKE) test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_sweep)'"
 
 # The crystal question (fight/BALANCE.md, "What a crystal buys"): the crystal
 # players side by side under the live rules and with pours priced in bits,
 # written to late-ssh/target/deadchannel-crystals.md.
 .PHONY: deadchannel-crystals
 deadchannel-crystals:
-	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_crystals)'"
+	$(MAKE) test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_crystals)'"
 
 # Whole simulated runs, start to finish: one seeded climb a player from a
 # fresh row to the first mark, every shop visit, step, and turn, written to
@@ -192,24 +170,19 @@ deadchannel-crystals:
 # rules is like.
 .PHONY: deadchannel-run
 deadchannel-run:
-	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_run)'"
+	$(MAKE) test ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_run)'"
 
-# Full pre-merge sweep, and the only place the otel feature is compiled:
-# clippy lints the whole workspace WITH --features otel, so the real
-# telemetry/metrics code (the config prod ships) is compiled and linted here.
-# The tests run without it.
+# Full pre-merge sweep: compile, lint, and test the workspace with --features
+# otel so the real telemetry/metrics code (the config prod ships) is covered.
 # CI deliberately skips otel to stay cheap (see .github/workflows/ci.yml), so
 # this is where otel breakage is caught before release. fmt stays scoped to
 # first-party packages: `cargo fmt --all` also reaches vendored path deps like
 # vendor/irc-proto, whose upstream style is not rustfmt-clean here.
 .PHONY: check
-check: .env
-	@set -e; \
-	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
-	$(CHECK_DB_START); \
-	cargo fmt $(CHECK_PACKAGES) -- --check; \
-	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel --no-fail-fast --failure-output final
+check:
+	cargo fmt $(CHECK_PACKAGES) -- --check
+	$(CHECK_CARGO_ENV) cargo clippy --workspace --all-targets --features otel -- -D warnings
+	$(MAKE) test ARGS="--workspace --all-targets --features otel"
 
 # late-ssh runs as pods behind an edge, the way prod runs it (scripts/fleet.sh,
 # docker-compose.yml). `make start` brings the stack up on the working tree and

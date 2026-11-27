@@ -89,7 +89,10 @@ trade by design; here they are the strength, and size is the score.
     0.5 (walls 3 hold twice a bare territory, walls 5 three times).
   - Front: the `walls_eff` of the taker's land bordering `T`, plus
     `sea_front` (0.5) × the `walls_eff` of their coastal holdings within
-    `sea_reach_km` (3000) of a coastal `T`. Each holding counts once, by land
+    `sea_reach_km` (3000) of a coastal `T`, or at the far end of one of
+    `T`'s sea lanes whatever the distance (`Territory::sea_lanes`, `MAPS.md`:
+    the fewest crossings that join every landmass, so no island or continent
+    is ever out of everyone's reach). Each holding counts once, by land
     when it borders. No front, no order: there is no long-range strike and
     no march past rivals in this engine (`long_range_strikes` is not read),
     while `landlocked_sea_attack` still decides who may launch from an
@@ -221,7 +224,7 @@ trade by design; here they are the strength, and size is the score.
   nobody could reach, and a settler alone on one held a quarter of the
   world), `join_max_claimed`, the protection days and `min_active_days_to_win`
   (above). Rerun it after moving anything:
-  `REALM_SIM_SEEDS=8 REALM_SIM_OUT=/tmp/realm-sim.csv make test-llm
+  `REALM_SIM_SEEDS=8 REALM_SIM_OUT=/tmp/realm-sim.csv make test
   ARGS="-p late-ssh --lib -E 'test(realm_campaign_sim)' --run-ignored
   ignored-only --no-capture"`.
 

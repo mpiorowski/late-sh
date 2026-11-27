@@ -56,7 +56,7 @@ fn current_item(video_id: &str) -> QueueItemView {
     }
 }
 
-fn render(current: Option<QueueItemView>) -> String {
+fn render(current: Option<QueueItemView>, nudge: Option<&str>) -> String {
     use ratatui::{Terminal, backend::TestBackend};
 
     let snapshot = QueueSnapshot {
@@ -70,7 +70,20 @@ fn render(current: Option<QueueItemView>) -> String {
     state.open(true);
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
     terminal
-        .draw(|frame| draw(frame, frame.area(), &state, &snapshot, &[], true, false))
+        .draw(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                &state,
+                &BoothView {
+                    snapshot: &snapshot,
+                    favorites: &[],
+                    submit_enabled: true,
+                    is_staff: false,
+                    nudge,
+                },
+            )
+        })
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
@@ -87,7 +100,7 @@ fn render(current: Option<QueueItemView>) -> String {
 
 #[test]
 fn now_playing_shows_the_watch_link_under_the_track_and_the_footer_names_copy() {
-    let screen = render(Some(current_item("aaaaaaaaaaa")));
+    let screen = render(Some(current_item("aaaaaaaaaaa")), None);
 
     let track_row = screen
         .lines()
@@ -105,7 +118,7 @@ fn now_playing_shows_the_watch_link_under_the_track_and_the_footer_names_copy() 
 
 #[test]
 fn fallback_stream_has_no_link_row() {
-    let screen = render(None);
+    let screen = render(None, None);
 
     assert!(screen.contains("fallback stream · YouTube"), "{screen}");
     assert!(!screen.contains("youtube.com/watch"), "{screen}");
@@ -165,10 +178,13 @@ fn history_list_shows_favorites_on_top_once_each_and_the_footer_names_f() {
                 frame,
                 frame.area(),
                 &state,
-                &snapshot,
-                &favorites,
-                true,
-                false,
+                &BoothView {
+                    snapshot: &snapshot,
+                    favorites: &favorites,
+                    submit_enabled: true,
+                    is_staff: false,
+                    nudge: None,
+                },
             )
         })
         .expect("draw");
@@ -194,4 +210,21 @@ fn history_list_shows_favorites_on_top_once_each_and_the_footer_names_f() {
         "{screen}"
     );
     assert!(screen.contains("f favorite"), "{screen}");
+}
+
+#[test]
+fn a_plain_ssh_session_reads_the_nudge_above_the_footer() {
+    let screen = render(
+        None,
+        Some("Plain ssh plays nothing: install late (? Pair) or open late.sh/listen"),
+    );
+    let lines: Vec<&str> = screen.lines().collect();
+    let nudge_at = lines
+        .iter()
+        .position(|line| line.contains("Plain ssh plays nothing"))
+        .expect("the nudge row");
+    assert!(lines[nudge_at + 1].contains("Tab focus"), "{screen}");
+
+    let screen = render(None, None);
+    assert!(!screen.contains("Plain ssh"), "{screen}");
 }

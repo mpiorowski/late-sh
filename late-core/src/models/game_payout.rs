@@ -1,5 +1,5 @@
 use anyhow::{Result, ensure};
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio_postgres::Client;
@@ -25,6 +25,15 @@ pub struct GamePayoutClaim {
 pub struct GamePayoutSource {
     pub game: String,
     pub payout_kind: String,
+}
+
+/// The newest cooldown claim of one milestone for one account
+/// ([`GamePayout::last_cooldown_claims`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LastCooldownClaim {
+    pub game: String,
+    pub payout_kind: String,
+    pub paid_at: DateTime<Utc>,
 }
 
 pub struct GamePayout;
@@ -102,6 +111,34 @@ impl GamePayout {
                         payout_kind: row.get("payout_kind"),
                     },
                 )
+            })
+            .collect())
+    }
+
+    /// When each cooldown-gated milestone last paid `user_id`: the newest
+    /// `period_kind = 'cooldown'` claim per game and payout kind. Those rows
+    /// are exactly what the `Cooldown` gate reads, so the latest one plus the
+    /// template's window is when the next payout can land.
+    pub async fn last_cooldown_claims(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<Vec<LastCooldownClaim>> {
+        let rows = client
+            .query(
+                "SELECT game, payout_kind, max(created) AS paid_at
+                 FROM game_payout_claims
+                 WHERE user_id = $1
+                   AND period_kind = $2
+                 GROUP BY game, payout_kind",
+                &[&user_id, &GAME_PAYOUT_PERIOD_COOLDOWN],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| LastCooldownClaim {
+                game: row.get("game"),
+                payout_kind: row.get("payout_kind"),
+                paid_at: row.get("paid_at"),
             })
             .collect())
     }

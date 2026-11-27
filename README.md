@@ -22,6 +22,7 @@ Read the details in [LICENSE](LICENSE), the plain-English policy in [LICENSING.m
 
 - SSH TUI with dashboard, chat, profile, news, and arcade screens
 - Mouse controls on Profiles (screen 5): click people, jobs, links, and form controls; wheel scrolls the hovered pane
+- Top Chat on Leaderboards (screen 6): monthly public chat counts, longest chat streaks, and News posts, all resetting in UTC
 - The events board on `7`: anyone posts an event, everyone sees it, `i` says I'm in; your own events sit beside it, private
 - Real-time global chat and shared activity feed
 - Audio streaming via Icecast/Liquidsoap, played by the paired CLI or the public `/listen` page
@@ -183,8 +184,9 @@ This runs `cargo fmt --check`, then `cargo clippy` and `cargo nextest` across th
 whole workspace with `--features otel`. It is the full pre-merge sweep and the
 only place the otel (telemetry) build is exercised, since CI skips otel to stay
 fast; otel breakage is caught here or at the release build, never in prod.
-The local check starts a dedicated Compose Postgres project (`late-check`) on
-port `55433` and points DB-backed tests at it via `TEST_DATABASE_URL`.
+After linting, the check uses `make test` to start a dedicated Compose Postgres
+project (`late-check`) on port `55433` and points DB-backed tests at it via
+`TEST_DATABASE_URL`.
 Override `CHECK_INSTANCE` or `CHECK_PG_HOST_PORT` if you need a parallel check
 database.
 

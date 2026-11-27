@@ -9,7 +9,6 @@ use crate::app::common::primitives::Banner;
 
 use super::{
     catalog::{CompanionSection, ShopCategory},
-    entitlements::ShopEntitlements,
     svc::{
         ActiveChatRoomEffect, ActiveRental, ActiveUsernameEffect, ShopCatalogItem, ShopEvent,
         ShopService, ShopSnapshot,
@@ -18,6 +17,7 @@ use super::{
 use late_core::models::{
     aquarium_shield::AquariumShield,
     bonsai_decay_protection::BonsaiDecayProtection,
+    chat_room::{RoomKind, RoomVisibility},
     marketplace::{CHAT_CONSUMABLE_ITEM_KIND, TankStockKind},
     rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
@@ -42,8 +42,7 @@ pub(crate) struct ShopState {
 pub(crate) struct RoomEffectTarget {
     pub room_id: Uuid,
     pub label: String,
-    pub kind: String,
-    pub visibility: String,
+    pub kind: RoomKind,
     pub permanent: bool,
     pub slug: Option<String>,
 }
@@ -162,14 +161,15 @@ impl ShopState {
 
         let mut banner = None;
         while let Ok(event) = self.event_rx.try_recv() {
-            match event {
-                ShopEvent::ActionCompleted { user_id, message } if user_id == self.user_id => {
-                    banner = Some(Banner::success(&message));
+            // The channel carries every buyer's events; only ours banner.
+            let (user_id, outcome) = match event {
+                ShopEvent::ActionCompleted { user_id, message } => {
+                    (user_id, Banner::success(&message))
                 }
-                ShopEvent::ActionFailed { user_id, message } if user_id == self.user_id => {
-                    banner = Some(Banner::error(&message));
-                }
-                _ => {}
+                ShopEvent::ActionFailed { user_id, message } => (user_id, Banner::error(&message)),
+            };
+            if user_id == self.user_id {
+                banner = Some(outcome);
             }
         }
         ShopTick {
@@ -184,10 +184,6 @@ impl ShopState {
 
     pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
-    }
-
-    pub(crate) fn entitlements(&self) -> &ShopEntitlements {
-        &self.snapshot.entitlements
     }
 
     pub(crate) fn all_items(&self) -> &[ShopCatalogItem] {
@@ -465,7 +461,8 @@ impl ShopState {
             return Some(Banner::success("Write your title"));
         }
         // Rentals are bought outright, every time: there is no picker and no
-        // equip step, and a rebuy replaces the live row and resets its clock.
+        // equip step; a rebuy of the same look adds to the live row, any
+        // other look replaces it.
         if item.is_badge_rental() || item.is_title_rental() {
             self.service
                 .purchase_item_task(self.user_id, item.sku, None, None);
@@ -660,10 +657,18 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
 
 impl RoomEffectTarget {
     fn can_bump(&self) -> bool {
-        self.kind == "topic"
-            && self.visibility == "public"
-            && !self.permanent
-            && self.slug.as_deref().is_some_and(|slug| !slug.is_empty())
+        match self.kind {
+            RoomKind::Topic(RoomVisibility::Public) => {
+                !self.permanent && self.slug.as_deref().is_some_and(|slug| !slug.is_empty())
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => false,
+        }
     }
 }
 

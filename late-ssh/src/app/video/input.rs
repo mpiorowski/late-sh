@@ -2,6 +2,10 @@
 //! a minute with Shift), restart and mute to the paired CLI and toggles
 //! its size; the setup box only copies and closes. Everything else, mouse
 //! included, is swallowed, so nothing reaches the page under the video.
+//! A live stream is only here while full screen (inline in its room it is
+//! no modal, and this module never sees a key): `f`, Esc and `[x]` send it
+//! back, still playing. The one thing an inline stream answers is a click
+//! on its picture (`click_inline_stream`).
 
 use ratatui::layout::Position;
 
@@ -29,10 +33,12 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
     match event {
         ParsedInput::Mouse(mouse) => {
             if app.interaction_mode.mouse_enabled() && clicks_close(*mouse, close) {
-                svc::close(app);
+                svc::dismiss(app);
             }
         }
-        ParsedInput::Byte(0x1B) => svc::close(app),
+        // A full-screen live stream goes back to its room; anything else
+        // closes.
+        ParsedInput::Byte(0x1B) => svc::dismiss(app),
         ParsedInput::Byte(b'c') | ParsedInput::Char('c') => copy_link(app),
         ParsedInput::Byte(b' ') | ParsedInput::Char(' ') if player => {
             svc::send_control(app, VideoControl::TogglePause);
@@ -66,6 +72,20 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         }
         _ => {}
     }
+}
+
+/// A click at 0-based `x`, `y` on a stream playing inline in its room
+/// takes it full screen (`f` or Esc there comes back). True when the click
+/// was on the picture.
+pub(crate) fn click_inline_stream(app: &mut App, x: u16, y: u16) -> bool {
+    let on_picture = app
+        .video
+        .inline_slot()
+        .is_some_and(|slot| slot.body().contains(Position::new(x, y)));
+    if on_picture && let Some(player) = app.video.player_mut() {
+        player.toggle_size();
+    }
+    on_picture
 }
 
 fn copy_link(app: &mut App) {

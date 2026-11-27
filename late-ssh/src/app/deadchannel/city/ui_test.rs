@@ -7,10 +7,32 @@ use crate::app::deadchannel::fight::state::{Lookout, Sheet};
 use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::poster::session::Bench;
 use crate::app::deadchannel::poster::ui as poster_ui;
+use crate::app::deadchannel::ring::svc::Board as RingBoard;
+use crate::app::deadchannel::ring::ui as ring_ui;
 use crate::app::deadchannel::street::state::StreetRunner;
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
+/// The ring with nobody at it, for every frame that is not about it.
+fn no_ring(board: &RingBoard) -> ring_ui::RingView<'_> {
+    ring_ui::RingView {
+        board,
+        picks: None,
+        cursor: 0,
+        corner: late_core::models::deadchannel_bout::Side::Caller,
+        roster: Vec::new(),
+        me: Uuid::nil(),
+        sheet: None,
+        now: chrono::Utc::now(),
+        word: None,
+    }
+}
+
 fn render(state: &State, width: u16, height: u16) -> String {
+    render_ringed(state, width, height, no_ring(&RingBoard::default()))
+}
+
+/// [`render`] with `ring` as the session's copy of the ring.
+fn render_ringed(state: &State, width: u16, height: u16, ring: ring_ui::RingView<'_>) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
@@ -40,6 +62,7 @@ fn render(state: &State, width: u16, height: u16) -> String {
                         writing: None,
                         word: None,
                     },
+                    ring,
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -72,6 +95,77 @@ fn the_runner_and_the_wire_popover_render_at_the_spawn() {
         screen.contains("back up the wire"),
         "the popover verb\n{screen}"
     );
+}
+
+#[test]
+fn the_street_shows_a_call_to_the_runner_with_the_key_that_steps_in() {
+    use chrono::{Duration, Utc};
+    use late_core::models::deadchannel_bout::Bout;
+
+    let me = Uuid::now_v7();
+    let now = Utc::now();
+    let board = RingBoard {
+        calls: vec![Bout {
+            id: Uuid::now_v7(),
+            day: now.date_naive(),
+            caller_user_id: Uuid::now_v7(),
+            called_user_id: me,
+            caller_username: "tom".to_string(),
+            called_username: "mira".to_string(),
+            caller_deck: None,
+            called_deck: None,
+            called_at: now,
+            expires_at: now + Duration::seconds(600),
+            accepted_at: None,
+            bell_at: None,
+            deadline_at: None,
+            state: None,
+            pool_caller: 0,
+            pool_called: 0,
+            ended_at: None,
+            outcome: None,
+            caller_settled_at: None,
+            called_settled_at: None,
+        }],
+        live: None,
+        records: HashMap::new(),
+    };
+    let ringed = |state: &State| {
+        render_ringed(
+            state,
+            100,
+            30,
+            ring_ui::RingView {
+                me,
+                now,
+                ..no_ring(&board)
+            },
+        )
+    };
+
+    // On the street: the news and the key, in the ring's box, and the
+    // runner is still where they stood.
+    let state = State::new();
+    let screen = ringed(&state);
+    assert!(screen.contains("the ring"), "the notice's title\n{screen}");
+    assert!(
+        screen.contains("tom calls you to the ring. 10:00 to answer."),
+        "{screen}"
+    );
+    assert!(screen.contains("[r] answer"), "{screen}");
+    assert!(
+        screen.contains("back up the wire"),
+        "the popover stays\n{screen}"
+    );
+
+    // A shop's panel is its own business: the notice waits under it.
+    let mut state = State::new();
+    state.open_panel(Landmark::Board);
+    assert!(!ringed(&state).contains("[r] answer"));
+
+    // A ring with nothing for this runner says nothing.
+    let screen = render(&State::new(), 100, 30);
+    assert!(!screen.contains("[r] "), "{screen}");
 }
 
 #[test]
@@ -132,6 +226,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -220,6 +315,7 @@ fn render_panel(
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -603,6 +699,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                             writing: None,
                             word: None,
                         },
+                        ring: no_ring(&RingBoard::default()),
                         guide: &GuideState::new(),
                         own_user_id: Uuid::nil(),
                         street: &StreetView::new(),
@@ -780,6 +877,7 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -957,6 +1055,7 @@ fn other_runners_stand_on_the_street_with_their_names_and_you_are_not_twice() {
                         writing: None,
                         word: None,
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: mira,
                     street: &street,
@@ -1023,6 +1122,7 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
         let names = HashMap::new();
         let usernames = UsernameLookup::new(&names, None);
         let looks = HashMap::new();
+        let ring_board = RingBoard::default();
         let view = CityView {
             state: &state,
             own_username: "mira",
@@ -1044,6 +1144,7 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
                 writing: None,
                 word: None,
             },
+            ring: no_ring(&ring_board),
             guide: &guide,
             own_user_id: Uuid::nil(),
             street: &street,
@@ -1093,6 +1194,7 @@ fn render_prints(width: u16, height: u16, state: &State, bench: &Bench, word: &s
                         writing: None,
                         word: Some(word),
                     },
+                    ring: no_ring(&RingBoard::default()),
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),

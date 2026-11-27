@@ -2,14 +2,16 @@ use anyhow::Context;
 
 /// Runtime configuration for the standalone dopewars host, read from the
 /// environment. Mirrors the nethack host's config minus the per-player save
-/// knobs dopewars doesn't have: there is no `-u` playname and no per-player
-/// `HOME`, just the one shared high-score file.
+/// knobs dopewars doesn't have: no save slot, just the run log on the PVC. The
+/// playname arrives per connection (the SSH username), not from config.
 pub(crate) struct Config {
     /// Path to the dopewars binary.
     pub(crate) bin: String,
-    /// The single, shared high-score file passed to every child as `-f`. Lives
-    /// on the host's PVC so the leaderboard survives pod restarts and is shared
-    /// across all players (the dopewars analog of nethack's shared playground).
+    /// Names where the run log lives: `<score_file>.runs.log`, on the host's
+    /// PVC so the leaderboard's history survives pod restarts. Nothing writes
+    /// the file itself: each game session plays on its own table in its
+    /// scratch `HOME` (`scorelog`). The name keeps the run log's path, and so
+    /// the ingest cursor, stable on the deployed volume.
     pub(crate) score_file: String,
     /// Shared secret. The single authorized client key is derived from this; it
     /// must match late-ssh's `LATE_DOPEWARS_SECRET`.

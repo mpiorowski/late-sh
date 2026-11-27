@@ -73,7 +73,7 @@ required dimensions, and available space. Existing thresholds include:
 | Traffic | 70×20, checked inside its own frame |
 | Games Hub | 60×6 |
 | Arcade Lobby | 50×10 |
-| Leaderboards | 48×8 |
+| Leaderboards | 48×9 |
 | Rubik's Cube | 42×18 |
 | Rice | 40×12 |
 | Green Dragon | 30×10 |
@@ -212,10 +212,12 @@ use brighter text. This avoids a separate key badge competing with the label.
 Toolbar controls use the calendar canvas background.
 See [calendar toolbar](late-ssh/src/app/calendar/toolbar.rs).
 
-Calendar uses a subtle today background where the day has a paintable canvas,
-with stronger emphasis reserved for the selected event. Terminal-owned
-backgrounds are preserved. Today-date emphasis does not use underlining, which
-can render poorly in terminals.
+Calendar uses a subtle background on the selected date where the day has a
+paintable canvas, with stronger emphasis reserved for the selected event.
+Terminal-owned backgrounds are preserved. Today is marked by a heavy outline
+around its cell (heavy side borders in the compact grid) and an underlined day
+number. The outline carries the emphasis on its own, so today still reads in a
+terminal that draws underlining poorly.
 See [calendar rendering](late-ssh/src/app/calendar/ui.rs).
 
 **Suggested:** consider these treatments for similar controls elsewhere, and
@@ -243,9 +245,9 @@ established game identities can legitimately use their own colors; their
 legibility against UI backgrounds is a separate concern.
 
 **Rendering contract:** theme state is thread-local. The render path installs
-the reader's theme and brightness adjustment before drawing. Background work
-should carry data or semantic ink roles rather than resolve and cache
-reader-specific theme colors on an unrelated worker thread.
+the reader's theme, brightness adjustment, and reported terminal colors before
+drawing. Background work should carry data or semantic ink roles rather than
+resolve and cache reader-specific theme colors on an unrelated worker thread.
 See [render initialization](late-ssh/src/app/render.rs).
 
 ### 5.2 Nominal palette contrast — observed snapshot
@@ -268,8 +270,10 @@ pair, or terminal configuration, and are not a claim of accessibility compliance
 `theme::selection_style()` uses `BG_SELECTION` on a paintable canvas. For a
 `Color::Reset` canvas, it sets foreground and background to Reset and adds
 `REVERSED`, allowing the terminal's own foreground/background pair to provide
-the selection. Reset inherits terminal defaults, which may be opaque or
-transparent.
+the selection; when the terminal has reported a light profile (OSC 10/11), it
+fills with the reported background moved toward the reported foreground
+instead (see [THEME.md](THEME.md)). Reset inherits terminal defaults, which
+may be opaque or transparent.
 
 A page surface (a screen's body, a game board, a keyboard strip) should leave
 its background `Color::Reset` rather than paint `BG_CANVAS()`. "Sync terminal
@@ -523,7 +527,7 @@ References: [Banner and drawing](late-ssh/src/app/common/primitives.rs),
 
 | Component | Current split behavior | Reference |
 | :--- | :--- | :--- |
-| Leaderboards | 25-column rail including divider; split retained down to its 48×8 area minimum | [Leaderboards](late-ssh/src/app/leaderboard/ui.rs) |
+| Leaderboards | 25-column rail including divider; 48×9 page minimum. Top Chat's 2×2 detail grid needs 25×9 cells; its size message retains the rail. All boards have a rule above the controls footer. | [Leaderboards](late-ssh/src/app/leaderboard/ui.rs) |
 | Games Hub | 19-column sidebar including rule; 60×6 area minimum | [Games](late-ssh/src/app/door/hub/ui.rs) |
 | Artboard | 21-column allocation; visibility follows editing/focus state | [Artboard](late-ssh/src/app/artboard/ui.rs) |
 | Artboard gallery | Preview omitted below 56 pane columns; listing requires 24×6 | [Gallery](late-ssh/src/app/artboard/gallery/ui.rs) |

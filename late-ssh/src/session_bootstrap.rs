@@ -30,6 +30,7 @@ use uuid::Uuid;
 use crate::app::activity::event::ActivityEvent;
 use crate::app::artboard::svc::ArtboardSnapshotService;
 use crate::app::common::theme;
+use crate::app::handoff::state::ResumePoint;
 use crate::app::state::SessionConfig;
 use crate::authz::Permissions;
 use crate::session::SessionMessage;
@@ -58,6 +59,8 @@ pub struct SessionBootstrapInputs {
     /// closing with TUNNEL_CLOSE_RECONNECT_REQUESTED.
     pub supports_reconnect_on_drain: bool,
     pub reconnect_reason: Option<u16>,
+    /// Where a CLI handoff left off, if it moved the session to this backend.
+    pub resume: Option<ResumePoint>,
     /// Fingerprint of the SSH key this session authenticated with, for
     /// per-device settings. `None` for sessions without a key of their own.
     pub key_fingerprint: Option<String>,
@@ -398,10 +401,24 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         activity_feed_rx,
         supports_reconnect_on_drain,
         reconnect_reason,
+        resume,
         key_fingerprint,
     } = inputs;
 
     let user_id = user.id;
+    // A handoff or bastion redial continues a session that already logged in.
+    if resume.is_none() && reconnect_reason.is_none() {
+        match state.db.get().await {
+            Ok(client) => {
+                if let Err(e) = User::note_login(&client, user_id).await {
+                    tracing::warn!(error = ?e, %user_id, "failed to count login");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, %user_id, "failed to get db client to count login");
+            }
+        }
+    }
     let permissions =
         Permissions::new(user.is_admin || state.config.force_admin, user.is_moderator);
     let ArcadeSessionPreloads {
@@ -454,7 +471,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             0
         }
     };
-    let initial_pet = match state.pet_service.ensure_pet(user_id).await {
+    let initial_pet = match state.pet_service.bootstrap(user_id).await {
         Ok(pet) => Some(pet),
         Err(e) => {
             tracing::warn!(error = ?e, "failed to load/create pet companion");
@@ -596,6 +613,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         poster_service: crate::app::deadchannel::poster::svc::PosterService::new(state.db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(state.db.clone()),
         lounge_service: state.lounge_service.clone(),
+        ring_service: state.ring_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),
@@ -701,6 +719,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
         leaderboard_rx: Some(state.leaderboard_service.subscribe()),
         is_new_user,
+        comeback_mark: late_core::models::user::extract_comeback_mark(&user.settings),
         landing_page: late_core::models::user::extract_landing_page(&user.settings),
         paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
@@ -713,6 +732,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         supports_reconnect_on_drain,
         reconnect_reason,
         handoff_idle: state.config.handoff_idle,
-        resume: None,
+        resume,
     }
 }

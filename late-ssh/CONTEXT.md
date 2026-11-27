@@ -32,6 +32,7 @@ late-ssh/src/
     state.rs input.rs tick.rs render.rs   root glue: hold domain state, delegate
     terminal_backend.rs                   GlyphIsolatingBackend
     activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ pot/ ...
+    comeback/                             the box a newcomer's return day owes, three in all (own CONTEXT.md)
 ```
 
 Root glue rule: a root file holds a domain's state and delegates to it. The
@@ -79,8 +80,10 @@ sequenceDiagram
   `ClientHandler`, and taken into `SessionConfig` in `pty_request`. The login
   event is published in `pty_request`, the first point that knows whether
   the session's CLI moved it here, off a draining pod or on a quit-modal
-  restart (`LATE_RESUME`); a moved session publishes none. Creating the receiver after the publish misses the user's
-  own login event.
+  restart (`LATE_RESUME`). A fresh direct SSH session publishes the event
+  after subscribing, so it receives its own join. The shared shell bootstrap
+  counts fresh logins from direct SSH and the bastion via `User::note_login`.
+  CLI handoffs and bastion redials keep the original login count.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
 - SSH compression is pinned to `NONE`: a client that negotiates zlib drops
@@ -221,6 +224,20 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
   input parser consumes the replies. Kitty-family wins over iTerm2-family wins
   over Sixel; DA1 attribute 4 only fills in Sixel when nothing else was found.
   `TERM` of tmux disables raster previews entirely (no passthrough).
+- **Terminal colors.** The same setup asks for the default foreground and
+  background (`OSC 10;?`, `OSC 11;?`, `app/common/terminal_colors.rs`) ahead
+  of any OSC 11 the render loop writes, and turns on DEC mode 2031, whose
+  `CSI ? 997 ; Ps n` says the terminal switched palettes. The session asks
+  again on that notice and after every OSC 111 reset (while synced, an answer
+  was the theme's canvas, so the held background is dropped), one query a
+  frame however many notices arrive, and always behind the reset.
+  `App::terminal_colors` (`terminal_colors::TerminalColors`) reaches
+  the theme through `theme::set_terminal_colors` before each draw; only the
+  selection fill of a Reset-canvas palette on a light profile reads them
+  (`THEME.md`). Unanswered queries cost nothing: the selection stays reverse
+  video. The shared `RESET_MODES` turns 2031 off at alt-screen teardown and
+  when the bastion restores the terminal after a lost backend. The CLI also
+  disables it at session end via `SESSION_MODES_OFF`.
 - **Rasters.** Chat rows always render the RGB block fallback; native image
   data is fetched lazily for the image modal and opt-in producers (none today).
   Kitty ids live in `0x4C000000..0x4CFFFFFF` with a dedicated z-index; an image
@@ -254,6 +271,12 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
 - `Ctrl+R` (and `/redraw`) is the manual full repaint.
 
 ## 6. Input parsing
+
+`App::handle_input` first takes out the terminal's complete color reports
+(OSC 10/11 replies, DEC 2031 notices; `terminal_colors::strip_reports`), so
+they never reach a door's raw passthrough, the away clock, or the splash. A
+report split across two reads slips through as input, as a split latency
+probe reply does.
 
 SSH input runs through a persistent `vte::Parser` (`app/input.rs`), so CSI/SS3
 sequences and bracketed paste survive split reads. `is_likely_paste` treats a
@@ -401,12 +424,23 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   a 3-row block top-center of the content area, under the settings overlay.
   The sponsor link `late.sh/thanks` redirects through late-web.
 - **Help modal** (`app/help_modal`, `?` or `/guide`). One overlay, topics in
-  `HelpTopic::ALL` (Pair first). `data.rs` also backs the bots' app context, so
+  `HelpTopic::ALL` (Pair first). Keys: Tab/Shift+Tab topics, j/k, g/G,
+  Home/End, PgUp/PgDn and Ctrl+D/U scroll (one shared `ScrollView`,
+  `app/common/scroll_view.rs`, per topic, clamped to the text the renderer
+  measured); `/` opens a prompt that takes every key (`?` and `q` included)
+  until Enter jumps to the first match from the top of the page, walking on
+  through every topic, or Esc drops it; `n`/`N` repeat the last query
+  either way and the matched line is highlighted. `data.rs` also backs the bots' app context, so
   stale help misleads users and bots alike. Content invariants: the OSC 52
   support list per terminal, why there is no OSC 8, Shift+drag to select past
   mouse reporting, OSC 777/9 notification support (tmux needs
   `allow-passthrough`). Splash tips live in
-  `late-ssh/assets/splash_tips/*.json`.
+  `late-ssh/assets/splash_tips/*.json`: one pool every session draws from,
+  and a returning pool (the "did you know" lines on the radio, the rung,
+  the people, the booth, the Artboard and Nightcap among them) added for
+  any account past its first session. The first return days hand a
+  newcomer more than a line: one box per day, three in all, each on
+  something the tour never reaches, `app/comeback`.
 
 ## 11. Global keys
 
@@ -472,10 +506,17 @@ a no-op twin when built without `otel`.
   is a Grafana question, not a database one.
 - Newcomers: `late_ssh_tour_stops_total{stop}` (a first-visit tour stop
   reached: the welcome box when the tour begins, `App::enter_clubhouse`,
-  then each stop an Enter at the one before reaches, `input.rs::tour_advance`;
-  the drop between two stops is where they leave the tour. A tour left
+  then each stop an Enter at the one before reaches,
+  `clubhouse/input.rs::tour_advance`;
+  the drop between two stops is where they leave the tour. The route in
+  force (`clubhouse::state::TOUR_ROUTE`) reaches `welcome`, `chat`,
+  `board`, `week`, `done`, and `board` against `week` is what
+  the board costs. A tour left
   midway starts over at the welcome box next session, a new attempt;
-  `/onboard` reruns are not counted) and
+  `/onboard` reruns are not counted),
+  `late_ssh_comeback_moments_total{moment,beat}` (a return day's box,
+  `app/comeback/CONTEXT.md`: shown, taken or skipped; `/comeback` reruns
+  are not counted) and
   `late_ssh_session_ends_total{tenure,screen}` (the screen that was up when
   a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
   row (`monitoring/dashboards/observability.json`) reads these plus the

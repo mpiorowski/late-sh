@@ -354,7 +354,7 @@ async fn irc_history_filters_before_limit_and_discovers_existing_dms() {
         "outgoing",
     )
     .await;
-    ChatMessage::edit_by_author(&client, old.id, user.id, "edited")
+    ChatMessage::edit_after_authorization(&client, old.id, "edited")
         .await
         .unwrap();
     let deleted = message(

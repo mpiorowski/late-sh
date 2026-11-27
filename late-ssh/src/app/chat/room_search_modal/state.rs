@@ -1,11 +1,11 @@
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use late_core::models::chat_room::ChatRoom;
+use late_core::models::chat_room::{ChatRoom, RoomKind, RoomVisibility};
 use uuid::Uuid;
 
 use crate::app::chat::state::{
-    ChatState, RoomSlot, is_chat_list_room, room_activity_at, synthetic_favorite_id,
+    ChatState, RoomSlot, is_chat_list_room, is_rail_room, room_activity_at, synthetic_favorite_id,
 };
 use crate::app::chat::svc::SEARCH_MIN_CHARS;
 
@@ -176,14 +176,14 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
                     meta: format!("live stream: {}", stream.title),
                     unread_count: chat.unread_counts.get(&room_id).copied().unwrap_or(0),
                     last_message_at: room_activity_at(room_id, &chat.room_last_message_at),
-                    favorite: false,
+                    favorite: chat.favorite_room_ids().contains(&room_id),
                 }),
                 None => {
                     let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id)
                     else {
                         continue;
                     };
-                    if !is_chat_list_room(room) {
+                    if !is_rail_room(room, chat.favorite_room_ids()) {
                         continue;
                     }
                     items.push(RoomSearchItem {
@@ -334,8 +334,14 @@ fn room_label(
     current_user_id: Uuid,
     usernames: &std::collections::HashMap<Uuid, String>,
 ) -> String {
-    if room.kind == "dm" {
-        return format!("@{}", dm_peer_label(room, current_user_id, usernames));
+    match room.kind {
+        RoomKind::Dm => return format!("@{}", dm_peer_label(room, current_user_id, usernames)),
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => {}
     }
     if let Some(slug) = room.slug.as_deref().filter(|slug| !slug.is_empty()) {
         return format!("#{slug}");
@@ -347,7 +353,7 @@ fn room_label(
     {
         return format!("#lang-{code}");
     }
-    format!("#{}", room.kind)
+    format!("#{}", room.kind.as_str())
 }
 
 fn dm_peer_label(
@@ -366,13 +372,29 @@ fn dm_peer_label(
 }
 
 fn room_meta(room: &ChatRoom) -> String {
-    match room.kind.as_str() {
-        "dm" => "direct message".to_string(),
-        _ if room.permanent => "core room".to_string(),
-        _ if room.visibility == "private" => "private room".to_string(),
-        _ if room.visibility == "public" => "public room".to_string(),
-        _ => "room".to_string(),
-    }
+    let meta = match room.kind {
+        RoomKind::Dm => "direct message",
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap
+            if room.permanent =>
+        {
+            "core room"
+        }
+        RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+            "private room"
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Game(RoomVisibility::Public)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => "public room",
+    };
+    meta.to_string()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -478,12 +500,21 @@ pub(crate) fn resolve_message_scope(
                 return None;
             }
             chat.rooms.iter().find_map(|(room, _)| {
-                (room.kind != "dm"
-                    && is_chat_list_room(room)
-                    && room_label(room, current_user_id, &chat.usernames)
-                        .trim_start_matches('#')
-                        .eq_ignore_ascii_case(slug))
-                .then_some(room.id)
+                let named = match room.kind {
+                    RoomKind::Dm => false,
+                    RoomKind::Lounge
+                    | RoomKind::Language
+                    | RoomKind::Topic(_)
+                    | RoomKind::Game(_)
+                    | RoomKind::Deadchannel
+                    | RoomKind::Nightcap => {
+                        is_chat_list_room(room)
+                            && room_label(room, current_user_id, &chat.usernames)
+                                .trim_start_matches('#')
+                                .eq_ignore_ascii_case(slug)
+                    }
+                };
+                named.then_some(room.id)
             })
         }
         MessageScope::Dm(name) => {
@@ -491,10 +522,17 @@ pub(crate) fn resolve_message_scope(
                 return None;
             }
             chat.rooms.iter().find_map(|(room, _)| {
-                (room.kind == "dm"
-                    && dm_peer_label(room, current_user_id, &chat.usernames)
-                        .eq_ignore_ascii_case(name))
-                .then_some(room.id)
+                let named = match room.kind {
+                    RoomKind::Dm => dm_peer_label(room, current_user_id, &chat.usernames)
+                        .eq_ignore_ascii_case(name),
+                    RoomKind::Lounge
+                    | RoomKind::Language
+                    | RoomKind::Topic(_)
+                    | RoomKind::Game(_)
+                    | RoomKind::Deadchannel
+                    | RoomKind::Nightcap => false,
+                };
+                named.then_some(room.id)
             })
         }
     }

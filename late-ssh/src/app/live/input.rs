@@ -9,25 +9,16 @@ use crate::app::{
     lobby::{daily::state::BoardEntry, modal_input::return_screen_for_opening},
     state::App,
 };
-use crate::metrics;
 
 use super::panel::PanelTarget;
 use super::pick::LiveSource;
-
-/// Which surface an open came from, for the one source that counts it
-/// (a board event: whether the strip or the panel is what brings people).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Origin {
-    Strip,
-    Panel,
-}
 
 /// `o` on the #lounge card opens what the strip is showing. With nothing
 /// to open (no strip up, or a result holding it) the key falls through
 /// untouched.
 pub fn open_from_key(app: &mut App) -> bool {
     match app.live.opens() {
-        Some(source) => open(app, source, Origin::Strip),
+        Some(source) => open(app, source),
         None => false,
     }
 }
@@ -36,9 +27,7 @@ pub fn open_from_key(app: &mut App) -> bool {
 /// recorded on frames where the strip drew something that opens.
 pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
     match app.live.hit.get() {
-        Some((rect, source)) if rect.contains(Position { x, y }) => {
-            open(app, source, Origin::Strip)
-        }
+        Some((rect, source)) if rect.contains(Position { x, y }) => open(app, source),
         Some(_) | None => false,
     }
 }
@@ -79,17 +68,12 @@ pub fn open_from_prefix(app: &mut App, byte: u8) -> bool {
     }
 }
 
-/// A panel row's open: a stream, a game or an event the way the strip
-/// opens it, a News share in the reader.
+/// A panel row's open: a stream or a game the way the strip opens it, a
+/// News share in the reader.
 fn open_panel(app: &mut App, target: PanelTarget) -> bool {
     match target {
-        PanelTarget::Stream(streamer_id) => {
-            open(app, LiveSource::Stream(streamer_id), Origin::Panel)
-        }
-        PanelTarget::DoorGame(key) => open(app, LiveSource::DoorGame(key), Origin::Panel),
-        PanelTarget::BoardEvent(event_id) => {
-            open(app, LiveSource::BoardEvent(event_id), Origin::Panel)
-        }
+        PanelTarget::Stream(streamer_id) => open(app, LiveSource::Stream(streamer_id)),
+        PanelTarget::DoorGame(key) => open(app, LiveSource::DoorGame(key)),
         // The News reader on the story, or the player straight away for a
         // video this session can play. Gone between the frame and the key
         // (deleted): nothing to open.
@@ -99,7 +83,7 @@ fn open_panel(app: &mut App, target: PanelTarget) -> bool {
     }
 }
 
-fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
+fn open(app: &mut App, source: LiveSource) -> bool {
     match source {
         // Never offered (`LiveState::opens`): the board left the lobby.
         LiveSource::DailyResult(_) => false,
@@ -172,26 +156,6 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
         // stop on the backtick cycle, so the same key hops back out. Gone
         // between the frame and the key (the game ended): nothing to open.
         LiveSource::DoorGame(key) => crate::app::door::spectate::input::open_live_game(app, key),
-        // The board, on the event's day, with the event's details open over
-        // it: the shared snapshot's copy, so it is up before the page's own
-        // load lands. Gone between the frame and the key (over, or taken
-        // down): nothing to open.
-        LiveSource::BoardEvent(event_id) => {
-            let event = app
-                .calendar
-                .live()
-                .into_iter()
-                .find(|event| event.id == event_id);
-            match event {
-                Some(event) => {
-                    metrics::record_calendar_open(origin);
-                    app.calendar.show_event(event);
-                    app.set_screen(Screen::Calendars);
-                    true
-                }
-                None => false,
-            }
-        }
         // The board of the world the moment happened on, to play or to
         // watch, the way the hub card opens it. On that board already there
         // is nothing to open. Gone between the frame and the key (the world

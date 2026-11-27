@@ -67,19 +67,20 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
         load_layout_by_digit(app, *digit);
         return true;
     }
-    // Alt+arrows: the next or previous chat tile, the keyboard's click on
-    // one. Arrange mode's plain arrows already walk every tile, and a composer
-    // being typed in keeps these for its word jumps: the chat composer gates
-    // this handler in `app/input.rs`, the news composer and a feeds search
-    // are checked here. A room jump in progress is finished or cancelled
-    // first, so its labels never answer for another tile.
-    if let ParsedInput::AltArrow(key) = event
+    // Alt+arrows and Alt+J/K: the next or previous chat tile, the keyboard's
+    // click on one. Arrange mode's plain arrows already walk every tile, and a
+    // composer being typed in keeps these (the arrows for its word jumps):
+    // the chat composer gates this handler in `app/input.rs`, the news
+    // composer and a feeds search are checked here. A room jump in progress
+    // is finished or cancelled first, so its labels never answer for another
+    // tile.
+    if let Some(delta) = chat_tile_hop(event)
         && !app.home.arrange
         && !app.chat.room_jump_active
         && !app.chat.news.composing()
         && !app.chat.feeds.processing()
     {
-        return hop_chat_tile(app, *key);
+        return hop_chat_tile(app, delta);
     }
     if app.home.arrange {
         // The layouts list owns every key while it is up (Esc closes it
@@ -162,14 +163,19 @@ pub fn handle_home_arrow(app: &mut App, key: u8) -> bool {
     chat::input::handle_arrow(app, key)
 }
 
-/// Alt+arrows outside arrange mode: left and up go to the previous chat tile,
-/// right and down to the next, as arrange mode's arrows walk its tiles.
-fn hop_chat_tile(app: &mut App, key: u8) -> bool {
-    let delta = match key {
-        b'A' | b'D' => -1,
-        b'B' | b'C' => 1,
-        _ => return false,
-    };
+/// The chat tile hop a key asks for: left, up and Alt+K go to the previous
+/// chat tile, right, down and Alt+J to the next, as arrange mode's arrows
+/// walk its tiles.
+fn chat_tile_hop(event: &ParsedInput) -> Option<isize> {
+    match event {
+        ParsedInput::AltArrow(b'A' | b'D') | ParsedInput::AltK => Some(-1),
+        ParsedInput::AltArrow(b'B' | b'C') | ParsedInput::AltJ => Some(1),
+        _ => None,
+    }
+}
+
+/// Outside arrange mode, the focus moves `delta` chat tiles along the page.
+fn hop_chat_tile(app: &mut App, delta: isize) -> bool {
     if !app.home.focus_chat_step(delta) {
         return false;
     }
@@ -361,18 +367,22 @@ pub(crate) fn load_home_layout(app: &mut App) {
     );
 }
 
-/// The status line's care click: the `home` layout and, with the tank due,
-/// the chat in the room the reef keeps to, so the click lands on a reef that
-/// can take the meal.
+/// The status line's care click: the `home` layout and, with the tank or the
+/// pet due, the chat in the room that tile keeps to, so the click lands on a
+/// reef that can take the meal or a pet that can take the pat.
 pub(crate) fn open_care(app: &mut App) {
     load_home_layout(app);
-    if app.care_today().tank != Chore::Due {
-        return;
-    }
-    let Some(reef) = app.home.first_tile_of(TileKind::Aquarium) else {
+    let care = app.care_today();
+    let waiting = [(care.tank, TileKind::Aquarium), (care.pet, TileKind::Pet)]
+        .into_iter()
+        .find(|(chore, _)| *chore == Chore::Due);
+    let Some((_, kind)) = waiting else {
         return;
     };
-    let only = app.home.rice.root.only_at(reef);
+    let Some(tile) = app.home.first_tile_of(kind) else {
+        return;
+    };
+    let only = app.home.rice.root.only_at(tile);
     match only.joined_room(&app.chat.rooms).map(|room| room.id) {
         Some(room_id) if app.home_chat_room_id() != Some(room_id) => {
             pick_for_active_chat(app, RoomSlot::Room(room_id));
@@ -545,6 +555,15 @@ fn act(app: &mut App, key: TileKey, byte: u8) -> bool {
         TileKey::CycleRoom => {
             cycle_room(app, if byte == b']' { 1 } else { -1 });
             true
+        }
+        // With the pet put away the tile holds a note and Enter is the
+        // page's.
+        TileKey::Care => {
+            let out = app.pet_out();
+            if out {
+                crate::app::pet::input::open_care(app);
+            }
+            out
         }
     }
 }

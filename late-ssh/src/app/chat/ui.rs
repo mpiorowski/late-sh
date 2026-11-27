@@ -1,10 +1,13 @@
+use crate::app::artboard::gallery::svc::GalleryPiece;
 use chrono::{DateTime, Utc};
 use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
 use late_core::models::{
-    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+    chat_message::ChatMessage,
+    chat_room::{ChatRoom, RoomKind, RoomVisibility},
+    chat_room_member::ChatRoomMember,
 };
 use ratatui::{
     Frame,
@@ -26,7 +29,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint, truncate_cells},
     theme,
     username_effect::ResolvedName,
 };
@@ -44,13 +47,14 @@ use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
     compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
-    is_deadchannel_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    is_deadchannel_room, is_rail_room, is_selected_slot, synthetic_favorite_id,
+    synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
-    AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
+    AuthorTint, Gutter, LoungeCard, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
     without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
+use crate::app::common::spoiler::{self, has_spoiler};
 
 /// The picker's choices in paint order: the key to press and the reaction
 /// kind it toggles.
@@ -149,6 +153,7 @@ pub struct DashboardChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
@@ -168,6 +173,7 @@ pub struct DashboardChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub active_poll: Option<&'a ActiveChatPoll>,
     /// The #lounge live strip (`app/live/`): one thing that just happened
     /// in the house, drawn above the poll strip. `None` when nothing is
@@ -175,10 +181,24 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+    /// Receives the room whose live stream row this frame drew: where a
+    /// stream may start playing by itself (`video::svc::auto_watch`).
+    pub stream_room_drawn: Option<&'a std::cell::Cell<Option<Uuid>>>,
+    /// The stream playing inline, when one is: its room's pane reserves
+    /// the picture's rows under the stream header.
+    pub stream_video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// What a bare `/watch` would do for this session, for the stream row.
+    pub stream_switch: crate::app::video::state::SwitchHint,
     pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    pub gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    pub artboard_gated: bool,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -1067,28 +1087,6 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     }
 }
 
-pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    let ellipsis_width = UnicodeWidthStr::width("…");
-    for ch in text.chars() {
-        let width = UnicodeWidthStr::width(ch.to_string().as_str());
-        if used + width + ellipsis_width > max_width {
-            break;
-        }
-        out.push(ch);
-        used += width;
-    }
-    out.push('…');
-    out
-}
-
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -1152,6 +1150,15 @@ pub fn draw_dashboard_chat_card(
                     .iter()
                     .find(|stream| stream.room_id == room.id)
             }),
+            drawn: view.stream_room_drawn,
+            video: view
+                .room
+                .and_then(|room| view.stream_video.filter(|slot| slot.room_id() == room.id)),
+            messages_in_use: view.overlay.is_some()
+                || view.image_modal.is_some()
+                || view.mention_active
+                || view.selected_message_id.is_some(),
+            switch: view.stream_switch,
             voice,
             // The live strip stands in for the topic row while it is up:
             // the board is the room's news, and the topic is a key away in
@@ -1210,12 +1217,15 @@ pub fn draw_dashboard_chat_card(
                 countries: view.countries,
                 friend_user_ids: view.friend_user_ids,
                 bonsai_glyphs: view.bonsai_glyphs,
+                ladder_marks: view.ladder_marks,
                 chat_badges: view.chat_badges,
                 profile_award_badges: view.profile_award_badges,
                 message_reactions: view.message_reactions,
                 message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
                 news_cards: view.news_cards,
+                gallery_cards: view.gallery_cards,
+                artboard_gated: view.artboard_gated,
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
@@ -1223,6 +1233,7 @@ pub fn draw_dashboard_chat_card(
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
+                spoilers_revealed: view.spoilers_revealed,
                 runner_looks: view
                     .room
                     .filter(|room| super::state::room_shows_portraits(room))
@@ -1305,6 +1316,7 @@ struct ChatRowsContext<'a> {
     countries: &'a HashMap<Uuid, String>,
     friend_user_ids: &'a HashSet<Uuid>,
     bonsai_glyphs: &'a HashMap<Uuid, String>,
+    ladder_marks: &'a HashMap<Uuid, String>,
     chat_badges: &'a HashMap<Uuid, String>,
     profile_award_badges: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1313,6 +1325,12 @@ struct ChatRowsContext<'a> {
     /// News shares' #lounge cards by message id (`news::State::lounge_cards`):
     /// those messages draw as the card.
     news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    artboard_gated: bool,
     dividers: ChatDividers,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
@@ -1322,6 +1340,7 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
+    spoilers_revealed: &'a HashSet<Uuid>,
     /// `Some` only while `state::room_shows_portraits` says so for the
     /// rendered room: the list keeps a portrait gutter on the right of
     /// every entry and paints each author's face beside their block
@@ -1455,6 +1474,7 @@ struct ChatRowsCacheKey {
     current_user_id: Uuid,
     show_flag_fallback: bool,
     name_flicker: Option<(Uuid, u64)>,
+    artboard_gated: bool,
 }
 
 #[derive(Default)]
@@ -1488,6 +1508,7 @@ fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCache
         current_user_id: ctx.current_user_id,
         show_flag_fallback: ctx.show_flag_fallback,
         name_flicker: ctx.name_flicker,
+        artboard_gated: ctx.artboard_gated,
     }
 }
 
@@ -1778,6 +1799,7 @@ fn ensure_chat_rows_cache(
             prefix,
             segments,
             author_range,
+            marks_range,
             title_range,
             runner_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
@@ -1785,6 +1807,7 @@ fn ensure_chat_rows_cache(
             author: &author,
             title: flair.and_then(|flair| flair.title.as_deref()),
             milestone: flair.and_then(|flair| flair.milestone.as_deref()),
+            ladder_marks: ctx.ladder_marks.get(&msg.user_id).map(String::as_str),
             special_badges: special_list,
             chat_badges: &chat_badge_refs,
             bonsai_glyph: bonsai_opt,
@@ -1806,10 +1829,12 @@ fn ensure_chat_rows_cache(
         };
         let author_tint = (drunk_word.is_some()
             || name_style.is_some()
+            || marks_range.is_some()
             || title_range.is_some()
             || runner_tint.is_some())
         .then_some(AuthorTint {
             range: author_range,
+            marks_range,
             title_range,
             runner: runner_tint,
             word: drunk_word,
@@ -1849,10 +1874,16 @@ fn ensure_chat_rows_cache(
         } else {
             reactions
         };
+        // Spoilers are read off the stored body, before the plain-glyphs
+        // pass: dropping an icon at a spoiler's edge would leave whitespace
+        // there, and the markers would stop reading as a spoiler.
+        let spoilers_revealed = ctx.spoilers_revealed.contains(&msg.id);
+        let spoilers_hidden = has_spoiler(&msg.body) && !spoilers_revealed;
+        let body = spoiler::shown(&msg.body, spoilers_revealed);
         let body = if ctx.show_flag_fallback {
-            without_nerd_font_glyphs(&msg.body)
+            Cow::Owned(without_nerd_font_glyphs(&body).into_owned())
         } else {
-            Cow::Borrowed(msg.body.as_str())
+            body
         };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
@@ -1932,11 +1963,16 @@ fn ensure_chat_rows_cache(
             (Some(lines), _) => Some(lines.as_slice()),
             (None, Some(preview)) => Some(preview.picture().as_slice()),
             (None, None) => None,
-        };
+        }
+        // A preview fetched before an edit wrapped its link in a spoiler
+        // would show the secret as a picture.
+        .filter(|_| !spoilers_hidden);
         let translation = ctx
             .translations
             .get(&msg.id)
-            .filter(|_| !ctx.translation_hidden.contains(&msg.id));
+            .filter(|_| !ctx.translation_hidden.contains(&msg.id))
+            // The translation would carry the hidden words in clear.
+            .filter(|_| !spoilers_hidden);
         // The #deadchannel portrait gutter (`app/deadchannel/runner`): in
         // the wire every author is a runner, and the message list keeps
         // `PORTRAIT_GUTTER` cells on the right where the author's face sits
@@ -1966,7 +2002,14 @@ fn ensure_chat_rows_cache(
             is_continuation,
             system_text,
             image_lines,
-            ctx.news_cards.get(&msg.id),
+            match (ctx.news_cards.get(&msg.id), ctx.gallery_cards.get(&msg.id)) {
+                (Some(item), _) => Some(LoungeCard::News(item)),
+                (None, Some(piece)) => Some(LoungeCard::Piece {
+                    piece,
+                    gated: ctx.artboard_gated,
+                }),
+                (None, None) => None,
+            },
             reactions,
             gild,
             translation,
@@ -2681,6 +2724,7 @@ fn build_author_prefix_and_segments(
         author,
         title: None,
         milestone: None,
+        ladder_marks: None,
         special_badges,
         chat_badges: &chat_badges,
         bonsai_glyph,
@@ -2702,6 +2746,10 @@ struct AuthorPrefixInput<'a> {
     /// the name, so it joins the badge stack rather than trailing the
     /// username the way the title does.
     milestone: Option<&'a str>,
+    /// The ladder's marks, the streak's moon and today's star, one space
+    /// after the name and ahead of the title: a mark on who this is, not
+    /// a badge.
+    ladder_marks: Option<&'a str>,
     special_badges: &'a [&'a str],
     chat_badges: &'a [(HeaderTarget, &'a str)],
     bonsai_glyph: Option<&'a str>,
@@ -2722,6 +2770,9 @@ struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
+    /// The ladder's marks right after the name (the moon and the star), for
+    /// the painter to give them the name's own color.
+    marks_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
     /// The ` ▚7` run: the space that opens the badge stack and the badge.
     runner_range: Option<(usize, usize)>,
@@ -2734,6 +2785,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         author,
         title,
         milestone,
+        ladder_marks,
         special_badges,
         chat_badges,
         bonsai_glyph,
@@ -2763,11 +2815,16 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         col += 1;
     }
 
+    // The ladder's marks widen the name's own click target: they are part
+    // of who this is, and the profile is where their numbers live.
+    let ladder_marks = ladder_marks.filter(|marks| !marks.is_empty());
     let author_w = UnicodeWidthStr::width(author) as u16;
-    if author_w > 0 {
+    // The space between the name and its marks is theirs.
+    let marks_w = ladder_marks.map_or(0, |marks| 1 + UnicodeWidthStr::width(marks) as u16);
+    if author_w + marks_w > 0 {
         segments.push(HeaderSegment {
             start_col: col,
-            end_col: col + author_w,
+            end_col: col + author_w + marks_w,
             target: HeaderTarget::Profile,
         });
     }
@@ -2777,6 +2834,13 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     prefix.push_str(author);
     let author_range = (author_range_start, prefix.len());
     col += author_w;
+    let marks_range = ladder_marks.map(|marks| {
+        let start = prefix.len();
+        prefix.push(' ');
+        prefix.push_str(marks);
+        col += marks_w;
+        (start, prefix.len())
+    });
 
     // The rented title reads as an aside on the name (`mira, the
     // insufferable`), so it sits between the name and the badge stack and is
@@ -2865,6 +2929,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         prefix,
         segments,
         author_range,
+        marks_range,
         title_range,
         runner_range,
     }
@@ -3047,6 +3112,12 @@ pub struct ChatRenderInput<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    pub gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    pub artboard_gated: bool,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
@@ -3086,6 +3157,7 @@ pub struct ChatRenderInput<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
@@ -3105,6 +3177,7 @@ pub struct ChatRenderInput<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -3127,6 +3200,17 @@ pub struct ChatRenderInput<'a> {
     pub work_unread_count: i64,
     pub work_view: super::work::ui::WorkListView<'a>,
     pub work_state: Option<&'a super::work::state::State>,
+    /// Receives the room whose live stream row this frame drew: where a
+    /// stream may start playing by itself (`video::svc::auto_watch`).
+    pub stream_room_drawn: Option<&'a std::cell::Cell<Option<Uuid>>>,
+    /// The stream playing inline, when one is: its room's pane reserves
+    /// the picture's rows under the stream header.
+    pub stream_video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// What a bare `/watch` would do for this session, for the stream row.
+    pub stream_switch: crate::app::video::state::SwitchHint,
+    /// The room whose stream this session is playing, seen or only heard:
+    /// its rail row says so, since the sound may come from another room.
+    pub stream_playing: Option<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3169,6 +3253,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub away_user_ids: &'a HashSet<Uuid>,
     /// Registered "watch me" streams driving the rail's `stream` section.
     pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
+    /// The room whose stream this session is playing, for its row's marker.
+    pub stream_playing: Option<Uuid>,
     pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
@@ -3241,6 +3327,12 @@ pub struct EmbeddedRoomChatView<'a> {
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
+    /// Hung Artboard pieces' #lounge cards by message id: those messages
+    /// draw as the piece.
+    pub gallery_cards: &'a HashMap<Uuid, GalleryPiece>,
+    /// The viewer still has the Artboard content disclaimer on: a card
+    /// names its piece without showing it.
+    pub artboard_gated: bool,
     pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
@@ -3263,6 +3355,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
     pub bonsai_glyphs: &'a HashMap<Uuid, String>,
+    pub ladder_marks: &'a HashMap<Uuid, String>,
     pub chat_badges: &'a HashMap<Uuid, String>,
     pub profile_award_badges: &'a HashMap<Uuid, String>,
     pub drunk_levels: &'a HashMap<Uuid, u8>,
@@ -3278,6 +3371,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3459,12 +3553,15 @@ fn draw_embedded_messages(
             countries: view.countries,
             friend_user_ids: view.friend_user_ids,
             bonsai_glyphs: view.bonsai_glyphs,
+            ladder_marks: view.ladder_marks,
             chat_badges: view.chat_badges,
             profile_award_badges: view.profile_award_badges,
             message_reactions: view.message_reactions,
             message_gilds: view.message_gilds,
             inline_images: view.inline_images,
             news_cards: view.news_cards,
+            gallery_cards: view.gallery_cards,
+            artboard_gated: view.artboard_gated,
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
@@ -3472,6 +3569,7 @@ fn draw_embedded_messages(
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
+            spoilers_revealed: view.spoilers_revealed,
             // Embedded game chats are house tables and daily boards, never
             // the wire.
             runner_looks: None,
@@ -3632,6 +3730,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         chat_rooms: view.chat_rooms,
         away_user_ids: view.away_user_ids,
         live_streams: view.live_streams,
+        stream_playing: view.stream_playing,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
@@ -4172,7 +4271,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             None => view
                 .chat_rooms
                 .iter()
-                .any(|(r, _)| r.id == *id && is_chat_list_room(r)),
+                .any(|(r, _)| r.id == *id && is_rail_room(r, view.favorite_room_ids)),
         })
         .collect();
     let favorited = |slot: RoomSlot| -> bool {
@@ -4262,13 +4361,20 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
 
     // Stream: live "watch me" streams, directly under Core, mirroring
     // `visual_order_for_rooms`. The section only exists while somebody is
-    // live; a pending stream gets no row.
-    if view.live_streams.iter().any(|stream| stream.live) {
+    // live; a pending stream gets no row. A favorited stream room keeps its
+    // Favorites row instead, live or not.
+    let section_streams: Vec<Uuid> = view
+        .live_streams
+        .iter()
+        .filter(|stream| stream.live && !favorite_ids.contains(&stream.room_id))
+        .map(|stream| stream.room_id)
+        .collect();
+    if !section_streams.is_empty() {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Stream), None, false);
         if !collapsed_set.contains(&RoomSection::Stream) {
-            for stream in view.live_streams.iter().filter(|stream| stream.live) {
-                push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
+            for room_id in section_streams {
+                push_slot(RoomSlot::Room(room_id), &mut push_row);
             }
         }
     }
@@ -4300,9 +4406,16 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind == "dm"
-                && !favorite_ids.contains(&r.id)
+            let dm = match r.kind {
+                RoomKind::Dm => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
+            dm && !favorite_ids.contains(&r.id)
                 && !dm_peer_is_ignored(r, view.current_user_id, view.ignored_user_ids)
         })
         .partition(|(r, _)| dm_is_promoted_unread(r.id, view.unread_counts, view.sticky_unread_dm));
@@ -4333,11 +4446,15 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
-            is_chat_list_room(r)
-                && r.kind != "dm"
+            let channel = match r.kind {
+                RoomKind::Lounge | RoomKind::Language | RoomKind::Topic(_) => true,
+                RoomKind::Dm | RoomKind::Game(_) | RoomKind::Deadchannel | RoomKind::Nightcap => {
+                    false
+                }
+            };
+            channel
                 && !core_order.contains(&r.slug.as_deref().unwrap_or(""))
                 && r.slug.as_deref() != Some("voice")
-                && !is_deadchannel_room(r)
                 && !favorite_ids.contains(&r.id)
         })
         .collect();
@@ -4418,7 +4535,8 @@ fn room_slot_label_and_unread(
                 .find(|stream| stream.room_id == room_id)
             {
                 let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
-                return (stream_rail_label(stream, label_max), unread);
+                let playing_here = view.stream_playing == Some(room_id);
+                return (stream_rail_label(stream, playing_here, label_max), unread);
             }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
@@ -4498,6 +4616,10 @@ pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStre
 /// (registered, no media yet) shows `[…]` in the count's slot; the watch
 /// count only means something once frames flow.
 ///
+/// The stream this session is playing leads with `♪` instead of `▶`: its
+/// sound follows the user into other rooms, and this is where it says
+/// which stream that is.
+///
 /// The label fits `max_width` by shortening the username, never the bracket:
 /// the row renderer clips labels from the right, which would drop the count
 /// first and end the row in the same `…` a pending stream shows. A username
@@ -4505,13 +4627,18 @@ pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStre
 /// so a long name is the ordinary case, not a corner.
 fn stream_rail_label(
     stream: &crate::app::stream::registry::LiveStreamView,
+    playing_here: bool,
     max_width: usize,
 ) -> String {
     let count = stream_count_badge(stream);
-    // `▶ ` before the name, one space before the count.
+    // The marker and a space before the name, one space before the count.
     let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
     let name = truncate_cells(&stream.username, name_budget);
-    format!("▶ {name} {count}")
+    let marker = match playing_here {
+        true => '♪',
+        false => '▶',
+    };
+    format!("{marker} {name} {count}")
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
@@ -4524,9 +4651,18 @@ pub(crate) fn bumped_join_room_slugs(
         .values()
         .filter_map(|effects| {
             let first = effects.first()?;
+            let public_topic = match first.room_kind {
+                RoomKind::Topic(RoomVisibility::Public) => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Private)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            };
             (has_room_effect(effects, "room_bump")
-                && first.room_kind == "topic"
-                && first.room_visibility == "public"
+                && public_topic
                 && !first.room_permanent
                 && first
                     .room_slug
@@ -4551,18 +4687,23 @@ fn room_display_label(
     current_user_id: Uuid,
     away_user_ids: &HashSet<Uuid>,
 ) -> String {
-    if room.kind == "dm" {
-        return dm_display_label(room, usernames, current_user_id, away_user_ids);
-    }
-    let base_label = room
-        .slug
-        .as_deref()
-        .map(str::to_string)
-        .unwrap_or_else(|| room.kind.clone());
-    if room.visibility == "private" {
-        format!("🔒 {}", base_label)
-    } else {
-        base_label
+    let base_label = || {
+        room.slug
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| room.kind.as_str().to_string())
+    };
+    match room.kind {
+        RoomKind::Dm => dm_display_label(room, usernames, current_user_id, away_user_ids),
+        RoomKind::Topic(RoomVisibility::Private) | RoomKind::Game(RoomVisibility::Private) => {
+            format!("🔒 {}", base_label())
+        }
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(RoomVisibility::Public)
+        | RoomKind::Game(RoomVisibility::Public)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => base_label(),
     }
 }
 
@@ -4644,6 +4785,19 @@ struct RoomHeader<'a> {
     /// watcher count, and the watch-URL nudge (a terminal-only person in
     /// the room is otherwise missing the show).
     stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
+    /// Told the room whose live stream row is drawn this frame: a stream
+    /// starts playing by itself only where its room is on screen.
+    drawn: Option<&'a std::cell::Cell<Option<Uuid>>>,
+    /// This room's stream playing inline: the picture's rows go under the
+    /// header block, above the messages.
+    video: Option<crate::app::video::state::InlineSlot<'a>>,
+    /// Whether this frame needs the messages' rows: something is drawn
+    /// over them (an overlay, an image, the composer's suggestions) or a
+    /// message is selected. A stream that has the pane alone (F4) shares it
+    /// for as long as that lasts.
+    messages_in_use: bool,
+    /// What `/watch` would do, for the stream row's hint.
+    switch: crate::app::video::state::SwitchHint,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     row: Option<TopicRow<'a>>,
     /// Whether the block ends in a rule. False when the daily live strip
@@ -4667,7 +4821,14 @@ impl RoomHeader<'_> {
 }
 
 /// The stream row of the header: `● LIVE title · 3 watching` on the left,
-/// the watch URL flushed right.
+/// and flushed right what to do about it: the `/watch` switch for a
+/// session that can play the stream in its terminal (`/watch to stop`
+/// while one plays, `/watch to play` otherwise; a pending stream has
+/// nothing to switch), then the watch URL. `pane` is this room's stream
+/// playing inline here: its switch opens with what F4 does to the chat
+/// under it (`F4 hide chat`, `F4 show chat`). When both do not fit, such a
+/// session keeps the switch and loses the URL: the stream is already in
+/// front of it.
 ///
 /// The link is the point of the row, so it is measured first and everything
 /// else is fitted around it: the title clips to what is left, and the watcher
@@ -4679,9 +4840,22 @@ impl RoomHeader<'_> {
 /// the link to show at all.
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
+    switch: crate::app::video::state::SwitchHint,
+    pane: Option<crate::app::video::state::StreamPane>,
     width: usize,
 ) -> Line<'static> {
-    let hint = if stream.watch_url.is_empty() {
+    use crate::app::video::state::{StreamPane, SwitchHint};
+    let switch = match (switch, stream.live, pane) {
+        (SwitchHint::Stop, true, Some(StreamPane::WithChat)) => {
+            Some("F4 hide chat · /watch to stop")
+        }
+        (SwitchHint::Stop, true, Some(StreamPane::Alone)) => Some("F4 show chat · /watch to stop"),
+        (SwitchHint::Stop, true, None) => Some("/watch to stop"),
+        (SwitchHint::Play, true, _) => Some("/watch to play"),
+        (SwitchHint::Unavailable, _, _) | (SwitchHint::Stop | SwitchHint::Play, false, _) => None,
+    }
+    .map(|text| Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
+    let link = if stream.watch_url.is_empty() {
         Vec::new()
     } else {
         vec![
@@ -4716,12 +4890,28 @@ fn stream_header_line(
         )
     });
 
+    let status_width = status.width();
+    let width_of = |spans: &[Span<'static>]| spans.iter().map(Span::width).sum::<usize>();
+    let hint = match (switch, link.is_empty()) {
+        (None, _) => link,
+        (Some(switch), true) => vec![switch],
+        (Some(switch), false) => {
+            let mut both = vec![
+                switch.clone(),
+                Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
+            ];
+            both.extend(link);
+            match status_width + width_of(&both) + 2 <= width {
+                true => both,
+                false => vec![switch],
+            }
+        }
+    };
     // What the rest of the row may not eat into: the hint (its own trailing
     // cell included) plus the two cells `row_with_hint` keeps between the two
     // sides. Nothing to reserve when there is no hint to flush right.
-    let hint_width: usize = hint.iter().map(Span::width).sum();
+    let hint_width = width_of(&hint);
     let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
-    let status_width = status.width();
     let watching = watching.filter(|count| status_width + count.width() + reserved <= width);
     let title_budget =
         width.saturating_sub(status_width + watching.as_ref().map_or(0, Span::width) + reserved);
@@ -4743,11 +4933,22 @@ fn stream_header_line(
 /// voice nor a topic (most of them) is left untouched, and the header yields
 /// entirely rather than squeeze the message area below one row.
 fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Rect {
+    let rule_width = area.width.max(1) as usize;
+    let rule = || {
+        Line::from(Span::styled(
+            "\u{2500}".repeat(rule_width),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))
+    };
     let height = header.height();
     if height == 0 || area.height <= height {
-        return area;
+        // No header rows (or no room for them): the stream still gets its
+        // seat, straight under the pane's top.
+        return match header.video {
+            Some(slot) => draw_inline_stream(frame, area, slot, header.messages_in_use, rule()),
+            None => area,
+        };
     }
-    let rule_width = area.width.max(1) as usize;
     // Text rows keep the messages' side padding: they skip the pad cell
     // every message row opens with (the selection bar's column) and leave
     // the same one cell clear on the right. The rules run edge to edge.
@@ -4758,16 +4959,17 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         Line::from(spans)
     };
 
-    let rule = || {
-        Line::from(Span::styled(
-            "\u{2500}".repeat(rule_width),
-            Style::default().fg(theme::BORDER_DIM()),
-        ))
-    };
-
     let mut lines: Vec<Line> = Vec::new();
     if let Some(stream) = header.stream {
-        lines.push(padded(stream_header_line(stream, width)));
+        if let (Some(drawn), true) = (header.drawn, stream.live) {
+            drawn.set(Some(stream.room_id));
+        }
+        lines.push(padded(stream_header_line(
+            stream,
+            header.switch,
+            header.video.map(|slot| slot.pane()),
+            width,
+        )));
     }
     if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
@@ -4807,10 +5009,111 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     }
 
     frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
-    Rect {
+    let below = Rect {
         y: area.y + height,
         height: area.height.saturating_sub(height),
         ..area
+    };
+    match header.video {
+        Some(slot) => draw_inline_stream(frame, below, slot, header.messages_in_use, rule()),
+        None => below,
+    }
+}
+
+/// The fewest rows a stream's picture is worth drawing in.
+const INLINE_STREAM_MIN_ROWS: u16 = 6;
+/// The fewest message rows the picture leaves under it.
+const INLINE_STREAM_MIN_CHAT_ROWS: u16 = 6;
+
+/// Rows for a stream's picture in a pane of `width` by `height` cells: a
+/// 16:9 picture as wide as the pane (a cell is about twice as tall as it
+/// is wide, so that is `width * 9 / 32` rows), held to three fifths of the
+/// pane and to what leaves the chat its floor. Zero when no picture worth
+/// drawing fits.
+fn inline_stream_rows(width: u16, height: u16) -> u16 {
+    let wanted = (u32::from(width) * 9 / 32) as u16;
+    let rows = wanted
+        .min((u32::from(height) * 3 / 5) as u16)
+        .min(height.saturating_sub(INLINE_STREAM_MIN_CHAT_ROWS + 1));
+    match rows >= INLINE_STREAM_MIN_ROWS {
+        true => rows,
+        false => 0,
+    }
+}
+
+/// The stream playing inline: its black rectangle at the top of `area`
+/// (the paired CLI draws the picture there), a rule under it, and the rest
+/// handed back for the messages. A stream that has the pane alone (F4)
+/// takes every row of `area`, with no rule and nothing left for them, so
+/// it fits where a shared pane has no room for a picture; under
+/// `INLINE_STREAM_MIN_ROWS` neither does. It shares the pane all the same
+/// in a frame that needs the messages' rows (`messages_in_use`). The slot
+/// hears where the rectangle landed, an empty one included, since being
+/// drawn at all is what keeps the watch alive.
+fn draw_inline_stream(
+    frame: &mut Frame,
+    area: Rect,
+    slot: crate::app::video::state::InlineSlot<'_>,
+    messages_in_use: bool,
+    rule: Line<'static>,
+) -> Rect {
+    use crate::app::video::state::StreamPane;
+    let alone = match (slot.pane(), messages_in_use) {
+        (StreamPane::Alone, false) => area.height >= INLINE_STREAM_MIN_ROWS,
+        (StreamPane::Alone, true) | (StreamPane::WithChat, _) => false,
+    };
+    let rows = match alone {
+        true => area.height,
+        false => inline_stream_rows(area.width, area.height),
+    };
+    let picture = Rect {
+        height: rows,
+        ..area
+    };
+    slot.place(picture);
+    if rows == 0 {
+        return area;
+    }
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ratatui::style::Color::Black)),
+        picture,
+    );
+    if let Some(caption) = slot.caption() {
+        frame.render_widget(
+            Paragraph::new(caption).centered().style(
+                Style::default()
+                    .fg(theme::TEXT_DIM())
+                    .bg(ratatui::style::Color::Black),
+            ),
+            Rect {
+                y: picture.y + rows / 2,
+                height: 1,
+                ..picture
+            },
+        );
+    }
+    // The rule and the messages, when the picture left them rows.
+    match area.height - rows {
+        0 => Rect {
+            y: area.y + rows,
+            height: 0,
+            ..area
+        },
+        under => {
+            frame.render_widget(
+                Paragraph::new(rule),
+                Rect {
+                    y: area.y + rows,
+                    height: 1,
+                    ..area
+                },
+            );
+            Rect {
+                y: area.y + rows + 1,
+                height: under - 1,
+                ..area
+            }
+        }
     }
 }
 
@@ -4891,9 +5194,10 @@ fn draw_selected_content(
         let selected_room = selected_room_id
             .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
             // Stream rooms are `kind='game'` (not chat-list rooms) but are
-            // openable from the rail's stream section, so they render here.
+            // openable from the rail's stream section, and a favorited game
+            // room from Favorites, so they render here.
             .filter(|(room, _)| {
-                is_chat_list_room(room)
+                is_rail_room(room, view.favorite_room_ids)
                     || view
                         .live_streams
                         .iter()
@@ -4929,6 +5233,13 @@ fn draw_selected_content(
                         .live_streams
                         .iter()
                         .find(|stream| stream.room_id == room.id),
+                    drawn: view.stream_room_drawn,
+                    video: view.stream_video.filter(|slot| slot.room_id() == room.id),
+                    messages_in_use: view.overlay.is_some()
+                        || view.image_modal.is_some()
+                        || view.mention_active
+                        || view.selected_message_id.is_some(),
+                    switch: view.stream_switch,
                     voice,
                     row: room_topic(room).map(|text| TopicRow {
                         text,
@@ -4971,12 +5282,15 @@ fn draw_selected_content(
                     countries: view.countries,
                     friend_user_ids: view.friend_user_ids,
                     bonsai_glyphs: view.bonsai_glyphs,
+                    ladder_marks: view.ladder_marks,
                     chat_badges: view.chat_badges,
                     profile_award_badges: view.profile_award_badges,
                     message_reactions: view.message_reactions,
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
                     news_cards: view.news_cards,
+                    gallery_cards: view.gallery_cards,
+                    artboard_gated: view.artboard_gated,
                     dividers: ChatDividers {
                         afk_line: view.afk_lines.get(&room.id).copied(),
                         left_app: view.device_left_at,
@@ -4987,6 +5301,7 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
+                    spoilers_revealed: view.spoilers_revealed,
                     runner_looks: super::state::room_shows_portraits(room)
                         .then_some(view.runner_looks),
                 },

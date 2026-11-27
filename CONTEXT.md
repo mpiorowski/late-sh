@@ -206,7 +206,6 @@ otherwise.
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
-| `attention` | The attention guest: what waits on you, a row each, gone when the list is empty |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
 | `herald` | The herald: two posts a day on the Fediverse and Bluesky, words and art, each slot's claim and post |
@@ -216,10 +215,12 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
+| `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles, the attention guest (what waits on you, a row each, gone when the list is empty) |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
+| `artboard` | The Artboard: the shared canvas, its editor and input model, the board server and persistence (hung pieces, applause, the monthly award and the splash wall in `gallery/CONTEXT.md`) |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
-| `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
+| `pet` | The Pet Companion, an egg for every account: the animal picked at the hatch and a drawing picked at each stage after, days together, one treat a day from a win in any game shown as that day's title, tricks, visitors and the pets they send to stay an hour, the care box, the `/pet` commands |
+| `hub` | The Shop (`Ctrl+S`), quests (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
 | `games` | Shared game primitives: cards, the chips service, `chess_core`, `pool_core` (each kernel has its own `CONTEXT.md`) |
 | `arcade` | The Arcade: solo games, daily puzzles, high scores (per-game notes, controls and adding a game in `GAMES.md`) |
 | `leaderboard` | Leaderboards page, board rosters, the refresh service (monthly awards and milestone badges in `AWARDS.md`) |
@@ -232,6 +233,7 @@ otherwise.
 | `calendar` | The events board |
 | `clubhouse` | The tavern: crowd, seating, bubbles, the tour, the floor plan |
 | `clubhouse/nightcap` | The Nightcap bar out back |
+| `comeback` | The comeback moments: one box on a newcomer's return day, three in all |
 | `scratchpad` | `/pair` shared scratchpad |
 | `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`; the diagnosis it rests on in the root `AUDIENCE.md`, the #lounge valve it waits on in `devdocs/FEED-BUDGET.md` |
 | `deadchannel/runner` | The runner: the look, the directory, the face in #deadchannel, the runner row |
@@ -239,6 +241,7 @@ otherwise.
 | `deadchannel/city` | The night city under `0`: map, shops, panels, art |
 | `deadchannel/fight` | The day's road, the cards, the round, the crossing; money, crystals and balance in `fight/*.md` |
 | `deadchannel/lounge` | The #lounge spawns |
+| `deadchannel/ring` | The ring: live 1v1 card duels between marked runners, bets in bits, the gate at the draft levels |
 | `door` | The Games hub and the door family; each door has its own context below it |
 | `door/lateania` | Lateania, the shared world RPG (the lands and content in `WORLD.md`, combat and items in `COMBAT.md`, keys and panels in `UI.md`, land numbers and the balance audit in `PROGRESSION.md`, the maps in `WORLDMAP.md`) |
 | `door/realm` | The Realm, the standing conquest world (rules and payouts in `RULES.md`, Earth and drawn worlds in `MAPS.md`, screens in `UI.md`) |
@@ -250,7 +253,7 @@ otherwise.
 
 No context of its own (read `late-ssh/CONTEXT.md` and the code): `activity`,
 `common`, `dashboard`, `files`, `help_modal`,
-`icon_picker`, `notify`, `pet`, `presence`, `profile`, `ultimates` and the
+`icon_picker`, `notify`, `presence`, `profile`, `ultimates` and the
 small modals.
 
 ## 6. Other docs
@@ -265,9 +268,9 @@ small modals.
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
-  budget, the Home layouts design (`HOME-LAYOUTS.md`), the IRC design and
-  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
-  permissions matrix).
+  budget, the IRC design, the parked audio leader, the CLI YouTube backend
+  plan, the rest of the Artboard hot-worker plan, the proposed house field
+  and browser terminal, what is left of pet growth).
 
 ## 7. Telemetry
 
@@ -316,21 +319,19 @@ query gotchas: `infra/RUNBOOK.md`.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's
   context. Chips for a local account come from the admin `/grant` command.
-- **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> --lib -E
-  'test(<filter>)'"` starts the check DB and runs nextest in a low-priority
-  scope capped to the memory free at launch (it refuses to start when too
-  little is). It builds incrementally, so a rerun after a small edit takes
-  about 25s; keep the `-p` set the same between runs, since a new set
-  rebuilds `late-ssh` cold. `--lib` is for a crate with both a lib and a main
+- **Agents run targeted tests only:** `make test ARGS="-p <crate> --lib -E
+  'test(<filter>)'"` starts the check DB and runs nextest. It limits neither
+  cpu nor memory: a ceiling on a build is the machine's to set. It builds
+  incrementally, so a rerun after a small edit takes about 25s; keep the
+  `-p` set the same between runs, since a new set rebuilds `late-ssh` cold. `--lib` is for a crate with both a lib and a main
   (`late-ssh`, `late-web`, `late-core`, `late-webview`): without it the lib
   compiles twice.
   A main-only crate (`late-cli`, the game doors) drops it. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
   full suite. `cargo check`, `cargo build` and `cargo fmt` are fine.
 - **`make check` is the human gate:** `cargo fmt --check` on first-party
   packages only (never `cargo fmt --all`, which would reformat vendored crates),
-  then clippy over the workspace with `--features otel` (the only place the
-  otel build is compiled) and nextest over the workspace without it. Like
-  `test-llm` it builds incrementally, so a rerun after a fix is mostly warm.
+  then clippy and `make test` over the workspace with `--features otel`. It
+  builds incrementally, so a rerun after a fix is mostly warm.
   It runs its own Postgres from
   `docker-compose.check.yml` (`late-check`, port 55433), never the app's.
 - Tests live next to the code they test (`foo_test.rs` beside `foo.rs`, or a

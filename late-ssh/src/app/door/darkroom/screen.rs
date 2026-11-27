@@ -12,6 +12,8 @@ use crate::app::{
     state::App,
 };
 
+use crate::app::games::chips::cooldown::CooldownView;
+
 use super::data;
 use super::model::View;
 use super::state::{Acted, State};
@@ -64,7 +66,7 @@ fn draw_screen(frame: &mut Frame, area: Rect, view: &DarkroomScreenView<'_>) {
     match view.state {
         Some(state) => super::ui::draw_page(frame, area, state),
         None => {
-            super::ui::draw_landing(frame, area, view.delete_confirm, 0);
+            super::ui::draw_landing(frame, area, view.delete_confirm, None, 0);
         }
     }
 }
@@ -268,6 +270,12 @@ fn leave(app: &mut App) {
 }
 
 /// Two-column landing card for the Games hub (delegates to the renderer).
-pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll: u16) -> u16 {
-    super::ui::draw_landing(frame, area, delete_confirm, scroll)
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    delete_confirm: bool,
+    cooldowns: Option<CooldownView<'_>>,
+    scroll: u16,
+) -> u16 {
+    super::ui::draw_landing(frame, area, delete_confirm, cooldowns, scroll)
 }

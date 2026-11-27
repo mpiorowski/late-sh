@@ -2,6 +2,37 @@ use super::*;
 use chrono::Duration as ChronoDuration;
 use late_core::models::chat_poll::{ChatPoll, ChatPollOptionSummary};
 
+/// A slur can lengthen the text (a thickened `s`, a `*hic*`). Text that
+/// fit the column as typed and would not once slurred goes out as typed,
+/// so a wasted patron's long message is never lost to the insert's CHECK.
+#[test]
+fn drunk_text_that_outgrows_the_cap_goes_out_as_typed() {
+    use late_core::models::chat_message::BODY_MAX_CHARS;
+    let typed = format!("{}ab", "lasso ".repeat(333));
+    assert_eq!(typed.chars().count(), BODY_MAX_CHARS);
+    assert!(
+        slur::slur(&typed, 4, 7).chars().count() > BODY_MAX_CHARS,
+        "the slur alone outgrows the cap"
+    );
+    assert_eq!(drunk_body(&typed, 4, 7), typed);
+}
+
+/// The moon and the star stand apart when a name carries both, and each
+/// stands alone otherwise.
+#[test]
+fn ladder_marks_put_a_space_between_the_moon_and_the_star() {
+    let streak = |consecutive_days| DailyStreakSnapshot {
+        consecutive_days,
+        last_completed_date: None,
+    };
+    let marks = |days, starred| ladder_marks(Some(&streak(days)), starred);
+    assert_eq!(marks(30, true).as_deref(), Some("● ✦"));
+    assert_eq!(marks(30, false).as_deref(), Some("●"));
+    assert_eq!(marks(1, true).as_deref(), Some("✦"));
+    assert_eq!(marks(1, false), None);
+    assert_eq!(ladder_marks(None, true).as_deref(), Some("✦"));
+}
+
 #[test]
 fn contains_link_catches_schemes_www_and_bare_domains() {
     for spam in [
@@ -38,6 +69,55 @@ fn link_cooldown_tiers_by_account_age() {
     // Established (7d+): no cooldown.
     assert_eq!(link_cooldown_for_age(7 * day), None);
     assert_eq!(link_cooldown_for_age(365 * day), None);
+}
+
+/// A body past the column's cap is a refusal that names the limit, never
+/// the generic failure the insert's CHECK would produce. IRC sends land
+/// here too, so the service is where it is checked.
+#[tokio::test]
+async fn a_body_past_the_cap_is_refused_by_name() {
+    use late_core::models::chat_message::BODY_MAX_CHARS;
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "too_long").await;
+    let room = ChatRoom::get_or_create_public_room(&client, "too-long-room")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join room");
+    let notifications =
+        crate::app::chat::notifications::svc::NotificationService::new(test_db.db.clone());
+    let service = ChatService::new(test_db.db.clone(), notifications);
+
+    let params = |body: String| SendMessageParams {
+        user_id: user.id,
+        room_id: room.id,
+        room_slug: room.slug.clone(),
+        body,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        is_admin: false,
+        wording: Wording::Typed,
+    };
+    match service
+        .send_message(params("x".repeat(BODY_MAX_CHARS + 1)))
+        .await
+    {
+        Err(SendError::Refused(refusal)) => assert_eq!(
+            refusal.message(),
+            "Message too long: 2001 characters, the limit is 2000."
+        ),
+        other => panic!("expected a too-long refusal, got {other:?}"),
+    }
+    // Characters, not bytes: 2000 two-byte characters still fit.
+    service
+        .send_message(params("é".repeat(BODY_MAX_CHARS)))
+        .await
+        .expect("a body at the cap sends");
 }
 
 #[test]
@@ -102,12 +182,11 @@ fn report_kind_maps_room_slugs() {
 /// the slug and stays free text.
 #[test]
 fn report_kind_enforces_public_topic_rooms_only() {
-    let room = |kind: &str, visibility: &str, slug: &str| ChatRoom {
+    let room = |kind: RoomKind, slug: &str| ChatRoom {
         id: Uuid::from_u128(1),
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        kind: kind.to_string(),
-        visibility: visibility.to_string(),
+        kind,
         auto_join: false,
         permanent: false,
         slug: Some(slug.to_string()),
@@ -119,20 +198,26 @@ fn report_kind_enforces_public_topic_rooms_only() {
         created_by: None,
     };
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "bugs")),
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Public), "bugs")),
         Some(ReportKind::Bug)
     );
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "suggestions")),
+        ReportKind::for_room(&room(
+            RoomKind::Topic(RoomVisibility::Public),
+            "suggestions"
+        )),
         Some(ReportKind::Suggestion)
     );
     assert_eq!(
-        ReportKind::for_room(&room("topic", "private", "bugs")),
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Private), "bugs")),
         None
     );
-    assert_eq!(ReportKind::for_room(&room("game", "public", "bugs")), None);
     assert_eq!(
-        ReportKind::for_room(&room("topic", "public", "lounge")),
+        ReportKind::for_room(&room(RoomKind::Game(RoomVisibility::Public), "bugs")),
+        None
+    );
+    assert_eq!(
+        ReportKind::for_room(&room(RoomKind::Topic(RoomVisibility::Public), "lounge")),
         None
     );
 }

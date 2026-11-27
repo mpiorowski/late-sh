@@ -80,3 +80,45 @@ fn a_ten_by_ten_board_is_ruled_every_fifth_line() {
     assert!(underlined(fifth_row) > 0);
     assert_eq!(underlined(sixth_row), 0);
 }
+
+/// The fifth-row rule never draws over a filled tile: an underline in the
+/// rule's colour across a full block reads as a darker tile in terminals
+/// that paint underlines thick. The rule still runs through the row's
+/// separators and open cells.
+#[tokio::test]
+async fn the_row_rule_leaves_filled_tiles_their_own_colour() {
+    let library =
+        crate::app::arcade::nonogram::state::load_default_library().expect("embedded packs");
+    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
+    let mut state = State::new(
+        uuid::Uuid::nil(),
+        super::super::svc::NonogramService::new(db, tokio::sync::broadcast::channel(4).0),
+        library,
+        Vec::new(),
+    );
+    state.move_cursor(4, 0);
+    state.toggle_cell();
+    state.move_cursor(-4, 0);
+    let puzzle = state.puzzle().expect("a daily board").clone();
+    assert!(puzzle.height >= 10, "the board has a fifth-row rule");
+
+    let lines = board_lines(&state, &puzzle);
+    let fifth_row = &lines[lines.len() - 1 - puzzle.height as usize + 4];
+    let filled: Vec<_> = fifth_row
+        .spans
+        .iter()
+        .filter(|s| s.content.contains('█'))
+        .collect();
+    assert_eq!(filled.len(), 1, "the one tile filled on the fifth row");
+    assert!(
+        !filled[0].style.add_modifier.contains(Modifier::UNDERLINED),
+        "a filled tile is never underlined"
+    );
+    assert!(
+        fifth_row
+            .spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::UNDERLINED)),
+        "the rule still runs through the row"
+    );
+}

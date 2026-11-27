@@ -221,7 +221,7 @@ and plaintext IRC; native IPv6 transport and production TLS remain staging check
 To repeat the attribution-specific cases from the larger focused run on Linux:
 
 ```sh
-make test-llm ARGS="-p late-bastion -p late-ssh --lib --features otel -E 'test(client_ip) or test(bastion_chain_transport_loss)'"
+make test ARGS="-p late-bastion -p late-ssh --lib --features otel -E 'test(client_ip) or test(bastion_chain_transport_loss)'"
 ```
 
 Rebuilt both release images with `otel` and repeated the 100-client, 120-second,

@@ -1,300 +1,287 @@
-use std::time::{Duration, Instant};
-
-use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
-use late_core::test_utils::create_test_user;
-use ratatui::layout::Rect;
+use chrono::NaiveDate;
+use late_core::models::pet::{Fed, Form, Pick, Stage, TreatKind, Trick};
 
 use super::{
-    ASLEEP_AFTER, Ambient, CHATTY_FOR, Look, MoodSignals, PROUD_FOR, PURR_FOR, Perch,
-    PetFrameInputs, PetState, PetTick, PetTravel, SULK_FOR, mood_at,
+    DayCounted, Growth, Practiced, STAY_MINUTES, TRICK_DAYS, call_line, fed_today, hatch_wait,
+    stay_left, stays_since, treat_for_win, treat_title,
 };
-use crate::app::pet::ui::{Neighbours, WatchSide};
-use crate::test_helpers::new_test_db;
+use crate::app::activity::event::GameFamily;
 
-fn awake(at: Instant) -> Ambient {
-    Ambient {
-        last_input: at,
-        music_playing: false,
+fn day(n: i64) -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 1, 1).expect("a date") + chrono::Duration::days(n)
+}
+
+fn egg() -> Growth {
+    Growth {
+        days_together: 0,
+        last_day: None,
+        form: Form::Egg,
+        bond_days: 0,
+        last_bond_day: None,
+        tricks: Vec::new(),
+        learning: None,
+        learning_days: 0,
+        last_practice: None,
+    }
+}
+
+/// Count one day together on each of `days`.
+fn live(growth: &mut Growth, days: std::ops::Range<i64>) {
+    for n in days {
+        growth.count_day(day(n));
     }
 }
 
 #[test]
-fn the_reading_runs_in_precedence_and_every_window_closes() {
-    let t0 = Instant::now();
-    let signals = MoodSignals {
-        petted: Some(t0),
-        won: Some(t0),
-        lost: Some(t0),
-        spoke: Some(t0),
-    };
-    // Everything at once: the click wins, then each window closes in turn.
-    assert_eq!(mood_at(signals, awake(t0), t0), PetMood::Purring);
-    assert_eq!(mood_at(signals, awake(t0), t0 + PURR_FOR), PetMood::Proud);
-    // The pet is an optimist: the loss is forgotten before the win is.
-    assert!(SULK_FOR < PROUD_FOR);
+fn a_day_counts_once_and_never_backwards() {
+    let mut growth = egg();
     assert_eq!(
-        mood_at(
-            MoodSignals {
-                won: None,
-                ..signals
+        growth.count_day(day(0)),
+        Some(DayCounted { days_away: 0 }),
+        "the first day"
+    );
+    assert_eq!(growth.count_day(day(0)), None, "once a day");
+    assert_eq!(growth.count_day(day(1)), Some(DayCounted { days_away: 0 }));
+    assert_eq!(
+        growth.count_day(day(6)),
+        Some(DayCounted { days_away: 4 }),
+        "four whole days with no key"
+    );
+    assert_eq!(growth.count_day(day(3)), None, "a clock that stepped back");
+    assert_eq!((growth.days_together, growth.last_day), (3, Some(day(6))));
+}
+
+#[test]
+fn an_egg_to_an_elder_by_its_days_and_its_owners_picks() {
+    let mut growth = egg();
+    let (one, two) = (Pick::One, Pick::Two);
+
+    assert_eq!(growth.days_to_hatch(), Some(2), "before its first day");
+    assert_eq!(hatch_wait(2), "in 2 days");
+    live(&mut growth, 0..1);
+    assert!(!growth.ready_to_hatch(), "the arrival day");
+    assert!(!growth.hatch(), "an egg without its days stays an egg");
+    assert_eq!(growth.days_to_next(), Some(1));
+    assert_eq!(growth.days_to_hatch(), Some(1));
+    assert_eq!(hatch_wait(1), "tomorrow");
+    live(&mut growth, 1..5);
+    assert!(growth.ready_to_hatch());
+    assert_eq!(growth.days_to_hatch(), None, "a ready egg waits on a pick");
+    assert_eq!(growth.stage(), Stage::Egg, "days never hatch an egg");
+    assert_eq!(
+        growth.offers(),
+        None,
+        "an egg is offered animals, not drawings"
+    );
+    assert_eq!(growth.grow(one), None);
+    assert!(growth.hatch());
+    assert!(!growth.hatch(), "once");
+    assert_eq!(growth.days_to_next(), Some(2));
+
+    assert_eq!(growth.offers(), None, "a baby without its days");
+    assert_eq!(growth.grow(two), None);
+    live(&mut growth, 5..40);
+    assert_eq!(growth.stage(), Stage::Baby, "days never enter a stage");
+    assert_eq!(
+        growth.offers(),
+        Some([Form::Young { top: one }, Form::Young { top: two }]),
+        "the top, drawn each way"
+    );
+    assert_eq!(growth.grow(two), Some(Stage::Young));
+
+    // It has the days for an adult already: the next pick waits at once.
+    assert_eq!(
+        growth.offers(),
+        Some([
+            Form::Adult {
+                top: two,
+                feet: one
             },
-            awake(t0),
-            t0 + PURR_FOR
-        ),
-        PetMood::Sulking
+            Form::Adult {
+                top: two,
+                feet: two
+            }
+        ]),
+        "the feet, under the top it kept"
     );
-    // The sulk and the chat windows are the same length, so a message
-    // sent mid-sulk is what shows once the sulk ends.
+    assert_eq!(growth.grow(one), Some(Stage::Adult));
+    assert_eq!(growth.offers(), None, "an elder is sixty days off");
+    assert_eq!(growth.days_to_next(), Some(60));
+
+    live(&mut growth, 40..100);
+    assert_eq!(growth.grow(two), Some(Stage::Elder));
     assert_eq!(
-        mood_at(
-            MoodSignals {
-                won: None,
-                spoke: Some(t0 + SULK_FOR / 2),
-                ..signals
+        growth,
+        Growth {
+            days_together: 100,
+            last_day: Some(day(99)),
+            form: Form::Elder {
+                top: two,
+                feet: one,
+                face: two
             },
-            awake(t0 + SULK_FOR),
-            t0 + SULK_FOR
-        ),
-        PetMood::Chatty
+            bond_days: 0,
+            last_bond_day: None,
+            tricks: Vec::new(),
+            learning: None,
+            learning_days: 0,
+            last_practice: None,
+        }
     );
-    // Quiet, keys still moving: awake. Music on: vibing. Keys gone: asleep,
-    // radio or not.
-    let quiet = t0 + PROUD_FOR.max(CHATTY_FOR);
-    assert_eq!(mood_at(signals, awake(quiet), quiet), PetMood::Idle);
-    assert_eq!(
-        mood_at(
-            signals,
-            Ambient {
-                last_input: quiet,
-                music_playing: true
-            },
-            quiet
-        ),
-        PetMood::Vibing
-    );
-    assert_eq!(
-        mood_at(
-            signals,
-            Ambient {
-                last_input: quiet,
-                music_playing: true
-            },
-            quiet + ASLEEP_AFTER
-        ),
-        PetMood::Asleep
-    );
-    // A blank slate is simply awake.
-    assert_eq!(
-        mood_at(MoodSignals::default(), awake(t0), t0),
-        PetMood::Idle
-    );
+    live(&mut growth, 100..120);
+    assert_eq!(growth.offers(), None, "an elder is fully grown");
+    assert_eq!(growth.grow(one), None);
+    assert_eq!(growth.days_to_next(), None);
 }
 
-async fn fresh_state(handle: &str) -> PetState {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, handle).await;
-    let svc = super::super::svc::PetService::new(
-        test_db.db.clone(),
-        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
-    );
-    let pet = svc.ensure_pet(user.id).await.expect("ensure pet");
-    PetState::new(user.id, svc, pet)
-}
-
-fn frame(position: (usize, usize)) -> PetFrameInputs {
-    PetFrameInputs {
-        travel: PetTravel { x: 40, y: 5 },
-        zone: Rect::new(10, 20, 48, 8),
-        neighbours: Neighbours::default(),
-        position,
-        home: (0, 0),
+#[test]
+fn a_reset_starts_over_as_an_egg_on_its_first_day() {
+    let mut growth = egg();
+    live(&mut growth, 0..10);
+    growth.hatch();
+    growth.bond(day(9));
+    assert_eq!(growth.grow(Pick::Two), Some(Stage::Young));
+    for n in 0..TRICK_DAYS as i64 {
+        growth.practice(Trick::Spin, day(10 + n));
     }
-}
+    growth.practice(Trick::Bow, day(20));
+    assert_eq!(growth.tricks, vec![Trick::Spin]);
 
-/// Tick with the cursor outside the box until the pet is back on the
-/// stroll, asserting it walks there: never more than a cell per axis per
-/// animation edge. Returns the last perch it held, which must be right
-/// next to `home` so handing over to the stroll is not a jump either.
-fn walk_home(state: &mut PetState, mut wall: usize, now: Instant) -> Perch {
-    let mut last = state.perch().expect("perched before the cursor left");
-    for _ in 0..100 {
-        wall += 2;
-        state.tick(tick(wall, now, Some(frame((last.x, last.y))), Some((0, 0))));
-        let Some(next) = state.perch() else {
-            return last;
-        };
-        assert!(next.x.abs_diff(last.x) <= 1 && next.y.abs_diff(last.y) <= 1);
-        last = next;
-    }
-    panic!("the pet never got back to the stroll");
-}
-
-fn tick(
-    wall_tick: usize,
-    now: Instant,
-    frame: Option<PetFrameInputs>,
-    cursor: Option<(u16, u16)>,
-) -> PetTick {
-    PetTick {
-        wall_tick,
-        now,
-        ambient: awake(now),
-        frame,
-        cursor,
-        persist: false,
-    }
-}
-
-#[tokio::test]
-async fn the_pet_walks_after_the_cursor_and_lets_go_when_it_leaves() {
-    let mut state = fresh_state("pet-follows").await;
-    assert_eq!(state.species, PetSpecies::Cat);
-    let now = Instant::now();
-    // The first tick wakes the stored (asleep) pet; after that a quiet
-    // tick has nothing to report.
-    assert!(state.tick(tick(0, now, None, None)), "the wake-up");
-    assert!(!state.tick(tick(0, now, None, None)), "nothing to report");
-    assert_eq!(state.perch(), None);
-
-    // The cursor lands far to the right inside the box: the pet turns and
-    // walks a cell per animation edge from where it stood.
-    let far_right = Some((10 + 3 + 30, 20 + 1 + 4));
-    assert!(state.tick(tick(2, now, Some(frame((0, 0))), far_right)));
+    growth.reset();
+    assert_eq!(growth, egg());
     assert_eq!(
-        state.perch(),
-        Some(Perch {
-            x: 1,
-            y: 1,
-            look: Look::Right
-        })
+        growth.count_day(day(21)),
+        Some(DayCounted { days_away: 0 }),
+        "its first day again, and it missed nobody"
     );
-    // A sparse tick covers the same ground as the edges it skipped.
-    assert!(state.tick(tick(12, now, Some(frame((1, 1))), far_right)));
+}
+
+#[test]
+fn a_stay_lasts_an_hour_and_counts_its_minutes_down() {
+    let came = day(3).and_hms_opt(22, 30, 0).expect("a time").and_utc();
+    let after = |seconds| came + chrono::Duration::seconds(seconds);
+    assert_eq!(stay_left(came, came), Some(STAY_MINUTES));
+    assert_eq!(stay_left(came, after(1)), Some(60), "the minute under way");
+    assert_eq!(stay_left(came, after(60)), Some(59));
+    assert_eq!(stay_left(came, after(59 * 60 + 59)), Some(1));
+    assert_eq!(stay_left(came, after(60 * 60)), None, "the hour is up");
     assert_eq!(
-        state.perch(),
-        Some(Perch {
-            x: 6,
-            y: 4,
-            look: Look::Right
-        })
+        stay_left(came, after(2 * 60 * 60)),
+        None,
+        "across midnight, long gone"
     );
-    // Arrived: face under the cursor, looking up at it, and it stays put.
-    let mut wall = 12;
-    for _ in 0..40 {
-        wall += 2;
-        let at = state.perch().map(|perch| (perch.x, perch.y)).unwrap();
-        state.tick(tick(wall, now, Some(frame(at)), far_right));
+    // A stay still running at a moment began after this.
+    assert_eq!(stay_left(stays_since(came), came), None);
+    assert_eq!(
+        stay_left(stays_since(came) + chrono::Duration::seconds(1), came),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_treat_names_the_pet_for_the_day_it_ate_it() {
+    let fed = Some(Fed {
+        kind: TreatKind::Arcade,
+        on: day(3),
+    });
+    assert_eq!(fed_today(fed, day(3)), Some(TreatKind::Arcade));
+    assert_eq!(fed_today(fed, day(4)), None, "gone at the day's end");
+    assert_eq!(fed_today(None, day(3)), None);
+    assert_eq!(
+        TreatKind::ALL.map(treat_title),
+        [
+            "the bookish",
+            "the quick",
+            "the cunning",
+            "the lucky",
+            "the brave"
+        ]
+    );
+}
+
+#[test]
+fn a_bond_day_is_stamped_once_a_day() {
+    let mut growth = egg();
+    assert!(growth.bond(day(0)));
+    assert!(!growth.bond(day(0)));
+    assert!(growth.bond(day(1)));
+    assert_eq!((growth.bond_days, growth.last_bond_day), (2, Some(day(1))));
+}
+
+#[test]
+fn a_trick_takes_separate_days_and_switching_starts_over() {
+    let mut growth = egg();
+    assert_eq!(growth.practice(Trick::Spin, day(0)), Practiced::Egg);
+    growth.form = Form::Baby;
+
+    assert_eq!(
+        growth.practice(Trick::Spin, day(0)),
+        Practiced::Progress { days: 1 }
+    );
+    assert_eq!(
+        growth.practice(Trick::Spin, day(0)),
+        Practiced::AlreadyToday
+    );
+    assert_eq!(
+        growth.practice(Trick::Bow, day(1)),
+        Practiced::Progress { days: 1 },
+        "another trick starts over"
+    );
+    for n in 2..TRICK_DAYS as i64 {
+        assert_eq!(
+            growth.practice(Trick::Bow, day(n)),
+            Practiced::Progress { days: n as i32 }
+        );
     }
     assert_eq!(
-        state.perch(),
-        Some(Perch {
-            x: 30,
-            y: 4,
-            look: Look::Ahead
-        })
+        growth.practice(Trick::Bow, day(TRICK_DAYS as i64)),
+        Practiced::Learned
     );
-    assert!(
-        !state.tick(tick(wall + 2, now, Some(frame((30, 4))), far_right)),
-        "a parked pet reports nothing"
+    assert_eq!(
+        growth.practice(Trick::Bow, day(TRICK_DAYS as i64 + 1)),
+        Practiced::Known
     );
-
-    // The cursor leaves the box: the pet walks back to where the stroll
-    // is, a cell at a time, and only then does the stroll take over. It
-    // must not teleport there.
-    let last = walk_home(&mut state, wall + 2, now);
-    assert!(last.x <= 1 && last.y <= 1, "let go right beside the stroll");
-    assert_eq!(last.look, Look::Left, "facing the way it walked");
+    assert_eq!(
+        (growth.tricks.clone(), growth.learning, growth.learning_days),
+        (vec![Trick::Bow], None, 0)
+    );
 }
 
-#[tokio::test]
-async fn a_sulking_or_sleeping_pet_does_not_come_and_a_petted_one_is_not_pinned() {
-    let mut state = fresh_state("pet-sulks").await;
-    let t0 = Instant::now();
-    let inside = Some((10 + 20, 20 + 3));
-
-    state.note_loss(t0);
-    state.tick(tick(2, t0, Some(frame((5, 5))), inside));
-    assert_eq!(state.mood(), PetMood::Sulking);
-    assert_eq!(state.perch(), None, "sulking: not coming");
-
-    let asleep = PetTick {
-        ambient: Ambient {
-            last_input: t0,
-            music_playing: false,
-        },
-        ..tick(4, t0 + SULK_FOR + ASLEEP_AFTER, Some(frame((5, 5))), inside)
-    };
-    state.tick(asleep);
-    assert_eq!(state.mood(), PetMood::Asleep);
-    assert_eq!(state.perch(), None, "asleep: not coming");
-
-    // Petted (the click is a report inside the box), then the cursor
-    // leaves: it purrs, follows while the cursor is there, and strolls the
-    // way back once it is gone. Nothing pins a purring pet.
-    let later = t0 + SULK_FOR + ASLEEP_AFTER + Duration::from_secs(1);
-    state.note_petted(later);
-    assert!(state.tick(tick(6, later, Some(frame((7, 2))), inside)));
-    assert_eq!(state.mood(), PetMood::Purring);
-    assert!(state.perch().is_some(), "following the click");
-    walk_home(&mut state, 6, later);
-    assert_eq!(state.perch(), None, "cursor gone: back on the stroll");
-    // The purr ends on its own.
-    assert!(state.tick(tick(10, later + PURR_FOR, Some(frame((7, 2))), None)));
-    assert_eq!(state.mood(), PetMood::Idle);
-}
-
-#[tokio::test]
-async fn a_tank_beside_the_box_rides_the_frame_inputs() {
-    // The frame inputs carry the neighbour through unchanged: the pose is
-    // the box's business, the tick only needs the zone and the position.
-    let mut state = fresh_state("pet-frame").await;
-    let now = Instant::now();
-    let beside = PetFrameInputs {
-        neighbours: Neighbours {
-            tank: Some(WatchSide::Right),
-            bonsai: None,
-        },
-        ..frame((3, 3))
-    };
-    state.tick(tick(2, now, Some(beside), None));
-    assert_eq!(state.perch(), None);
-}
-
-#[tokio::test]
-async fn an_owner_coming_back_wakes_the_stored_sleeping_pet_on_the_profile() {
-    // The last session wrote `asleep` on its way out. A new session that
-    // is active but quiet (no chat, win, loss, music, or petting) reads
-    // idle, and that has to reach the row: otherwise the profile shows a
-    // sleeping pet for an owner who is right there.
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "pet-wakes").await;
-    let svc = super::super::svc::PetService::new(
-        test_db.db.clone(),
-        tokio::sync::broadcast::channel::<crate::app::activity::event::ActivityEvent>(16).0,
+#[test]
+fn every_family_but_lateania_earns_its_treat_by_a_win() {
+    assert_eq!(
+        treat_for_win(GameFamily::ArcadeDaily),
+        Some(TreatKind::Puzzle)
     );
-    let stored = svc.ensure_pet(user.id).await.expect("ensure pet");
-    assert_eq!(stored.mood(), PetMood::Asleep);
-    let mut state = PetState::new(user.id, svc, stored);
+    assert_eq!(
+        treat_for_win(GameFamily::ArcadeScore),
+        Some(TreatKind::Arcade)
+    );
+    assert_eq!(treat_for_win(GameFamily::Match), Some(TreatKind::Match));
+    assert_eq!(treat_for_win(GameFamily::Table), Some(TreatKind::Table));
+    assert_eq!(treat_for_win(GameFamily::Door), Some(TreatKind::Door));
+    assert_eq!(
+        treat_for_win(GameFamily::Lateania),
+        None,
+        "a mob kill is not a win: its minutes earn the door treat"
+    );
+}
 
-    let now = Instant::now();
-    let awake_and_quiet = PetTick {
-        persist: true,
-        ..tick(0, now, None, None)
-    };
-    assert!(state.tick(awake_and_quiet), "waking up is a change");
-    assert_eq!(state.mood(), PetMood::Idle);
-
-    let db = test_db.db.clone();
-    crate::test_helpers::wait_until(
-        || async {
-            let client = db.get().await.expect("db client");
-            PetCompanion::ensure(&client, user.id)
-                .await
-                .expect("reload")
-                .mood()
-                == PetMood::Idle
-        },
-        "the row says idle",
-    )
-    .await;
+#[test]
+fn a_call_brings_back_a_line_for_what_the_two_share() {
+    let door = Some(TreatKind::Door);
+    assert_eq!(
+        call_line(door, door, Stage::Adult),
+        "they went exploring and came back muddy"
+    );
+    assert_eq!(
+        call_line(door, Some(TreatKind::Puzzle), Stage::Adult),
+        "it came back with a story"
+    );
+    assert_eq!(
+        call_line(None, None, Stage::Young),
+        "they sat in the sun together",
+        "two pets that ate nothing today share nothing in particular"
+    );
+    assert_eq!(call_line(door, door, Stage::Egg), "it kept the egg warm");
 }

@@ -3,7 +3,7 @@ use late_core::models::user::{AudioSource, RadioStation};
 use late_core::models::user_ssh_key::KeyAudio;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -98,6 +98,22 @@ pub enum PairControlMessage {
         rows: u16,
         start_s: u64,
     },
+    /// Play a live stream in the rectangle the TUI reserved: the CLI joins
+    /// the stream's LiveKit room with this subscribe-only ticket and shows
+    /// what it receives. Only CLIs advertising `video_stream` get it; the
+    /// play's later `video_place`, `video_control` and `video_stop` are the
+    /// same ones a video uses. `voices` is whether the CLI plays the room's
+    /// voices too (false when the viewer already hears them in voice).
+    VideoPlayStream {
+        play_id: u64,
+        livekit_url: String,
+        token: String,
+        voices: bool,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
+    },
     /// The play's rectangle moved (Window/Full, a resize).
     VideoPlace {
         play_id: u64,
@@ -109,6 +125,17 @@ pub enum PairControlMessage {
     VideoControl {
         play_id: u64,
         control: VideoControl,
+    },
+    /// A live stream's picture comes off the terminal and the stream plays
+    /// on, heard and not seen; the next `VideoPlace` brings it back.
+    VideoHide {
+        play_id: u64,
+    },
+    /// Whether a playing live stream plays the room's voices changed: the
+    /// viewer joined (`false`) or left (`true`) the stream's voice channel.
+    VideoVoices {
+        play_id: u64,
+        voices: bool,
     },
     VideoStop {
         play_id: u64,
@@ -314,10 +341,14 @@ impl PairedClientRegistry {
     }
 
     /// Deliver a video control to the paired CLIs on `token` advertising
-    /// `video`. The webview helper never gets one. Returns whether anyone
-    /// did, so the watch modal can tell a dead pairing at once.
+    /// `video` or `video_stream` (the player's gate already checked the one
+    /// its source needs). The webview helper never gets one. Returns
+    /// whether anyone did, so the watch modal can tell a dead pairing at
+    /// once.
     pub fn send_control_to_video_cli(&self, token: &str, msg: PairControlMessage) -> bool {
-        self.send_control_filter(token, msg, ClientAudioState::supports_video) > 0
+        self.send_control_filter(token, msg, |state| {
+            state.supports_video() || state.supports_video_stream()
+        }) > 0
     }
 
     /// Deliver a drain handoff to the paired CLIs on `token` advertising
@@ -543,6 +574,17 @@ impl PairedClientRegistry {
             .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_video()))
     }
 
+    /// True when a paired CLI on `token` advertises `video_stream`: it can
+    /// receive a live stream itself and play it in the terminal.
+    pub fn has_video_stream_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients.get(token).is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry.state.supports_video_stream())
+        })
+    }
+
     /// True when a paired CLI on `token` advertises `reconnect`: the quit
     /// modal offers a restart only then. Scans every entry, like
     /// `has_voice_cli`.
@@ -634,6 +676,20 @@ impl PairedClientRegistry {
     /// Update every entry for `user_id` to the new audio source and push
     /// `SetPlaybackSource` to each. The CLI uses it to gate its direct-stream
     /// decoder and to start or stop its embedded webview helper.
+    /// The users who can hear something right now: everyone with at least
+    /// one paired client that is not muted. The roll call counts only these
+    /// (`app/audio/svc.rs`), since an account with no client, or a muted
+    /// one, is on its source and hears nothing.
+    pub fn hearing_user_ids(&self) -> HashSet<Uuid> {
+        let clients = self.clients.lock_recover();
+        clients
+            .values()
+            .flatten()
+            .filter(|entry| !entry.state.muted)
+            .map(|entry| entry.user_id)
+            .collect()
+    }
+
     pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) {
         let mut targets = Vec::new();
         {

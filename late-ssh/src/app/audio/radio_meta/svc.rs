@@ -14,7 +14,8 @@ use crate::metrics;
 const NIGHTRIDE_META_URL: &str = "https://nightride.fm/meta";
 const RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
-// The feed sends keep-alive comments between track changes; a connection
+// The feed sends keep-alives (such as `data: keepalive` lines) between track
+// changes; a connection
 // quiet for this long is dead. Without it a half-open connection would
 // show stale artist/title forever and never reconnect.
 const SSE_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
@@ -245,31 +246,35 @@ async fn stream_events(
         while let Some(newline) = buffer.find('\n') {
             let line = buffer[..newline].trim_end_matches('\r').to_string();
             buffer.drain(..=newline);
-            if let Some(stations) = parse_meta_line(&line) {
-                received_any = true;
-                // Merge rather than replace: an event carrying a subset of
-                // stations must not blank the others.
-                tx.send_modify(|map| map.extend(stations));
+            match parse_meta_line(&line) {
+                Ok(Some(stations)) => {
+                    received_any = true;
+                    // Merge rather than replace: an event carrying a subset of
+                    // stations must not blank the others.
+                    tx.send_modify(|map| map.extend(stations));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::debug!(error = ?err, "failed to parse nightride meta event");
+                }
             }
         }
     }
 }
 
 /// One SSE line. Metadata events are a single `data:` line carrying a JSON
-/// array of station records. Anything else (comments, empty keep-alives,
-/// unparsable payloads, records missing artist/title) yields `None`.
-fn parse_meta_line(line: &str) -> Option<HashMap<String, ArtistTitle>> {
-    let payload = line.strip_prefix("data:")?.trim();
-    if payload.is_empty() {
-        return None;
-    }
-    let records: Vec<StationRecord> = match serde_json::from_str(payload) {
-        Ok(records) => records,
-        Err(err) => {
-            tracing::debug!(error = ?err, "failed to parse nightride meta event");
-            return None;
-        }
+/// array of station records. Comments, keep-alives and records missing
+/// artist/title yield `Ok(None)`; any other unparsable payload is an error.
+fn parse_meta_line(line: &str) -> anyhow::Result<Option<HashMap<String, ArtistTitle>>> {
+    let Some(payload) = line.strip_prefix("data:") else {
+        return Ok(None);
     };
+    let payload = payload.trim();
+    if payload.is_empty() || payload == "keepalive" {
+        return Ok(None);
+    }
+    let records: Vec<StationRecord> =
+        serde_json::from_str(payload).context("parsing nightride meta event")?;
 
     let mut stations = HashMap::new();
     for record in records {
@@ -286,7 +291,7 @@ fn parse_meta_line(line: &str) -> Option<HashMap<String, ArtistTitle>> {
             },
         );
     }
-    (!stations.is_empty()).then_some(stations)
+    Ok((!stations.is_empty()).then_some(stations))
 }
 
 #[cfg(test)]

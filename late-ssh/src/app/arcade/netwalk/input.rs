@@ -44,6 +44,17 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     true
 }
 
+/// The keys the first-visit tour lends with the board: moving, turning,
+/// locking and the reset. Nothing that changes which board is up (`n`, `p`,
+/// `d`, `[`, `]`), since the tour waits on this one.
+pub fn handle_lent_key(state: &mut State, byte: u8) -> bool {
+    match byte {
+        b'r' | b'R' | b'0' | b'k' | b'K' | b'j' | b'J' | b'h' | b'H' | b'l' | b'L' | b' '
+        | b'\r' | b'\n' | b'x' | b'X' | b'f' | b'F' => handle_key(state, byte),
+        _ => false,
+    }
+}
+
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     let side = match key {
         b'A' => Side::North,
@@ -70,3 +81,7 @@ pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
     state.click(index);
     true
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

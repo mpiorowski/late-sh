@@ -64,7 +64,8 @@ immortal wanderer (`state::Escape`, `Plain` or `WithBeacon`).
   the next key leaves the door. There is nothing behind the ending to go back
   to, so that is the screen's only exit (`screen::ending_took_key`, which owns
   Esc and the arrows too).
-- **The account keeps the run: chips every time, a badge the first time.**
+- **The account keeps the run: chips once a month per ending, a badge the
+  first time.**
   `svc::reward_escape` is the Green Dragon `reward_dragon_kill` shape: a
   `#lounge` feed line every time (the beacon run's says so:
   `Escape::feed_detail` appends "followed the fleet beacon home"), the chip
@@ -72,13 +73,14 @@ immortal wanderer (`state::Escape`, `Plain` or `WithBeacon`).
   insert — a rankless profile badge. Plain: `darkroom_escape`, migration 143,
   `ADE`, 15,000. Beacon: `darkroom_beacon_escape`, migration 145, `ADB`,
   20,000. Separate claims, so an account can earn both.
-  **The chips repeat** (migration 158): the ending wipes the
-  save, so a second escape is the whole arc walked again and it pays again.
-  The gate is `Game.run_id`, a uuidv7 stamped on a fresh game and carried in
-  the save blob (a blob written before migration 158 deserializes with one of its own rather
-  than a nil id shared by every old save), passed to `reward_escape` and used
-  as the `per_event` key, so a retried grant task pays once and a new run is a
-  new event. `Escape::reward_line` is the one place the amounts are written
+  **The chips repeat, once a month per ending** (migrations 158 and 286):
+  two gates at once through `credit_run_cooldown_reward_template`, the door
+  milestones' grant. One is `Game.run_id`, a uuidv7 stamped on a fresh game
+  and carried in the save blob (a blob written before migration 158
+  deserializes with one of its own rather than a nil id shared by every old
+  save), passed to `reward_escape` as the event key, so a retried grant task
+  pays once. The other is a 30-day window per ending per account: the plain
+  escape and the beacon escape are two milestones, each with its own window. `Escape::reward_line` is the one place the amounts are written
   out for the UI. Badge codes are registered in
   `late-core/src/models/profile_award.rs` and `user.rs`'s chat-label SQL; chat
   shows only the higher of the two (`BADGE_LADDERS`), the profile page still

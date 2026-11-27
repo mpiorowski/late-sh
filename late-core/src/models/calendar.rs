@@ -8,6 +8,7 @@
 //! locks the actor and the event row, so a stale editor cannot overwrite a
 //! newer revision and two posts at once cannot beat the daily cap. The cap
 //! counts `calendar_posts`, a log deletes never touch.
+use super::calendar_ban::CalendarBan;
 use crate::db::Db;
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -19,9 +20,13 @@ use uuid::Uuid;
 pub const CALENDAR_CHANGED_CHANNEL: &str = "calendar_changed";
 /// Board posts one account may make per UTC day.
 pub const BOARD_POSTS_PER_DAY: i64 = 5;
-/// How long before its start a timed board post goes live: the strip's
-/// nudge, the Live panel's row. An all-day post goes live for its day.
-pub const STRIP_LEAD: Duration = Duration::hours(1);
+/// How far either side of now a timed board post can sit and still fall on
+/// some viewer's today: a civil day is at most 25 hours long, in any zone.
+pub const DAY_REACH: Duration = Duration::hours(25);
+/// The offsets of the zones furthest behind and ahead of UTC: between them
+/// are the dates that are today somewhere.
+const ZONES_BEHIND: Duration = Duration::hours(-12);
+const ZONES_AHEAD: Duration = Duration::hours(14);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CalendarView {
@@ -196,21 +201,17 @@ impl CalendarEvent {
     pub fn is_board(&self) -> bool {
         self.owner_id.is_none()
     }
-    pub fn timed(&self) -> bool {
-        matches!(self.timing, EventTiming::Timed { .. })
+    /// On a viewer's today, the day Home's banner lists: every date the
+    /// event covers in the viewer's zone (`EventTiming::dates`, the days the
+    /// Calendars page shows it on), before, during and after it. An all-day
+    /// post is its civil dates in every zone.
+    pub fn on_day(&self, now: DateTime<Utc>, tz: Tz) -> bool {
+        let today = now.with_timezone(&tz).date_naive();
+        let (first, end_exclusive) = self.timing.dates(tz);
+        first <= today && today < end_exclusive
     }
-    /// Live on the house's surfaces: a timed post inside [`STRIP_LEAD`] of
-    /// its start or on, an all-day post on its day. Over is never live.
-    pub fn live(&self, now: DateTime<Utc>) -> bool {
-        let lead = if self.timed() {
-            STRIP_LEAD
-        } else {
-            Duration::zero()
-        };
-        self.starts_at - lead <= now && now < self.ends_at
-    }
-    pub fn started(&self, now: DateTime<Utc>) -> bool {
-        self.starts_at <= now
+    pub fn over(&self, now: DateTime<Utc>) -> bool {
+        self.ends_at <= now
     }
     fn from_row(r: Row) -> Self {
         let timing = match r.get::<_, Option<NaiveDate>>("start_date") {
@@ -383,12 +384,12 @@ fn refuse<T>(refusal: CalendarRefusal) -> Result<T, CalendarError> {
     Err(CalendarError::Refused(refusal))
 }
 
-/// A save, and whether it made a new event: a new board post is a story,
-/// an edit is not.
+/// A save, whether it made a new event, and whether it published to the board.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Saved {
     pub event: CalendarEvent,
     pub created: bool,
+    pub board_posted: bool,
 }
 
 /// A delete, and whether staff did it to someone else's post.
@@ -481,20 +482,27 @@ impl CalendarStore {
             None => refuse(CalendarRefusal::Gone),
         }
     }
-    /// The board posts live at `now` (see [`CalendarEvent::live`]), soonest
-    /// first. The replica service reads this into the snapshot every
-    /// session shares. Personal events are never live anywhere.
-    pub async fn live_board(&self, now: DateTime<Utc>) -> Result<Vec<CalendarEvent>> {
+    /// The board posts that are on some viewer's today at `now`, soonest
+    /// first: every timed post within [`DAY_REACH`] of now, and every
+    /// all-day post covering a date that is today in some zone. Each
+    /// session narrows it to its own zone ([`CalendarEvent::on_day`]). The
+    /// replica service reads this into the snapshot every session shares.
+    /// Personal events are never in it.
+    pub async fn today_board(&self, now: DateTime<Utc>) -> Result<Vec<CalendarEvent>> {
         let c = self.db.get().await?;
-        let lead = now + STRIP_LEAD;
+        let from = now - DAY_REACH;
+        let until = now + DAY_REACH;
+        let earliest_today = (now + ZONES_BEHIND).date_naive();
+        let latest_today = (now + ZONES_AHEAD).date_naive();
         Ok(c.query(
             &format!(
                 "SELECT {EVENT_COLUMNS} FROM calendar_events e LEFT JOIN users u ON u.id=e.creator_id \
-                 WHERE e.owner_id IS NULL AND e.ends_at > $1 \
-                   AND ((e.start_at IS NOT NULL AND e.starts_at <= $2) OR (e.start_date IS NOT NULL AND e.starts_at <= $1)) \
+                 WHERE e.owner_id IS NULL \
+                   AND ((e.start_at IS NOT NULL AND e.starts_at < $2 AND e.ends_at > $1) \
+                     OR (e.start_date IS NOT NULL AND e.start_date <= $4 AND e.end_date > $3)) \
                  ORDER BY e.starts_at, e.id"
             ),
-            &[&now, &lead],
+            &[&from, &until, &earliest_today, &latest_today],
         )
         .await?
         .into_iter()
@@ -544,9 +552,6 @@ impl CalendarStore {
                     return refuse(CalendarRefusal::Gone);
                 };
                 let e = CalendarEvent::from_row(row);
-                if e.source() != source {
-                    return refuse(CalendarRefusal::ReadOnly);
-                }
                 if !event_access(&e, viewer, actor.staff).edit {
                     return refuse(CalendarRefusal::ReadOnly);
                 }
@@ -555,15 +560,21 @@ impl CalendarStore {
                 }
                 Some(e)
             }
-            None => {
-                if source == CalendarSource::Board {
-                    if Self::banned(&tx, viewer).await? {
-                        return refuse(CalendarRefusal::Banned);
-                    }
-                    // The post log, not the events: a deleted post still
-                    // used its slot. The day is UTC whatever the session's
-                    // TimeZone.
-                    let today: i64 = tx
+            None => None,
+        };
+        let board_posted =
+            source == CalendarSource::Board && old.as_ref().is_none_or(|e| !e.is_board());
+        if board_posted {
+            if CalendarBan::find_active_for_user(&tx, viewer)
+                .await?
+                .is_some()
+            {
+                return refuse(CalendarRefusal::Banned);
+            }
+            // The post log, not the events: a deleted post still
+            // used its slot. The day is UTC whatever the session's
+            // TimeZone.
+            let today: i64 = tx
                         .query_one(
                             "SELECT count(*) FROM calendar_posts WHERE user_id=$1 \
                              AND created >= date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
@@ -571,15 +582,12 @@ impl CalendarStore {
                         )
                         .await?
                         .get(0);
-                    if today >= BOARD_POSTS_PER_DAY {
-                        return refuse(CalendarRefusal::DailyCap);
-                    }
-                    tx.execute("INSERT INTO calendar_posts(user_id) VALUES($1)", &[&viewer])
-                        .await?;
-                }
-                None
+            if today >= BOARD_POSTS_PER_DAY {
+                return refuse(CalendarRefusal::DailyCap);
             }
-        };
+            tx.execute("INSERT INTO calendar_posts(user_id) VALUES($1)", &[&viewer])
+                .await?;
+        }
         let creator_timezone = old
             .as_ref()
             .map(|e| e.creator_timezone.clone())
@@ -604,11 +612,15 @@ impl CalendarStore {
             CalendarSource::Board => None,
             CalendarSource::Personal => Some(viewer),
         };
+        if old.as_ref().is_some_and(CalendarEvent::is_board) && source == CalendarSource::Personal {
+            tx.execute("DELETE FROM calendar_rsvps WHERE event_id=$1", &[&id])
+                .await?;
+        }
         let saved: Uuid = tx
             .query_one(
                 "INSERT INTO calendar_events(id,owner_id,creator_id,title,description,start_date,end_date,start_at,end_at,creator_timezone,starts_at,ends_at) \
                  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
-                 ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,description=EXCLUDED.description,start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at,revision=calendar_events.revision+1 \
+                 ON CONFLICT(id) DO UPDATE SET owner_id=EXCLUDED.owner_id,title=EXCLUDED.title,description=EXCLUDED.description,start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,starts_at=EXCLUDED.starts_at,ends_at=EXCLUDED.ends_at,announced_at=CASE WHEN EXCLUDED.owner_id IS NOT NULL THEN NULL ELSE calendar_events.announced_at END,revision=calendar_events.revision+1 \
                  RETURNING id",
                 &[
                     &id,
@@ -639,15 +651,8 @@ impl CalendarStore {
         Ok(Saved {
             event: CalendarEvent::from_row(row),
             created: old.is_none(),
+            board_posted,
         })
-    }
-    async fn banned<C: GenericClient + Sync>(c: &C, viewer: Uuid) -> Result<bool> {
-        Ok(c.query_opt(
-            "SELECT 1 FROM calendar_bans WHERE target_user_id=$1 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)",
-            &[&viewer],
-        )
-        .await?
-        .is_some())
     }
     pub async fn delete(
         &self,

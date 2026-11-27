@@ -144,7 +144,10 @@ pub enum ParsedInput {
     AltS,
     AltA,
     AltC,
-    /// Alt+K samples the Artboard colour under the cursor.
+    /// Alt+J on Home focuses the next chat tile.
+    AltJ,
+    /// Alt+K samples the Artboard colour under the cursor; on Home it
+    /// focuses the previous chat tile.
     AltK,
     /// Alt+1..9 (`ESC 1`..`ESC 9`), the digit 1-9: on Home it loads that
     /// layout in one chord, an extra to `Ctrl+E` then the digit. Ctrl+digit
@@ -153,7 +156,8 @@ pub enum ParsedInput {
     Paste(Vec<u8>),
     /// F4 (SS3 `ESC O S`, CSI `ESC [ 14 ~`): show or hide the chat beside a
     /// game, Realm's board and an open watch here, and the watchable doors'
-    /// own pane (which read it off raw input, `door::spectate::input::is_f4`).
+    /// own pane (which read it off raw input, `door::spectate::input::is_f4`);
+    /// and the messages under a stream playing inline in its room.
     F4,
     PageUp,
     PageDown,
@@ -553,6 +557,7 @@ impl Perform for VtCollector {
                 b'a' | b'A' => self.events.push(ParsedInput::AltA),
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
+                b'j' | b'J' => self.events.push(ParsedInput::AltJ),
                 b'k' | b'K' => self.events.push(ParsedInput::AltK),
                 b'1'..=b'9' => self.events.push(ParsedInput::AltDigit(byte - b'0')),
                 _ => {}
@@ -810,7 +815,14 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if handle_tour_gate(app, &event) {
+    if crate::app::clubhouse::input::handle_tour_gate(app, &event) {
+        return;
+    }
+
+    // A comeback moment's box holds every key but its two, like the tour's
+    // welcome box, so a stray key never takes the pitch off the screen.
+    if app.comeback.is_open() {
+        crate::app::comeback::input::handle_input(app, event);
         return;
     }
 
@@ -878,13 +890,18 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.video.is_open() {
+    if app.video.modal().is_some() {
         crate::app::video::input::handle_input(app, &event);
         return;
     }
 
     if app.chat.has_reader() {
         chat::news::reader::input::handle_input(app, &event);
+        return;
+    }
+
+    if app.gallery_cards.modal().is_some() {
+        crate::app::artboard::gallery::card::input::handle_input(app, &event);
         return;
     }
 
@@ -954,6 +971,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.show_bonsai_modal {
         crate::app::bonsai::modal_input::handle_input(app, event);
+        return;
+    }
+
+    if app.show_pet_modal {
+        crate::app::pet::input::handle_modal_input(app, event);
         return;
     }
 
@@ -1096,16 +1118,24 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                 chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
-        // Alt+digit is Home's (`zen::input::handle_home_event`, above);
-        // every other page, and a composer being typed in, ignores it.
-        ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK | ParsedInput::AltDigit(_) => {}
+        // Alt+digit and Alt+J/K are Home's (`zen::input::handle_home_event`,
+        // above); every other page, and a composer being typed in, ignores them.
+        ParsedInput::AltA
+        | ParsedInput::AltC
+        | ParsedInput::AltJ
+        | ParsedInput::AltK
+        | ParsedInput::AltDigit(_) => {}
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
-        // the composer gate, so F4 closes it from the composer too.
+        // the composer gate, so F4 closes it from the composer too. In a
+        // room whose stream plays inline it hides the messages under the
+        // picture, which then takes the whole pane.
         ParsedInput::F4 if ctx.screen == Screen::Games => {
             crate::app::door::spectate::input::toggle_watch_chat(app);
         }
-        ParsedInput::F4 => {}
+        ParsedInput::F4 => {
+            app.video.toggle_stream_pane();
+        }
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
@@ -1735,10 +1765,7 @@ fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
         chat::input::handle_compose_char(app, ch);
         return true;
     }
-    if ctx.screen == Screen::Dashboard && ctx.feeds_processing {
-        return true;
-    }
-    false
+    ctx.screen == Screen::Dashboard && ctx.feeds_processing
 }
 
 fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
@@ -1857,9 +1884,13 @@ fn dispatch_escape(app: &mut App) {
         quit_confirm::input::handle_escape(app);
         return;
     }
-    // A lone Esc skips the tour gate the same way, and would close the modal
-    // or the practice table a stop is holding open.
-    if app.clubhouse.tutorial_forced_step().is_some() {
+    // A lone Esc skips the tour gate the same way, and would close the modal,
+    // the practice table or the board a stop is holding open; the tour takes
+    // it first while a stop is up.
+    if crate::app::clubhouse::input::handle_tour_escape(app) {
+        return;
+    }
+    if crate::app::comeback::input::handle_escape(app) {
         return;
     }
     if app.show_help {
@@ -1931,6 +1962,10 @@ fn dispatch_escape(app: &mut App) {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
+    if app.show_pet_modal {
+        crate::app::pet::input::handle_escape(app);
+        return;
+    }
     if app.show_lobby_modal {
         crate::app::lobby::modal_input::handle_escape(app);
         return;
@@ -1981,12 +2016,16 @@ fn dispatch_escape(app: &mut App) {
         app.paper.close_modal();
         return;
     }
-    if app.video.is_open() {
-        crate::app::video::svc::close(app);
+    if app.video.modal().is_some() {
+        crate::app::video::svc::dismiss(app);
         return;
     }
     if app.chat.has_reader() {
         app.chat.close_reader();
+        return;
+    }
+    if app.gallery_cards.modal().is_some() {
+        app.gallery_cards.close();
         return;
     }
     if app.chat.has_image_modal() {
@@ -2476,6 +2515,7 @@ fn chat_room_list_view<'a>(
         chat_rooms: &app.chat.rooms,
         away_user_ids: &app.away_user_ids,
         live_streams: &app.chat.live_streams,
+        stream_playing: app.video.playing_stream_room(),
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
@@ -2603,22 +2643,17 @@ fn handle_mouse_scroll_over_screen(
     true
 }
 
-/// A left-click on the pet's render-recorded rect pets it. The rect is only
-/// set on frames where the box drew, so this is a no-op wherever the box is
-/// hidden.
+/// A left-click on the pet's tile as the frame recorded it: the pet, a
+/// treat in its pouch, its rows, its floor (`pet::input::handle_click`).
+/// The slots are only set on frames where the box drew, so this is a no-op
+/// wherever the box is hidden.
 fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
     // The box renders under the global modals; don't let clicks on a
     // modal that happens to overlap it fall through to the pet.
     if chat_scroll_clicks_blocked(app) {
         return false;
     }
-    if let Some(rect) = app.last_pet_rect.get()
-        && rect_contains(rect, x, y)
-    {
-        pet_the_pet_globally(app);
-        return true;
-    }
-    false
+    crate::app::pet::input::handle_click(app, x, y)
 }
 
 /// A left-click on the reef or the tank tile feeds it, the pet's way: a
@@ -2643,7 +2678,7 @@ fn handle_tank_click(app: &mut App, x: u16, y: u16) -> bool {
 }
 
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
-    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+    if mouse.kind != MouseEventKind::Down {
         return false;
     }
     let Some(x) = mouse.x.checked_sub(1) else {
@@ -2652,6 +2687,16 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
+    match mouse.button {
+        Some(MouseButton::Left) => {}
+        // The one right click the app takes: on the pet's tile it opens
+        // the care box, under the same modal guard as the left one.
+        Some(MouseButton::Right) => {
+            return !chat_scroll_clicks_blocked(app)
+                && crate::app::pet::input::handle_right_click(app, x, y);
+        }
+        Some(MouseButton::Middle) | None => return false,
+    }
     // Petting the pet is a passing gesture, not a move: it takes the click
     // before the tile focus, so a click on the pet leaves the keys with the
     // chat tile the page opened on.
@@ -2679,6 +2724,10 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     // its gesture and the keys stay put.
     if app.on_home() && !chat_scroll_clicks_blocked(app) {
         crate::app::zen::input::focus_home_tile_at(app, x, y);
+    }
+    if !chat_scroll_clicks_blocked(app) && crate::app::video::input::click_inline_stream(app, x, y)
+    {
+        return true;
     }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
@@ -2879,6 +2928,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.chat.cyberspace.modal_active()
         || app.show_quit_confirm
         || app.show_bonsai_modal
+        || app.show_pet_modal
         || app.show_lobby_modal
         || app.icon_picker_open
 }
@@ -2996,6 +3046,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
             if !app.chat.open_selected_card_in_room(room_id)
+                && !crate::app::artboard::gallery::card::input::open_selected_card(app, room_id)
                 && !app.chat.open_selected_image_modal_in_room(room_id)
             {
                 crate::app::chat::input::watch_selected_video(app, room_id);
@@ -3304,6 +3355,7 @@ fn close_overlays_for_modal(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3343,6 +3395,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3371,6 +3424,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_hub_modal = false;
     app.show_settings = false;
@@ -3384,7 +3438,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
         .set_shelf(crate::app::directory::state::Shelf::Map);
 }
 
-/// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.
+/// Shared Shop entry point for Ctrl+S, `/shop`, and the status bar's Shop hint.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3396,6 +3450,7 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3406,16 +3461,16 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_hub_modal = true;
 }
 
-/// A click on the pet: it purrs for a bit, and the first click of the day
-/// pays (`PetState::pet`). The box only draws for a pet that is out, so the
-/// click can only land on one here; the service's claim decides the payout
-/// off the row, since another session may have put it away since.
+/// The pet's daily pat from a surface that is not the pet itself (the
+/// attention row): it purrs, and the first of the day pays
+/// (`PetState::pat`). The service's claim decides the payout off the row,
+/// since another session may have put the pet away since.
 pub(crate) fn pet_the_pet_globally(app: &mut App) {
     if !app.pet_out() {
         return;
     }
     app.pet_state
-        .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
+        .pat(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
 /// The tank's free daily meal, from any surface that shows it (`a` on its
@@ -3437,6 +3492,15 @@ pub(crate) fn feed_aquarium_globally(app: &mut App) {
     }
 }
 
+/// Open the pet's care box over whatever is up (`pet::input::open_care`,
+/// whose callers gate it on the pet being out).
+pub(crate) fn open_pet_modal_globally(app: &mut App) {
+    close_overlays_for_modal(app);
+    // A piece picker left open over Home would take the modal's keys.
+    app.piece_picker.close();
+    app.show_pet_modal = true;
+}
+
 fn open_bonsai_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3449,6 +3513,7 @@ fn open_bonsai_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
@@ -3473,6 +3538,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
@@ -3502,141 +3568,6 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
             app.request_close(late_core::tunnel_protocol::TUNNEL_CLOSE_SESSION_ENDED);
         }
     }
-}
-
-/// The forced first-visit tour: while a stop is up
-/// (`clubhouse::state::State::tutorial_forced_step`), Enter moves it on and
-/// quitting is the way out. Everything else, mouse, arrows, and chords
-/// included, dies here so no modal, composer, or game can hijack a newcomer
-/// mid-route. Returns true when the event was consumed.
-fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::clubhouse::state::{TableStop, TourStep};
-
-    let Some(step) = app.clubhouse.tutorial_forced_step() else {
-        return false;
-    };
-    let byte = match event {
-        ParsedInput::Byte(byte) => *byte,
-        ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
-        // Arrows, mouse, pastes: swallowed while the tour runs.
-        _ => return true,
-    };
-    match (step, byte) {
-        // The Artboard stop lands behind its content disclaimer: `s` shows
-        // the art for this visit only, Enter skips ahead without it. Neither
-        // touches the account tweak; the standalone dialog never runs here.
-        (TourStep::Enter, b's' | b'S') if app.artboard_disclaimer_visible() => {
-            app.artboard_content_accepted = true;
-            app.sync_dartboard_connection();
-        }
-        (TourStep::Enter, b'\r' | b'\n') => tour_advance(app),
-        // The table's one shot has to be played: Enter or Space strikes the
-        // break, and only then does Enter move on. A terminal the table does
-        // not fit has no shot to see, so Enter walks on from there.
-        (TourStep::Table, b'\r' | b'\n' | b' ') => {
-            let table = crate::app::clubhouse::ui::table_stop(
-                app.content_area(),
-                app.daily.practice_played(),
-            );
-            match (table, byte) {
-                (TableStop::Racked, _) => app.daily.practice_break(),
-                (TableStop::TooSmall | TableStop::Played, b' ') => {}
-                (TableStop::TooSmall | TableStop::Played, _) => tour_advance(app),
-            }
-        }
-        // The fight is the same: every press is the next blow until it is won.
-        (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
-        (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
-        // The way out is always open.
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, b'q' | b'Q') => {
-            trigger_global_quit(app)
-        }
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
-    }
-    sync_tour_modal(app);
-    true
-}
-
-/// `/onboard`: the first-visit tour from the top, for anyone who asks.
-/// Through `leave_board` so a board left behind is closed properly.
-pub(crate) fn start_tour(app: &mut App) {
-    crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
-    app.clubhouse.begin_tutorial(
-        crate::app::presence::svc::now_ms(),
-        crate::app::clubhouse::state::TourStart::Rerun,
-    );
-}
-
-/// Enter at a tour stop: walk the newcomer to wherever the next one lives.
-fn tour_advance(app: &mut App) {
-    use crate::app::clubhouse::state::{TourMove, TourStart};
-
-    match app.clubhouse.tutorial_advance() {
-        TourMove::Stay => {}
-        // Through `leave_board` so a practice table left behind is dropped.
-        TourMove::Page(screen) => crate::app::lobby::daily::board_input::leave_board(app, screen),
-        // The People page, on its map whatever section a rerun left it on.
-        TourMove::Map => {
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Profiles);
-            crate::app::directory::input::switch_shelf(
-                app,
-                crate::app::directory::state::Shelf::Map,
-            );
-        }
-        // `]`: the next section of the People page.
-        TourMove::NextSection => {
-            let next = app.directory_state.shelf().next();
-            crate::app::directory::input::switch_shelf(app, next);
-        }
-        // A pool table nobody else sees, for one break.
-        TourMove::Table => {
-            let username = app.username.clone();
-            app.daily.open_practice_table(Screen::Arcade, &username);
-            app.set_screen(Screen::DailyMatch);
-        }
-        // Home with its stock second layout up, the street: a device that
-        // deleted it gets the missing-name banner under the stop.
-        TourMove::Layouts => {
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Dashboard);
-            crate::app::zen::input::run_layout_command(
-                app,
-                crate::app::zen::presets::LayoutCommand::Load(
-                    crate::app::zen::presets::STOCK_STREET_NAME.to_string(),
-                ),
-            );
-        }
-        // Home's first layout back before the tavern, so the newcomer's
-        // page is as the tour found it.
-        TourMove::Homecoming => {
-            crate::app::zen::input::load_home_layout(app);
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
-        }
-        TourMove::Finished => app.persist_clubhouse_tutorial_done(),
-    }
-    // The stop just reached, on a first visit's tour only (its welcome box
-    // is counted where the tour began, `App::enter_clubhouse`): a rerun is
-    // a regular walking the route again, not a newcomer leaving it.
-    match app.clubhouse.tour_start() {
-        TourStart::FirstVisit => crate::metrics::record_tour_stop(app.clubhouse.tutorial),
-        TourStart::Rerun => {}
-    }
-}
-
-/// Hold open the real modal the current stop pitches, and close it once the
-/// tour has moved past.
-fn sync_tour_modal(app: &mut App) {
-    use crate::app::clubhouse::state::TourModal;
-
-    let modal = app.clubhouse.tour_modal();
-    match (
-        modal == TourModal::Stations,
-        app.stations_modal_state.is_open(),
-    ) {
-        (true, false) => app.stations_modal_state.open(app.selected_radio_station),
-        (false, true) => app.stations_modal_state.close(),
-        (true, true) | (false, false) => {}
-    }
-    app.show_lobby_modal = modal == TourModal::Lobby;
 }
 
 /// Live games own Ctrl+S even when they currently leave it unbound. Running
@@ -3754,8 +3685,6 @@ pub(crate) fn toggle_lobby_globally(app: &mut App) {
 /// The global guide, opened on the topic that fits the current page. Shared
 /// by `?` and `/guide`.
 pub(crate) fn open_guide_globally(app: &mut App) {
-    app.help_modal_state
-        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     let topic = if app.screen == Screen::Lateania {
         HelpTopic::Lateania
     } else if app.screen == Screen::Profiles {
@@ -3765,6 +3694,13 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     } else {
         HelpTopic::Pair
     };
+    open_guide_on_globally(app, topic);
+}
+
+/// The global guide, opened on a named topic (a comeback moment's Enter).
+pub(crate) fn open_guide_on_globally(app: &mut App, topic: HelpTopic) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
     app.help_modal_state.open(topic);
     app.show_help = true;
 }
@@ -3809,6 +3745,7 @@ fn close_modals_for_page_change(app: &mut App) {
     app.show_gild_modal = false;
     app.gild_modal_state.close();
     app.show_bonsai_modal = false;
+    app.show_pet_modal = false;
     app.show_settings = false;
     app.show_lobby_modal = false;
 }
@@ -3842,9 +3779,15 @@ fn handle_numbered_page_switch(app: &mut App, byte: u8) -> bool {
         b'7' => Screen::Calendars,
         _ => return false,
     };
+    switch_page_globally(app, screen);
+    true
+}
+
+/// What a page's number key does: the composers reset, then the page
+/// (a comeback moment's Enter takes the same path).
+pub(crate) fn switch_page_globally(app: &mut App, screen: Screen) {
     reset_composers_for_page_change(app);
     app.set_screen(screen);
-    true
 }
 
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
@@ -4254,11 +4197,14 @@ pub(crate) fn close_icon_picker(app: &mut App) {
     app.icon_picker_target = IconPickerTarget::Composer;
 }
 
-/// The News reader and the watch player (`app/video/`), for a page change
-/// or another modal opening. A closing player keeps its position.
+/// The News reader, an open Artboard piece and the watch player
+/// (`app/video/`), for a page change or another modal opening. A closing
+/// player keeps its position; a live stream is not closed, it plays on
+/// with its picture out of the way (`video::svc::dismiss`).
 pub(crate) fn close_reader_and_player(app: &mut App) {
     app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    app.gallery_cards.close();
+    crate::app::video::svc::dismiss(app);
 }
 
 pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {

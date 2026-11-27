@@ -120,7 +120,6 @@ async fn the_first_connect_plants_a_free_tank_once() {
         .balance;
 
     let first = svc.bootstrap(user.id).await.expect("first bootstrap");
-    assert!(first.welcomed, "the first connect plants the tank");
     let care = first.care.expect("care");
     assert_eq!(care.sprout_born, Some(today));
     assert_eq!(care.fry_creature.as_deref(), Some("fry"));
@@ -136,11 +135,10 @@ async fn the_first_connect_plants_a_free_tank_once() {
     assert_eq!(after, before, "the tank costs nothing");
     assert!(
         rx.try_recv().is_err(),
-        "a welcome is the session's banner, not an event"
+        "a welcome says nothing: a new account has the tour"
     );
 
-    let second = svc.bootstrap(user.id).await.expect("second bootstrap");
-    assert!(!second.welcomed, "the next connect finds it");
+    svc.bootstrap(user.id).await.expect("second bootstrap");
     assert_eq!(
         sku_counts(&test_db.db, user.id, "aquarium_fish_fry").await,
         Some((1, 1)),

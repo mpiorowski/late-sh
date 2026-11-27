@@ -23,6 +23,7 @@
 use chrono::Utc;
 use dartboard_core::Canvas;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
+use late_core::models::daily_rung::STAR_GLYPH;
 use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
 use ratatui::{
@@ -53,8 +54,12 @@ use crate::app::{
         runner::ui as runner_ui,
     },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
-    pet::ui::portrait_lines as pet_portrait_lines,
-    profile::svc::{ProfilePet, ProfileRunner},
+    pet::{
+        state::treat_title as pet_treat_title,
+        svc::ProfilePet,
+        ui::{guest_label, portrait_with_guests},
+    },
+    profile::svc::ProfileRunner,
     settings_modal::data::country_label,
 };
 
@@ -317,11 +322,22 @@ fn build_segments(
             heading.extend(section_heading("pet", usize::from(PET_WIDTH)).spans);
             segments.push(Segment::Text(vec![Line::from(""), Line::from(heading)]));
 
-            // The pet stands halfway down the band, its name and its mood
-            // on a row each so the longest name still fits the column.
-            let mut right = pet_portrait_lines(pet.species, pet.mood, wall_tick);
+            // The pet stands halfway down the band, its name, its title,
+            // its stage and its mood on a row each so the longest name
+            // still fits the column.
+            let mut right = pet_portrait(pet, wall_tick, usize::from(PET_WIDTH));
             right.push(Line::from(pet_name_span(pet)));
+            if let Some(kind) = pet.fed_today {
+                right.push(Line::from(Span::styled(pet_treat_title(kind), dim)));
+            }
+            right.push(Line::from(Span::styled(pet_stage_text(pet), dim)));
             right.push(Line::from(Span::styled(pet.mood.as_str(), dim)));
+            if let Some(with) = pet_guests_text(pet) {
+                right.push(Line::from(Span::styled(with, dim)));
+            }
+            if !state.viewing_own() {
+                right.push(pet_visit_hint());
+            }
             let above = usize::from(AQUARIUM_HEIGHT).saturating_sub(right.len()) / 2;
             right.splice(0..0, vec![Line::from(""); above]);
             segments.push(Segment::AquariumBeside {
@@ -331,11 +347,22 @@ fn build_segments(
         }
         (Some(pet), false) => {
             let mut lines = section_lines("pet", width_usize);
-            lines.extend(pet_portrait_lines(pet.species, pet.mood, wall_tick));
-            lines.push(Line::from(vec![
-                pet_name_span(pet),
-                Span::styled(format!(" · {}", pet.mood.as_str()), dim),
-            ]));
+            lines.extend(pet_portrait(pet, wall_tick, width_usize));
+            let mut caption = vec![pet_name_span(pet)];
+            if let Some(kind) = pet.fed_today {
+                caption.push(Span::styled(format!(" {}", pet_treat_title(kind)), dim));
+            }
+            caption.push(Span::styled(
+                format!(" · {} · {}", pet_stage_text(pet), pet.mood.as_str()),
+                dim,
+            ));
+            lines.push(Line::from(caption));
+            if let Some(with) = pet_guests_text(pet) {
+                lines.push(Line::from(Span::styled(with, dim)));
+            }
+            if !state.viewing_own() {
+                lines.push(pet_visit_hint());
+            }
             segments.push(Segment::Text(lines));
         }
         (None, true) => {
@@ -350,6 +377,25 @@ fn build_segments(
     if !badge_lines.is_empty() {
         let mut lines = section_lines("badges", width_usize);
         lines.extend(badge_lines);
+        segments.push(Segment::Text(lines));
+    }
+
+    // ── dailies: the numbers behind the marks beside the name in chat ──
+    let ladder = state.ladder();
+    if ladder.streak_days > 0 || ladder.stars > 0 {
+        let mut lines = section_lines("dailies", width_usize);
+        let mut facts = Vec::new();
+        if ladder.streak_days > 0 {
+            facts.push(format!("streak day {}", ladder.streak_days));
+        }
+        if ladder.stars > 0 {
+            let noun = if ladder.stars == 1 { "star" } else { "stars" };
+            facts.push(format!("{STAR_GLYPH} {} {noun}", ladder.stars));
+        }
+        lines.push(Line::from(Span::styled(
+            facts.join(" · "),
+            Style::default().fg(theme::TEXT()),
+        )));
         segments.push(Segment::Text(lines));
     }
 
@@ -466,11 +512,51 @@ fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
     blit(body, &reef, area, 0);
 }
 
-/// The pet's name, or its species while it has none.
+/// The pet's body in its form, in its stored mood, carrying what it ate
+/// today and running through its tricks, with the pets staying with it
+/// beside it as far as `width` cells go.
+fn pet_portrait(pet: &ProfilePet, wall_tick: usize, width: usize) -> Vec<Line<'static>> {
+    portrait_with_guests(pet.portrait(), &pet.guests, wall_tick, width)
+}
+
+/// Who is staying with the pet: `with mat's Biscuit`, and how many more.
+fn pet_guests_text(pet: &ProfilePet) -> Option<String> {
+    match pet.guests.as_slice() {
+        [] => None,
+        [one] => Some(format!("with {}", guest_label(one))),
+        [first, rest @ ..] => Some(format!(
+            "with {} and {} more",
+            guest_label(first),
+            rest.len()
+        )),
+    }
+}
+
+/// `young · day 12`.
+fn pet_stage_text(pet: &ProfilePet) -> String {
+    format!("{} · day {}", pet.form.stage().as_str(), pet.days_together)
+}
+
+/// The keys a visitor has for someone else's pet (`input::visit_pet`).
+fn pet_visit_hint() -> Line<'static> {
+    let key = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    Line::from(vec![
+        Span::styled("p", key),
+        Span::styled(" pet it · ", dim),
+        Span::styled("v", key),
+        Span::styled(" send yours", dim),
+    ])
+}
+
+/// The pet's name, or what it is while it has none: its animal, or an egg.
 fn pet_name_span(pet: &ProfilePet) -> Span<'static> {
-    let name = match &pet.name {
-        Some(name) => name.clone(),
-        None => pet.species.as_str().to_string(),
+    let name = match (&pet.name, pet.animal()) {
+        (Some(name), _) => name.clone(),
+        (None, None) => "egg".to_string(),
+        (None, Some(species)) => species.as_str().to_string(),
     };
     Span::styled(
         name,

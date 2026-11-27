@@ -18,6 +18,7 @@ fn other(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
             since_ms,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         nightcap: None,
         street: None,
@@ -207,6 +208,7 @@ fn a_second_device_joins_the_first_and_follows_its_moves() {
 #[test]
 fn tutorial_tours_every_page_then_comes_home() {
     let mut state = state_with_lobby(true);
+    state.tour_route = TourRoute::House;
     assert_eq!(state.tutorial, Tutorial::Pending);
     assert_eq!(state.tutorial_forced_step(), None);
     state.enter_screen(NOW);
@@ -272,11 +274,53 @@ fn tutorial_tours_every_page_then_comes_home() {
     assert_eq!(state.tutorial_advance(), TourMove::Stay);
 }
 
+/// The `Board` route, the one every session walks (`TOUR_ROUTE`): Enter
+/// from the door walks the chat, today's board and the week ahead, and
+/// ends there. The whole tour state is asserted at
+/// each step, since nothing but `tutorial_advance` moves it.
+#[test]
+fn the_board_route_is_four_stops_and_ends_on_the_week() {
+    let mut state = state_with_lobby(true);
+    assert_eq!(state.tour_route, TOUR_ROUTE);
+    assert_eq!(state.tour_route, TourRoute::Board);
+    assert_eq!(state.tutorial, Tutorial::Pending);
+    assert_eq!(state.tutorial_forced_step(), None);
+    assert!(!state.tutorial_settled());
+    state.enter_screen(NOW);
+    assert_eq!(state.tutorial, Tutorial::Welcome);
+    assert_eq!((state.player_x, state.player_y), map::SPAWN);
+    assert_eq!(state.tutorial_forced_step(), Some(TourStep::Enter));
+
+    for (went, next_stage, step) in [
+        (
+            TourMove::Page(Screen::Dashboard),
+            Tutorial::VisitChat,
+            Some(TourStep::Enter),
+        ),
+        (TourMove::Board, Tutorial::VisitBoard, Some(TourStep::Board)),
+        (TourMove::Week, Tutorial::VisitWeek, Some(TourStep::Enter)),
+        (TourMove::FinishedAtChat, Tutorial::Done, None),
+    ] {
+        assert_eq!(state.tutorial_advance(), went);
+        assert_eq!(state.tutorial, next_stage);
+        assert_eq!(state.tutorial_forced_step(), step);
+        assert_eq!(state.tour_modal(), TourModal::None);
+        assert_eq!(state.tutorial_settled(), next_stage == Tutorial::Done);
+    }
+
+    // Done is the end: nothing moves past it, and the bar glows for the
+    // pour the route never pointed at.
+    assert_eq!(state.tutorial_advance(), TourMove::Stay);
+    assert_eq!(state.tutorial, Tutorial::Done);
+    assert!(state.bar_glow());
+}
+
 /// The practice table and the fight are the stops Enter alone does not
 /// pass: the gate reads these steps to make the shot and the win come first.
 #[test]
 fn the_table_and_the_fight_are_their_own_steps() {
     let mut state = state_with_lobby(true);
+    state.tour_route = TourRoute::House;
     state.enter_screen(NOW);
     let mut steps = Vec::new();
     while let Some(step) = state.tutorial_forced_step() {
@@ -297,6 +341,7 @@ fn the_table_and_the_fight_are_their_own_steps() {
 #[test]
 fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
     let mut state = state_with_lobby(true);
+    state.tour_route = TourRoute::House;
     state.enter_screen(NOW);
     // Mid-tour: nothing pours at a distance, and the bar does not glow yet.
     assert!(!state.welcome_pour_due());
@@ -539,4 +584,31 @@ fn heading_out_back_puts_the_avatar_at_the_back_door_for_everyone() {
     // back door.
     let (x, y) = map::BACK_DOOR_MAT;
     assert_eq!(state.stand().spot, Spot::Walking { x, y });
+}
+
+#[test]
+fn a_hatched_pet_rides_the_stand_and_an_egg_or_no_pet_does_not() {
+    use crate::app::pet::ui::Portrait;
+    use late_core::models::pet::{Form, PetMood, PetSpecies, Pick};
+
+    let mut state = session(Vec::new(), false);
+    let pet = |form| Portrait::new(PetSpecies::Dog, form, PetMood::Idle, None, &[]);
+    assert_eq!(state.stand().pet_at_heel, None);
+
+    state.set_pet(Some(pet(Form::Egg)));
+    assert_eq!(state.stand().pet_at_heel, None, "an egg stays home");
+
+    state.set_pet(Some(pet(Form::Young { top: Pick::One })));
+    let young = state.stand();
+    assert_eq!(young.pet_at_heel, Some(PetSpecies::Dog));
+    // Growing changes nothing on the wire: the record is not republished.
+    state.set_pet(Some(pet(Form::Elder {
+        top: Pick::One,
+        feet: Pick::Two,
+        face: Pick::Two,
+    })));
+    assert_eq!(state.stand(), young);
+
+    state.set_pet(None);
+    assert_eq!(state.stand().pet_at_heel, None, "put away");
 }

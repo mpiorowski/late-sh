@@ -25,10 +25,12 @@ use late_core::models::{
     chat_message_gild::CHAT_MESSAGE_GILDED_CHANNEL,
     chips::CHIP_USER_CHANGED_CHANNEL,
     daily_match::DAILY_MATCH_CHANGED_CHANNEL,
+    deadchannel_bout::DEADCHANNEL_BOUT_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
     deadchannel_spawn::DEADCHANNEL_SPAWN_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
+    pet::PET_CHANGED_CHANNEL,
     pot::POT_CHANGED_CHANNEL,
     presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
@@ -50,6 +52,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 pub enum Refresh {
     RunnerLooks,
     LoungeSpawn,
+    RingBoard,
     DailyMatches,
     Pot,
     Articles,
@@ -57,6 +60,7 @@ pub enum Refresh {
     ShopFlairDirectory,
     CalendarNotices,
     RealmGames,
+    GalleryCards,
 }
 
 impl Refresh {
@@ -65,6 +69,7 @@ impl Refresh {
         match self {
             Refresh::RunnerLooks => "runner looks",
             Refresh::LoungeSpawn => "lounge spawn",
+            Refresh::RingBoard => "ring board",
             Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
@@ -72,6 +77,7 @@ impl Refresh {
             Refresh::ShopFlairDirectory => "shop flair directory",
             Refresh::CalendarNotices => "calendar server notices",
             Refresh::RealmGames => "realm games",
+            Refresh::GalleryCards => "gallery cards",
         }
     }
 }
@@ -120,6 +126,8 @@ pub enum Channel {
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
     DeadchannelSpawn,
+    DeadchannelBout,
+    PetChanged,
     PotChanged,
     Presence,
     QuestAssignmentsChanged,
@@ -127,10 +135,11 @@ pub enum Channel {
     RealmGameChanged,
     ShopCatalogChanged,
     ShopUserChanged,
+    ArtboardPiecesChanged,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 16] = [
+    pub const ALL: [Channel; 19] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -140,6 +149,8 @@ impl Channel {
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
         Channel::DeadchannelSpawn,
+        Channel::DeadchannelBout,
+        Channel::PetChanged,
         Channel::PotChanged,
         Channel::Presence,
         Channel::QuestAssignmentsChanged,
@@ -147,8 +158,8 @@ impl Channel {
         Channel::RealmGameChanged,
         Channel::ShopCatalogChanged,
         Channel::ShopUserChanged,
+        Channel::ArtboardPiecesChanged,
     ];
-
     /// The Postgres channel name, owned by the model that sends it.
     pub fn name(self) -> &'static str {
         match self {
@@ -161,6 +172,8 @@ impl Channel {
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
             Channel::DeadchannelSpawn => DEADCHANNEL_SPAWN_CHANNEL,
+            Channel::DeadchannelBout => DEADCHANNEL_BOUT_CHANNEL,
+            Channel::PetChanged => PET_CHANGED_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
             Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
@@ -168,6 +181,9 @@ impl Channel {
             Channel::RealmGameChanged => REALM_GAME_CHANGED_CHANNEL,
             Channel::ShopCatalogChanged => SHOP_CATALOG_CHANGED_CHANNEL,
             Channel::ShopUserChanged => SHOP_USER_CHANGED_CHANNEL,
+            Channel::ArtboardPiecesChanged => {
+                late_core::models::artboard_piece::ARTBOARD_PIECES_CHANGED_CHANNEL
+            }
         }
     }
 

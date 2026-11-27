@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::app::common::theme;
 use crate::app::door::landing;
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownView};
 
 use super::commentary::{self, CommentRoom};
 use super::data;
@@ -1268,7 +1269,13 @@ fn controls_hint(mode: Mode) -> &'static str {
 }
 
 /// Two-column Green Dragon landing card for the Games hub.
-pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll: u16) -> u16 {
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    delete_confirm: bool,
+    cooldowns: Option<CooldownView<'_>>,
+    scroll: u16,
+) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -1322,13 +1329,14 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, scroll:
     lines.push(flavor_quote());
     lines.push(Line::raw(""));
     lines.push(landing::heading("Rewards"));
-    lines.push(landing::stat(
+    lines.extend(landing::reward(
         "Green Dragon slain",
         "10,000 chips, and the GDS badge the first time",
         20,
+        cooldowns.map(|view| view.window(CooldownReward::GreendragonDragon)),
     ));
     lines.push(Line::from(Span::styled(
-        "  Every kill pays: the dragon sends you back to level 1, so the climb is the price.",
+        "  Pays again 30 days after the last kill that paid. One kill, one payout.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));

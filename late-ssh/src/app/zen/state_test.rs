@@ -1,3 +1,4 @@
+use late_core::models::chat_room::{RoomKind, RoomVisibility};
 use ratatui::layout::Rect;
 use uuid::Uuid;
 
@@ -755,23 +756,23 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
 }
 
 #[test]
-fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_right_column() {
-    // The stock is fixed and the same for every account: the column's
-    // panels with the pet over the bonsai, and an unowned reef or pet
-    // draws the shop's note in its tile.
+fn the_stock_home_is_the_rail_the_reef_and_the_pet_over_the_chat_and_the_right_column() {
+    // The stock is fixed and the same for every account: the reef and the
+    // pet share the band over the chat, the column's panels end on the
+    // bonsai, and a pet put away draws its note in its tile.
     let home = RiceLayout::home();
     assert_eq!(
         home.root.leaf_kinds(),
         vec![
             TileKind::Rooms,
             TileKind::Aquarium,
+            TileKind::Pet,
             TileKind::Chat,
             TileKind::Presence,
             TileKind::Visualizer,
             TileKind::Music,
             TileKind::Lobby,
             TileKind::Live,
-            TileKind::Pet,
             TileKind::Bonsai,
         ]
     );
@@ -781,12 +782,12 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_right_column() {
         "the reef hosts the strip, so the chat never loses a row to it"
     );
     assert_eq!(
-        home.root.leaf_guests()[6],
+        home.root.leaf_guests()[7],
         vec![Guest::Attention],
         "the lobby hosts attention: what waits on you takes the tables' tile"
     );
     assert_eq!(
-        home.root.leaf_guests()[2],
+        home.root.leaf_guests()[3],
         Vec::<Guest>::new(),
         "the board's day is the banner over the tree, not a guest"
     );
@@ -798,6 +799,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_right_column() {
         vec![
             TileTitle::Hidden,
             TileTitle::Hidden,
+            TileTitle::Hidden,
             TileTitle::Named,
             TileTitle::Hidden,
             TileTitle::Named,
@@ -805,9 +807,17 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_right_column() {
             TileTitle::Named,
             TileTitle::Named,
             TileTitle::Named,
-            TileTitle::Named,
         ],
-        "only the rail, the reef and the presence rows take their title off"
+        "only the rail, the band over the chat and the presence rows take their title off"
+    );
+    let lounge = ChatRoomBinding::Permanent(REEF_ROOM.to_string());
+    let kept: Vec<usize> = (0..home.root.leaf_count())
+        .filter(|ordinal| home.root.only_at(*ordinal) == lounge)
+        .collect();
+    assert_eq!(
+        kept,
+        vec![1, 2],
+        "the band keeps to #lounge, so the chat has its rows in every other room"
     );
 
     let zen = ZenState::new(home.clone(), Some(home));
@@ -1034,8 +1044,7 @@ fn a_tile_goes_down_only_for_a_room_the_account_still_holds() {
             id: Uuid::now_v7(),
             created: now,
             updated: now,
-            kind: "topic".to_string(),
-            visibility: "public".to_string(),
+            kind: RoomKind::Topic(RoomVisibility::Public),
             auto_join: false,
             permanent,
             slug: slug.map(str::to_string),

@@ -1,3 +1,6 @@
+use std::cell::Cell;
+
+use crate::app::chat::list_ui::scroll_offset;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
@@ -16,9 +19,15 @@ pub struct FeedListView<'a> {
     pub selected_index: usize,
     pub has_feeds: bool,
     pub marker_read_at: Option<DateTime<Utc>>,
+    /// The first entry the last draw showed; this draw starts from it and
+    /// leaves its own behind.
+    pub scroll: &'a Cell<usize>,
 }
 
 const ITEM_HEIGHT: u16 = 7;
+/// The unread dot's column and the space after it, the same gutter the News
+/// list keeps, so both lists start their text at the same column.
+const GUTTER: u16 = 2;
 const SUMMARY_MAX_CHARS: usize = 240;
 
 pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
@@ -41,7 +50,17 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
     let selected_index = view
         .selected_index
         .min(view.entries.len().saturating_sub(1));
-    let start = selected_index.saturating_sub(visible_items.saturating_sub(1));
+    // Entries are drawn whole, so the window counts entries: it holds while
+    // the selection moves inside it and scrolls an entry before the edge.
+    let context = selected_index.saturating_sub(1)..(selected_index + 2).min(view.entries.len());
+    let start = scroll_offset(
+        view.scroll.get(),
+        view.entries.len(),
+        &(selected_index..selected_index + 1),
+        &context,
+        visible_items,
+    );
+    view.scroll.set(start);
     let end = (start + visible_items).min(view.entries.len());
     let constraints =
         std::iter::repeat_n(Constraint::Length(ITEM_HEIGHT), end - start).collect::<Vec<_>>();
@@ -61,39 +80,35 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
             .marker_read_at
             .map(|last_read_at| item.entry.created > last_read_at)
             .unwrap_or(true);
+        let [gutter, text] =
+            Layout::horizontal([Constraint::Length(GUTTER), Constraint::Fill(1)]).areas(content);
+        if is_unread {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "●",
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )),
+                gutter,
+            );
+        }
         frame.render_widget(
-            Paragraph::new(entry_lines(item, is_unread, content.width as usize))
-                .wrap(Wrap { trim: true }),
-            content,
+            Paragraph::new(entry_lines(item, text.width as usize)).wrap(Wrap { trim: true }),
+            text,
         );
     }
 }
 
-fn entry_lines(item: &RssEntryView, is_unread: bool, width: usize) -> Vec<Line<'static>> {
-    let mut title_spans = Vec::with_capacity(4);
-    if is_unread {
-        title_spans.push(Span::styled(
-            "● ",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    let unread_w = if is_unread {
-        UnicodeWidthStr::width("● ")
-    } else {
-        0
-    };
+fn entry_lines(item: &RssEntryView, width: usize) -> Vec<Line<'static>> {
+    let mut title_spans = Vec::with_capacity(3);
     let shared = item.entry.shared_at.is_some();
     let badge = if shared { "(shared)" } else { "" };
     let badge_w = UnicodeWidthStr::width(badge);
     let title_budget = if shared {
-        width
-            .saturating_sub(unread_w)
-            .saturating_sub(badge_w + 1)
-            .max(4)
+        width.saturating_sub(badge_w + 1).max(4)
     } else {
-        width.saturating_sub(unread_w).max(4)
+        width.max(4)
     };
     let title = truncate_to_width(&item.entry.title, title_budget);
     let title_w = UnicodeWidthStr::width(title.as_str());
@@ -104,8 +119,7 @@ fn entry_lines(item: &RssEntryView, is_unread: bool, width: usize) -> Vec<Line<'
             .add_modifier(Modifier::BOLD),
     ));
     if shared {
-        let used = unread_w + title_w;
-        let pad = width.saturating_sub(used + badge_w).max(1);
+        let pad = width.saturating_sub(title_w + badge_w).max(1);
         title_spans.push(Span::raw(" ".repeat(pad)));
         title_spans.push(Span::styled(
             badge,
@@ -200,3 +214,7 @@ fn display_feed_title(item: &RssEntryView) -> String {
         title.to_string()
     }
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

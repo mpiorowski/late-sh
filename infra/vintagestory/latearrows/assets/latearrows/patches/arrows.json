@@ -1,0 +1,5 @@
+[
+  { "file": "game:itemtypes/tool/arrow.json", "op": "replace", "path": "/attributes/breakChanceOnImpactByType/*-iron", "value": 0 },
+  { "file": "game:itemtypes/tool/arrow.json", "op": "replace", "path": "/attributes/breakChanceOnImpactByType/*-meteoriciron", "value": 0 },
+  { "file": "game:itemtypes/tool/arrow.json", "op": "replace", "path": "/attributes/breakChanceOnImpactByType/*-steel", "value": 0 }
+]

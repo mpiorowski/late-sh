@@ -28,6 +28,7 @@ fn sitter(n: u128, stool: u8, sat_at_ms: i64) -> PresenceRecord {
             since_ms: 0,
             emote: None,
             petted_dog_at_ms: None,
+            pet_at_heel: None,
         },
         nightcap: Some(NightcapStand {
             stool,

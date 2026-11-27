@@ -287,6 +287,52 @@ fn a_landing_is_weaker_than_a_march_and_encirclement_is_stronger() {
     );
 }
 
+/// Sailing is capped by `sea_reach_km`, but a sea lane is not: the far end
+/// of one is always a landing, which is what keeps a landmass with no other
+/// shore in reach from being a dead end. Antarctica is Earth's: its lane
+/// runs past the campaign's reach, and any other shore that far is not.
+#[test]
+fn a_sea_lane_lands_past_sailing_reach() {
+    let map = map_by_id("earth").unwrap();
+    let antarctica = map
+        .territories
+        .iter()
+        .find(|t| t.name == "Antarctica")
+        .unwrap();
+    let mut state = campaign(&[(1, "a"), (2, "b")]);
+    let reach = state.ruleset.sea_reach_km;
+    let lane = antarctica
+        .sea_lanes
+        .iter()
+        .copied()
+        .find(|from| map.distance_km(*from, antarctica.id) > reach)
+        .expect("a lane past sailing reach");
+    hold(&mut state, 1, &[lane]);
+    assert_eq!(check_take(&state, &map, uid(1), antarctica.id, DAY), Ok(()));
+    assert!(
+        projection(&state, &map, uid(1), antarctica.id, 1, DAY)
+            .unwrap()
+            .landing
+    );
+
+    let elsewhere = map
+        .territories
+        .iter()
+        .find(|t| {
+            t.coastal
+                && t.id != lane
+                && !antarctica.sea_lanes.contains(&t.id)
+                && map.distance_km(t.id, antarctica.id) > reach
+        })
+        .unwrap();
+    let mut far = campaign(&[(1, "a"), (2, "b")]);
+    hold(&mut far, 1, &[elsewhere.id]);
+    assert_eq!(
+        check_take(&far, &map, uid(1), antarctica.id, DAY),
+        Err(OrderRejected::NoFront)
+    );
+}
+
 #[test]
 fn bigger_land_is_harder_to_take() {
     let map = map_by_id("testmap").unwrap();

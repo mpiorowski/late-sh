@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::common::theme;
+use crate::app::games::chips::cooldown::PayoutWindow;
 
 /// A landing section heading. Amber-bold is reserved for these.
 pub fn heading(title: &str) -> Line<'static> {
@@ -36,6 +37,29 @@ pub fn stat(label: &str, value: &str, pad: usize) -> Line<'static> {
         ),
         Span::styled(value.to_string(), Style::default().fg(theme::TEXT_DIM())),
     ])
+}
+
+/// A reward row: the [`stat`] row, then, once the account's payout timers
+/// have been read, the reward's window under its value: green while it pays
+/// now, dim while it counts down.
+pub fn reward(
+    label: &str,
+    value: &str,
+    pad: usize,
+    window: Option<PayoutWindow>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![stat(label, value, pad)];
+    if let Some(window) = window {
+        let color = match window {
+            PayoutWindow::Open => theme::SUCCESS(),
+            PayoutWindow::Closed { .. } => theme::AMBER_DIM(),
+        };
+        lines.push(Line::from(vec![
+            Span::raw(" ".repeat(pad + 2)),
+            Span::styled(window.label(), Style::default().fg(color)),
+        ]));
+    }
+    lines
 }
 
 /// A launch/action row: `marker key  label`, with the marker and key tinted by

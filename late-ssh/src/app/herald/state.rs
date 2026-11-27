@@ -605,6 +605,30 @@ impl ProjectCandidate {
     }
 }
 
+/// The #lounge line for a project once it is out on every network, posted as
+/// the `system` user: the title and the member, the write-up, the member's own
+/// link. It is a chat row, not a ticker line, so it carries no `· ` prefix.
+/// The member is `@name`, followed by a space so the mention takes the whole
+/// name and only the name: the line is how they hear their project was
+/// featured. Chat reads the whole line for mentions
+/// (`common::mentions::extract_mentions`), so what the member typed is made
+/// safe for it: the title and the words go in dead (`dead_words`), the title
+/// loses its backticks before the cut (one left open ahead of `@name` would
+/// put the mention in a code span and the member would never hear), and an
+/// `@` in the link goes in as `%40`, the same address with nobody to ping.
+pub(crate) fn lounge_text(project: &ProjectCandidate) -> String {
+    format!(
+        "\u{1F527} \"{}\" by @{} is this week's featured project.\n{}\n{}",
+        cut_to(
+            &dead_words(&project.title).replace('`', ""),
+            PROJECT_TITLE_MAX_CHARS
+        ),
+        project.artist,
+        project.text,
+        project.url.replace('@', "%40")
+    )
+}
+
 /// Which projects a week's draw leaves out, from the picks of the last
 /// `PROJECT_COOLDOWN`: everything posted in that time. `None` when the week of
 /// `day` (Monday on) already had its project, so nothing is owed. An unreadable

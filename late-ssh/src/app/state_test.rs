@@ -40,6 +40,90 @@ async fn splash_screen_renders_selected_hint_with_existing_copy_and_dismisses() 
     );
 }
 
+#[tokio::test]
+async fn splash_tip_wraps_and_moves_up_on_narrow_screens() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "wrapped-splash-tip").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "wrapped-splash-session");
+    let hint = "Press ? outside of chat to see available hotkeys and learn how to find your way around the clubhouse ☕";
+    app.show_splash_for_tests(hint);
+    app.splash_ticks = 100;
+
+    // Include a short screen where the cup must move up too, then widen
+    // again to check that resizing restores the single-line layout.
+    for (cols, rows) in [(40, 24), (20, 14), (120, 24)] {
+        app.resize(cols, rows).expect("resize splash");
+        let mut terminal = vt100::Parser::new(rows, cols, 0);
+        terminal.process(&app.render().expect("render splash"));
+        let screen = terminal.screen().contents();
+        let lines: Vec<_> = screen.lines().collect();
+        let first = lines
+            .iter()
+            .position(|line| line.trim_start().starts_with("Press ?"))
+            .expect("tip starts on screen");
+        let wrapped = lines[first..].join(" ");
+        assert_eq!(
+            wrapped.split_whitespace().collect::<Vec<_>>(),
+            hint.split_whitespace().collect::<Vec<_>>(),
+            "the full tip fits at {cols}x{rows}:\n{screen}"
+        );
+        assert!(
+            lines[..first].iter().any(|line| line.contains("`----'")),
+            "the cup stays above the tip at {cols}x{rows}:\n{screen}"
+        );
+        if cols == 40 {
+            assert!(first < 22, "the three-line tip moves up:\n{screen}");
+        }
+        if cols == 120 {
+            assert_eq!(first, 22, "a single-line tip keeps its position");
+        }
+    }
+}
+
+#[tokio::test]
+async fn splash_tip_wraps_below_the_gallery_piece_and_greeting() {
+    use crate::app::artboard::gallery::svc::{GalleryPiece, SplashPiece};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "gallery-splash-tip").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "gallery-splash-session");
+    let hint = "Press ? outside of chat to see available hotkeys and learn how to find your way around the clubhouse";
+    let today = chrono::Utc::now().date_naive();
+    app.splash_piece = Some(SplashPiece {
+        shown_on: today,
+        piece: GalleryPiece {
+            id: uuid::Uuid::now_v7(),
+            user_id: user.id,
+            username: "artist".to_string(),
+            title: "Splash artwork".to_string(),
+            width: 4,
+            height: 2,
+            canvas: dartboard_core::Canvas::with_size(4, 2),
+            credits: Vec::new(),
+            applause: 0,
+            applauded_by_viewer: false,
+            created: chrono::Utc::now(),
+            period_month: today,
+        },
+    });
+    app.show_splash_for_tests(hint);
+    app.splash_ticks = 100;
+    app.resize(42, 16).expect("resize splash");
+    let mut terminal = vt100::Parser::new(16, 42, 0);
+    terminal.process(&app.render().expect("render splash"));
+    let screen = terminal.screen().contents();
+    assert!(screen.contains("Splash artwork"), "{screen}");
+    let (above, tip) = screen.split_once("Press ?").expect("tip starts on screen");
+    assert!(above.contains("take a break, grab a coffee"), "{screen}");
+    assert_eq!(
+        format!("Press ?{tip}")
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+        hint.split_whitespace().collect::<Vec<_>>(),
+        "the full wrapped tip fits below the artwork:\n{screen}"
+    );
+}
+
 /// A session must start from the snapshot `LeaderboardService` has already
 /// published. `watch::Sender::subscribe` marks the current value as seen, so the
 /// `has_changed()` gate in `tick.rs` never fires for it: before `App::new`

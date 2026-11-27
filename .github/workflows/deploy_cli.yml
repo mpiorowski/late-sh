@@ -76,8 +76,11 @@ jobs:
         include:
           # Linux desktop targets also ship the standalone late-webview
           # helper: late itself must not link WebKitGTK, so a host without
-          # the webview libraries can still run the CLI.
-          - runner: ubuntu-latest
+          # the webview libraries can still run the CLI. Both glibc targets
+          # stay on a pinned 24.04 image: the binaries need the runner's
+          # glibc, and `ubuntu-latest` moving on locks out every older distro
+          # (check_glibc_floor below fails the build if one slips through).
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             binary_name: late
             webview_helper: true
@@ -207,6 +210,26 @@ jobs:
       - name: cargo_build_webview_helper
         if: matrix.webview_helper == true
         run: cargo build --locked --release -p late-webview --bin late-webview --target ${{ matrix.target }}
+
+      # Ubuntu 24.04's glibc is the floor the Linux release supports. A
+      # binary that asks for a newer symbol version would refuse to start
+      # there ("GLIBC_2.xx not found"), so it never ships.
+      - name: check_glibc_floor
+        if: matrix.webview_helper == true
+        shell: bash
+        env:
+          GLIBC_FLOOR: "2.39"
+        run: |
+          for bin in late late-webview; do
+            path="target/${{ matrix.target }}/release/${bin}"
+            needed="$(objdump -T "$path" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
+            highest="$(printf '%s\n%s\n' "$needed" "$GLIBC_FLOOR" | sort -V | tail -1)"
+            echo "${bin} needs glibc ${needed} (floor ${GLIBC_FLOOR})"
+            if [[ "$highest" != "$GLIBC_FLOOR" ]]; then
+              echo "${bin} needs glibc ${needed}, newer than the ${GLIBC_FLOOR} floor; pin the runner image back" >&2
+              exit 1
+            fi
+          done
 
       - name: stage_cli_artifact
         shell: bash

@@ -231,6 +231,27 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
     }
 }
 
+/// A ring with no sweeper and no listener behind it: the board stays
+/// empty unless a test fills the rows and re-reads it.
+fn test_ring_service(
+    db: Db,
+    chat_service: ChatService,
+    chip_service: ChipService,
+) -> crate::app::deadchannel::ring::svc::RingService {
+    crate::app::deadchannel::ring::svc::RingService::new(
+        db.clone(),
+        crate::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            chat_service.clone(),
+            chip_service,
+        ),
+        chat_service,
+        crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        crate::app::deadchannel::runner::svc::fixed_looks_rx(std::collections::HashMap::new()),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+}
+
 /// A lounge with no spawner behind it: nothing lands unless a test
 /// lands it, and the hit path runs against the test database.
 fn test_lounge_service(
@@ -274,6 +295,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let herald_service = crate::app::herald::svc::HeraldService::new(
         db.clone(),
         ai_service.clone(),
+        chat_service.clone(),
         config.herald.clone(),
         config.web_url.clone(),
     );
@@ -348,6 +370,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
         presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
         lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
+        ring_service: test_ring_service(db.clone(), chat_service.clone(), chip_service.clone()),
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         pot_service: crate::app::pot::svc::PotService::new(db.clone()),
@@ -362,7 +385,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ),
         voice_service,
         stream_service,
-        chat_service,
+        chat_service: chat_service.clone(),
         notification_service,
         ai_service,
         translation_service,
@@ -418,7 +441,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
-        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(db.clone()),
+        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(
+            db.clone(),
+            chip_service.clone(),
+        ),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -433,7 +459,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         house_registry: test_house_registry(db.clone()),
         dartboard_server,
         dartboard_provenance: test_dartboard_provenance(),
-        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            chat_service.clone(),
+            "http://localhost:3000".to_string(),
+        ),
         leaderboard_service,
         quest_service,
         shop_service,
@@ -507,6 +537,10 @@ pub struct SessionWorld {
     /// The tour still to walk (the account's flag is unset), which also
     /// starts the session in the Clubhouse. Unset means walked.
     pub tour_pending: bool,
+    /// An account created yesterday with no comeback mark, so this login
+    /// owes the first comeback moment (`app/comeback`). Unset is an
+    /// account from the epoch, long past the series.
+    pub comeback_due: bool,
     /// Where a session its CLI moved here was (`app/handoff`). Unset is a
     /// login.
     pub resume: Option<crate::app::handoff::state::ResumePoint>,
@@ -515,6 +549,7 @@ pub struct SessionWorld {
     /// the session its own. Mention notifications ride the app's own
     /// `NotificationService`, which this does not share.
     pub chat_service: Option<ChatService>,
+    pub gallery_service: Option<crate::app::artboard::gallery::svc::GalleryService>,
 }
 
 pub fn make_app_in_world(db: Db, user_id: Uuid, session_token: &str, world: SessionWorld) -> App {
@@ -578,6 +613,7 @@ fn make_app_with_chat_service_and_permissions(
         herald_service: crate::app::herald::svc::HeraldService::new(
             db.clone(),
             AiService::new(false, None),
+            chat_service.clone(),
             HeraldConfig::disabled("http://localhost:3000".to_string()),
             "http://localhost:3000".to_string(),
         ),
@@ -676,7 +712,13 @@ fn make_app_with_chat_service_and_permissions(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
-        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        gallery_service: world.gallery_service.clone().unwrap_or_else(|| {
+            crate::app::artboard::gallery::svc::GalleryService::new(
+                db.clone(),
+                chat_service.clone(),
+                "http://localhost:3000".to_string(),
+            )
+        }),
         username: world.username.unwrap_or_else(|| "test-user".to_string()),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
@@ -688,6 +730,7 @@ fn make_app_with_chat_service_and_permissions(
         poster_service: crate::app::deadchannel::poster::svc::PosterService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
         lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
+        ring_service: test_ring_service(db.clone(), chat_service.clone(), chip_service.clone()),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -720,7 +763,10 @@ fn make_app_with_chat_service_and_permissions(
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
-        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(db.clone()),
+        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(
+            db.clone(),
+            chip_service.clone(),
+        ),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
         dcss_host: String::new(),
@@ -790,10 +836,15 @@ fn make_app_with_chat_service_and_permissions(
         pot_service: None,
         referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
         newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
-        // A regular: the newcomer counters are no-ops in tests either way.
-        account_created: chrono::DateTime::UNIX_EPOCH,
+        // A regular, unless the world owes a comeback moment: the newcomer
+        // counters are no-ops in tests either way.
+        account_created: match world.comeback_due {
+            true => chrono::Utc::now() - chrono::Duration::days(1),
+            false => chrono::DateTime::UNIX_EPOCH,
+        },
         activity_feed_rx: None,
         is_new_user: world.is_new_user,
+        comeback_mark: None,
         landing_page: match world.landing_page {
             Some(page) => page,
             None => late_core::models::user::LandingPage::Clubhouse,
@@ -881,6 +932,7 @@ pub fn make_app_with_paired_client(
         herald_service: crate::app::herald::svc::HeraldService::new(
             db.clone(),
             AiService::new(false, None),
+            chat_service.clone(),
             HeraldConfig::disabled("http://localhost:3000".to_string()),
             "http://localhost:3000".to_string(),
         ),
@@ -979,7 +1031,11 @@ pub fn make_app_with_paired_client(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
-        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(
+            db.clone(),
+            chat_service.clone(),
+            "http://localhost:3000".to_string(),
+        ),
         username: "test-user".to_string(),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         fight_service: crate::app::deadchannel::fight::svc::FightService::new(
@@ -991,6 +1047,11 @@ pub fn make_app_with_paired_client(
         poster_service: crate::app::deadchannel::poster::svc::PosterService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
         lounge_service: test_lounge_service(
+            db.clone(),
+            ChatService::new(db.clone(), notification_service.clone()),
+            chip_service.clone(),
+        ),
+        ring_service: test_ring_service(
             db.clone(),
             ChatService::new(db.clone(), notification_service.clone()),
             chip_service.clone(),
@@ -1027,7 +1088,10 @@ pub fn make_app_with_paired_client(
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
-        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(db.clone()),
+        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(
+            db.clone(),
+            chip_service.clone(),
+        ),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
         dcss_host: String::new(),
@@ -1101,6 +1165,7 @@ pub fn make_app_with_paired_client(
         account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: false,
+        comeback_mark: None,
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1370,4 +1435,22 @@ pub async fn publish_test_splash(state: &State) -> Uuid {
         piece.id
     );
     piece.id
+}
+
+/// A pet's snapshot grown to `form` in memory, with the days its stage
+/// asks for: for tests of the session and the drawing that need a pet out
+/// of its egg and never touch the row.
+pub fn pet_grown_to(
+    mut pet: crate::app::pet::svc::PetSnapshot,
+    form: late_core::models::pet::Form,
+) -> crate::app::pet::svc::PetSnapshot {
+    let stage = form.stage();
+    pet.row.stage = stage.as_str().to_string();
+    pet.row.looks = form
+        .picks()
+        .into_iter()
+        .map(|pick| pick.as_str().to_string())
+        .collect();
+    pet.row.days_together = crate::app::pet::state::days_for(stage);
+    pet
 }

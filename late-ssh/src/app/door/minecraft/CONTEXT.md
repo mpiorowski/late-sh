@@ -121,5 +121,5 @@ Steps:
 ## Tests
 
 ```bash
-make test-llm ARGS="-p late-ssh --lib -E 'test(/door::minecraft::/) | test(/door::hub::/)'"
+make test ARGS="-p late-ssh --lib -E 'test(/door::minecraft::/) | test(/door::hub::/)'"
 ```

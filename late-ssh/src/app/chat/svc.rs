@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::{
     collections::{HashMap, HashSet},
@@ -10,11 +10,14 @@ use std::{
 };
 use uuid::Uuid;
 
+use late_core::models::daily_rung::{STAR_GLYPH, list_starred_on};
+use late_core::models::daily_streak::{
+    DailyStreakSnapshot, StreakMark, list_daily_streak_snapshots,
+};
 use late_core::{
     MutexRecover,
     db::Db,
     models::{
-        article::Article,
         character_sheet::{CharacterSheet, CharacterSheetParams},
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection},
         chat_message_gild::{
@@ -26,7 +29,7 @@ use late_core::{
             ChatMessageReactionSummary,
         },
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
-        chat_room::{ChatRoom, UserRoomState},
+        chat_room::{ChatRoom, RoomKind, RoomVisibility, UserRoomState},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         chips::UserChips,
@@ -52,8 +55,7 @@ use crate::metrics;
 use crate::moderation::command::RoomModAction;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationInfra, ModerationService, RoomModRequest, ensure_message_permission,
-    target_tier_for_user_id,
+    ModerationInfra, ModerationService, RoomModRequest, target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::pg_listener::{Channel, Signal};
@@ -131,6 +133,12 @@ impl ReportKind {
         }
     }
 
+    /// The body a report of `text` is posted as: what `send_report` sends,
+    /// and what the composer measures against the cap before it clears.
+    pub(crate) fn card_body(self, text: &str) -> String {
+        format!("{} {}", self.marker(), text)
+    }
+
     pub(crate) const fn command(self) -> &'static str {
         match self {
             Self::Bug => "/bug",
@@ -167,10 +175,16 @@ impl ReportKind {
     /// unique per visibility, so a private room may carry the same name and
     /// stays free text for its members.
     pub(crate) fn for_room(room: &ChatRoom) -> Option<Self> {
-        if room.kind != "topic" || room.visibility != "public" {
-            return None;
+        match room.kind {
+            RoomKind::Topic(RoomVisibility::Public) => Self::for_room_slug(room.slug.as_deref()?),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => None,
         }
-        Self::for_room_slug(room.slug.as_deref()?)
     }
 }
 
@@ -390,13 +404,16 @@ struct SendMessageParams {
 
 /// Whose words a line carries. The bar slurs a patron's own words and
 /// their `@name`s notify; a line the house builds for them out of text
-/// they never wrote (a News card's page title) gets neither.
+/// they never wrote (a News card's page title, a hung piece's title)
+/// gets neither.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Wording {
     /// Typed by the author.
     Typed,
-    /// Built by the house from someone else's text.
-    Quoted,
+    /// A #lounge card the house writes in the author's name: a News
+    /// share's or a hung Artboard piece's. Kept out of chat standings from
+    /// the instant it is inserted.
+    HouseCard,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -428,6 +445,10 @@ pub(crate) enum SendRefusal {
     /// A young account posting a link inside its cooldown.
     LinkCooldown {
         remaining: Duration,
+    },
+    /// A body past `chat_message::BODY_MAX_CHARS`, with its own count.
+    TooLong {
+        chars: usize,
     },
 }
 
@@ -468,6 +489,10 @@ impl SendRefusal {
             Self::LinkCooldown { remaining } => format!(
                 "🔗 New accounts can only post a link occasionally — next link in {}.",
                 format_cooldown(remaining.as_secs())
+            ),
+            Self::TooLong { chars } => format!(
+                "Message too long: {chars} characters, the limit is {}.",
+                late_core::models::chat_message::BODY_MAX_CHARS
             ),
         }
     }
@@ -517,6 +542,8 @@ enum SendPath {
     },
     /// A game line on the wire, from the voice.
     Wire,
+    /// A game line to one runner, a DM from the voice.
+    VoiceDm,
 }
 
 impl SendPath {
@@ -527,6 +554,7 @@ impl SendPath {
             Self::BotReply => "chat_bot_send_failed",
             Self::Lounge { .. } => "chat_lounge_send_failed",
             Self::Wire => "deadchannel_wire_line_failed",
+            Self::VoiceDm => "deadchannel_voice_dm_failed",
         }
     }
 
@@ -538,6 +566,7 @@ impl SendPath {
             Self::BotReply => "a bot reply",
             Self::Lounge { what } => what,
             Self::Wire => "a wire line",
+            Self::VoiceDm => "a dm from the voice",
         }
     }
 }
@@ -564,6 +593,86 @@ fn account_send_error(path: SendPath, error: &SendError) -> String {
             );
             SEND_FAILED_MESSAGE.to_string()
         }
+    }
+}
+
+/// Why an edit did not land: a rule the editor can act on. Every arm words
+/// its own banner, so a new guard has to say what the editor should do
+/// rather than fall into "could not edit".
+#[derive(Clone, Copy, Debug)]
+enum EditRefusal {
+    /// Nothing left once trimmed.
+    Empty,
+    /// The message was deleted while its edit was open.
+    Gone,
+    /// Someone else's message, past the editor's rank.
+    NotTheirs,
+    /// A report in `#bugs` or `#suggestions` losing its marker, which would
+    /// get free text past the send gate.
+    ReportMarker,
+    /// A #lounge card the house wrote (`ChatMessage::is_house_card`): it is
+    /// drawn from its story or piece, so its line is not what anyone reads.
+    HouseCard,
+}
+
+impl EditRefusal {
+    /// Sentence-case banner copy, the one place a refusal is worded.
+    fn message(self) -> &'static str {
+        match self {
+            Self::Empty => "Edited message cannot be empty.",
+            Self::Gone => "That message is gone.",
+            Self::NotTheirs => "You can't edit this message.",
+            Self::ReportMarker => "Reports here must keep their marker; edit the text after it.",
+            Self::HouseCard => "That card can't be edited.",
+        }
+    }
+}
+
+/// An edit that did not land: a rule said no, or something broke. Kept
+/// apart like `SendError`: only the first is the editor's to fix.
+#[derive(Debug)]
+enum EditError {
+    Refused(EditRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for EditError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// Why a delete did not land: a rule the deleter can act on, each worded
+/// once, as `EditRefusal` is.
+#[derive(Clone, Copy, Debug)]
+enum DeleteRefusal {
+    /// Someone else deleted the message first.
+    Gone,
+    /// Someone else's message, past the deleter's rank.
+    NotTheirs,
+}
+
+impl DeleteRefusal {
+    /// Sentence-case banner copy, the one place a refusal is worded.
+    fn message(self) -> &'static str {
+        match self {
+            Self::Gone => "That message is gone.",
+            Self::NotTheirs => "You can't delete this message.",
+        }
+    }
+}
+
+/// A delete that did not land: a rule said no, or something broke. Kept
+/// apart like `EditError`: only the first is the deleter's to fix.
+#[derive(Debug)]
+enum DeleteError {
+    Refused(DeleteRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for DeleteError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
     }
 }
 
@@ -635,7 +744,16 @@ async fn slow_mode_remaining(
         return Ok(Some((remaining, SlowModeScope::Room)));
     }
 
-    if room.kind != "dm"
+    let server_slow_mode_applies = match room.kind {
+        RoomKind::Dm => false,
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => true,
+    };
+    if server_slow_mode_applies
         && let Some(slow_mode) = ChatSlowMode::find_active_server_for_user(client, user_id).await?
         && let Some(remaining) =
             server_slow_mode_remaining_for_mode(client, user_id, slow_mode).await?
@@ -676,6 +794,18 @@ const LINK_TLDS: &[&str] = &[
 /// roll happens once and never has to be reproducible after the fact; only
 /// [`slur::slur`] itself takes a caller-supplied seed, which is what keeps it
 /// testable.
+/// `body` as a patron at `level` gets it into the room: slurred, unless the
+/// slur grew it past the column cap (a thickened `s`, a `*hic*`). Text that
+/// fit as typed goes out as typed then, instead of failing at the insert
+/// after the composer cleared.
+fn drunk_body(body: &str, level: u8, seed: u64) -> String {
+    let slurred = slur::slur(body, level, seed);
+    match slurred.chars().count() > late_core::models::chat_message::BODY_MAX_CHARS {
+        true => body.to_string(),
+        false => slurred,
+    }
+}
+
 fn slur_seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -847,6 +977,9 @@ pub struct ChatSnapshot {
     pub room_last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     pub active_polls: HashMap<Uuid, ActiveChatPoll>,
     pub bonsai_glyphs: HashMap<Uuid, String>,
+    /// The ladder's marks beside each author's name: the streak's moon and
+    /// today's star, as one short string, absent when there is nothing.
+    pub ladder_marks: HashMap<Uuid, String>,
     pub chat_badges: HashMap<Uuid, String>,
     pub profile_award_badges: HashMap<Uuid, String>,
     pub ignored_user_ids: Vec<Uuid>,
@@ -892,6 +1025,7 @@ pub enum ChatEvent {
         target_user_ids: Option<Vec<Uuid>>,
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
+        author_ladder_marks: Option<String>,
         author_chat_badge: Option<String>,
         author_profile_award_badges: Option<String>,
     },
@@ -900,6 +1034,7 @@ pub enum ChatEvent {
         target_user_ids: Option<Vec<Uuid>>,
         author_username: Option<String>,
         author_bonsai_glyph: Option<String>,
+        author_ladder_marks: Option<String>,
         author_chat_badge: Option<String>,
         author_profile_award_badges: Option<String>,
     },
@@ -913,6 +1048,7 @@ pub enum ChatEvent {
         message_gilds: HashMap<Uuid, ChatMessageGildSummary>,
         usernames: HashMap<Uuid, String>,
         bonsai_glyphs: HashMap<Uuid, String>,
+        ladder_marks: HashMap<Uuid, String>,
         chat_badges: HashMap<Uuid, String>,
         profile_award_badges: HashMap<Uuid, String>,
     },
@@ -1489,6 +1625,7 @@ impl ChatService {
             self.moderation_session_effects(),
             self.moderation_event_tx.clone(),
             self.moderation_infra.clone(),
+            self.clone(),
         )
     }
 
@@ -1604,18 +1741,34 @@ impl ChatService {
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
         let lounge_room_id = rooms
             .iter()
-            .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
+            .find(|room| match room.kind {
+                RoomKind::Lounge => room.slug.as_deref() == Some("lounge"),
+                RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            })
             .map(|room| room.id);
 
         let mut visible_user_ids = vec![user_id];
         for room in &rooms {
-            if room.kind == "dm" {
-                if let Some(id) = room.dm_user_a {
-                    visible_user_ids.push(id);
+            match room.kind {
+                RoomKind::Dm => {
+                    if let Some(id) = room.dm_user_a {
+                        visible_user_ids.push(id);
+                    }
+                    if let Some(id) = room.dm_user_b {
+                        visible_user_ids.push(id);
+                    }
                 }
-                if let Some(id) = room.dm_user_b {
-                    visible_user_ids.push(id);
-                }
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(_)
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {}
             }
         }
         visible_user_ids.extend(friend_user_ids.iter().copied());
@@ -1623,7 +1776,16 @@ impl ChatService {
         visible_user_ids.dedup();
         let private_room_ids: Vec<Uuid> = rooms
             .iter()
-            .filter(|room| room.kind == "topic" && room.visibility == "private")
+            .filter(|room| match room.kind {
+                RoomKind::Topic(RoomVisibility::Private) => true,
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Public)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => false,
+            })
             .map(|room| room.id)
             .collect();
 
@@ -1665,6 +1827,7 @@ impl ChatService {
             room_last_message_at,
             active_polls,
             bonsai_glyphs: author_metadata.bonsai_glyphs,
+            ladder_marks: author_metadata.ladder_marks,
             chat_badges: author_metadata.chat_badges,
             profile_award_badges: author_metadata.profile_award_badges,
             ignored_user_ids,
@@ -1681,14 +1844,30 @@ impl ChatService {
             return Ok(ChatAuthorMaps::default());
         }
 
-        let metadata = User::list_chat_author_metadata(client, user_ids).await?;
+        // The ladder's marks are read on the UTC day the label is built
+        // for: a star is today's only, and the moon goes the day after a
+        // run breaks. Both ride every author metadata load, so they are
+        // never staler than the badges beside them. The three reads are
+        // independent, so they share one round trip on the connection.
+        let today = Utc::now().date_naive();
+        let (metadata, streaks, starred) = tokio::try_join!(
+            User::list_chat_author_metadata(client, user_ids),
+            list_daily_streak_snapshots(client, user_ids, today),
+            list_starred_on(client, user_ids, today),
+        )?;
 
         let mut maps = ChatAuthorMaps {
             usernames: HashMap::with_capacity(metadata.len()),
             bonsai_glyphs: HashMap::new(),
+            ladder_marks: HashMap::new(),
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
         };
+        for user_id in user_ids {
+            if let Some(marks) = ladder_marks(streaks.get(user_id), starred.contains(user_id)) {
+                maps.ladder_marks.insert(*user_id, marks);
+            }
+        }
         for item in metadata {
             if !item.username.trim().is_empty() {
                 maps.usernames.insert(item.user_id, item.username);
@@ -1721,8 +1900,25 @@ impl ChatService {
 struct ChatAuthorMaps {
     usernames: HashMap<Uuid, String>,
     bonsai_glyphs: HashMap<Uuid, String>,
+    ladder_marks: HashMap<Uuid, String>,
     chat_badges: HashMap<Uuid, String>,
     profile_award_badges: HashMap<Uuid, String>,
+}
+
+/// What the ladder may add to a name: the streak's moon, then today's
+/// star, a space between them when both show (glued, `●✦` reads as one
+/// smudge). At most three single-width cells, and nothing at all for most
+/// people, so the label's budget holds.
+fn ladder_marks(streak: Option<&DailyStreakSnapshot>, starred_today: bool) -> Option<String> {
+    let moon = streak
+        .and_then(|s| StreakMark::for_days(s.consecutive_days))
+        .map(StreakMark::glyph);
+    match (moon, starred_today) {
+        (Some(moon), true) => Some(format!("{moon} {STAR_GLYPH}")),
+        (Some(moon), false) => Some(moon.to_string()),
+        (None, true) => Some(STAR_GLYPH.to_string()),
+        (None, false) => None,
+    }
 }
 
 fn chat_author_badge(flag: Option<String>, badge: Option<String>) -> Option<String> {
@@ -1990,6 +2186,7 @@ impl ChatService {
                 message_gilds,
                 usernames: author_metadata.usernames,
                 bonsai_glyphs: author_metadata.bonsai_glyphs,
+                ladder_marks: author_metadata.ladder_marks,
                 chat_badges: author_metadata.chat_badges,
                 profile_award_badges: author_metadata.profile_award_badges,
             },
@@ -2796,6 +2993,7 @@ impl ChatService {
             target_user_ids,
             author_username: author_metadata.usernames.remove(&poll.poll.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&poll.poll.user_id),
+            author_ladder_marks: author_metadata.ladder_marks.remove(&poll.poll.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&poll.poll.user_id),
             author_profile_award_badges: author_metadata
                 .profile_award_badges
@@ -2914,7 +3112,7 @@ impl ChatService {
         // (a private topic room or a game room may share one), so a loose
         // slug lookup could leak the report into, and join the reporter to,
         // whichever same-slug row happened to come back first.
-        let room = ChatRoom::find_topic_room(&client, "public", kind.slug())
+        let room = ChatRoom::find_topic_room(&client, RoomVisibility::Public, kind.slug())
             .await?
             .ok_or_else(|| anyhow::anyhow!("room #{} not found", kind.slug()))?;
         ChatRoomMember::join(&client, room.id, user_id).await?;
@@ -2924,7 +3122,7 @@ impl ChatService {
             user_id,
             room_id: room.id,
             room_slug: Some(kind.slug().to_string()),
-            body: format!("{} {}", kind.marker(), text),
+            body: kind.card_body(&text),
             reply_to_message_id: None,
             reply_to_user_id: None,
             is_admin: false,
@@ -3229,6 +3427,56 @@ impl ChatService {
         );
     }
 
+    /// A line of the game's for one runner: a DM from the voice, for what
+    /// a runner must not miss (a call to the ring). The DM room is the one
+    /// the first contact invitation opened, or made here; the message is a
+    /// real one, so it is unread until read and notifies like any DM.
+    /// Fire-and-forget, accounted here like the wire's lines.
+    pub fn post_voice_dm_task(&self, target_user_id: Uuid, body: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let posted: Result<(), SendError> = async {
+                    let (voice_id, room_id) = async {
+                        let voice = service.ensure_first_contact_voice().await?;
+                        let client = service.db.get().await?;
+                        let room =
+                            ChatRoom::get_or_create_dm(&client, voice.id, target_user_id).await?;
+                        ChatRoomMember::join(&client, room.id, voice.id).await?;
+                        ChatRoomMember::join(&client, room.id, target_user_id).await?;
+                        VoiceChannel::upsert_for_target(
+                            &client,
+                            TARGET_CHAT_ROOM,
+                            room.id,
+                            "dm",
+                            true,
+                        )
+                        .await?;
+                        anyhow::Ok((voice.id, room.id))
+                    }
+                    .await?;
+                    service
+                        .send_message(SendMessageParams {
+                            user_id: voice_id,
+                            room_id,
+                            room_slug: None,
+                            body,
+                            reply_to_message_id: None,
+                            reply_to_user_id: None,
+                            is_admin: false,
+                            wording: Wording::Typed,
+                        })
+                        .await
+                }
+                .await;
+                if let Err(error) = posted {
+                    account_send_error(SendPath::VoiceDm, &error);
+                }
+            }
+            .instrument(info_span!("chat.post_voice_dm_task", user_id = %target_user_id)),
+        );
+    }
+
     pub fn send_message_with_reply_task(&self, task: SendMessageTask) {
         let SendMessageTask {
             user_id,
@@ -3337,7 +3585,7 @@ impl ChatService {
 
     /// `send_lounge_message` handing back the row it wrote, `None` for an
     /// empty body: for a caller that keeps a pointer to its line (a News
-    /// share's card, whose title is `Wording::Quoted`).
+    /// share's card or a hung piece's, `Wording::HouseCard`).
     pub(crate) async fn send_lounge_message_returning(
         &self,
         user_id: Uuid,
@@ -3367,11 +3615,12 @@ impl ChatService {
         .await
     }
 
-    /// Take a News share's card out of #lounge with its story. The News
-    /// delete already decided who may delete the story and audited it, so
-    /// the row goes as the house's, and every session drops it. A card
-    /// already gone (its author deleted it first) is nothing to do.
-    pub(crate) async fn delete_news_card(&self, deleted_by: Uuid, message_id: Uuid) -> Result<()> {
+    /// Take a house card out of #lounge with what it stood for: a News
+    /// share's story, a hung piece. The caller already decided who may
+    /// delete that and audited it, so the row goes as the house's, and
+    /// every session drops it. A card already gone (its author deleted it
+    /// first) is nothing to do.
+    pub(crate) async fn delete_house_card(&self, deleted_by: Uuid, message_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let room_id = match ChatMessage::get(&client, message_id).await? {
             Some(message) => message.room_id,
@@ -3434,6 +3683,10 @@ impl ChatService {
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
             return Ok(None);
+        }
+        let chars = body.chars().count();
+        if chars > late_core::models::chat_message::BODY_MAX_CHARS {
+            return Err(SendError::Refused(SendRefusal::TooLong { chars }));
         }
 
         if room_slug.as_deref() == Some("announcements") && !is_admin {
@@ -3498,15 +3751,23 @@ impl ChatService {
                 )));
             }
         }
-        if room.kind == "dm" {
-            let user_a = room
-                .dm_user_a
-                .ok_or_else(|| anyhow::anyhow!("dm room is missing first participant"))?;
-            let user_b = room
-                .dm_user_b
-                .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
-            ChatRoomMember::join(&client, room_id, user_a).await?;
-            ChatRoomMember::join(&client, room_id, user_b).await?;
+        match room.kind {
+            RoomKind::Dm => {
+                let user_a = room
+                    .dm_user_a
+                    .ok_or_else(|| anyhow::anyhow!("dm room is missing first participant"))?;
+                let user_b = room
+                    .dm_user_b
+                    .ok_or_else(|| anyhow::anyhow!("dm room is missing second participant"))?;
+                ChatRoomMember::join(&client, room_id, user_a).await?;
+                ChatRoomMember::join(&client, room_id, user_b).await?;
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
         }
 
         // Last thing before the row is written, so every check above (report
@@ -3514,7 +3775,7 @@ impl ChatService {
         // mention task below sees the same body the room will.
         let body = match wording {
             Wording::Typed => self.slurred_body(&client, user_id, &room, body).await?,
-            Wording::Quoted => body.to_string(),
+            Wording::HouseCard => body.to_string(),
         };
 
         let message = ChatMessageParams {
@@ -3522,13 +3783,18 @@ impl ChatService {
             user_id,
             body: body.clone(),
         };
-        let chat = ChatMessage::create_with_reply_targets(
-            &client,
-            message,
-            reply_to_message_id,
-            reply_to_user_id,
-        )
-        .await?;
+        let chat = match wording {
+            Wording::Typed => {
+                ChatMessage::create_with_reply_targets(
+                    &client,
+                    message,
+                    reply_to_message_id,
+                    reply_to_user_id,
+                )
+                .await?
+            }
+            Wording::HouseCard => ChatMessage::create_house_card(&client, message).await?,
+        };
         ChatRoom::touch_updated(&client, room_id).await?;
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, room_id).await?;
@@ -3538,6 +3804,7 @@ impl ChatService {
             target_user_ids,
             author_username: author_metadata.usernames.remove(&user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&user_id),
+            author_ladder_marks: author_metadata.ladder_marks.remove(&user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&user_id),
             author_profile_award_badges: author_metadata.profile_award_badges.remove(&user_id),
         });
@@ -3549,7 +3816,7 @@ impl ChatService {
             }
             // An `@name` the author never wrote notifies nobody in their
             // name.
-            Wording::Quoted => {}
+            Wording::HouseCard => {}
         }
         self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
@@ -3602,8 +3869,16 @@ impl ChatService {
         room: &ChatRoom,
         body: &str,
     ) -> Result<String> {
-        if room.visibility != "public" {
-            return Ok(body.to_string());
+        match room.kind {
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Game(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
+            RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Private) => return Ok(body.to_string()),
         }
 
         let level = match UserDrinks::find(client, user_id).await? {
@@ -3613,7 +3888,7 @@ impl ChatService {
         // Rolled once, here, and stored: the level at the moment of typing is
         // the only one that ever made sense, and it must not re-roll or sober
         // up under a reader later.
-        Ok(slur::slur(body, level, slur_seed()))
+        Ok(drunk_body(body, level, slur_seed()))
     }
 
     pub fn edit_message_task(
@@ -3631,17 +3906,17 @@ impl ChatService {
                     .edit_message(user_id, message_id, new_body, permissions)
                     .await
                 {
-                    Err(e) => {
-                        let message = if e.to_string().contains("Cannot edit") {
-                            "You can only edit your own messages."
-                        } else if e.to_string().contains("empty") {
-                            "Edited message cannot be empty."
-                        } else if e.to_string().starts_with("report-only:") {
-                            "Reports here must keep their marker; edit the text after it."
-                        } else if e.to_string().starts_with("news-card:") {
-                            "A story's card can't be edited."
-                        } else {
-                            "Could not edit message. Please try again."
+                    Err(error) => {
+                        let message = match error {
+                            EditError::Refused(refusal) => refusal.message(),
+                            EditError::Failed(error) => {
+                                late_core::error_span!(
+                                    "chat_edit_failed",
+                                    error = ?error,
+                                    "edit failed"
+                                );
+                                "Could not edit message. Please try again."
+                            }
                         };
                         let _ = service.evt_tx.send(ChatEvent::EditFailed {
                             user_id,
@@ -3673,35 +3948,38 @@ impl ChatService {
         message_id: Uuid,
         new_body: String,
         permissions: Permissions,
-    ) -> Result<()> {
+    ) -> Result<(), EditError> {
         let new_body = new_body.trim_start_matches('\n').trim_end();
         if new_body.is_empty() {
-            anyhow::bail!("edited body is empty");
+            return Err(EditError::Refused(EditRefusal::Empty));
         }
 
         let mut client = self.db.get().await?;
-        let existing = ChatMessage::get(&client, message_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("message not found"))?;
+        let existing = match ChatMessage::get(&client, message_id).await? {
+            Some(existing) => existing,
+            None => return Err(EditError::Refused(EditRefusal::Gone)),
+        };
         let is_owner = existing.user_id == user_id;
         let target_tier = if is_owner {
             Tier::Regular
         } else {
             target_tier_for_user_id(&client, existing.user_id).await?
         };
-        ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
-
-        // A News share's card is drawn from its story, not from its line, so
-        // an edit would change what IRC and search read while every TUI
-        // reader, moderators included, still saw the story. Nobody edits
-        // one; deleting the story takes it out.
-        if Article::is_lounge_card(&client, message_id).await? {
-            anyhow::bail!("news-card: a story's card is not edited");
+        if !is_owner && !permissions.can(Caps::EDIT_OTHER_MESSAGE, target_tier) {
+            return Err(EditError::Refused(EditRefusal::NotTheirs));
         }
 
+        // A house card (a News share's, a hung piece's) is drawn from its
+        // story or piece, not from its line, so an edit would change what
+        // IRC and search read while every TUI reader, moderators included,
+        // still saw the original. Nobody edits one; taking the story or the
+        // piece down takes it out.
+        if ChatMessage::is_house_card(&client, message_id).await? {
+            return Err(EditError::Refused(EditRefusal::HouseCard));
+        }
         // Report-only rooms: a regular user's only messages there are their own
-        // report cards, and an edit must not strip the marker — otherwise
-        // editing would bypass the free-text send gate.
+        // report cards, and an edit must not strip the marker, or editing
+        // would get free text past the send gate.
         if !permissions.is_admin() && !permissions.is_moderator() {
             let room = ChatRoom::get(&client, existing.room_id)
                 .await?
@@ -3709,12 +3987,20 @@ impl ChatService {
             if let Some(kind) = ReportKind::for_room(&room)
                 && !new_body.trim_start().starts_with(kind.marker())
             {
-                anyhow::bail!("report-only:{}", kind.slug());
+                return Err(EditError::Refused(EditRefusal::ReportMarker));
             }
         }
 
-        let tx = client.transaction().await?;
-        let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the edit's transaction")?;
+        // Deleted between the read above and here: the same lost race.
+        let updated = match ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?
+        {
+            Some(updated) => updated,
+            None => return Err(EditError::Refused(EditRefusal::Gone)),
+        };
         // Cached translations describe the pre-edit body; they die with it.
         late_core::models::message_translation::MessageTranslation::delete_for_message(
             &tx, message_id,
@@ -3730,7 +4016,7 @@ impl ChatService {
             json!({ "room_id": existing.room_id }),
         )
         .await?;
-        tx.commit().await?;
+        tx.commit().await.context("committing the edit")?;
         let target_user_ids = ChatRoom::get_target_user_ids(&client, existing.room_id).await?;
         let mut author_metadata =
             Self::load_chat_author_metadata(&client, &[existing.user_id]).await?;
@@ -3739,6 +4025,7 @@ impl ChatService {
             target_user_ids,
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
+            author_ladder_marks: author_metadata.ladder_marks.remove(&existing.user_id),
             author_chat_badge: author_metadata.chat_badges.remove(&existing.user_id),
             author_profile_award_badges: author_metadata
                 .profile_award_badges
@@ -4141,13 +4428,18 @@ impl ChatService {
                 }
             })
             .collect();
-        let title = if room.kind == "dm" {
-            "DM Members".to_string()
-        } else {
-            room.slug
+        let title = match room.kind {
+            RoomKind::Dm => "DM Members".to_string(),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => room
+                .slug
                 .as_deref()
                 .map(|slug| format!("#{slug} Members"))
-                .unwrap_or_else(|| "Room Members".to_string())
+                .unwrap_or_else(|| "Room Members".to_string()),
         };
 
         Ok((title, members))
@@ -4521,11 +4813,20 @@ impl ChatService {
         let Some(room) = ChatRoom::get(&client, message.room_id).await? else {
             return Err(GildError::Refused(GildRefusal::MessageNotFound));
         };
-        if room.visibility != "public" {
-            return Err(GildError::Refused(GildRefusal::NotPublic));
-        }
-        if room.kind == "game" {
-            return Err(GildError::Refused(GildRefusal::GameRoom));
+        match room.kind {
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Public)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
+            RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(RoomVisibility::Private) => {
+                return Err(GildError::Refused(GildRefusal::NotPublic));
+            }
+            RoomKind::Game(RoomVisibility::Public) => {
+                return Err(GildError::Refused(GildRefusal::GameRoom));
+            }
         }
         if message.user_id == user_id {
             return Err(GildError::Refused(GildRefusal::SelfGild));
@@ -4995,8 +5296,17 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        if room.kind != "topic" || room.visibility != "public" {
-            anyhow::bail!("Only public rooms can be joined from discover");
+        match room.kind {
+            RoomKind::Topic(RoomVisibility::Public) => {}
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(RoomVisibility::Private)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {
+                anyhow::bail!("Only public rooms can be joined from discover")
+            }
         }
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
@@ -5011,18 +5321,25 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        if room.kind != "game" {
-            anyhow::bail!("Only game rooms can be joined here");
-        }
-        // House tables, stream chats and match chats are public: anyone who
-        // opens the surface joins and talks. The one private flavor left is
-        // a match claimed while match chat was players-only, where the two
-        // memberships written at claim time are the whole room; a spectator
-        // walking into one stays out, which is an outcome and not an error.
-        if room.visibility != "public"
-            && !ChatRoomMember::is_member(&client, room.id, user_id).await?
-        {
-            return Ok(GameRoomJoin::PlayersOnly);
+        match room.kind {
+            // House tables, stream chats and match chats are public: anyone
+            // who opens the surface joins and talks.
+            RoomKind::Game(RoomVisibility::Public) => {}
+            // The one private flavor left is a match claimed while match
+            // chat was players-only, where the two memberships written at
+            // claim time are the whole room; a spectator walking into one
+            // stays out, which is an outcome and not an error.
+            RoomKind::Game(RoomVisibility::Private) => {
+                if !ChatRoomMember::is_member(&client, room.id, user_id).await? {
+                    return Ok(GameRoomJoin::PlayersOnly);
+                }
+            }
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Dm
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => anyhow::bail!("Only game rooms can be joined here"),
         }
         // A ban is what keeps someone out of a public game room, and
         // `ChatRoomMember::join` is where that is enforced for every join path.
@@ -5044,7 +5361,7 @@ impl ChatService {
         // Public rooms are hosted, not owned: only mods edit their topic and
         // rules. Whether this call opens a brand-new room decides whether the
         // house gets told about it, so look before creating.
-        let existed = ChatRoom::find_topic_room(&client, "public", slug)
+        let existed = ChatRoom::find_topic_room(&client, RoomVisibility::Public, slug)
             .await?
             .is_some();
         // A new room is created without auto-join. An existing one keeps
@@ -5147,7 +5464,8 @@ impl ChatService {
             .await?
             .map(|user| user.username)
             .unwrap_or_else(|| "someone".to_string());
-        let moderators = ChatRoom::find_topic_room(&client, "private", MODERATORS_SLUG).await?;
+        let moderators =
+            ChatRoom::find_topic_room(&client, RoomVisibility::Private, MODERATORS_SLUG).await?;
         drop(client);
 
         self.send_system_message(
@@ -5372,8 +5690,17 @@ impl ChatService {
             .await?
             .ok_or_else(|| anyhow::anyhow!("room not found"))?;
         if !is_mod {
-            if room.kind != "topic" || room.visibility != "private" {
-                anyhow::bail!("only a moderator can set this room's info");
+            match room.kind {
+                RoomKind::Topic(RoomVisibility::Private) => {}
+                RoomKind::Lounge
+                | RoomKind::Language
+                | RoomKind::Topic(RoomVisibility::Public)
+                | RoomKind::Dm
+                | RoomKind::Game(_)
+                | RoomKind::Deadchannel
+                | RoomKind::Nightcap => {
+                    anyhow::bail!("only a moderator can set this room's info")
+                }
             }
             match ChatRoom::owner_id(&client, room_id).await? {
                 Some(owner) if owner == user_id => {}
@@ -5381,7 +5708,7 @@ impl ChatService {
             }
         }
         let room = ChatRoom::set_topic_and_rules(&client, room_id, topic, rules).await?;
-        Ok(room.slug.unwrap_or_else(|| room.kind.clone()))
+        Ok(room.slug.unwrap_or_else(|| room.kind.as_str().to_string()))
     }
 
     pub fn leave_room_task(&self, user_id: Uuid, room_id: Uuid, slug: String) {
@@ -5417,13 +5744,17 @@ impl ChatService {
         // The name for the wire's "went dark" line, read before anything
         // is written: a lookup that fails here fails the leave whole, never
         // after the membership and the stamp have already landed.
-        let deadchannel_username = match room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
-        {
-            true => match User::get(&client, user_id).await? {
+        let deadchannel_username = match room.kind {
+            RoomKind::Deadchannel => match User::get(&client, user_id).await? {
                 Some(user) => Some(user.username),
                 None => anyhow::bail!("user not found"),
             },
-            false => None,
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Dm
+            | RoomKind::Game(_)
+            | RoomKind::Nightcap => None,
         };
         ChatRoomMember::leave(&client, room_id, user_id).await?;
         // Leaving #deadchannel closes the undercity gate, on this replica
@@ -5539,13 +5870,14 @@ impl ChatService {
 
     async fn fill_room(&self, slug: &str) -> Result<u64> {
         let client = self.db.get().await?;
-        if let Some(room) = ChatRoom::find_topic_room(&client, "public", slug).await? {
+        if let Some(room) = ChatRoom::find_topic_room(&client, RoomVisibility::Public, slug).await?
+        {
             ChatRoom::set_auto_join(&client, room.id, true).await?;
             let users_added = ChatRoom::add_all_users(&client, room.id).await?;
             tracing::info!(slug = %slug, room_id = %room.id, users_added, "room filled and auto-join enabled");
             return Ok(users_added);
         }
-        if ChatRoom::find_topic_room(&client, "private", slug)
+        if ChatRoom::find_topic_room(&client, RoomVisibility::Private, slug)
             .await?
             .is_some()
         {
@@ -5636,8 +5968,14 @@ impl ChatService {
         let room = ChatRoom::get(&client, room_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Room not found"))?;
-        if room.kind == "dm" {
-            anyhow::bail!("Cannot invite users to a DM");
+        match room.kind {
+            RoomKind::Dm => anyhow::bail!("Cannot invite users to a DM"),
+            RoomKind::Lounge
+            | RoomKind::Language
+            | RoomKind::Topic(_)
+            | RoomKind::Game(_)
+            | RoomKind::Deadchannel
+            | RoomKind::Nightcap => {}
         }
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
@@ -5652,7 +5990,10 @@ impl ChatService {
         }
 
         ChatRoomMember::join(&client, room_id, target.id).await?;
-        let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
+        let room_slug = room
+            .slug
+            .clone()
+            .unwrap_or_else(|| room.kind.as_str().to_string());
         Ok((room_slug, target.username))
     }
 
@@ -5705,10 +6046,21 @@ impl ChatService {
                             message_id,
                         });
                     }
-                    Err(e) => {
+                    Err(error) => {
+                        let message = match error {
+                            DeleteError::Refused(refusal) => refusal.message(),
+                            DeleteError::Failed(error) => {
+                                late_core::error_span!(
+                                    "chat_delete_failed",
+                                    error = ?error,
+                                    "delete failed"
+                                );
+                                "Could not delete message. Please try again."
+                            }
+                        };
                         let _ = service.evt_tx.send(ChatEvent::DeleteFailed {
                             user_id,
-                            message: e.to_string(),
+                            message: message.to_string(),
                         });
                     }
                 }
@@ -5722,32 +6074,34 @@ impl ChatService {
         user_id: Uuid,
         message_id: Uuid,
         permissions: Permissions,
-    ) -> Result<Uuid> {
+    ) -> Result<Uuid, DeleteError> {
         let mut client = self.db.get().await?;
         // Look up the message to get room_id
-        let msg = ChatMessage::get(&client, message_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Message not found"))?;
+        let msg = match ChatMessage::get(&client, message_id).await? {
+            Some(msg) => msg,
+            None => return Err(DeleteError::Refused(DeleteRefusal::Gone)),
+        };
         let is_owner = msg.user_id == user_id;
         let target_tier = if is_owner {
             Tier::Regular
         } else {
             target_tier_for_user_id(&client, msg.user_id).await?
         };
-        ensure_message_permission(
-            permissions,
-            is_owner,
-            Caps::DELETE_OTHER_MESSAGE,
-            target_tier,
-        )?;
-        let tx = client.transaction().await?;
+        if !is_owner && !permissions.can(Caps::DELETE_OTHER_MESSAGE, target_tier) {
+            return Err(DeleteError::Refused(DeleteRefusal::NotTheirs));
+        }
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the delete's transaction")?;
         let count = if is_owner {
             ChatMessage::delete_by_author(&tx, message_id, user_id).await?
         } else {
             ChatMessage::delete_by_admin(&tx, message_id).await?
         };
+        // Deleted between the read above and here.
         if count == 0 {
-            anyhow::bail!("Cannot delete this message");
+            return Err(DeleteError::Refused(DeleteRefusal::Gone));
         }
         ModerationAuditLog::record_if(
             &tx,
@@ -5761,7 +6115,7 @@ impl ChatService {
             json!({ "room_id": msg.room_id, "body": msg.body }),
         )
         .await?;
-        tx.commit().await?;
+        tx.commit().await.context("committing the delete")?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
     }

@@ -1,7 +1,31 @@
+use late_core::models::reward::RewardTemplate;
+use serde_json::json;
+use uuid::Uuid;
+
 use crate::app::door::hub::state::*;
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownTimers};
 
 fn public() -> &'static [HubGame] {
     HubGame::roster(false)
+}
+
+/// The timers of an account no milestone has paid yet: one active `cooldown`
+/// template per reward, and no claims.
+fn open_timers() -> CooldownTimers {
+    let templates: Vec<RewardTemplate> = CooldownReward::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, reward)| RewardTemplate {
+            id: Uuid::now_v7(),
+            key: reward.reward_key().to_string(),
+            kind: "game_win".to_string(),
+            params: json!({ "game": "game", "payout_kind": format!("kind-{index}") }),
+            reward_chips: 10_000,
+            claim_policy: "cooldown".to_string(),
+            cooldown_seconds: Some(30 * 24 * 60 * 60),
+        })
+        .collect();
+    CooldownTimers::from_rows(&templates, &[]).expect("a template per reward")
 }
 
 fn runner() -> &'static [HubGame] {
@@ -149,4 +173,23 @@ fn scroll_up_after_the_range_shrinks_moves_at_once() {
     s.max_scroll().set(3);
     s.scroll_up();
     assert_eq!(s.scroll(), 2);
+}
+
+/// A refresh that fails takes down the timers already shown: a snapshot read
+/// before a payout would go on saying "pays now" for a milestone that will
+/// not pay again for a month. The landing falls back to its fixed line.
+#[test]
+fn a_failed_refresh_drops_the_timers_already_shown() {
+    let mut s = State::default();
+    s.request_timers()
+        .send(open_timers())
+        .expect("the state holds the receiver");
+    assert!(s.tick(), "the first read lands");
+    assert!(s.timers().is_some());
+
+    // The read task ends without an answer: its sender is dropped.
+    drop(s.request_timers());
+    assert!(s.tick(), "the landing repaints without the stale timers");
+    assert!(s.timers().is_none());
+    assert!(!s.tick(), "nothing is in flight any more");
 }

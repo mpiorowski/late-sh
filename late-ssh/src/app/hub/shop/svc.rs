@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -12,24 +12,24 @@ use late_core::{
     models::{
         aquarium_shield::AquariumShield,
         bonsai_decay_protection::BonsaiDecayProtection,
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, RoomKind},
         chips::UserChips,
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
             AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU,
             BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseResult, PurchaseStatus,
-            PurchaseWithEffectResult, TankActiveStatus, TankStockKind, ULTIMATE_SPELL_KIND,
-            USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_active_by_sku, is_sprout_row,
-            is_welcome_fish, purchase_item_by_sku_with_chat_effect,
-            purchase_item_by_sku_with_custom_title, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs,
+            MarketplaceItem, PurchaseResult, PurchaseStatus, PurchaseWithEffectResult,
+            TankActiveStatus, TankStockKind, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND,
+            UserPurchase, adjust_aquarium_active_by_sku, is_sprout_row, is_welcome_fish,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
-            BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
-            TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title, title_from_payload,
+            BADGE_RENTAL_ITEM_KIND, BadgeRental, BadgeSlot, CustomTitle, RENTAL_DAY_SECS,
+            TITLE_EFFECT_KIND, TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title,
+            title_from_payload,
         },
         shop_consumable_effect::ShopConsumableEffect,
         user::User,
@@ -41,7 +41,6 @@ use uuid::Uuid;
 
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
-use super::entitlements::ShopEntitlements;
 use crate::app::ai::screen::{TitleScreen, screen_custom_title};
 use crate::app::ai::svc::AiService;
 use crate::app::common::username_effect::{FlairEffect, FlairTitle, NameFlair, NameFlairDirectory};
@@ -51,7 +50,6 @@ pub struct ShopSnapshot {
     pub user_id: Option<Uuid>,
     pub balance: i64,
     pub items: Vec<ShopCatalogItem>,
-    pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     /// The user's live username effect, if any (detail pane shows the style
     /// and remaining time).
@@ -100,8 +98,7 @@ pub struct ActiveUsernameEffect {
 pub struct ActiveChatRoomEffect {
     pub effect_kind: String,
     pub source_sku: String,
-    pub room_kind: String,
-    pub room_visibility: String,
+    pub room_kind: RoomKind,
     pub room_permanent: bool,
     pub room_slug: Option<String>,
     pub ends_at: DateTime<Utc>,
@@ -135,10 +132,12 @@ pub struct ShopCatalogItem {
     /// transaction reads it, so the shop never quotes a window the activation
     /// would not honour.
     pub rental_duration_secs: Option<i64>,
-    /// Which chat-label slot this item fills, read from the rental payload.
-    /// Only a rental fills one: the Badges and Flags tabs are rentals top to
-    /// bottom, and a rental never touches `equipped_slot`.
-    pub badge_slot: Option<String>,
+    /// Which chat-label slot this item fills, read from the rental payload
+    /// the way activation reads it (`BadgeRental::from_payload`), so the
+    /// tabs list exactly what a purchase accepts. Only a rental fills one:
+    /// the Badges and Flags tabs are rentals top to bottom, and a rental
+    /// never touches `equipped_slot`.
+    pub badge_slot: Option<BadgeSlot>,
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.
     pub custom_title: bool,
@@ -151,10 +150,6 @@ pub struct ShopCatalogItem {
 }
 
 impl ShopCatalogItem {
-    pub fn is_pet_companion(&self) -> bool {
-        self.sku == PET_COMPANION_SKU
-    }
-
     pub fn is_bonsai_decay_shield(&self) -> bool {
         self.sku == BONSAI_DECAY_SHIELD_SKU
     }
@@ -209,7 +204,8 @@ impl ShopCatalogItem {
         self.custom_title
     }
 
-    /// Every timed item: the shop quotes a window and a rebuy resets it.
+    /// Every timed item: the shop quotes a window; a rebuy of the same look
+    /// adds it to the live one, any other look replaces it.
     pub fn is_rental(&self) -> bool {
         self.is_username_effect() || self.is_badge_rental() || self.is_title_rental()
     }
@@ -225,7 +221,10 @@ impl ShopCatalogItem {
     }
 
     pub fn is_flag_badge(&self) -> bool {
-        self.badge_slot.as_deref() == Some(CHAT_FLAG_SLOT)
+        match self.badge_slot {
+            Some(BadgeSlot::Flag) => true,
+            Some(BadgeSlot::Badge) | None => false,
+        }
     }
 
     pub fn is_ultimate_spell(&self) -> bool {
@@ -989,16 +988,13 @@ impl ShopService {
             .collect::<Vec<_>>();
         let mut active_effect_room_meta = HashMap::new();
         for room in ChatRoom::list_by_ids(&client, &active_effect_room_ids).await? {
-            active_effect_room_meta.insert(
-                room.id,
-                (room.kind, room.visibility, room.permanent, room.slug),
-            );
+            active_effect_room_meta.insert(room.id, (room.kind, room.permanent, room.slug));
         }
         for effect in active_effect_rows {
             let Some(room_id) = effect.room_id else {
                 continue;
             };
-            let Some((room_kind, room_visibility, room_permanent, room_slug)) =
+            let Some((room_kind, room_permanent, room_slug)) =
                 active_effect_room_meta.get(&room_id).cloned()
             else {
                 continue;
@@ -1010,7 +1006,6 @@ impl ShopService {
                     effect_kind: effect.effect_kind,
                     source_sku: effect.source_sku,
                     room_kind,
-                    room_visibility,
                     room_permanent,
                     room_slug,
                     ends_at: effect.ends_at,
@@ -1085,7 +1080,6 @@ impl ShopService {
             purchases_by_item.insert(purchase.item_id, purchase);
         }
 
-        let mut owned_skus = HashSet::new();
         let catalog = items
             .into_iter()
             .map(|item| {
@@ -1094,9 +1088,6 @@ impl ShopService {
                 let owned = purchase.is_some_and(|purchase| {
                     !is_consumable_kind(&item_kind) || purchase.quantity > 0
                 });
-                if owned {
-                    owned_skus.insert(item.sku.clone());
-                }
                 let equipped = match (
                     purchase.and_then(|purchase| purchase.equipped_slot.as_deref()),
                     item.slot.as_deref(),
@@ -1153,12 +1144,9 @@ impl ShopService {
                 // never equips anything. Nothing else on sale fills one: the
                 // Badges and Flags tabs are rentals top to bottom.
                 let badge_slot = match item_kind.as_str() {
-                    BADGE_RENTAL_ITEM_KIND => item
-                        .payload
-                        .get("slot")
-                        .and_then(|value| value.as_str())
-                        .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
-                        .map(ToOwned::to_owned),
+                    BADGE_RENTAL_ITEM_KIND => {
+                        BadgeRental::from_payload(&item.payload).map(|rental| rental.slot)
+                    }
                     _ => None,
                 };
                 let custom_title =
@@ -1201,7 +1189,6 @@ impl ShopService {
             user_id: Some(user_id),
             balance: chips.balance,
             items: catalog,
-            entitlements: ShopEntitlements::from_owned_skus(owned_skus),
             active_room_effects,
             active_username_effect,
             active_bonsai_decay_protection,

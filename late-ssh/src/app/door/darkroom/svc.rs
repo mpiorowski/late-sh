@@ -157,13 +157,14 @@ impl DarkroomService {
     /// and — first escape of this kind only, on the `NOT EXISTS` award insert
     /// — a rankless profile badge.
     ///
-    /// The chips land for every run that gets out (migration 158): the
-    /// ending wipes the save, so a repeat is the whole arc walked again, and
-    /// the run is the whole gate. `run_id` is that gate, keyed per ending, so
-    /// a retry of this task pays once.
+    /// The chips pay behind two gates at once (migration 286, the door
+    /// milestones' `credit_run_cooldown_reward_template`): `run_id`, so a
+    /// retry of this task pays once, and at most one payout per ending every
+    /// 30 days per account.
     ///
-    /// The two endings are separate claims: an account that flies out plainly
-    /// and later flies out holding the fleet beacon is paid for both.
+    /// The two endings are separate milestones with a window each: an
+    /// account that flies out plainly and later flies out holding the fleet
+    /// beacon is paid for both, in the same month or not.
     pub fn reward_escape(&self, user_id: Uuid, escape: Escape, run_id: Uuid) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
@@ -207,7 +208,7 @@ impl DarkroomService {
             let event_key = run_id.to_string();
             let grant = match inner
                 .chips
-                .credit_per_event_reward_template(user_id, reward_key, &event_key, chip_move)
+                .credit_run_cooldown_reward_template(user_id, reward_key, &event_key, chip_move)
                 .await
             {
                 Ok(grant) => grant,
@@ -221,15 +222,16 @@ impl DarkroomService {
                 }
             };
             // This run already paid (a retry of the same fire-and-forget
-            // task): the chips stay suppressed, but the badge insert below
-            // still runs (it is `NOT EXISTS` idempotent), so a badge insert
-            // that failed on the crediting run heals on a later escape
-            // instead of being lost for good.
+            // task), or this ending paid inside the last 30 days: the chips
+            // stay suppressed, but the badge insert below still runs (it is
+            // `NOT EXISTS` idempotent), so a badge insert that failed on the
+            // crediting run heals on a later escape instead of being lost for
+            // good.
             if !grant.credited {
                 tracing::info!(
                     user_id = %user_id,
                     run_id = %run_id,
-                    "suppressed darkroom escape chips because this run already paid"
+                    "suppressed darkroom escape chips: this run already paid, or the ending is inside its 30-day window"
                 );
             }
 

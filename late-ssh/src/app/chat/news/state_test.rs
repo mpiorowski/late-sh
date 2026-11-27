@@ -240,12 +240,12 @@ fn the_first_snapshot_a_session_sees_is_not_announced() {
     ));
 }
 
-/// The shelf leads, newest save first, then the feed less what is on the
-/// shelf, oldest first so the newest share is the last row: a saved story
-/// appears once, and the feed's copy (the fresher body) is the one shown.
-/// Mine-only filters both parts.
+/// The feed less what is on the shelf leads, oldest share first, then the
+/// shelf under it, oldest save first, so the newest save is the last row: a
+/// saved story appears once, and the feed's copy (the fresher body) is the
+/// one shown. Mine-only filters both parts.
 #[test]
-fn the_display_puts_the_shelf_over_the_feed_once_each() {
+fn the_display_puts_the_shelf_under_the_feed_once_each() {
     let feed = vec![
         article(3, OTHER, 3),
         article(2, READER, 2),
@@ -257,9 +257,9 @@ fn the_display_puts_the_shelf_over_the_feed_once_each() {
 
     let (rows, saved_len) = display_order(&saved, &feed, None);
     let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
-    assert_eq!(ids, vec![2, 9, 1, 3]);
+    assert_eq!(ids, vec![1, 3, 9, 2]);
     assert_eq!(saved_len, 2);
-    assert_eq!(rows[0].body, feed[1].body, "the feed's copy is shown");
+    assert_eq!(rows[3].body, feed[1].body, "the feed's copy is shown");
 
     let (rows, saved_len) = display_order(&saved, &feed, Some(READER));
     let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
@@ -271,8 +271,9 @@ fn the_display_puts_the_shelf_over_the_feed_once_each() {
     assert_eq!(saved_len, 0);
 }
 
-/// `s` on a feed story shelves it and hands the cursor to the story that
-/// came after it; on a full shelf it refuses and the cursor stays put.
+/// The first fill lands on the newest share, just over the shelf, even
+/// when the shelf loaded first; saving that story hands the cursor to
+/// nothing on the shelf, so it follows the story down.
 #[tokio::test]
 async fn the_cursor_lands_on_the_newest_story_when_the_shelf_loads_first() {
     let test_db = new_test_db().await;
@@ -291,8 +292,17 @@ async fn the_cursor_lands_on_the_newest_story_when_the_shelf_loads_first() {
     state.select_article_by_id(older.article.id);
     state.rebuild_display();
     assert_eq!(selected_id(&state), Some(older.article.id));
+
+    // The newest share has nothing after it in the feed: saved, the cursor
+    // goes with it to the bottom of the shelf.
+    state.select_article_by_id(newest.article.id);
+    assert_eq!(state.toggle_save_selected(), Some(NewsSaveOutcome::Saved));
+    assert_eq!(selected_id(&state), Some(newest.article.id));
+    assert_eq!(state.selected_index(), state.displayed_articles().len() - 1);
 }
 
+/// `s` on a feed story shelves it and hands the cursor to the story that
+/// came after it; on a full shelf it refuses and the cursor stays put.
 #[tokio::test]
 async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
     let test_db = new_test_db().await;
@@ -314,7 +324,7 @@ async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
                 .expect("create story"),
         );
     }
-    // One short of full, so three stories sit in the feed under the shelf.
+    // One short of full, so three stories sit in the feed over the shelf.
     let shelf_len = NEWS_SAVED_LIMIT as usize - 1;
     for story in stories.iter().take(shelf_len) {
         ArticleSave::save(&mut client, reader.id, story.id)
@@ -333,7 +343,7 @@ async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
         "the feed and the shelf load",
     )
     .await;
-    let feed_ids: Vec<Uuid> = state.displayed_articles()[shelf_len..]
+    let feed_ids: Vec<Uuid> = state.displayed_articles()[..3]
         .iter()
         .map(|item| item.article.id)
         .collect();
@@ -342,10 +352,10 @@ async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
     assert_eq!(
         selected_id(&state),
         feed_ids.last().copied(),
-        "the cursor lands on the newest story, at the bottom"
+        "the cursor lands on the newest share, just over the shelf"
     );
     state.select_article_by_id(feed_ids[0]);
-    assert_eq!(state.selected_index(), shelf_len);
+    assert_eq!(state.selected_index(), 0);
 
     assert_eq!(state.toggle_save_selected(), Some(NewsSaveOutcome::Saved));
     assert_eq!(state.saved_count(), NEWS_SAVED_LIMIT as usize);

@@ -91,7 +91,11 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         ])];
 
         let preview_width = content_area.width.saturating_sub(2) as usize;
-        let preview_rows = preview_rows(&item.message_preview, preview_width, PREVIEW_ROWS);
+        let preview_rows = preview_rows(
+            &mention_preview(&item.message_body),
+            preview_width,
+            PREVIEW_ROWS,
+        );
         lines.extend(preview_rows.into_iter().map(|row| {
             Line::from(vec![
                 Span::styled("  ", Style::default()),
@@ -102,6 +106,18 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         let p = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(p, content_area);
     }
+}
+
+/// How much of a mentioning message the list reads.
+const MENTION_PREVIEW_CHARS: usize = 120;
+
+/// A mention's preview: `||spoilers||` masked first, then cut, so the cut
+/// can never split one and leave its first words in clear.
+fn mention_preview(body: &str) -> String {
+    crate::app::common::spoiler::mask_spoilers(body)
+        .chars()
+        .take(MENTION_PREVIEW_CHARS)
+        .collect()
 }
 
 fn preview_rows(body: &str, width: usize, max_rows: usize) -> Vec<String> {

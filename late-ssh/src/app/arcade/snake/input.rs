@@ -1,11 +1,11 @@
-use super::state::State;
+use super::state::{Direction, State};
 
-fn canonical_direction_key(byte: u8) -> Option<u8> {
+fn canonical_direction_key(byte: u8) -> Option<Direction> {
     match byte {
-        b'k' | b'K' | b'w' | b'W' => Some(b'A'),
-        b'j' | b'J' | b's' | b'S' => Some(b'B'),
-        b'l' | b'L' | b'd' | b'D' => Some(b'C'),
-        b'h' | b'H' | b'a' | b'A' => Some(b'D'),
+        b'k' | b'K' | b'w' | b'W' => Some(Direction::Up),
+        b'j' | b'J' | b's' | b'S' => Some(Direction::Down),
+        b'l' | b'L' | b'd' | b'D' => Some(Direction::Right),
+        b'h' | b'H' | b'a' | b'A' => Some(Direction::Left),
         _ => None,
     }
 }
@@ -21,23 +21,25 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
             true
         }
         byte => {
-            let Some(direction_key) = canonical_direction_key(byte) else {
+            let Some(direction) = canonical_direction_key(byte) else {
                 return false;
             };
-            state.input_queue.insert(0, direction_key);
+            state.input_queue.insert(0, direction);
             true
         }
     }
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
-    match key {
-        b'A' | b'B' | b'C' | b'D' => {
-            state.input_queue.insert(0, key);
-            true
-        }
-        _ => false,
-    }
+    let direction = match key {
+        b'A' => Direction::Up,
+        b'B' => Direction::Down,
+        b'C' => Direction::Right,
+        b'D' => Direction::Left,
+        _ => return false,
+    };
+    state.input_queue.insert(0, direction);
+    true
 }
 
 #[cfg(test)]

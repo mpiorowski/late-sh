@@ -577,6 +577,7 @@ async fn start_tunnel_shell(
             key_fingerprint: Some(key_fingerprint),
             supports_reconnect_on_drain: true,
             reconnect_reason,
+            resume: None,
         },
     )
     .await;

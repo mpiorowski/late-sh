@@ -69,6 +69,8 @@ The door is gated by the `nethack_enabled` profile flag in `late-ssh/src/config.
 | `stats.rs` | The `late_stats` log-streaming session: cursor env parsing, complete-line framing (`frame_lines`), and the stateless tail loop over `xlogfile`/`livelog` in `var_dir`. Constants mirrored in late-ssh's `app/door/ingest/stream.rs`; the late-dcss twin. |
 | `watch.rs` | Live spectating (`../spectate/CONTEXT.md`): the `LiveRegistry` of live games (host-side `vt100` mirror + pulse per game, watcher counts), the `late_watch` sessions, and `hud_status` (`Xp3 Dlvl:4` off the bottom status line). The late-dcss twin; `host.rs` feeds it every output chunk and window change. |
 
+`late-nethack/sokoban/` is not part of the host: a local-only Sokoban solver and autoplayer for the player's desktop, its own Cargo workspace, never built by CI or into an image. Runbook in `late-nethack/sokoban/SOKOBAN.md`.
+
 Cross-module wiring (client side, outside this folder):
 - `app/state.rs`: `App::nethack_state`, `enter_nethack`/`leave_nethack`, and the Running-mode input passthrough in `App::handle_input` (intercept F1, else forward raw bytes).
 - `app/input.rs`: launcher `Enter` → `enter_nethack` + `connect`; arrows are a no-op on the launcher (Running-mode arrows are forwarded upstream).
@@ -158,7 +160,7 @@ Client knobs (profile literals in `late-ssh/src/config.rs` plus `LATE_NETHACK_SE
 
 ## 8. Tests And Verification [STABLE]
 
-Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-nethack -p late-ssh -E 'package(late-nethack) or test(nethack)'"`.
+Agents run the focused tests with `make test ARGS="-p late-nethack -p late-ssh -E 'package(late-nethack) or test(nethack)'"`.
 
 Inline pure tests cover:
 - Client `state.rs`: launcher inert when disabled; `late-core` `models::arcade_handle` covers the handle shape/reserved rules.
@@ -168,7 +170,7 @@ Inline pure tests cover:
 - `late-core` `profile_award.rs`: `NHA`/`NHY` badge codes + chips score formatting. `late-core` `user.rs`: chat author label collapses `NHA` into `NHY`.
 - Host `playname.rs`: sanitize keeps alphanumerics + `_`, strips metachars, caps length, falls back when empty.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
-- Host `host.rs`: rc materialize/clear/keep, and `child_command` spawned on a real pty with a fake `nethack` script: a resize after spawn reaches the child's curses (`tput cols`), pinning the no-`LINES`/`COLUMNS` rule.
+- Host `host.rs`: rc materialize/clear/keep, and `child_command` spawned on a real pty with a fake `nethack` script: a resize after spawn reaches the child's curses (`tput cols`), pinning the no-`LINES`/`COLUMNS` rule. The fake child waits for an acknowledgement after reporting both dimensions, so macOS cannot discard unread output when the PTY slave closes.
 - `app/common/primitives.rs` + `app/input.rs`: screen `next`/`prev` ordering; NetHack is a door screen reached through the Games hub, absent from the tab cycle.
 
 The rest of the PTY bridge (`run_bridge`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/save/quit manually against a real host.

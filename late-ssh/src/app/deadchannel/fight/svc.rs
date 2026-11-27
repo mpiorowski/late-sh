@@ -38,6 +38,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::ChipMove;
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome, NewAmbush};
+use late_core::models::deadchannel_bout::Bout;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::profile_award::{
     DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY, grant_unique_milestone_award,
@@ -74,6 +75,11 @@ pub(crate) enum FightOutcome {
     Reloaded {
         sheet: Sheet,
         lookout: Lookout,
+        /// The asking session's count of action answers when it asked,
+        /// handed back untouched: a reload and an action answer race each
+        /// other, and the session tells by this which one read the row
+        /// first.
+        answers_seen: u64,
     },
     /// No standing runner for this user: the door is shut or was never
     /// opened. The city's gate should have kept them out; logged as such.
@@ -250,6 +256,11 @@ impl FightService {
             .as_ref()
             .and_then(|fight| fight.rival().cloned());
         let mut outcome = match ask {
+            // What the ring pays, it pays onto the sheet that staked it:
+            // the fall waits while a bet or a bout of the runner's is out.
+            Ask::Command(Command::Reset) if Bout::holds(&*tx, user_id).await? => {
+                super::state::ring_holds()
+            }
             Ask::Command(command) => sheet.apply(command, &mut rand::thread_rng()),
             Ask::Cross { lane, username } => {
                 self.cross(&tx, &mut sheet, lane, &username, today, now)
@@ -946,7 +957,12 @@ impl FightService {
     /// catches up with a change made elsewhere on the next press. A mark
     /// the row still owes is paid here too, so a grant lost to a restart
     /// heals at the next connect; its line goes to the log only.
-    pub(crate) fn reload_task(&self, user_id: Uuid, reply: mpsc::UnboundedSender<FightOutcome>) {
+    pub(crate) fn reload_task(
+        &self,
+        user_id: Uuid,
+        answers_seen: u64,
+        reply: mpsc::UnboundedSender<FightOutcome>,
+    ) {
         let svc = self.clone();
         let span = info_span!("deadchannel.fight.reload_task", user_id = %user_id);
         tokio::spawn(
@@ -962,7 +978,11 @@ impl FightService {
                             tracing::info!(mark, line = %line, "old signal mark settled on reload");
                         }
                         let lookout = svc.lookout_for(&sheet).await;
-                        let _ = reply.send(FightOutcome::Reloaded { sheet, lookout });
+                        let _ = reply.send(FightOutcome::Reloaded {
+                            sheet,
+                            lookout,
+                            answers_seen,
+                        });
                     }
                     Ok(None) => {
                         let _ = reply.send(FightOutcome::NoRunner);
@@ -1000,6 +1020,43 @@ impl FightService {
             tracing::info!(user_id = %user_id, applied = ?acted.outcome.applied, level = acted.sheet.level, "lounge leavings pocketed");
             acted.sheet
         }))
+    }
+
+    /// One command on a runner's sheet inside a transaction the caller
+    /// owns, for the ring (`deadchannel/ring`): a stake and its bet row, a
+    /// pay and its claim, a bout's end and the gate it clears land
+    /// together or not at all. The same lock, day roll and store as `act`,
+    /// and nothing committed here: the caller commits, and locks its own
+    /// row before this one, always in that order. `None` for no standing
+    /// runner. Nothing is counted or logged here, since nothing has
+    /// landed yet: the caller hands the outcome to [`Self::landed`] once
+    /// its commit is through.
+    pub(crate) async fn apply_in(
+        &self,
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        command: Command,
+    ) -> Result<Option<Outcome>> {
+        let today = Self::today();
+        let now = Utc::now();
+        let Some(row) = DeadchannelRunner::lock_standing(tx, user_id).await? else {
+            return Ok(None);
+        };
+        let mut sheet = Sheet::from_row(&row).context("reading the runner's sheet")?;
+        let rolled = settle_day(tx, &mut sheet, today, now).await?;
+        let outcome = sheet.apply(command, &mut rand::thread_rng());
+        let changed = rolled || !matches!(outcome.applied, Applied::Refused(_) | Applied::Resumed);
+        if changed {
+            DeadchannelRunner::store_sheet(tx, sheet.to_write()).await?;
+        }
+        Ok(Some(outcome))
+    }
+
+    /// Count and log a command `apply_in` applied, once the transaction
+    /// it ran in has committed.
+    pub(crate) fn landed(user_id: Uuid, outcome: &Outcome) {
+        metrics::record_deadchannel_fight(beat_for(&outcome.applied));
+        tracing::info!(user_id = %user_id, applied = ?outcome.applied, "sheet command landed for the ring");
     }
 
     /// A read, but through the same lock-and-settle path as an action, so
@@ -1094,6 +1151,9 @@ fn can_be_crossed(theirs: &Sheet, mine: &Sheet) -> bool {
 
 fn beat_for(applied: &Applied) -> FightBeat {
     match applied {
+        // The ring's gate is counted by itself: how often the road is
+        // found shut is the cost of having no fallback opponent.
+        Applied::Refused(super::state::Refusal::RingOwed) => FightBeat::RingOwed,
         Applied::Refused(_) => FightBeat::Refused,
         Applied::Started { pick: Pick::Fair } => FightBeat::Started,
         Applied::Started { pick: Pick::Lower } => FightBeat::SteppedDown,
@@ -1125,6 +1185,9 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Carted { .. } => FightBeat::Carted,
         Applied::Inked { .. } => FightBeat::Inked,
         Applied::Pocketed { .. } => FightBeat::Pocketed,
+        Applied::Staked { .. } => FightBeat::Staked,
+        Applied::Collected { .. } => FightBeat::Collected,
+        Applied::RingFought { .. } => FightBeat::RingFought,
     }
 }
 

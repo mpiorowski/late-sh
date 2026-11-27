@@ -45,6 +45,7 @@ use crate::{
         chat::svc::ChatService,
         chat::{mod_modal, sheet_modal},
         common::primitives::{Banner, BannerKind, Screen},
+        common::terminal_colors,
         help_modal, hub, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal,
@@ -324,11 +325,14 @@ pub struct SessionConfig {
     /// The lounge spawns (`app/deadchannel/lounge`): the live spawn and
     /// the hit path.
     pub lounge_service: crate::app::deadchannel::lounge::svc::LoungeService,
+    /// The ring (`app/deadchannel/ring`): the board every session copies
+    /// and the call, bet and round paths.
+    pub ring_service: crate::app::deadchannel::ring::svc::RingService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
-    pub initial_pet: Option<late_core::models::pet::PetCompanion>,
+    pub initial_pet: Option<crate::app::pet::svc::PetSnapshot>,
     pub aquarium_service: crate::app::hub::aquarium::svc::AquariumService,
     /// The tank's care at connect, with any starvation already settled.
     pub initial_aquarium_care: crate::app::hub::aquarium::svc::CareBootstrap,
@@ -496,6 +500,9 @@ pub struct SessionConfig {
 
     /// UI flags
     pub is_new_user: bool,
+    /// The last comeback moment this account was shown and when
+    /// (`app/comeback`), `None` until one has been.
+    pub comeback_mark: Option<late_core::models::user::ComebackMark>,
     /// Tweak: the page the session starts on. Ignored for brand-new users so
     /// they still get the clubhouse first-visit tutorial.
     pub landing_page: LandingPage,
@@ -585,6 +592,8 @@ pub struct App {
     pub(crate) show_poll_modal: bool,
     pub(crate) show_gild_modal: bool,
     pub(crate) show_bonsai_modal: bool,
+    /// The pet's care box (`pet/modal_ui.rs`).
+    pub(crate) show_pet_modal: bool,
     pub(crate) show_lobby_modal: bool,
     pub(crate) show_ultimate_modal: bool,
     /// Edge detector for the cooldown label's ready flip: the countdown is
@@ -593,11 +602,16 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The comeback moments (`app/comeback`): the box a return day owes.
+    pub(crate) comeback: crate::app::comeback::state::State,
     /// The herald: the `/herald` drain and its answers.
     pub(crate) herald: crate::app::herald::state::HeraldState,
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
+    /// Hung Artboard pieces' #lounge cards and the piece Enter on one opens
+    /// over the chat (`app/artboard/gallery/card/`).
+    pub(crate) gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState,
     /// The Jobs shelf: the replica's active postings, the selection, and
     /// the `/jobs` drain.
     pub(crate) jobs: crate::app::jobs::state::JobsState,
@@ -728,7 +742,7 @@ pub struct App {
     /// The box the pet was drawn in last frame, where it stood, and how far
     /// it could roam; `None` when no box was drawn. Gates the pet
     /// animation's frame cost in tick and places the cursor for the walk.
-    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::state::PetFrameInputs>>,
+    pub(crate) last_pet_frame: std::cell::Cell<Option<crate::app::pet::session::PetFrameInputs>>,
     /// The terminal cursor's last reported cell (0-based), for the pet to
     /// walk after. `None` until the terminal reports one.
     pub(crate) last_mouse: Option<(u16, u16)>,
@@ -854,12 +868,15 @@ pub struct App {
     /// The lounge spawns (`app/deadchannel/lounge`): this session's copy of
     /// the spawn, its own `/hit` and the word it came back with.
     pub(crate) lounge: crate::app::deadchannel::lounge::session::LoungeSession,
+    /// The ring (`app/deadchannel/ring`): this session's copy of the
+    /// board, the deck it brings and the answer to its last request.
+    pub(crate) ring: crate::app::deadchannel::ring::session::RingSession,
     /// The undercity guide (`app/deadchannel/guide`): the box over the
     /// street, opened by `?` and by itself on the first descent.
     pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
 
     /// Cat companion
-    pub(crate) pet_state: crate::app::pet::state::PetState,
+    pub(crate) pet_state: crate::app::pet::session::PetState,
 
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
@@ -1073,6 +1090,9 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
+    /// A piece opened from its #lounge card, until the Artboard page may
+    /// show it (`open_gallery_piece`, `sync_dartboard_connection`).
+    pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1109,6 +1129,9 @@ pub struct App {
     /// The terminal's own name for itself, from its XTVERSION reply; named
     /// in the session's wire summary log (`ssh.rs`).
     terminal_version: Option<String>,
+    /// The terminal's default foreground and background, from its OSC 10/11
+    /// replies (`common/terminal_colors.rs`).
+    pub(crate) terminal_colors: terminal_colors::TerminalColors,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
@@ -1270,10 +1293,12 @@ impl App {
     /// paired CLI's mpv paints the watch player's rectangle whatever the
     /// TUI draws under it, and the key that drops a screensaver would never
     /// reach the player. A video outlasts the idle limit without a key, so
-    /// the screensaver waits for the modal to close; the 1Hz sync brings it
-    /// up then.
+    /// the screensaver waits for it to leave the screen (the modal closed,
+    /// or a stream's room no longer drawn); the 1Hz sync brings it up then.
+    /// A stream only heard has no picture to fight and does not hold it
+    /// back.
     fn screensaver_due(&self) -> bool {
-        self.away && !self.video.is_open()
+        self.away && !self.video.on_screen()
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -1283,6 +1308,7 @@ impl App {
         self.show_quit_confirm = false;
         self.show_hub_modal = false;
         self.show_bonsai_modal = false;
+        self.show_pet_modal = false;
         self.show_lobby_modal = false;
         // Real sessions land in the clubhouse; the integration suite predates
         // that and drives flows from Home, so tests start there.
@@ -1582,32 +1608,17 @@ impl App {
             config.username.clone(),
             config.lounge_service.clone(),
         );
+        let ring = crate::app::deadchannel::ring::session::RingSession::new(
+            config.user_id,
+            config.username.clone(),
+            config.ring_service.clone(),
+        );
 
-        let pet_state = if let Some(companion) = config.initial_pet {
-            crate::app::pet::state::PetState::new(
-                config.user_id,
-                config.pet_service.clone(),
-                companion,
-            )
-        } else {
-            crate::app::pet::state::PetState::new(
-                config.user_id,
-                config.pet_service.clone(),
-                late_core::models::pet::PetCompanion {
-                    id: uuid::Uuid::nil(),
-                    created: chrono::Utc::now(),
-                    updated: chrono::Utc::now(),
-                    user_id: config.user_id,
-                    adopted_at: None,
-                    name: None,
-                    species: late_core::models::pet::PetSpecies::Cat.as_str().to_string(),
-                    mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
-                    mood_since: chrono::Utc::now(),
-                    last_petted: None,
-                    enabled: true,
-                },
-            )
-        };
+        let pet_state = crate::app::pet::session::PetState::new(
+            config.user_id,
+            config.pet_service.clone(),
+            config.initial_pet,
+        );
         let quest_state = crate::app::hub::dailies::state::QuestState::new(
             config.user_id,
             config.quest_service.clone(),
@@ -1631,15 +1642,10 @@ impl App {
             aquarium_care.sprout_visible(),
         );
         aquarium_state.set_hungry(aquarium_care.hungry());
-        // What the login settlement did while the user was away, or the tank
-        // it planted: said once, on the first screen. A loss outranks the
-        // sprout news.
+        // What the login settlement did while the user was away: said once,
+        // on the first screen. A loss outranks the sprout news. A tank
+        // planted by this connect says nothing: a new account has the tour.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
-            [] if config.initial_aquarium_care.welcomed => {
-                Some(crate::app::common::primitives::Banner::info(
-                    "You have a tank, a fry and a sprout: click the tank or /aquarium feed daily, cut the sprout in /shop or let it root",
-                ))
-            }
             [] => match (
                 &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
@@ -1662,7 +1668,6 @@ impl App {
         let active_users = config.active_users.clone();
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
-        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
         let reconnect_notice = match config.reconnect_reason {
             Some(TUNNEL_CLOSE_RECONNECT_REQUESTED) => {
                 Some(ReconnectNotice::new(ReconnectNoticeKind::Updated))
@@ -1699,6 +1704,15 @@ impl App {
         let resume = match tour_pending {
             true => None,
             false => config.resume,
+        };
+        let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        // A fresh login after the tour can show a comeback moment once the
+        // splash is down. Handoffs and bastion redials continue a session.
+        let fresh_login = config.resume.is_none() && config.reconnect_reason.is_none();
+        let comeback_arrival = if !tour_pending && fresh_login {
+            crate::app::comeback::state::Arrival::Login(config.comeback_mark)
+        } else {
+            crate::app::comeback::state::Arrival::NotALogin
         };
         let landing = match (tour_pending, resume) {
             (true, _) => LandingPage::Clubhouse,
@@ -1764,6 +1778,7 @@ impl App {
             show_poll_modal: false,
             show_gild_modal: false,
             show_bonsai_modal: false,
+            show_pet_modal: false,
             show_lobby_modal: false,
             show_ultimate_modal: false,
             ultimate_cooldown_was_running: false,
@@ -1773,7 +1788,12 @@ impl App {
                 config.paper_service,
                 config.paper_at_login && resume.is_none(),
             ),
+            comeback: crate::app::comeback::state::State::new(comeback_arrival),
             video: crate::app::video::state::State::default(),
+            gallery_cards: crate::app::artboard::gallery::card::state::LoungeCardState::new(
+                config.gallery_service.clone(),
+                config.user_id,
+            ),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
@@ -1826,6 +1846,7 @@ impl App {
             poster,
             guide,
             lounge,
+            ring,
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
@@ -2096,6 +2117,7 @@ impl App {
             artboard_interacting: false,
             artboard_content_accepted: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
+            pending_gallery_piece: None,
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -2110,6 +2132,7 @@ impl App {
             multiplexer_term: terminal_images_disabled,
             windows_terminal: false,
             terminal_version: None,
+            terminal_colors: terminal_colors::TerminalColors::default(),
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
@@ -2515,8 +2538,17 @@ impl App {
         if self.dopewars_state.is_some() {
             return;
         }
+        // The playname is how a run finds its account, so it is the name the
+        // account has now: `self.username` is the one the session started
+        // with, and a rename since then would send runs to nobody. It stands
+        // in only until the profile has loaded.
+        let profile_username = &self.profile_state.profile().username;
+        let username = match profile_username.is_empty() {
+            true => self.username.clone(),
+            false => profile_username.clone(),
+        };
         self.dopewars_state = Some(crate::app::door::dopewars::state::State::new(
-            self.user_id,
+            username,
             self.dopewars_host.clone(),
             self.dopewars_port,
             self.dopewars_secret.clone(),
@@ -2801,6 +2833,7 @@ impl App {
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
+            self.pending_gallery_piece = None;
         }
 
         if self.screen == Screen::Lateania {
@@ -2956,6 +2989,16 @@ impl App {
             self.lateania_service
                 .fill_slots_task(self.user_id, self.repaint_signal.clone());
         }
+        // The landings' payout timers are read on the way in, never polled:
+        // a milestone paid while the hub sat open shows on the next visit.
+        if screen_changed && matches!(self.screen, Screen::Lateania | Screen::Games) {
+            let reply = self.games_hub_state.request_timers();
+            self.games_hub_service.load_timers_task(
+                self.user_id,
+                reply,
+                self.repaint_signal.clone(),
+            );
+        }
         if self.screen == Screen::Rebels {
             self.enter_rebels();
         }
@@ -3049,6 +3092,20 @@ impl App {
         }
     }
 
+    /// What the terminal reported about its own colors. A palette switch
+    /// (DEC 2031, a light/dark follow) asks again; the answers land here too.
+    fn apply_terminal_color_reports(&mut self, reports: terminal_colors::Reports) {
+        if let Some(fg) = reports.fg {
+            self.terminal_colors.fg = Some(fg);
+        }
+        if let Some(bg) = reports.bg {
+            self.terminal_colors.bg = Some(bg);
+        }
+        if reports.palette_changed {
+            terminal_colors::queue_query(&mut self.pending_terminal_commands);
+        }
+    }
+
     /// The terminal's XTVERSION name, when it answered the startup probe.
     pub(crate) fn terminal_version(&self) -> Option<&str> {
         self.terminal_version.as_deref()
@@ -3123,6 +3180,7 @@ impl App {
         if let Some(reader) = self.chat.reader() {
             reader.view().invalidate();
         }
+        self.help_modal_state.invalidate_views();
         self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
         // fixed-viewport clear queries `backend.size()`, which reads the
@@ -3155,12 +3213,15 @@ impl App {
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_pet_modal
             || self.show_lobby_modal
             || self.paper.modal.is_some()
+            || self.comeback.is_open()
             || self.stream_modal.is_some()
             || self.show_help
             || self.show_ultimate_modal
             || self.chat.reader().is_some()
+            || self.gallery_cards.modal().is_some()
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
@@ -3176,6 +3237,11 @@ impl App {
 
     pub fn handle_input(&mut self, data: &[u8]) {
         use crate::app::common::away::{PresenceInput, paste_end, presence_input};
+        // The terminal reporting its colors, not a person: out before the
+        // away clock, the doors' raw passthrough, or the splash can read it.
+        let (data, reports) = terminal_colors::strip_reports(data);
+        self.apply_terminal_color_reports(reports);
+        let data: &[u8] = &data;
         if !data.is_empty() {
             self.last_input_at = Instant::now();
         }
@@ -3510,6 +3576,8 @@ impl App {
             self.screen == Screen::City,
             now_ms,
         );
+        let pet = self.pet_out().then(|| self.pet_state.portrait());
+        self.clubhouse.set_pet(pet);
         let record = late_core::models::presence::PresenceRecord {
             session_id: self.presence.session_id(),
             user_id: self.user_id,
@@ -3621,17 +3689,16 @@ impl App {
     pub(crate) fn home_tiles_area(&self) -> Rect {
         crate::app::zen::layout::rice_areas(
             self.content_area(),
-            self.home_board_day().is_some(),
+            !self.home_board_day().is_empty(),
             self.home.arrange,
         )
         .tiles
     }
 
-    /// The board's day for Home's banner (`calendar::live::day_text`):
-    /// today's all-day posts, `None` on any other day.
-    pub(crate) fn home_board_day(&self) -> Option<String> {
-        let now = chrono::Utc::now();
-        crate::app::calendar::live::day_text(&self.calendar.live_at(now), now)
+    /// The board's day for Home's banner (`calendar::banner`): today's
+    /// board posts, empty on a day it has none.
+    pub(crate) fn home_board_day(&self) -> Vec<crate::app::calendar::banner::DayPost> {
+        self.calendar.day_posts(chrono::Utc::now())
     }
 
     /// Every tile's rect on Home, in layout order, with the chrome's inner
@@ -3729,10 +3796,11 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Whether the pet shows: bought, and not put away with its Shop switch.
-    /// Every surface that draws it, pets it or asks for it reads this.
+    /// Whether the pet shows: every account has one, and `/pet away` puts
+    /// it away. Every surface that draws it, pets it or asks for it reads
+    /// this.
     pub(crate) fn pet_out(&self) -> bool {
-        self.shop_state.entitlements().has_pet_companion() && self.pet_state.enabled
+        self.pet_state.enabled
     }
 
     /// Today's care, the pet gated on `pet_out`: what the attention guest
@@ -3749,11 +3817,12 @@ impl App {
 
     /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions (`unread_rows`), and today's care still
+    /// the unread DMs and mentions (chat's `unread_dms` and
+    /// `unread_mentions`), and today's care still
     /// due. Read each frame while the page hosts the guest and on each of
     /// its keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
-        use crate::app::zen::attention::{Chore, Inputs, Match, items, unread_rows};
+        use crate::app::zen::attention::{Chore, Inputs, Item, Match, items};
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3790,14 +3859,22 @@ impl App {
                 ),
             })
             .collect();
-        let unread = unread_rows(
-            self.user_id,
-            &self.chat.rooms,
-            &self.chat.unread_counts,
-            self.chat.usernames(),
-            self.chat.ignored_user_ids(),
-            self.chat.notifications.all_items(),
-        );
+        let unread_dms = self.chat.unread_dms().into_iter().map(|dm| Item::Dm {
+            room_id: dm.room_id,
+            peer: dm.peer,
+            unread: dm.unread,
+        });
+        let unread_mentions =
+            self.chat
+                .unread_mentions()
+                .into_iter()
+                .map(|mention| Item::Mention {
+                    room_id: mention.room_id,
+                    message_id: mention.message_id,
+                    actor: mention.actor_username.clone(),
+                    room: mention.room_slug.clone(),
+                });
+        let unread = unread_dms.chain(unread_mentions).collect();
         let care = self.care_today();
         items(Inputs {
             my_moves,
@@ -4160,29 +4237,42 @@ impl App {
             }
         }
 
-        if let Some(username) = self.chat.take_requested_watch() {
+        if let Some(request) = self.chat.take_requested_watch() {
             changed = true;
-            match self.stream_service.watch_url_for_username(&username) {
-                Some(url) => {
-                    self.stream_service.note_viewer_of_username(
-                        &username,
-                        self.user_id,
-                        &self.username,
-                    );
-                    self.open_stream_url(
-                        url,
-                        "Watch Stream".to_string(),
-                        format!("@{username} is live. Open on any device or scan:"),
-                        true,
-                    );
+            match request {
+                crate::app::chat::state::StreamWatchRequest::User(username) => {
+                    let viewer_voice_channel = self.voice.current_room(self.user_id);
+                    match self
+                        .stream_service
+                        .watch_url_for_username(&username, viewer_voice_channel)
+                    {
+                        Some(url) => {
+                            self.stream_service.note_viewer_of_username(
+                                &username,
+                                self.user_id,
+                                &self.username,
+                            );
+                            self.open_stream_url(
+                                url,
+                                "Watch Stream".to_string(),
+                                format!("@{username} is live. Open on any device or scan:"),
+                                true,
+                            );
+                        }
+                        None => {
+                            self.banner = Some(Banner::error(&format!(
+                                "@{username} is not live right now."
+                            )));
+                        }
+                    }
                 }
-                None => {
-                    self.banner = Some(Banner::error(&format!(
-                        "@{username} is not live right now."
-                    )));
+                crate::app::chat::state::StreamWatchRequest::Toggle { room_here } => {
+                    crate::app::video::svc::toggle_stream(self, room_here);
                 }
             }
         }
+        // A live stream room on screen plays its stream by itself.
+        crate::app::video::svc::auto_watch(self, self.chat.last_stream_room_drawn.get());
 
         // Walking into a stream room counts as arriving at the stream. No
         // banner for the viewer: they can see where they are.
@@ -4584,7 +4674,11 @@ impl App {
             buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h");
         }
         // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~) - always on.
-        buf.extend_from_slice(b"\x1b[?2004h");
+        // 2031h = palette change notifications (CSI ? 997 ; Ps n).
+        buf.extend_from_slice(b"\x1b[?2004h\x1b[?2031h");
+        // Ahead of every OSC 11 the render loop writes, so the answer is the
+        // terminal's own background, not the synced one.
+        buf.extend_from_slice(terminal_colors::QUERY);
         buf.extend_from_slice(&crate::app::files::terminal_image::xtversion_probe());
         buf.extend_from_slice(&iterm2_capabilities_probe());
         // DA1 last: nearly every terminal answers it, and replies arrive in
@@ -4617,11 +4711,7 @@ impl Drop for App {
         // An owner going offline leaves a sleeping pet on the profile. Only
         // the owner's session writes the row; another device still up
         // rewrites it on its next mood change.
-        if self.shop_state.entitlements().has_pet_companion() {
-            self.pet_state
-                .svc
-                .set_mood_task(self.user_id, late_core::models::pet::PetMood::Asleep);
-        }
+        self.pet_state.session_ended();
         // The device mark: when this terminal's keyboard went quiet, not when
         // the connection closed. A terminal parked open overnight and shut in
         // the morning left last night. Keyless sessions (ghost bots, tests)

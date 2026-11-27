@@ -29,9 +29,10 @@ use super::{
     config::{open_state_log, state_log_path},
     latency::LatencySample,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
+    stream_view::StreamTicket,
     video::{
-        self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState,
-        VideoUpdate,
+        self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoSource,
+        VideoState, VideoUpdate,
     },
     voice::VoiceRuntimeState,
 };
@@ -136,6 +137,22 @@ enum PairControlMessage {
         #[serde(default)]
         start_s: u64,
     },
+    /// Play a live stream in the TUI's reserved rectangle: the CLI joins the
+    /// stream's LiveKit room with this subscribe-only ticket and shows what
+    /// it receives. Advertised via the `video_stream` capability; the later
+    /// `video_place`, `video_control` and `video_stop` are the same ones.
+    VideoPlayStream {
+        play_id: u64,
+        livekit_url: String,
+        token: String,
+        /// Whether the room's voices play here too; false when the viewer
+        /// already hears them in the voice channel.
+        voices: bool,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
+    },
     VideoPlace {
         play_id: u64,
         left: u16,
@@ -146,6 +163,17 @@ enum PairControlMessage {
     VideoControl {
         play_id: u64,
         control: VideoControl,
+    },
+    /// Take a live stream's picture off the terminal and keep the stream:
+    /// its sound plays on. A later `video_place` brings the picture back.
+    VideoHide {
+        play_id: u64,
+    },
+    /// Whether a playing live stream plays the room's voices too: the
+    /// viewer left (`true`) or joined (`false`) the stream's voice channel.
+    VideoVoices {
+        play_id: u64,
+        voices: bool,
     },
     VideoStop {
         play_id: u64,
@@ -182,12 +210,16 @@ const BASE_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "ope
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const BASE_CAPABILITIES: &[&str] = &[];
 
-/// `video` joins the base list only when nothing blocks it, `reconnect` only
-/// in a mode that can redial.
+/// `video` joins the base list only when nothing blocks it, `video_stream`
+/// when nothing but a missing yt-dlp does (a stream never calls it),
+/// `reconnect` only in a mode that can redial.
 fn client_capabilities(client: &PairClientInfo) -> Vec<&'static str> {
     let mut capabilities = BASE_CAPABILITIES.to_vec();
     if client.video_blockers.is_empty() {
         capabilities.push("video");
+    }
+    if video::can_play_streams(&client.video_blockers) {
+        capabilities.push("video_stream");
     }
     if client.reconnect {
         capabilities.push("reconnect");
@@ -1172,7 +1204,34 @@ async fn handle_pair_control(
                 rows,
             };
             info!(play_id, url = %url, ?rect, start_s, "starting video");
-            let update = video.play(play_id, url, rect, start_s);
+            let update = video.play(play_id, VideoSource::Url { url, start_s }, rect);
+            report_video(ws, update).await?;
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoPlayStream {
+            play_id,
+            livekit_url,
+            token,
+            voices,
+            left,
+            top,
+            cols,
+            rows,
+        } => {
+            let rect = VideoRect {
+                left,
+                top,
+                cols,
+                rows,
+            };
+            info!(play_id, livekit_url = %livekit_url, voices, ?rect, "starting stream");
+            let ticket = StreamTicket {
+                livekit_url,
+                token,
+                voices,
+            };
+            let update = video.play(play_id, VideoSource::Stream(ticket), rect);
             report_video(ws, update).await?;
             silence_for_video(video.is_active(), playback, webview);
             Ok(false)
@@ -1192,6 +1251,7 @@ async fn handle_pair_control(
             };
             match video.place(play_id, rect).await {
                 PlaceOutcome::Moved => info!(play_id, ?rect, "moved video"),
+                PlaceOutcome::Shown => info!(play_id, ?rect, "drawing the stream in a fresh mpv"),
                 PlaceOutcome::Deferred => info!(play_id, ?rect, "video move waits for mpv"),
                 PlaceOutcome::Unchanged => {}
                 PlaceOutcome::Failed(update) => report_video(ws, update).await?,
@@ -1204,6 +1264,21 @@ async fn handle_pair_control(
                 report_video(ws, update).await?;
             }
             silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoHide { play_id } => {
+            if let Some(rect) = video.hide(play_id) {
+                info!(play_id, "hid the stream's picture; the stream plays on");
+                if let Err(err) = video::settle_terminal(rect) {
+                    warn!(play_id, error = %err, "failed to clear the last video frame");
+                }
+            }
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoVoices { play_id, voices } => {
+            info!(play_id, voices, "stream voices changed");
+            video.set_voices(play_id, voices);
             Ok(false)
         }
         PairControlMessage::VideoStop { play_id } => {
@@ -1443,8 +1518,11 @@ fn apply_audio_pair_control(
         | PairControlMessage::VoiceSetDeafened { .. }
         | PairControlMessage::OpenUrl { .. }
         | PairControlMessage::VideoPlay { .. }
+        | PairControlMessage::VideoPlayStream { .. }
         | PairControlMessage::VideoPlace { .. }
         | PairControlMessage::VideoControl { .. }
+        | PairControlMessage::VideoHide { .. }
+        | PairControlMessage::VideoVoices { .. }
         | PairControlMessage::VideoStop { .. }
         | PairControlMessage::Reconnect { .. } => {}
     }

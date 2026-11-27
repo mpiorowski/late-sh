@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::app::deadchannel::fight::road::STEPS;
 use crate::app::deadchannel::fight::state::Sheet;
 use crate::app::deadchannel::street::state::StreetView;
+use crate::app::games::chips::cooldown::{CooldownReward, CooldownView, PayoutWindow};
 
 use super::map::Neon;
 use super::ui::{
@@ -72,6 +73,9 @@ pub struct LandingView<'a> {
     pub own_user_id: Uuid,
     /// `marquee_tick`, the city's animation clock.
     pub tick: usize,
+    /// The account's payout timers (`games::chips::cooldown`), once the
+    /// hub's read has landed: the Old Signal's bounty says when it pays.
+    pub cooldowns: Option<CooldownView<'a>>,
 }
 
 /// The Night City row in the hub sidebar, selected: magenta neon.
@@ -566,6 +570,7 @@ fn body(view: &LandingView<'_>) -> Vec<Line<'static>> {
         heading("YOUR RUNNER", Neon::Amber),
     ];
     lines.extend(runner(view.sheet));
+    lines.push(bounty(view.cooldowns));
     lines.push(Line::raw(""));
     lines.push(heading("THE STREET", Neon::Cyan));
     lines.push(street_count(view.street, view.own_user_id));
@@ -597,6 +602,25 @@ fn body(view: &LandingView<'_>) -> Vec<Line<'static>> {
     }
     lines.push(Line::raw(""));
     lines
+}
+
+/// The Old Signal's bounty (`fight/svc.rs`, one payout per mark and at most
+/// one every 30 days), and when it pays this account again once the timers
+/// are read.
+fn bounty(cooldowns: Option<CooldownView<'_>>) -> Line<'static> {
+    let mut value = vec![
+        number("40,000"),
+        text(" chips for the Old Signal, once a month"),
+    ];
+    if let Some(window) = cooldowns.map(|view| view.window(CooldownReward::OldSignal)) {
+        let neon = match window {
+            PayoutWindow::Open => Neon::Green,
+            PayoutWindow::Closed { .. } => Neon::Amber,
+        };
+        value.push(text("   "));
+        value.push(Span::styled(window.label(), ink(neon_rgb(neon))));
+    }
+    stat("bounty", value)
 }
 
 /// The sheet, read off the mirror: level, signal, what the pockets hold,

@@ -2449,12 +2449,11 @@ async fn each_world_talks_in_its_own_public_room() {
         .expect("load room")
         .expect("the room exists");
     assert_eq!(
-        room.kind, "game",
-        "hidden from the rail like every game room"
-    );
-    assert_eq!(
-        room.visibility, "public",
-        "anyone who opens the board talks"
+        room.kind,
+        late_core::models::chat_room::RoomKind::Game(
+            late_core::models::chat_room::RoomVisibility::Public
+        ),
+        "hidden from the rail like every game room, and anyone who opens the board talks"
     );
     assert_eq!(room.slug, Some(format!("realm-{}", first.id)));
 

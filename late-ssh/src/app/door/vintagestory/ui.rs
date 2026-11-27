@@ -68,7 +68,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
         ),
         landing::stat(
             "mods",
-            "Carry On, ProspectTogether, Auto Map Markers, QP's Chisel Tools, VS Roofing, BetterRuins, A Wearable Light, BetterEr Prospecting, Prosequor, Pal's Enhanced Locusts, Cartographer, Animal Cages, Purposeful Storage; the game offers them when you join",
+            "Carry On, ProspectTogether, Auto Map Markers, QP's Chisel Tools, VS Roofing, BetterRuins, A Wearable Light, BetterEr Prospecting, Prosequor, Pal's Enhanced Locusts, Cartographer, Animal Cages, Purposeful Storage, Food Shelves; the game offers them when you join",
             10,
         ),
         Line::from(""),
@@ -151,6 +151,16 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
         landing::stat("pvp", "on", 12),
         landing::stat("fire", "spreads; keep it away from wood", 12),
         landing::stat("time", "the world's clock stops while nobody is online", 12),
+        landing::stat(
+            "arrows",
+            "iron, meteoric iron, and steel arrows never break",
+            12,
+        ),
+        landing::stat(
+            "x-ray",
+            "Block Overlay and other x-ray mods are refused",
+            12,
+        ),
     ];
 
     crate::app::door::landing::render_scrolled(

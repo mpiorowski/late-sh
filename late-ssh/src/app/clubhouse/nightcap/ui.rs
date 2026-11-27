@@ -336,7 +336,9 @@ fn draw_lines(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
         let body_width = (area.width as usize)
             .saturating_sub(prefix.chars().count())
             .max(1);
-        let rows = build_composer_rows(message.body.trim_end(), body_width);
+        // `||spoilers||` stay bars: the wall has no selection to reveal one.
+        let body = crate::app::common::spoiler::mask_spoilers(&message.body);
+        let rows = build_composer_rows(body.trim_end(), body_width);
         if used + rows.len() > budget {
             break;
         }

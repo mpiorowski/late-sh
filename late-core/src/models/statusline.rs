@@ -140,9 +140,7 @@ impl StatusComponent {
             Self::Quests => "Unfinished daily quests, optionally including weekly quests.",
             Self::Care => "Daily care still due today: bonsai, tank, and pet.",
             Self::Voice => "Your voice channel: speaking, listening, muted or deafened.",
-            Self::Live => {
-                "What the #lounge now strip shows: a stream, a match, a booth track, a board event."
-            }
+            Self::Live => "What the #lounge now strip shows: a stream, a match, a booth track.",
             Self::Date => "Today's date in your chosen timezone.",
             Self::Username => {
                 "The name you are logged in as, for anyone with several keys or accounts."

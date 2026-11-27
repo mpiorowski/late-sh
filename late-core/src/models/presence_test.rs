@@ -1,5 +1,7 @@
 use uuid::Uuid;
 
+use crate::models::pet::PetSpecies;
+
 use super::{
     ClubhouseStand, Emote, MAX_PAYLOAD_BYTES, NightcapStand, PresenceBatch, PresenceRecord, Spot,
     StreetStand, parse_presence_payload,
@@ -17,6 +19,7 @@ fn record(n: u16) -> PresenceRecord {
             since_ms: 1_790_000_000_123,
             emote: Some((Emote::Dance, 1_790_000_000_456)),
             petted_dog_at_ms: Some(1_790_000_000_789),
+            pet_at_heel: Some(PetSpecies::Bird),
         },
         nightcap: Some(NightcapStand {
             stool: 5,
@@ -50,6 +53,29 @@ fn a_batch_survives_the_wire() {
         left: vec![Uuid::now_v7()],
     };
     assert_eq!(parse_presence_payload(&sent.to_payload()), Some(sent));
+}
+
+/// A deploy runs mixed versions for a while: a record from a replica that
+/// predates the pet at heel has no such field, and one from a replica that
+/// knows a species this one does not still parses. Both read as no pet.
+#[test]
+fn a_pet_at_heel_this_replica_cannot_read_is_no_pet_not_a_lost_record() {
+    let mut sent = record(1);
+    sent.clubhouse.pet_at_heel = None;
+    let batch = PresenceBatch {
+        replica_id: Uuid::now_v7(),
+        records: vec![sent.clone()],
+        left: Vec::new(),
+    };
+    let without = batch.to_payload();
+    assert!(!without.contains("pet_at_heel"), "{without}");
+    assert_eq!(parse_presence_payload(&without), Some(batch.clone()));
+
+    let mut with_cat = batch.clone();
+    with_cat.records[0].clubhouse.pet_at_heel = Some(PetSpecies::Cat);
+    let unknown = with_cat.to_payload().replace("\"cat\"", "\"axolotl\"");
+    assert!(unknown.contains("\"pet_at_heel\":\"axolotl\""), "{unknown}");
+    assert_eq!(parse_presence_payload(&unknown), Some(batch));
 }
 
 #[test]

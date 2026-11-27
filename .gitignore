@@ -64,3 +64,6 @@ GUIDE.md
 
 /scripts/test/aggstats.json
 .cache_ggshield
+
+# Symlink to personal NetHack notes (canonical copy in dotfiles).
+NETHACK.md

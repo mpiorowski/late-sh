@@ -15,6 +15,8 @@ pub mod qr;
 pub mod readline;
 pub(crate) mod scroll_view;
 pub mod splash_tips;
+pub(crate) mod spoiler;
+pub(crate) mod terminal_colors;
 pub mod textarea_input;
 pub mod theme;
 pub mod time;
@@ -38,6 +40,12 @@ mod mentions_test;
 
 #[cfg(test)]
 mod primitives_test;
+
+#[cfg(test)]
+mod spoiler_test;
+
+#[cfg(test)]
+mod terminal_colors_test;
 
 #[cfg(test)]
 mod public_net_test;

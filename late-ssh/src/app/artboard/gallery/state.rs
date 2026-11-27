@@ -181,6 +181,24 @@ struct SectionState {
     scroll: usize,
 }
 
+impl SectionState {
+    /// Select `piece`: where it is in the list, or on top when the list
+    /// does not reach it.
+    fn select_or_insert(&mut self, piece: GalleryPiece) {
+        match self.pieces.iter().position(|listed| listed.id == piece.id) {
+            Some(index) => {
+                self.selected = index;
+                self.scroll = self.scroll.min(index);
+            }
+            None => {
+                self.pieces.insert(0, piece);
+                self.selected = 0;
+                self.scroll = 0;
+            }
+        }
+    }
+}
+
 pub struct GalleryState {
     service: GalleryService,
     viewer_id: Uuid,
@@ -204,6 +222,13 @@ pub struct GalleryState {
     take_down_asked: Option<Uuid>,
     /// The piece whose take-down is in flight.
     pending_take_down: Option<Uuid>,
+    /// A piece to open full-frame (`open_piece`) that arrived before the
+    /// Latest listing did; shown at once, placed in the list when it lands.
+    pending_open_piece: Option<GalleryPiece>,
+    /// A hang that was refused or failed, until the page takes it for its
+    /// banner (`take_hang_error`): the notice alone is easy to miss on the
+    /// board, where only the framing bar shows it.
+    pending_hang_error: Option<String>,
     /// Published by the draw path so hit tests and the viewport math agree
     /// with what is on screen.
     rail_visible: Cell<bool>,
@@ -230,6 +255,8 @@ impl GalleryState {
             pending_applause: None,
             take_down_asked: None,
             pending_take_down: None,
+            pending_open_piece: None,
+            pending_hang_error: None,
             rail_visible: Cell::new(false),
             rail_area: Cell::new(Rect::default()),
             list_area: Cell::new(Rect::default()),
@@ -260,6 +287,11 @@ impl GalleryState {
 
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
+    }
+
+    /// The refused or failed hang this tick found, once.
+    pub fn take_hang_error(&mut self) -> Option<String> {
+        self.pending_hang_error.take()
     }
 
     /// The section the detail pane shows, if the selected row is one.
@@ -464,7 +496,26 @@ impl GalleryState {
     pub fn selected_piece(&self) -> Option<&GalleryPiece> {
         let section = self.viewed_section()?;
         let state = &self.sections[section.index()];
-        state.pieces.get(state.selected)
+        state
+            .pieces
+            .get(state.selected)
+            .or(self.pending_open_piece.as_ref())
+    }
+
+    /// Open `piece` full-frame from outside the page (its #lounge card):
+    /// Latest is selected and the piece shown, in its place in the list
+    /// when it is there and on top when it is not (an older piece).
+    pub fn open_piece(&mut self, piece: GalleryPiece) {
+        self.rail_select(RailRow::Gallery(GallerySection::Newest));
+        let state = &mut self.sections[GallerySection::Newest.index()];
+        self.pending_open_piece = match state.loaded {
+            true => {
+                state.select_or_insert(piece);
+                None
+            }
+            false => Some(piece),
+        };
+        self.focus = Focus::Piece;
     }
 
     pub fn list_move(&mut self, delta: isize) {
@@ -686,6 +737,11 @@ impl GalleryState {
                     state.error = None;
                     state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
                     state.scroll = state.scroll.min(state.selected);
+                    if section == GallerySection::Newest
+                        && let Some(pending) = self.pending_open_piece.take()
+                    {
+                        state.select_or_insert(pending);
+                    }
                 }
                 GalleryResult::ListFailed {
                     listing,
@@ -723,7 +779,9 @@ impl GalleryState {
                 }
                 GalleryResult::HangRefused(refusal) => {
                     self.hang = HangFlow::Idle;
-                    self.notice = Some(refusal.notice().to_string());
+                    let notice = refusal.notice().to_string();
+                    self.notice = Some(notice.clone());
+                    self.pending_hang_error = Some(notice);
                     if refusal == HangRefusal::Disabled {
                         self.focus = Focus::Canvas;
                         self.rail_index = 0;
@@ -731,37 +789,20 @@ impl GalleryState {
                 }
                 GalleryResult::HangFailed(error) => {
                     self.hang = HangFlow::Idle;
-                    self.notice = Some(error);
+                    self.notice = Some(error.clone());
+                    self.pending_hang_error = Some(error);
                 }
                 GalleryResult::Applause { piece_id, outcome } => {
                     self.pending_applause = None;
+                    self.update_piece(piece_id, |piece| take_applause(piece, outcome));
                     match outcome {
-                        ApplauseOutcome::Applauded(count) => {
-                            self.update_piece(piece_id, |piece| {
-                                piece.applause = count;
-                                piece.applauded_by_viewer = true;
-                            });
-                            self.notice = Some(format!("Applauded. {}.", applause_label(count)));
-                        }
-                        ApplauseOutcome::Withdrawn(count) => {
-                            self.update_piece(piece_id, |piece| {
-                                piece.applause = count;
-                                piece.applauded_by_viewer = false;
-                            });
-                            self.notice =
-                                Some(format!("Applause withdrawn. {}.", applause_label(count)));
-                        }
-                        ApplauseOutcome::OwnPiece => {
-                            self.notice = Some(OWN_PIECE_APPLAUSE.to_string());
-                        }
-                        ApplauseOutcome::Closed => {
-                            self.notice = Some(CLOSED_MONTH_APPLAUSE.to_string());
-                        }
-                        ApplauseOutcome::NotFound => {
-                            self.drop_piece(piece_id);
-                            self.notice = Some("That piece was taken down.".to_string());
-                        }
+                        ApplauseOutcome::NotFound => self.drop_piece(piece_id),
+                        ApplauseOutcome::Applauded(_)
+                        | ApplauseOutcome::Withdrawn(_)
+                        | ApplauseOutcome::OwnPiece
+                        | ApplauseOutcome::Closed => {}
                     }
+                    self.notice = Some(applause_notice(outcome));
                 }
                 GalleryResult::ApplauseFailed { piece_id: _, error } => {
                     self.pending_applause = None;
@@ -770,7 +811,7 @@ impl GalleryState {
                 GalleryResult::TakeDown { piece_id, outcome } => {
                     self.pending_take_down = None;
                     match outcome {
-                        TakeDownOutcome::TakenDown => {
+                        TakeDownOutcome::TakenDown { .. } => {
                             self.drop_piece(piece_id);
                             self.notice = Some("Taken down. The wall forgets it.".to_string());
                             self.service
@@ -800,8 +841,16 @@ impl GalleryState {
     /// A piece that is no longer on the wall leaves every listing; a full
     /// frame on it goes back to its list. A listing still in flight is
     /// asked for again, since its answer may have been read before the
-    /// piece came down and would put it back.
+    /// piece came down and would put it back. So would a copy still waiting
+    /// for Latest to load (`open_piece`), so that one is dropped too.
     fn drop_piece(&mut self, piece_id: Uuid) {
+        if self
+            .pending_open_piece
+            .as_ref()
+            .is_some_and(|pending| pending.id == piece_id)
+        {
+            self.pending_open_piece = None;
+        }
         for state in &mut self.sections {
             state.pieces.retain(|piece| piece.id != piece_id);
             state.selected = state.selected.min(state.pieces.len().saturating_sub(1));
@@ -816,12 +865,17 @@ impl GalleryState {
         }
     }
 
+    /// Every copy of the piece this session holds: one per listing it is
+    /// in, and the one waiting for Latest to load (`open_piece`), which is
+    /// the copy on screen until then.
     fn update_piece(&mut self, piece_id: Uuid, mut apply: impl FnMut(&mut GalleryPiece)) {
-        for state in &mut self.sections {
-            for piece in &mut state.pieces {
-                if piece.id == piece_id {
-                    apply(piece);
-                }
+        let listed = self
+            .sections
+            .iter_mut()
+            .flat_map(|state| state.pieces.iter_mut());
+        for piece in listed.chain(self.pending_open_piece.as_mut()) {
+            if piece.id == piece_id {
+                apply(piece);
             }
         }
     }
@@ -832,9 +886,38 @@ const CLOSED_MONTH_APPLAUSE: &str = "Applause closed with the month. The ranking
 const NOT_YOURS_TAKE_DOWN: &str = "Only the hanger takes a piece down.";
 const CLOSED_MONTH_TAKE_DOWN: &str = "Last month's wall is settled; that piece stays up.";
 
+/// The count and the viewer's own hand on `piece` after an applause
+/// answer. A refusal changes neither.
+pub(super) fn take_applause(piece: &mut GalleryPiece, outcome: ApplauseOutcome) {
+    match outcome {
+        ApplauseOutcome::Applauded(count) => {
+            piece.applause = count;
+            piece.applauded_by_viewer = true;
+        }
+        ApplauseOutcome::Withdrawn(count) => {
+            piece.applause = count;
+            piece.applauded_by_viewer = false;
+        }
+        ApplauseOutcome::OwnPiece | ApplauseOutcome::Closed | ApplauseOutcome::NotFound => {}
+    }
+}
+
+/// What an applause answer tells the one who pressed the key.
+pub(super) fn applause_notice(outcome: ApplauseOutcome) -> String {
+    match outcome {
+        ApplauseOutcome::Applauded(count) => format!("Applauded. {}.", applause_label(count)),
+        ApplauseOutcome::Withdrawn(count) => {
+            format!("Applause withdrawn. {}.", applause_label(count))
+        }
+        ApplauseOutcome::OwnPiece => OWN_PIECE_APPLAUSE.to_string(),
+        ApplauseOutcome::Closed => CLOSED_MONTH_APPLAUSE.to_string(),
+        ApplauseOutcome::NotFound => "That piece was taken down.".to_string(),
+    }
+}
+
 /// The first day of the current UTC month, the `period_month` a piece hung
 /// now would carry.
-fn current_period_month() -> NaiveDate {
+pub(super) fn current_period_month() -> NaiveDate {
     let today = Utc::now().date_naive();
     today.with_day(1).unwrap_or(today)
 }

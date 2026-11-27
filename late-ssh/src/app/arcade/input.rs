@@ -258,6 +258,37 @@ fn launch_selected(app: &mut App) {
     app.is_playing_game = true;
 }
 
+/// The board the first-visit tour borrows: today's Netwalk daily at its
+/// easiest difficulty, opened as the active Arcade game the way Enter on
+/// its lobby card opens it, so the win it produces is a real one (the win
+/// task runs, the chips land, the quest ticks when Netwalk is drawn, the
+/// solvers roster gains the name). The tour's gate feeds it through
+/// `lent_board_key` and `lent_board_arrow`, and reads
+/// `netwalk_state.is_solved()` to let the newcomer go.
+pub(crate) fn open_lent_board(app: &mut App) {
+    app.netwalk_state.ensure_current_daily();
+    app.netwalk_state.open_lent_daily();
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::Netwalk);
+    app.arcade_solvers_open = false;
+    app.is_playing_game = true;
+}
+
+/// Put the lent board away: back to the Arcade lobby, the board kept as it
+/// stands.
+pub(crate) fn close_lent_board(app: &mut App) {
+    app.is_playing_game = false;
+}
+
+/// A key on the lent board, the board's own moves only.
+pub(crate) fn lent_board_key(app: &mut App, byte: u8) -> bool {
+    super::netwalk::input::handle_lent_key(&mut app.netwalk_state, byte)
+}
+
+/// An arrow on the lent board.
+pub(crate) fn lent_board_arrow(app: &mut App, key: u8) -> bool {
+    super::netwalk::input::handle_arrow(&mut app.netwalk_state, key)
+}
+
 /// The selected card is a daily that can be played today, so it has a
 /// roster to show.
 fn selected_daily_is_available(app: &App) -> bool {
@@ -314,14 +345,15 @@ pub(crate) fn day_card(app: &App) -> ShareCard {
         .on(today)
         .get(&app.user_id);
     let session = app.session_daily_wins.today();
-    let streak = app.quest_state.snapshot().daily_streak.consecutive_days;
+    let quests = app.quest_state.snapshot();
     share::day_card(
         today,
         |puzzle| {
             snapshot.is_some_and(|s| s.completed(puzzle))
                 || session.is_some_and(|s| s.completed(puzzle))
         },
-        streak,
+        quests.daily_streak.consecutive_days,
+        quests.rung_stars,
     )
 }
 

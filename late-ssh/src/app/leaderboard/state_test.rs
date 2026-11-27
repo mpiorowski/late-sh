@@ -5,6 +5,50 @@ use late_core::models::leaderboard::{
 use crate::app::leaderboard::state::*;
 
 #[test]
+fn top_chat_month_change_resets_scroll_and_hides_previous_month() {
+    use chrono::{Datelike, Duration, Utc};
+    use ratatui::layout::Rect;
+    let mut state = LeaderboardPageState::new();
+    let top_chat = state
+        .boards()
+        .iter()
+        .position(|board| *board == Board::TopChat)
+        .unwrap();
+    state.select(top_chat);
+    let month = Utc::now().date_naive().with_day(1).unwrap();
+    assert!(state.sync_month(month));
+    state.set_content_area(Rect::new(25, 1, 70, 30), 100);
+    state.scroll_by(20);
+    assert!(!state.sync_month(month));
+    assert_eq!(state.scroll(), 20);
+    let next = (month + Duration::days(32)).with_day(1).unwrap();
+    assert!(state.sync_month(next));
+    assert_eq!(state.scroll(), 0);
+    let mut data = LeaderboardData::default();
+    data.top_chat.month_start = (month - Duration::days(1)).with_day(1).unwrap();
+    data.top_chat
+        .all_rooms
+        .push(late_core::models::leaderboard::RankedEntry {
+            username: "old".into(),
+            user_id: uuid::Uuid::nil(),
+            rank: 1,
+            value: 99,
+            note: None,
+        });
+    // Read in the month it was taken for, the snapshot shows, each race
+    // under its own heading; read a month later, none of it does.
+    assert!(matches!(
+        Board::TopChat.standings(&data, data.top_chat.month_start),
+        Standings::TopChat([("all rooms", all_rooms), ("outside the lounge", outside), ..])
+            if all_rooms.len() == 1 && outside.is_empty()
+    ));
+    assert!(matches!(
+        Board::TopChat.standings(&data, month),
+        Standings::TopChat(panels) if panels.iter().all(|(_, entries)| entries.is_empty())
+    ));
+}
+
+#[test]
 fn wheel_selection_stops_at_ends_and_only_board_changes_reset_scroll() {
     use ratatui::layout::Rect;
     let mut state = LeaderboardPageState::new();
@@ -24,15 +68,15 @@ fn wheel_selection_stops_at_ends_and_only_board_changes_reset_scroll() {
 }
 
 /// The page list is roster-derived: the four bespoke boards lead (Top
-/// Drinkers first), then the game boards (the Lateania boards, then each
+/// Chips first), then the game boards (the Lateania boards, then each
 /// door's board triple), then every daily puzzle, then every score game. A
 /// roster addition in late-core must grow this list without any page change.
 #[test]
 fn board_list_follows_the_rosters() {
     let boards = Board::all();
-    assert_eq!(boards[0], Board::TopDrinkers);
-    assert_eq!(boards[1], Board::TopChips);
-    assert_eq!(boards[2], Board::ArcadeWins);
+    assert_eq!(boards[0], Board::TopChips);
+    assert_eq!(boards[1], Board::ArcadeWins);
+    assert_eq!(boards[2], Board::TopChat);
     assert_eq!(boards[3], Board::TimeOnline);
     assert_eq!(boards[4], Board::LateaniaAdventurers);
     assert_eq!(boards[5], Board::LateaniaPvp);
@@ -42,11 +86,15 @@ fn board_list_follows_the_rosters() {
     let door_boards = 3 * DoorGame::ALL.len();
     assert_eq!(
         boards.len(),
-        6 + door_boards + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
+        6 + door_boards + 1 + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
     );
-    assert_eq!(boards[6 + door_boards], Board::Daily(DailyPuzzle::ALL[0]));
+    assert_eq!(boards[6 + door_boards], Board::DopewarsScore);
     assert_eq!(
-        boards[6 + door_boards + DailyPuzzle::ALL.len()],
+        boards[6 + door_boards + 1],
+        Board::Daily(DailyPuzzle::ALL[0])
+    );
+    assert_eq!(
+        boards[6 + door_boards + 1 + DailyPuzzle::ALL.len()],
         Board::Score(ScoreGame::ALL[0])
     );
     assert_eq!(
@@ -56,16 +104,19 @@ fn board_list_follows_the_rosters() {
     );
 }
 
-/// Top Drinkers races by month and by year, never all time.
+/// The dopewars board ranks final net worth and shows it as cash, negative
+/// debt included.
 #[test]
-fn top_drinkers_shows_monthly_and_yearly_buzz() {
-    let board = Board::TopDrinkers;
-    assert_eq!(board.title(), "Top Drinkers");
-    assert_eq!(board.format_value(12_400), "12,400 buzz");
+fn dopewars_top_score_shows_dollar_values() {
+    let board = Board::DopewarsScore;
+    assert_eq!(board.title(), "dopewars Top Score");
+    assert_eq!(board.format_value(1_250_000), "$1,250,000");
+    assert_eq!(board.format_value(-500), "-$500");
+    assert_eq!(board.format_value(0), "$0");
     let data = LeaderboardData::default();
     assert!(matches!(
-        board.standings(&data),
-        Standings::MonthlyYearly { .. }
+        board.standings(&data, chrono::NaiveDate::default()),
+        Standings::Paired { .. }
     ));
 }
 
@@ -89,13 +140,16 @@ fn online_time_uses_compact_two_unit_values() {
         online_time: BoardWindows::default(),
         ..LeaderboardData::default()
     };
-    assert!(matches!(board.standings(&data), Standings::Paired { .. }));
+    assert!(matches!(
+        board.standings(&data, chrono::NaiveDate::default()),
+        Standings::Paired { .. }
+    ));
 }
 
 #[test]
 fn selection_wraps_both_ways() {
     let mut state = LeaderboardPageState::new();
-    assert_eq!(state.selected_board(), Board::TopDrinkers);
+    assert_eq!(state.selected_board(), Board::TopChips);
     state.select_previous();
     assert_eq!(
         state.selected_index(),
@@ -103,5 +157,5 @@ fn selection_wraps_both_ways() {
         "previous from the first board wraps to the last"
     );
     state.select_next();
-    assert_eq!(state.selected_board(), Board::TopDrinkers);
+    assert_eq!(state.selected_board(), Board::TopChips);
 }

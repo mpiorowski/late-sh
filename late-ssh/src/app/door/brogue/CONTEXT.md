@@ -107,14 +107,14 @@ Most of the DCSS door's invariants (§4 of its CONTEXT) apply verbatim: auth com
 
 ## 5. Tests And Verification [STABLE]
 
-Root policy applies: agents run targeted tests via `make test-llm`; humans run the suite.
+Root policy applies: agents run targeted tests via `make test`; humans run the suite.
 
 Inline `_test.rs` files cover: client+host `identity` (derivation determinism + distinctness + the cross-crate known-answer fingerprint pinning `late.sh/brogue/v1`), client `state` (disabled connect no-op, forward without proxy no-op, mouse/paste stripping, cursor keys following the game in and out of application cursor mode, F1 both encodings, exit grace, claim-prompt byte handling/caps/validation errors), shared `door/keys` (the CSI→SS3 rewrite, and what it must leave alone: plain keys, Page Up/Down, modified arrows, already-SS3 input, and a sequence cut by the chunk boundary), host `playname` (sanitize incl. traversal), host `server` (`effective_term` fallback), host `host` (`player_dir` distinctness), hub `state` (card order incl. Brogue), `primitives` (door screens outside the tab cycle).
 
 The log pipe adds: host `stats` (cursor parsing over path-shaped file ids, line framing incl. embedded tabs and partial tails, and the playname-dir filter that keeps a frame-breaking or traversing directory name out of the stream), client `ingest/brogue_test` (real-shaped run-history lines for every result, the `Reset` marker, extra trailing fields, hostile/truncated lines, and the file-id → handle recovery incl. rejecting variant files), and `ingest/svc_test` (DB-backed: replay lands one row, escape and mastery each grant only their own badge and pay once for life, reset markers and foreign file ids advance the cursor without attribution). Board coverage rides `late-core/src/models/leaderboard_test.rs` (a Brogue escape plus a mastery both count on the wins board).
 
 ```bash
-make test-llm ARGS="-E 'package(late-brogue) or (package(late-ssh) and test(brogue))'"
+make test ARGS="-E 'package(late-brogue) or (package(late-ssh) and test(brogue))'"
 ```
 
 The §4 save-isolation properties live in upstream C source, so they are checked by `scripts/brogue_verify_isolation.sh` rather than by cargo: fail-closed in the `brogue-build` stage, and runnable by hand against the local reference with `scripts/brogue_verify_isolation.sh upstream-brogue`. Mutation-test every assertion you add or edit (weaken the property, watch the check go red), since an assertion that cannot fail is worse than none.

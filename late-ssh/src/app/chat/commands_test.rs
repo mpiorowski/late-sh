@@ -1,4 +1,5 @@
 use super::*;
+use late_core::models::chat_room::{RoomKind, RoomVisibility};
 
 fn names(matches: &[MentionMatch]) -> Vec<&str> {
     matches.iter().map(|m| m.name.as_str()).collect()
@@ -10,8 +11,7 @@ fn room_with_slug(slug: Option<&str>) -> ChatRoom {
         id: uuid::Uuid::from_u128(1),
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        kind: "topic".to_string(),
-        visibility: "public".to_string(),
+        kind: RoomKind::Topic(RoomVisibility::Public),
         auto_join: false,
         permanent: false,
         slug: slug.map(str::to_string),

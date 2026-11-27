@@ -90,6 +90,6 @@ Pure tests cover key derivation, account-label validation, session-label stabili
 Focused checks:
 
 ```bash
-make test-llm ARGS="-p late-codekeep"
-make test-llm ARGS="-p late-ssh --lib -E 'test(codekeep) | test(door_games_are_outside) | test(selection_clamps) | test(all_games_are_listed)'"
+make test ARGS="-p late-codekeep"
+make test ARGS="-p late-ssh --lib -E 'test(codekeep) | test(door_games_are_outside) | test(selection_clamps) | test(all_games_are_listed)'"
 ```

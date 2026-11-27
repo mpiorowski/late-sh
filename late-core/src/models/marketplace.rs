@@ -14,7 +14,6 @@ use super::{
     username_effect::{USERNAME_EFFECT_KIND, UsernameEffect},
 };
 
-pub const PET_COMPANION_SKU: &str = "pet_companion";
 pub const BONSAI_CONSUMABLE_ITEM_KIND: &str = "bonsai_consumable";
 pub const BONSAI_DECAY_SHIELD_SKU: &str = "bonsai_decay_shield_two_weeks";
 /// `shop_consumable_effects.effect_kind` for the user-scoped Bonsai Decay
@@ -552,17 +551,6 @@ async fn purchase_item_by_sku_inner(
     if let Some(slot) = &item.slot {
         equip_purchase_in_tx(&tx, user_id, item.id, slot).await?;
     }
-    if item.sku == PET_COMPANION_SKU {
-        tx.execute(
-            "INSERT INTO pet_companions (user_id, adopted_at)
-             VALUES ($1, current_timestamp)
-             ON CONFLICT (user_id) DO UPDATE
-             SET adopted_at = COALESCE(pet_companions.adopted_at, current_timestamp),
-                 updated = current_timestamp",
-            &[&user_id],
-        )
-        .await?;
-    }
 
     let refresh_all_active_users =
         activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
@@ -883,7 +871,8 @@ async fn activate_chat_consumable_in_tx(
 /// effect purchase must carry the buyer's style choice, and the choice must
 /// belong to the bought item's variant; failing the transaction means the
 /// buyer is never charged for an effect that could not activate. Any prior
-/// live username effect is replaced (one active effect per user).
+/// live username effect is replaced, or extended when it is the same
+/// style (one active effect per user, `activate_user_effect_in_tx`).
 async fn activate_username_effect_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -927,8 +916,9 @@ pub fn rental_duration_secs(item: &MarketplaceItem) -> i64 {
 
 /// Activates the chat badge or flag rental bought in this transaction. The
 /// rental fills its slot through a user-scoped effect row rather than the
-/// legacy `equipped_slot` path, so it expires on its own and a rebuy of any
-/// badge for the same slot replaces the live row and resets the clock. A
+/// legacy `equipped_slot` path, so it expires on its own; a rebuy of the
+/// same badge adds its window to the live row, any other badge for the slot
+/// replaces it. A
 /// payload nothing could render fails the transaction: never charge for a
 /// badge that would not appear.
 async fn activate_badge_rental_in_tx(
@@ -955,7 +945,8 @@ async fn activate_badge_rental_in_tx(
 }
 
 /// Activates the title rental bought in this transaction. One active title per
-/// user, rebuy replaces, exactly the username-effect path; a title and a
+/// user, a rebuy extends the same text and replaces any other, exactly the
+/// username-effect path; a title and a
 /// username color are separate effect kinds, so buying one never clears the
 /// other.
 ///
@@ -997,10 +988,10 @@ async fn activate_title_rental_in_tx(
     Ok(Some(effect))
 }
 
-/// Activates the Bonsai Decay Shield bought in this transaction. Unlike the
-/// username effect above, a live protection window is extended by the
-/// item's duration rather than reset (`extend_user_effect_in_tx`), so
-/// stacking never discards time the player already paid for.
+/// Activates the Bonsai Decay Shield bought in this transaction. A live
+/// protection window is extended by the item's duration rather than reset
+/// (`extend_user_effect_in_tx`), so stacking never discards time the player
+/// already paid for.
 async fn activate_bonsai_decay_protection_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
@@ -1053,20 +1044,6 @@ async fn activate_aquarium_shield_in_tx(
     )
     .await?;
     Ok(Some(effect))
-}
-
-/// Whether the user owns the Pet Companion: what puts a pet on a profile.
-pub async fn user_owns_pet_companion(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
-    let row = client
-        .query_opt(
-            "SELECT 1
-             FROM user_purchases p
-             JOIN marketplace_items i ON i.id = p.item_id
-             WHERE p.user_id = $1 AND i.sku = $2",
-            &[&user_id, &PET_COMPANION_SKU],
-        )
-        .await?;
-    Ok(row.is_some())
 }
 
 /// One species in a user's tank: what the care rolls (fry, starvation)

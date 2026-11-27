@@ -173,7 +173,7 @@ fn draw_preview(frame: &mut Frame, area: Rect, item: &DiscoverRoomItem) {
                 ),
             ]));
             lines.push(Line::from(Span::styled(
-                msg.body.clone(),
+                crate::app::common::spoiler::mask_spoilers(&msg.body).into_owned(),
                 Style::default().fg(theme::TEXT()),
             )));
             lines.push(Line::from(""));
@@ -236,7 +236,7 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool, width: u16) -> Vec<Line<'
                 Style::default().fg(theme::TEXT_FAINT()),
             ));
             name_spans.push(Span::styled(
-                crate::app::chat::ui::truncate_cells(topic, room),
+                crate::app::common::primitives::truncate_cells(topic, room),
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

@@ -32,3 +32,13 @@ fn a_click_lands_on_the_square_drawn_for_either_side() {
         assert_eq!(hit_test(area, ChessColor::White, board.x, board.y), None);
     }
 }
+
+/// A lost life is a dot, not an outlined heart: ♥ and ♡ look alike in
+/// most terminal fonts, so the count has to read from the glyph's shape.
+#[test]
+fn lost_lives_read_as_dots_beside_the_hearts_left() {
+    assert_eq!(
+        (0..=LIVES).map(lives_text).collect::<Vec<_>>(),
+        ["···", "♥··", "♥♥·", "♥♥♥"]
+    );
+}

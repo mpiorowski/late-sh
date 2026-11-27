@@ -293,8 +293,10 @@ fn vt_parser_emits_alt_c_for_explicit_clipboard_chord() {
 }
 
 #[test]
-fn vt_parser_emits_alt_k_for_the_artboard_eyedropper() {
+fn vt_parser_emits_alt_j_and_alt_k_chords() {
     let mut parser = VtInputParser::default();
+    assert_eq!(parser.feed(b"\x1bj"), vec![ParsedInput::AltJ]);
+    assert_eq!(parser.feed(b"\x1bJ"), vec![ParsedInput::AltJ]);
     assert_eq!(parser.feed(b"\x1bk"), vec![ParsedInput::AltK]);
     assert_eq!(parser.feed(b"\x1bK"), vec![ParsedInput::AltK]);
 }

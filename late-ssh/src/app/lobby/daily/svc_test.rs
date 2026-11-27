@@ -1378,11 +1378,15 @@ async fn claim_creates_match_chat_with_voice() {
         .await
         .expect("load chat room")
         .expect("chat room exists");
-    assert_eq!(room.kind, "game");
     // Public, like the house tables: a spectator who opens the board joins
     // and talks. The two players are seeded here all the same, so the room
     // is theirs before anyone wanders in.
-    assert_eq!(room.visibility, "public");
+    assert_eq!(
+        room.kind,
+        late_core::models::chat_room::RoomKind::Game(
+            late_core::models::chat_room::RoomVisibility::Public
+        )
+    );
     assert!(!room.auto_join);
     assert_eq!(
         room.slug.as_deref(),

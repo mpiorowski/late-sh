@@ -1,5 +1,15 @@
 use super::*;
 
+/// The week from the rotation's first Monday, nobody starred.
+fn a_week() -> Week {
+    Week::today(
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(),
+        &std::collections::HashSet::new(),
+        crate::app::hub::dailies::state::RungStanding::Open,
+        uuid::Uuid::from_u128(1),
+    )
+}
+
 #[test]
 fn truncate_name_keeps_short_names_and_cuts_long_ones() {
     assert_eq!(truncate_name("alice"), "alice");
@@ -57,6 +67,11 @@ fn bubble_text_drops_reply_quotes_and_flattens_lines() {
         "thanks a lot"
     );
     assert_eq!(bubble_text("two\nlines  here"), "two lines here");
+}
+
+#[test]
+fn bubble_text_keeps_spoilers_hidden() {
+    assert_eq!(bubble_text("today is ||CRANE||"), "today is ▒▒▒▒▒");
 }
 
 #[test]
@@ -160,7 +175,13 @@ fn header_rows(header: &TourHeader, width: u16) -> Vec<String> {
 #[test]
 fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     let music = header_rows(
-        &tour_header(Tutorial::VisitMusic, TableStop::Racked, false).unwrap(),
+        &tour_header(
+            Tutorial::VisitMusic,
+            TableStop::Racked,
+            false,
+            BoardStop::Open,
+        )
+        .unwrap(),
         72,
     );
     let total = RadioStation::enabled().count();
@@ -177,7 +198,13 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     );
 
     let lobby = header_rows(
-        &tour_header(Tutorial::VisitLobby, TableStop::Racked, false).unwrap(),
+        &tour_header(
+            Tutorial::VisitLobby,
+            TableStop::Racked,
+            false,
+            BoardStop::Open,
+        )
+        .unwrap(),
         72,
     );
     assert!(
@@ -190,7 +217,13 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
 
     // The table asks for the break, then for Enter onward once it is struck.
     let table = header_rows(
-        &tour_header(Tutorial::VisitTable, TableStop::Racked, false).unwrap(),
+        &tour_header(
+            Tutorial::VisitTable,
+            TableStop::Racked,
+            false,
+            BoardStop::Open,
+        )
+        .unwrap(),
         72,
     );
     assert!(
@@ -198,7 +231,13 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
         "{table:#?}"
     );
     let struck = header_rows(
-        &tour_header(Tutorial::VisitTable, TableStop::Played, false).unwrap(),
+        &tour_header(
+            Tutorial::VisitTable,
+            TableStop::Played,
+            false,
+            BoardStop::Open,
+        )
+        .unwrap(),
         72,
     );
     assert!(
@@ -211,7 +250,13 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
 
     // A terminal the table does not fit: the stop says so and moves on.
     let small = header_rows(
-        &tour_header(Tutorial::VisitTable, TableStop::TooSmall, false).unwrap(),
+        &tour_header(
+            Tutorial::VisitTable,
+            TableStop::TooSmall,
+            false,
+            BoardStop::Open,
+        )
+        .unwrap(),
         72,
     );
     assert!(small[1].contains("needs a bigger window"), "{small:#?}");
@@ -220,7 +265,15 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
         "{small:#?}"
     );
 
-    assert!(tour_header(Tutorial::VisitGames, TableStop::Racked, false).is_none());
+    assert!(
+        tour_header(
+            Tutorial::VisitGames,
+            TableStop::Racked,
+            false,
+            BoardStop::Open
+        )
+        .is_none()
+    );
 }
 
 /// Every page stop moves on with Enter and says so on a default terminal.
@@ -234,8 +287,10 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
                 frame,
                 Rect::new(1, 1, 78, 22),
                 Tutorial::VisitGames,
+                TourRoute::House,
                 Screen::Games,
                 false,
+                a_week,
             )
         })
         .unwrap();
@@ -271,8 +326,10 @@ fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
                     frame,
                     Rect::new(1, 1, 78, 22),
                     Tutorial::VisitArtboard,
+                    TourRoute::House,
                     Screen::Artboard,
                     hidden,
+                    a_week,
                 )
             })
             .unwrap();
@@ -309,8 +366,10 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
                 frame,
                 Rect::new(1, 1, 78, 22),
                 Tutorial::VisitGames,
+                TourRoute::House,
                 Screen::Games,
                 false,
+                a_week,
             )
         })
         .unwrap();
@@ -342,8 +401,13 @@ fn the_dungeon_stop_fills_the_page_under_its_header() {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                let header =
-                    tour_header(Tutorial::VisitDungeon, TableStop::Racked, fight.won()).unwrap();
+                let header = tour_header(
+                    Tutorial::VisitDungeon,
+                    TableStop::Racked,
+                    fight.won(),
+                    BoardStop::Open,
+                )
+                .unwrap();
                 let page = header.draw_above(frame, Rect::new(1, 1, 78, 22));
                 fight::draw(frame, page, fight, "mat");
             })
@@ -381,4 +445,269 @@ fn the_dungeon_stop_fills_the_page_under_its_header() {
         at(&rows, "You kill the fire dragon!").is_some(),
         "{rows:#?}"
     );
+}
+
+/// On the `Board` route the chat stop leads to today's board, not the
+/// music.
+#[test]
+fn the_board_route_names_the_board_as_what_comes_after_the_chat() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitChat,
+                TourRoute::Board,
+                Screen::Dashboard,
+                false,
+                a_week,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[Enter] next: today's board")),
+        "{rows:#?}"
+    );
+}
+
+/// The board stop writes its pitch across the top of the Arcade: it asks
+/// for the board's keys while the board is open, says so and moves on
+/// where the board does not fit, and once the board is solved names
+/// tomorrow and the way out.
+#[test]
+fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
+    let header = |board: BoardStop| {
+        header_rows(
+            &tour_header(Tutorial::VisitBoard, TableStop::Played, false, board).unwrap(),
+            100,
+        )
+    };
+    let open = header(BoardStop::Open);
+    assert!(open[0].contains("the tour · today's board"), "{open:#?}");
+    assert!(
+        open[1].contains("everyone here gets this same board today"),
+        "{open:#?}"
+    );
+    assert!(
+        open.last()
+            .unwrap()
+            .contains("[hjkl/arrows] move · [Space] turn · [f] lock · [s] skip ──"),
+        "{open:#?}"
+    );
+
+    let small = header(BoardStop::TooSmall);
+    assert!(small[1].contains("needs a bigger window"), "{small:#?}");
+    assert!(
+        small.last().unwrap().contains("[Enter] next: the week ──"),
+        "{small:#?}"
+    );
+
+    let monday = chrono::NaiveDate::from_ymd_opt(2026, 11, 9).unwrap();
+    let solved = header(BoardStop::Solved {
+        hours_left: 7,
+        tomorrow: rung_for(monday),
+    });
+    assert!(
+        solved[1].contains("connected. that was day one."),
+        "{solved:#?}"
+    );
+    assert!(
+        solved[2].contains("tomorrow is your first star: medium Sudoku, up at 00:00 UTC, in 7 h."),
+        "{solved:#?}"
+    );
+    assert!(
+        solved[4].contains(
+            "it stays in the Arcade, under [2], with who else solved it. [?] is the guide, anywhere."
+        ),
+        "{solved:#?}"
+    );
+    assert!(
+        solved.last().unwrap().contains("[Enter] next: the week ──"),
+        "{solved:#?}"
+    );
+}
+
+/// The board stop stands on what the frame can show: solved is solved
+/// whatever the terminal, an unsolved board has to fit under the header,
+/// and the send-off counts whole hours up to the next 00:00 UTC.
+#[test]
+fn the_board_stop_follows_the_board_and_the_terminal() {
+    let at = |rfc3339: &str| {
+        chrono::DateTime::parse_from_rfc3339(rfc3339)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    };
+    let noon = at("2026-11-06T12:10:00Z");
+    let tomorrow = rung_for(chrono::NaiveDate::from_ymd_opt(2026, 11, 7).unwrap());
+    let default_terminal = Rect::new(1, 1, 78, 22);
+    assert_eq!(
+        board_stop(default_terminal, false, false, noon),
+        BoardStop::Open
+    );
+    assert_eq!(
+        board_stop(default_terminal, true, false, noon),
+        BoardStop::Solved {
+            hours_left: 12,
+            tomorrow
+        }
+    );
+    // Too short for the header and a five-tile board under it.
+    let tiny = Rect::new(1, 1, 78, 9);
+    assert_eq!(board_stop(tiny, false, false, noon), BoardStop::TooSmall);
+    assert_eq!(
+        board_stop(tiny, true, false, noon),
+        BoardStop::Solved {
+            hours_left: 12,
+            tomorrow
+        }
+    );
+
+    assert_eq!(
+        board_stop(default_terminal, true, false, at("2026-11-06T23:30:00Z")),
+        BoardStop::Solved {
+            hours_left: 1,
+            tomorrow
+        }
+    );
+    assert_eq!(
+        board_stop(default_terminal, true, false, at("2026-11-06T00:00:00Z")),
+        BoardStop::Solved {
+            hours_left: 24,
+            tomorrow
+        }
+    );
+}
+
+/// The week stop boxes the week over the Arcade lobby: today's and
+/// tomorrow's badges, the pitch beside them, and Enter finishes the tour
+/// in the chat. Look only: no key of the lobby's is named.
+#[test]
+fn the_week_stop_boxes_the_week_over_the_arcade_and_leads_to_the_chat() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitWeek,
+                TourRoute::Board,
+                Screen::Arcade,
+                false,
+                a_week,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let joined = rows.join("\n");
+    assert!(joined.contains("✦ the tour · the week"), "{rows:#?}");
+    assert!(joined.contains("today"), "{rows:#?}");
+    assert!(joined.contains("tomorrow"), "{rows:#?}");
+    assert!(
+        joined.contains("up at 00:00 UTC: your first star."),
+        "{rows:#?}"
+    );
+    // Today's and tomorrow's badges: the games on one row, their boards on
+    // the next, in the same columns.
+    let names = rows
+        .iter()
+        .position(|row| row.contains("sudoku") && row.contains("netwalk"))
+        .expect("the badges' name row");
+    assert!(
+        rows[names + 1].contains("medium") && rows[names + 1].contains("hard"),
+        "{rows:#?}"
+    );
+    assert!(!joined.contains("and then"), "{rows:#?}");
+    assert!(
+        joined.contains("[Enter] finish the tour · into the chat ──"),
+        "{rows:#?}"
+    );
+
+    // Off its page it draws nothing.
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitWeek,
+                TourRoute::Board,
+                Screen::Dashboard,
+                false,
+                a_week,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let blank = (0..24).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " "));
+    assert!(blank);
+}
+
+fn patron(n: u128, placement: Placement, pet: Option<PetSpecies>) -> Patron {
+    Patron {
+        user_id: Uuid::from_u128(n),
+        username: format!("user{n:03}"),
+        placement,
+        emote: None,
+        drunk_level: 0,
+        pet,
+    }
+}
+
+#[test]
+fn a_pet_is_drawn_at_its_patrons_heel_on_free_floor_and_skipped_when_it_is_taken() {
+    // Open floor in front of the bar stools: the heel is two cells right of the
+    // feet.
+    let ann = patron(1, Placement::Walking(20, 14), Some(PetSpecies::Cat));
+    assert_eq!(map::char_at(22, 14), ' ', "the heel is open floor");
+    let mut cells = styled_base_grid();
+    draw_pets(&mut cells, std::slice::from_ref(&ann), Uuid::from_u128(99));
+    assert_eq!(cells[14][22].0, 'c');
+
+    // A patron with no pet has none beside them.
+    let bob = patron(2, Placement::Walking(40, 14), None);
+    let mut cells = styled_base_grid();
+    let before = cells.clone();
+    draw_pets(&mut cells, &[bob], Uuid::from_u128(99));
+    assert_eq!(cells, before);
+
+    // Another patron on the heel, a speech bubble over it, or furniture
+    // there (the armchair's side beside a seated patron): not drawn.
+    let mut cells = styled_base_grid();
+    draw_figure(&mut cells, 22, 14, 'o', Style::default());
+    let before = cells.clone();
+    draw_pets(&mut cells, std::slice::from_ref(&ann), Uuid::from_u128(99));
+    assert_eq!(cells, before, "over another patron");
+
+    let mut cells = styled_base_grid();
+    draw_bubble_box(&mut cells, 22, 14, &["hi there".to_string()]);
+    let before = cells.clone();
+    draw_pets(&mut cells, &[ann], Uuid::from_u128(99));
+    assert_eq!(cells, before, "over a speech bubble");
+
+    let armchair = map::SEATS
+        .iter()
+        .position(|seat| seat.kind == map::SeatKind::Armchair)
+        .expect("an armchair");
+    let seated = patron(3, Placement::Seated(armchair), Some(PetSpecies::Dog));
+    let (x, y) = seated.placement.position();
+    assert!(
+        !matches!(map::char_at(x + 2, y), ' ' | '░'),
+        "the armchair's heel is furniture"
+    );
+    let mut cells = styled_base_grid();
+    let before = cells.clone();
+    draw_pets(&mut cells, &[seated], Uuid::from_u128(99));
+    assert_eq!(cells, before, "over furniture");
 }

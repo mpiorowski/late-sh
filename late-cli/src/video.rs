@@ -7,6 +7,9 @@
 //! tty with mpv's own terminal-mode writes filtered out; it does the work
 //! and returns data, and the pair loop in `ws.rs` sends, logs, and
 //! silences the house audio around it.
+//!
+//! A live stream plays through the same mpv: the CLI receives it itself
+//! (`stream_view.rs`) and feeds mpv raw frames on stdin instead of a URL.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -17,13 +20,14 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 
 use super::config::{SshMode, open_state_log, state_log_path};
+use super::stream_view::{Canvas, StreamFeed, StreamTicket};
 
 /// The first mpv release with `--vo=kitty`.
 const MIN_MPV: (u32, u32) = (0, 36);
@@ -44,6 +48,10 @@ const YTDL_FORMAT: &str = "bestvideo[protocol^=m3u8][height<=720]+bestaudio[prot
 /// A relay sequence held past this many bytes is written as it is: mpv's
 /// graphics commands are chunked at 4 KB, so nothing legitimate gets here.
 const RELAY_HOLD_CAP: usize = 8 * 1024 * 1024;
+/// The frame rate mpv stamps a live stream's raw frames with. Only the
+/// position it reports depends on it: `--untimed` shows each frame as it
+/// arrives.
+const STREAM_NOMINAL_FPS: u32 = 30;
 
 /// One failing precondition for the `video` capability. Sent as
 /// `client_state.video_blockers` so the server's setup box can say which
@@ -79,6 +87,21 @@ impl VideoBlocker {
             Self::NoYtDlp => "no_ytdlp",
         }
     }
+}
+
+/// Whether a live stream can play (the `video_stream` capability): every
+/// `video` precondition but yt-dlp, which a stream never calls.
+pub(super) fn can_play_streams(blockers: &[VideoBlocker]) -> bool {
+    blockers.iter().all(|blocker| match blocker {
+        VideoBlocker::NoYtDlp => true,
+        VideoBlocker::NotNative
+        | VideoBlocker::Platform
+        | VideoBlocker::Multiplexer
+        | VideoBlocker::NotKitty
+        | VideoBlocker::NoPixelSize
+        | VideoBlocker::NoMpv
+        | VideoBlocker::MpvTooOld => false,
+    })
 }
 
 /// The Kitty-graphics terminals the CLI recognizes from its env, the same
@@ -235,6 +258,10 @@ pub(super) enum VideoFailure {
     UnsupportedUrl,
     /// Neither now nor at startup did the tty report a pixel size.
     NoPixelSize,
+    /// The rectangle is too small to draw a stream in.
+    RectTooSmall,
+    /// The stream viewer could not join its room, or lost it.
+    Stream(String),
     /// mpv could not be started.
     Spawn(String),
     /// mpv could not be inspected after it started.
@@ -258,6 +285,8 @@ impl VideoFailure {
         match self {
             Self::UnsupportedUrl => "refused a non-http url".to_string(),
             Self::NoPixelSize => "the terminal reports no pixel size".to_string(),
+            Self::RectTooSmall => "the video rectangle is too small for a stream".to_string(),
+            Self::Stream(error) => format!("stream viewer failed: {error}"),
             Self::Spawn(error) => format!("failed to start mpv: {error}"),
             Self::Inspect(error) => format!("failed to inspect mpv: {error}"),
             Self::IpcTimeout => "mpv never opened its ipc socket".to_string(),
@@ -492,17 +521,30 @@ fn ipc_socket_path() -> PathBuf {
 /// Where a respawned mpv picks up after a geometry change.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct MpvLaunch<'a> {
-    pub(super) url: &'a str,
+    pub(super) input: MpvInput<'a>,
     pub(super) rect: VideoRect,
     pub(super) tty: TtySize,
     pub(super) use_shm: bool,
     pub(super) ipc_path: &'a Path,
-    pub(super) ytdlp_override: Option<&'a Path>,
     /// mpv's own log: with `--terminal=no` nothing reaches stderr, so this
     /// file is where a failed play says why.
     pub(super) log_path: &'a Path,
-    /// Where to begin, in seconds; zero is the top and adds no argument.
-    pub(super) start_s: u64,
+}
+
+/// What mpv plays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum MpvInput<'a> {
+    /// A URL mpv resolves through its ytdl hook.
+    Url {
+        url: &'a str,
+        ytdlp_override: Option<&'a Path>,
+        /// Where to begin, in seconds; zero is the top and adds no argument.
+        start_s: u64,
+    },
+    /// Raw I420 frames of exactly this size on stdin: a live stream the CLI
+    /// decodes itself. No audio; the stream's sound never passes through
+    /// mpv.
+    Frames(Canvas),
 }
 
 /// The whole mpv command line. The six geometry numbers are the contract
@@ -517,14 +559,12 @@ pub(super) struct MpvLaunch<'a> {
 /// removes the frames a killed mpv leaves behind.
 pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
     let MpvLaunch {
-        url,
+        input,
         rect,
         tty,
         use_shm,
         ipc_path,
-        ytdlp_override,
         log_path,
-        start_s,
     } = launch;
     let (left, top) = rect.origin_cell();
     let (width, height) = tty.pixels_for(*rect);
@@ -547,25 +587,52 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         format!("--vo-kitty-rows={}", rect.rows).into(),
         format!("--vo-kitty-width={width}").into(),
         format!("--vo-kitty-height={height}").into(),
-        "--ytdl=yes".into(),
-        format!("--ytdl-format={YTDL_FORMAT}").into(),
     ];
-    if *start_s > 0 {
-        args.push(format!("--start={start_s}").into());
+    match input {
+        MpvInput::Url {
+            url,
+            ytdlp_override,
+            start_s,
+        } => {
+            args.extend([
+                "--ytdl=yes".into(),
+                format!("--ytdl-format={YTDL_FORMAT}").into(),
+            ]);
+            if *start_s > 0 {
+                args.push(format!("--start={start_s}").into());
+            }
+            if let Some(ytdlp) = ytdlp_override {
+                args.push(path_arg("--script-opts=ytdl_hook-ytdl_path=", ytdlp));
+            }
+            // Full level, as any video player opens: the house volume is
+            // for the radio, which is silenced while a video plays, and a
+            // video at 30 percent of itself is just quiet. `m` and the
+            // system mixer remain.
+            args.extend([
+                "--volume=100".into(),
+                "--keep-open=no".into(),
+                path_arg("--input-ipc-server=", ipc_path),
+                "--".into(),
+                (*url).into(),
+            ]);
+        }
+        // Each frame is shown the moment it arrives and nothing is
+        // buffered: this is live, and a queue would only be delay.
+        MpvInput::Frames(canvas) => args.extend([
+            "--demuxer=rawvideo".into(),
+            format!("--demuxer-rawvideo-w={}", canvas.width).into(),
+            format!("--demuxer-rawvideo-h={}", canvas.height).into(),
+            "--demuxer-rawvideo-mp-format=yuv420p".into(),
+            format!("--demuxer-rawvideo-fps={STREAM_NOMINAL_FPS}").into(),
+            "--profile=low-latency".into(),
+            "--untimed".into(),
+            "--cache=no".into(),
+            "--keep-open=no".into(),
+            path_arg("--input-ipc-server=", ipc_path),
+            "--".into(),
+            "-".into(),
+        ]),
     }
-    if let Some(ytdlp) = ytdlp_override {
-        args.push(path_arg("--script-opts=ytdl_hook-ytdl_path=", ytdlp));
-    }
-    // Full level, as any video player opens: the house volume is for the
-    // radio, which is silenced while a video plays, and a video at 30
-    // percent of itself is just quiet. `m` and the system mixer remain.
-    args.extend([
-        "--volume=100".into(),
-        "--keep-open=no".into(),
-        path_arg("--input-ipc-server=", ipc_path),
-        "--".into(),
-        (*url).into(),
-    ]);
     args
 }
 
@@ -615,6 +682,9 @@ pub(super) fn place_commands(rect: VideoRect, tty: TtySize) -> Vec<Value> {
 pub(super) enum PlaceOutcome {
     /// mpv's output is in the new rectangle; the old frame is settled.
     Moved,
+    /// A stream's picture comes from a fresh mpv: back from hiding, or at
+    /// a new size.
+    Shown,
     /// mpv's socket is not up yet: applied once it is, from `poll`.
     Deferred,
     /// No such play, or the rectangle it already has.
@@ -1011,8 +1081,18 @@ enum IpcLink {
     Connected(MpvIpc),
 }
 
-struct Playback {
-    play_id: u64,
+/// What a play shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum VideoSource {
+    /// A URL for mpv, from `start_s` (zero for the top, the saved position
+    /// for a resume).
+    Url { url: String, start_s: u64 },
+    /// A live stream the CLI joins as a viewer.
+    Stream(StreamTicket),
+}
+
+/// One mpv and where it draws.
+struct Screen {
     rect: VideoRect,
     /// The tty read at spawn: it sized the first rectangle's pixels and
     /// sizes every move's.
@@ -1027,7 +1107,7 @@ struct Playback {
     pending_place: Option<VideoRect>,
 }
 
-impl Playback {
+impl Screen {
     /// Settle the frame at `old`, then send the move to `self.rect` over
     /// the socket. Only called once the socket is up. Frames mpv drew at
     /// `old` before the teardown can reach the tty after this settle; the
@@ -1049,6 +1129,55 @@ impl Playback {
         }
         Ok(())
     }
+
+    /// Kill mpv and wait for its last bytes to reach the tty. Returns the
+    /// rectangle its last frame is still sitting in.
+    fn kill(mut self, ipc_path: &Path) -> VideoRect {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        // The pipe closed with the child, so the relay is at its end: wait
+        // for it so the settle delete lands after mpv's last frame.
+        if let Some(relay) = self.relay.take() {
+            let _ = relay.join();
+        }
+        let _ = fs::remove_file(ipc_path);
+        self.rect
+    }
+}
+
+/// What is running for a play.
+enum Show {
+    /// A URL: mpv does everything.
+    Url(Screen),
+    /// A live stream: the viewer in the stream's room, which plays the
+    /// sound, and the mpv it feeds the picture to. No screen while the
+    /// picture is hidden (`video_hide`): the stream plays on unseen.
+    /// Dropping the feed leaves the room.
+    Stream {
+        feed: StreamFeed,
+        screen: Option<Screen>,
+    },
+}
+
+struct Playback {
+    play_id: u64,
+    show: Show,
+}
+
+impl Playback {
+    fn screen_mut(&mut self) -> Option<&mut Screen> {
+        match &mut self.show {
+            Show::Url(screen) => Some(screen),
+            Show::Stream { screen, .. } => screen.as_mut(),
+        }
+    }
+}
+
+/// A play that was taken down: whose it was, and the rectangle its last
+/// frame was left in (none when its picture was hidden).
+struct Gone {
+    play_id: u64,
+    residue: Option<VideoRect>,
 }
 
 /// At most one mpv per CLI. Owned by the pair loop for the whole session,
@@ -1071,19 +1200,19 @@ impl VideoPlayer {
         self.current.is_some()
     }
 
-    /// Start `url` in `rect` from `start_s`, stopping whatever was playing
-    /// first. The old play gets no report: the server superseded it.
+    /// Start `source` in `rect`, stopping whatever was playing first. The
+    /// old play gets no report: the server superseded it. A stream's viewer
+    /// starts on the tokio runtime, so this must be called from it.
     pub(super) fn play(
         &mut self,
         play_id: u64,
-        url: String,
+        source: VideoSource,
         rect: VideoRect,
-        start_s: u64,
     ) -> VideoUpdate {
-        let residue = self.take_and_kill().map(|old| old.rect);
-        let state = match self.spawn(play_id, url, rect, start_s) {
-            Ok(playback) => {
-                self.current = Some(playback);
+        let residue = self.take_and_kill().and_then(|old| old.residue);
+        let state = match self.spawn(source, rect) {
+            Ok(show) => {
+                self.current = Some(Playback { play_id, show });
                 VideoState::Starting
             }
             Err(failure) => VideoState::Failed(failure),
@@ -1099,25 +1228,98 @@ impl VideoPlayer {
     /// first (the delete targets its origin cell, which the new frame may
     /// cover, so it must go before the rebuild), then the geometry and the
     /// output swap go over the socket. Before the socket is up the move
-    /// waits for `poll`.
+    /// waits for `poll`. A stream moves the same way only at the size it
+    /// has: back from hiding or at another size, its picture comes from a
+    /// fresh mpv in `rect`, fed by the viewer that never left.
     pub(super) async fn place(&mut self, play_id: u64, rect: VideoRect) -> PlaceOutcome {
         let Some(playback) = self.current_for(play_id) else {
             return PlaceOutcome::Unchanged;
         };
-        if playback.rect == rect {
+        let screen = match &mut playback.show {
+            Show::Url(screen) => screen,
+            Show::Stream { screen: slot, .. } => match slot {
+                Some(shown) if (shown.rect.cols, shown.rect.rows) == (rect.cols, rect.rows) => {
+                    shown
+                }
+                // The canvas the frames are scaled onto was cut for the old
+                // rectangle's pixels: moved to another size, mpv would only
+                // stretch it.
+                Some(_) | None => {
+                    let old = slot.take();
+                    return self.show_picture(old, rect);
+                }
+            },
+        };
+        if screen.rect == rect {
             return PlaceOutcome::Unchanged;
         }
-        let old = playback.rect;
-        playback.rect = rect;
-        match &mut playback.ipc {
+        let old = screen.rect;
+        screen.rect = rect;
+        match &mut screen.ipc {
             IpcLink::Waiting { .. } => {
-                playback.pending_place = Some(playback.pending_place.unwrap_or(old));
+                screen.pending_place = Some(screen.pending_place.unwrap_or(old));
                 PlaceOutcome::Deferred
             }
-            IpcLink::Connected(_) => match playback.move_output(old).await {
+            IpcLink::Connected(_) => match screen.move_output(old).await {
                 Ok(()) => PlaceOutcome::Moved,
                 Err(failure) => PlaceOutcome::Failed(self.fail(failure)),
             },
+        }
+    }
+
+    /// Take a live stream's picture off the terminal and keep the stream:
+    /// mpv goes, the viewer stays in the room and its sound plays on.
+    /// Returns the rectangle the last frame is left in, for the caller to
+    /// settle. Nothing for another play, a URL (which has no life without
+    /// its mpv), or a picture already hidden.
+    pub(super) fn hide(&mut self, play_id: u64) -> Option<VideoRect> {
+        let ipc_path = self.tools.ipc_path.clone();
+        let playback = self.current_for(play_id)?;
+        match &mut playback.show {
+            Show::Url(_) => None,
+            Show::Stream { feed, screen } => {
+                let screen = screen.take()?;
+                feed.hide_picture();
+                Some(screen.kill(&ipc_path))
+            }
+        }
+    }
+
+    /// A fresh mpv in `rect` for the current stream, whose screen the
+    /// caller took: `old` is the one it had (a new size), or `None` for a
+    /// picture that was hidden. The old mpv goes and its frame is settled
+    /// before the new one draws.
+    fn show_picture(&mut self, old: Option<Screen>, rect: VideoRect) -> PlaceOutcome {
+        if let Some(old) = old {
+            let left_in = old.kill(&self.tools.ipc_path);
+            if let Err(error) = settle_terminal(left_in) {
+                return PlaceOutcome::Failed(self.fail(VideoFailure::Inspect(format!(
+                    "settling the old frame: {error}"
+                ))));
+            }
+        }
+        let (new_screen, canvas, to_mpv) = match self.spawn_stream_screen(rect) {
+            Ok(spawned) => spawned,
+            Err(failure) => return PlaceOutcome::Failed(self.fail(failure)),
+        };
+        match self.current.as_mut().map(|playback| &mut playback.show) {
+            Some(Show::Stream { feed, screen }) => {
+                feed.show_picture(canvas, to_mpv);
+                *screen = Some(new_screen);
+                PlaceOutcome::Shown
+            }
+            Some(Show::Url(_)) | None => {
+                unreachable!("only a stream is given a fresh picture")
+            }
+        }
+    }
+
+    /// Whether a playing stream plays the room's voices too. Nothing for
+    /// another play, or a URL.
+    pub(super) fn set_voices(&mut self, play_id: u64, voices: bool) {
+        match self.current_for(play_id).map(|playback| &playback.show) {
+            Some(Show::Stream { feed, .. }) => feed.set_voices(voices),
+            Some(Show::Url(_)) | None => {}
         }
     }
 
@@ -1129,7 +1331,25 @@ impl VideoPlayer {
         control: VideoControl,
     ) -> Option<VideoUpdate> {
         let playback = self.current_for(play_id)?;
-        let IpcLink::Connected(ipc) = &mut playback.ipc else {
+        let screen = match (&mut playback.show, control) {
+            // A stream's sound is the viewer's, not mpv's.
+            (Show::Stream { feed, .. }, VideoControl::ToggleMute) => {
+                feed.toggle_mute();
+                return None;
+            }
+            // Live: nothing to pause or seek.
+            (
+                Show::Stream { .. },
+                VideoControl::TogglePause
+                | VideoControl::SeekBack
+                | VideoControl::SeekForward
+                | VideoControl::SeekBackFar
+                | VideoControl::SeekForwardFar
+                | VideoControl::Restart,
+            ) => return None,
+            (Show::Url(screen), _) => screen,
+        };
+        let IpcLink::Connected(ipc) = &mut screen.ipc else {
             return None;
         };
         match ipc.request(ipc_command(control)).await {
@@ -1141,24 +1361,26 @@ impl VideoPlayer {
     /// Ask mpv to quit, then kill it if it has not within `QUIT_GRACE`.
     pub(super) async fn stop(&mut self, play_id: u64) -> Option<VideoUpdate> {
         let playback = self.current_for(play_id)?;
-        if let IpcLink::Connected(ipc) = &mut playback.ipc {
-            match ipc.request(json!({ "command": ["quit"] })).await {
-                // A broken socket only means the kill below does the work.
-                Ok(_) | Err(_) => {}
+        if let Some(screen) = playback.screen_mut() {
+            if let IpcLink::Connected(ipc) = &mut screen.ipc {
+                match ipc.request(json!({ "command": ["quit"] })).await {
+                    // A broken socket only means the kill below does the work.
+                    Ok(_) | Err(_) => {}
+                }
             }
-        }
-        let deadline = Instant::now() + QUIT_GRACE;
-        while Instant::now() < deadline {
-            match playback.child.try_wait() {
-                Ok(None) => tokio::time::sleep(QUIT_POLL).await,
-                Ok(Some(_)) | Err(_) => break,
+            let deadline = Instant::now() + QUIT_GRACE;
+            while Instant::now() < deadline {
+                match screen.child.try_wait() {
+                    Ok(None) => tokio::time::sleep(QUIT_POLL).await,
+                    Ok(Some(_)) | Err(_) => break,
+                }
             }
         }
         let old = self.take_and_kill()?;
         Some(VideoUpdate {
             play_id,
             state: VideoState::Stopped,
-            residue: Some(old.rect),
+            residue: old.residue,
         })
     }
 
@@ -1167,7 +1389,32 @@ impl VideoPlayer {
     /// repeat `starting`.
     pub(super) async fn poll(&mut self) -> Option<VideoUpdate> {
         let playback = self.current.as_mut()?;
-        match playback.child.try_wait() {
+        let play_id = playback.play_id;
+        let screen = match &mut playback.show {
+            Show::Url(screen) => screen,
+            Show::Stream { feed, screen } => {
+                // Before mpv's exit: a viewer that gave up closed mpv's
+                // stdin, and its reason is the one worth reporting.
+                if let Some(reason) = feed.failure() {
+                    return Some(self.fail(VideoFailure::Stream(reason)));
+                }
+                match screen {
+                    Some(screen) => screen,
+                    // Hidden: the viewer is all there is, and it is up.
+                    None => {
+                        return Some(VideoUpdate {
+                            play_id,
+                            state: VideoState::Playing {
+                                position_s: 0,
+                                duration_s: None,
+                            },
+                            residue: None,
+                        });
+                    }
+                }
+            }
+        };
+        match screen.child.try_wait() {
             Ok(Some(status)) => {
                 let state = match status.code() {
                     Some(0) => VideoState::Ended,
@@ -1183,20 +1430,19 @@ impl VideoPlayer {
             Ok(None) => {}
             Err(error) => return Some(self.fail(VideoFailure::Inspect(error.to_string()))),
         }
-        if let IpcLink::Waiting { since } = playback.ipc {
+        if let IpcLink::Waiting { since } = screen.ipc {
             match MpvIpc::connect(&self.tools.ipc_path).await {
-                Ok(ipc) => playback.ipc = IpcLink::Connected(ipc),
+                Ok(ipc) => screen.ipc = IpcLink::Connected(ipc),
                 Err(_) if since.elapsed() < IPC_CONNECT_DEADLINE => return None,
                 Err(_) => return Some(self.fail(VideoFailure::IpcTimeout)),
             }
         }
-        if let Some(old) = playback.pending_place.take()
-            && let Err(failure) = playback.move_output(old).await
+        if let Some(old) = screen.pending_place.take()
+            && let Err(failure) = screen.move_output(old).await
         {
             return Some(self.fail(failure));
         }
-        let play_id = playback.play_id;
-        let IpcLink::Connected(ipc) = &mut playback.ipc else {
+        let IpcLink::Connected(ipc) = &mut screen.ipc else {
             unreachable!("the ipc link was connected just above");
         };
         match ipc.state().await {
@@ -1217,7 +1463,7 @@ impl VideoPlayer {
         Some(VideoUpdate {
             play_id: old.play_id,
             state: VideoState::Stopped,
-            residue: Some(old.rect),
+            residue: old.residue,
         })
     }
 
@@ -1238,25 +1484,91 @@ impl VideoPlayer {
         VideoUpdate {
             play_id: old.play_id,
             state,
-            residue: Some(old.rect),
+            residue: old.residue,
         }
     }
 
-    fn spawn(
-        &self,
-        play_id: u64,
-        url: String,
-        rect: VideoRect,
-        start_s: u64,
-    ) -> Result<Playback, VideoFailure> {
-        // The server is trusted, but the URL is the one string here that
-        // ends up as a command argument, so the scheme gate stays.
-        if !(url.starts_with("https://") || url.starts_with("http://")) {
-            return Err(VideoFailure::UnsupportedUrl);
+    fn spawn(&self, source: VideoSource, rect: VideoRect) -> Result<Show, VideoFailure> {
+        match source {
+            VideoSource::Url { url, start_s } => {
+                // The server is trusted, but the URL is the one string here
+                // that ends up as a command argument, so the scheme gate
+                // stays.
+                if !(url.starts_with("https://") || url.starts_with("http://")) {
+                    return Err(VideoFailure::UnsupportedUrl);
+                }
+                let tty = self.tty()?;
+                let args = mpv_args(&self.launch(
+                    MpvInput::Url {
+                        url: &url,
+                        ytdlp_override: self.tools.ytdlp_override.as_deref(),
+                        start_s,
+                    },
+                    rect,
+                    tty,
+                ));
+                Ok(Show::Url(self.spawn_mpv(args, Stdio::null(), rect, tty)?))
+            }
+            VideoSource::Stream(ticket) => {
+                let (screen, canvas, to_mpv) = self.spawn_stream_screen(rect)?;
+                Ok(Show::Stream {
+                    feed: StreamFeed::start(ticket, canvas, to_mpv),
+                    screen: Some(screen),
+                })
+            }
         }
-        let Some(tty) = TtySize::read().or(self.tools.startup_tty) else {
-            return Err(VideoFailure::NoPixelSize);
+    }
+
+    /// An mpv that draws raw frames in `rect`: the screen, the canvas its
+    /// command line was sized for, and the pipe the frames go down.
+    fn spawn_stream_screen(
+        &self,
+        rect: VideoRect,
+    ) -> Result<(Screen, Canvas, ChildStdin), VideoFailure> {
+        let tty = self.tty()?;
+        let (width, height) = tty.pixels_for(rect);
+        let Some(canvas) = Canvas::for_pixels(width, height) else {
+            return Err(VideoFailure::RectTooSmall);
         };
+        let args = mpv_args(&self.launch(MpvInput::Frames(canvas), rect, tty));
+        let mut screen = self.spawn_mpv(args, Stdio::piped(), rect, tty)?;
+        match screen.child.stdin.take() {
+            Some(to_mpv) => Ok((screen, canvas, to_mpv)),
+            None => {
+                screen.kill(&self.tools.ipc_path);
+                Err(VideoFailure::Spawn("mpv has no stdin pipe".to_string()))
+            }
+        }
+    }
+
+    fn tty(&self) -> Result<TtySize, VideoFailure> {
+        match TtySize::read().or(self.tools.startup_tty) {
+            Some(tty) => Ok(tty),
+            None => Err(VideoFailure::NoPixelSize),
+        }
+    }
+
+    fn launch<'a>(&'a self, input: MpvInput<'a>, rect: VideoRect, tty: TtySize) -> MpvLaunch<'a> {
+        MpvLaunch {
+            input,
+            rect,
+            tty,
+            use_shm: self.tools.use_shm,
+            ipc_path: &self.tools.ipc_path,
+            log_path: &self.tools.log_path,
+        }
+    }
+
+    /// Start mpv on `args`. Its stdin is `stdin` (the frame pipe for a
+    /// stream, left on the child for the caller to take; null for a URL),
+    /// its stdout the relay's pipe, its stderr the video log.
+    fn spawn_mpv(
+        &self,
+        args: Vec<OsString>,
+        stdin: Stdio,
+        rect: VideoRect,
+        tty: TtySize,
+    ) -> Result<Screen, VideoFailure> {
         match fs::remove_file(&self.tools.ipc_path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -1270,21 +1582,11 @@ impl VideoPlayer {
             Ok(log) => log,
             Err(error) => return Err(VideoFailure::Spawn(format!("{error:#}"))),
         };
-        let args = mpv_args(&MpvLaunch {
-            url: &url,
-            rect,
-            tty,
-            use_shm: self.tools.use_shm,
-            ipc_path: &self.tools.ipc_path,
-            ytdlp_override: self.tools.ytdlp_override.as_deref(),
-            log_path: &self.tools.log_path,
-            start_s,
-        });
         // mpv never writes to the tty itself: its stdout is a pipe the relay
         // carries to the tty with mpv's terminal-mode writes filtered out.
         let child = Command::new(&self.tools.mpv)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log))
             .spawn();
@@ -1297,8 +1599,7 @@ impl VideoPlayer {
             let _ = child.wait();
             return Err(VideoFailure::Spawn("mpv has no stdout pipe".to_string()));
         };
-        Ok(Playback {
-            play_id,
+        Ok(Screen {
             rect,
             tty,
             child,
@@ -1310,17 +1611,17 @@ impl VideoPlayer {
         })
     }
 
-    fn take_and_kill(&mut self) -> Option<Playback> {
-        let mut playback = self.current.take()?;
-        let _ = playback.child.kill();
-        let _ = playback.child.wait();
-        // The pipe closed with the child, so the relay is at its end: wait
-        // for it so the settle delete lands after mpv's last frame.
-        if let Some(relay) = playback.relay.take() {
-            let _ = relay.join();
-        }
-        let _ = fs::remove_file(&self.tools.ipc_path);
-        Some(playback)
+    fn take_and_kill(&mut self) -> Option<Gone> {
+        let playback = self.current.take()?;
+        let screen = match playback.show {
+            Show::Url(screen) => Some(screen),
+            // The feed drops here, which leaves the stream's room.
+            Show::Stream { screen, .. } => screen,
+        };
+        Some(Gone {
+            play_id: playback.play_id,
+            residue: screen.map(|screen| screen.kill(&self.tools.ipc_path)),
+        })
     }
 }
 
@@ -1330,8 +1631,8 @@ impl Drop for VideoPlayer {
     /// alternate screen on its own, so without it the last frame would sit
     /// over the shell.
     fn drop(&mut self) {
-        if let Some(old) = self.take_and_kill() {
-            let _ = settle_terminal(old.rect);
+        if let Some(rect) = self.take_and_kill().and_then(|old| old.residue) {
+            let _ = settle_terminal(rect);
         }
     }
 }

@@ -3,9 +3,9 @@
 //!
 //! A row is one account heard on one station on one day. The audio
 //! service's roll call (`late-ssh/src/app/audio/svc.rs`) writes one for
-//! every online account on the radio source, on every replica, and the same
-//! listener again is a no-op, so a day's rows count listeners, never
-//! minutes. The paper's YESTERDAY column reads a day's stations by
+//! every online account on the radio source with an unmuted paired client,
+//! on every replica, and the same listener again is a no-op, so a day's
+//! rows count listeners, never minutes. The paper's YESTERDAY column reads a day's stations by
 //! listener count.
 
 use anyhow::Result;

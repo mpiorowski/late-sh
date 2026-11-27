@@ -30,6 +30,7 @@ async fn shared_bootstrap_shows_gallery_splash_only_after_always_view() {
                 key_fingerprint: None,
                 supports_reconnect_on_drain: false,
                 reconnect_reason: None,
+                resume: None,
             },
         )
         .await;
@@ -82,6 +83,7 @@ async fn shared_bootstrap_reads_the_disclaimer_of_this_device() {
                 key_fingerprint: fingerprint.map(str::to_string),
                 supports_reconnect_on_drain: false,
                 reconnect_reason: None,
+                resume: None,
             },
         )
         .await;

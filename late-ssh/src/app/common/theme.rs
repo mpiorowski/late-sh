@@ -1,6 +1,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use std::{cell::Cell, hash::Hash};
 
+use super::terminal_colors::TerminalColors;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeKind {
     Late = 0,
@@ -4074,6 +4076,7 @@ const PALETTE_TERMINAL: Palette = Palette {
 thread_local! {
     static CURRENT_THEME: Cell<ThemeKind> = const { Cell::new(ThemeKind::Contrast) };
     static TEXT_BRIGHTNESS_ADJUSTMENT: Cell<i32> = const { Cell::new(0) };
+    static TERMINAL_COLORS: Cell<TerminalColors> = const { Cell::new(TerminalColors { fg: None, bg: None }) };
 }
 
 pub fn normalize_id(id: &str) -> &'static str {
@@ -4086,6 +4089,11 @@ pub fn set_current_by_id(id: &str) {
 
 pub fn set_text_brightness_adjustment(adjustment: i32) {
     TEXT_BRIGHTNESS_ADJUSTMENT.with(|current| current.set(adjustment.clamp(-5, 5)));
+}
+
+/// The terminal's own colors for this thread's next draw.
+pub(crate) fn set_terminal_colors(colors: TerminalColors) {
+    TERMINAL_COLORS.with(|current| current.set(colors));
 }
 
 pub fn current_kind() -> ThemeKind {
@@ -4402,7 +4410,11 @@ pub fn BG_SELECTION() -> Color {
 /// `Color::Reset` canvas means the text follows the terminal's own
 /// foreground, and no fixed fill can guarantee contrast against an unknown
 /// color, so those palettes invert instead: `REVERSED` swaps the terminal's
-/// own fg/bg pair, the one pair the user has already made legible.
+/// own fg/bg pair, the one pair the user has already made legible. On a light
+/// profile that swap paints the row in the near-black text color, so when the
+/// terminal answered the OSC 10/11 queries with a background brighter than
+/// its text, the fill is that background moved a step toward the text: a
+/// quiet row, the body text keeping nearly all of its contrast.
 ///
 /// The invert arm carries explicit `Reset` colors because call sites compose
 /// via `Style::patch`, which only overwrites `Some` fields: without them a
@@ -4413,12 +4425,38 @@ pub fn BG_SELECTION() -> Color {
 /// becomes the fill of the swapped cell.
 pub fn selection_style() -> Style {
     match BG_CANVAS() {
-        Color::Reset => Style::default()
-            .fg(Color::Reset)
-            .bg(Color::Reset)
-            .add_modifier(Modifier::REVERSED),
+        Color::Reset => match terminal_selection_fill() {
+            Some(fill) => Style::default().bg(fill),
+            None => Style::default()
+                .fg(Color::Reset)
+                .bg(Color::Reset)
+                .add_modifier(Modifier::REVERSED),
+        },
         _ => Style::default().bg(BG_SELECTION()),
     }
+}
+
+/// How far a light profile's selection moves from the terminal's background
+/// toward its foreground: about 1.5:1 against the canvas, the step the
+/// paintable palettes' selections take.
+const TERMINAL_SELECTION_TOWARD_FG: f32 = 0.18;
+
+fn terminal_selection_fill() -> Option<Color> {
+    let TerminalColors {
+        fg: Some(fg),
+        bg: Some(bg),
+    } = TERMINAL_COLORS.with(Cell::get)
+    else {
+        return None;
+    };
+    if relative_luminance(bg) <= relative_luminance(fg) {
+        return None;
+    }
+    Some(blend_toward(
+        Color::Rgb(bg.0, bg.1, bg.2),
+        Color::Rgb(fg.0, fg.1, fg.2),
+        TERMINAL_SELECTION_TOWARD_FG,
+    ))
 }
 
 /// Base style for a list row: the selection treatment when selected,

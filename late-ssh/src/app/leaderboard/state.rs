@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 
+use chrono::{Datelike, NaiveDate};
 use ratatui::layout::{Position, Rect};
 
 use late_core::models::{
@@ -15,7 +16,7 @@ use crate::app::common::primitives::thousands;
 const EMPTY: &[RankedEntry] = &[];
 
 /// One selectable board on the Leaderboards page. The four bespoke boards
-/// lead (Top Drinkers first), then every game board; the per-game boards come straight off the
+/// lead (Top Chips first), then every game board; the per-game boards come straight off the
 /// late-core rosters, so a game added there appears here without a page
 /// change. `BadgeGuide` trails every ranked board: it carries no standings,
 /// `draw_detail` special-cases it before touching `standings`/`format_value`.
@@ -29,9 +30,10 @@ pub(crate) enum Board {
     TopChips,
     ArcadeWins,
     TimeOnline,
-    TopDrinkers,
+    TopChat,
     Daily(DailyPuzzle),
     Score(ScoreGame),
+    DopewarsScore,
     BadgeGuide,
 }
 
@@ -39,6 +41,9 @@ pub(crate) enum Board {
 /// exactly one of these; the renderer matches every arm, so a new shape
 /// cannot fall through to a wrong heading.
 pub(crate) enum Standings<'a> {
+    /// The four monthly chat and News races in reading order, each under
+    /// its own heading.
+    TopChat([(&'static str, &'a [RankedEntry]); 4]),
     /// One window of month-scoped standings, headed "this month".
     MonthlyOnly(&'a [RankedEntry]),
     /// One window over all recorded history, headed "all time" (the door
@@ -52,12 +57,6 @@ pub(crate) enum Standings<'a> {
         monthly: &'a [RankedEntry],
         all_time: &'a [RankedEntry],
     },
-    /// Paired monthly and current-year windows, for a race that resets
-    /// every year rather than one kept forever (Top Drinkers).
-    MonthlyYearly {
-        monthly: &'a [RankedEntry],
-        yearly: &'a [RankedEntry],
-    },
 }
 
 impl Board {
@@ -66,9 +65,9 @@ impl Board {
     /// then score games, each roster in its declaration order.
     pub(crate) fn all() -> Vec<Self> {
         let mut boards = vec![
-            Self::TopDrinkers,
             Self::TopChips,
             Self::ArcadeWins,
+            Self::TopChat,
             Self::TimeOnline,
             Self::LateaniaAdventurers,
             Self::LateaniaPvp,
@@ -78,6 +77,9 @@ impl Board {
             boards.push(Self::DoorDepth(game));
             boards.push(Self::DoorScore(game));
         }
+        // dopewars is not on the roguelike roster: one score board, last in
+        // the Games group.
+        boards.push(Self::DopewarsScore);
         boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
         boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
         boards.push(Self::BadgeGuide);
@@ -100,9 +102,10 @@ impl Board {
             Self::TopChips => "Top Chips",
             Self::ArcadeWins => "Arcade Wins",
             Self::TimeOnline => "Late Time",
-            Self::TopDrinkers => "Top Drinkers",
+            Self::TopChat => "Top Chat",
             Self::Daily(puzzle) => puzzle.title(),
             Self::Score(game) => game.title(),
+            Self::DopewarsScore => "dopewars Top Score",
             Self::BadgeGuide => "Badge Guide",
         }
     }
@@ -134,9 +137,10 @@ impl Board {
                 Difficulty::Hard.points(),
             ),
             Self::TimeOnline => "total connected time".to_string(),
-            Self::TopDrinkers => "buzz from every drink taken, whoever paid".to_string(),
+            Self::TopChat => "monthly messages".to_string(),
             Self::Daily(_) => "daily wins".to_string(),
             Self::Score(_) => "best score".to_string(),
+            Self::DopewarsScore => "best final cash on the street".to_string(),
             Self::BadgeGuide => "what each three-letter award code means".to_string(),
         }
     }
@@ -156,9 +160,13 @@ impl Board {
             Self::TopChips => format!("{} chips", thousands(value)),
             Self::ArcadeWins => format!("{} pts", thousands(value)),
             Self::TimeOnline => format_online_time(value),
-            Self::TopDrinkers => format!("{} buzz", thousands(value)),
+            Self::TopChat => thousands(value),
             Self::Daily(_) => format!("{} wins", thousands(value)),
             Self::Score(_) => thousands(value),
+            Self::DopewarsScore => match value < 0 {
+                true => format!("-${}", thousands(value.saturating_abs())),
+                false => format!("${}", thousands(value)),
+            },
             // Unreachable: BadgeGuide has no ranked entries, so nothing ever
             // calls format_value with it. draw_detail renders the guide
             // directly and returns before reaching entry formatting.
@@ -166,7 +174,9 @@ impl Board {
         }
     }
 
-    pub(crate) fn standings(self, data: &LeaderboardData) -> Standings<'_> {
+    /// `today` is the caller's clock: a month-stamped board (Top Chat) shows
+    /// nothing once its snapshot's month is over.
+    pub(crate) fn standings(self, data: &LeaderboardData, today: NaiveDate) -> Standings<'_> {
         match self {
             Self::LateaniaAdventurers => Standings::Snapshot(&data.lateania_adventurers),
             Self::LateaniaPvp => Standings::Snapshot(&data.lateania_pvp),
@@ -193,10 +203,24 @@ impl Board {
                 monthly: &data.online_time.monthly,
                 all_time: &data.online_time.all_time,
             },
-            Self::TopDrinkers => Standings::MonthlyYearly {
-                monthly: &data.top_drinkers.monthly,
-                yearly: &data.top_drinkers.yearly,
-            },
+            Self::TopChat => {
+                let chat = match data.top_chat.in_month(today) {
+                    true => Some(&data.top_chat),
+                    false => None,
+                };
+                Standings::TopChat([
+                    ("all rooms", chat.map_or(EMPTY, |chat| &chat.all_rooms)),
+                    (
+                        "outside the lounge",
+                        chat.map_or(EMPTY, |chat| &chat.outside_lounge),
+                    ),
+                    (
+                        "daily streak (days)",
+                        chat.map_or(EMPTY, |chat| &chat.daily_streak),
+                    ),
+                    ("news posts", chat.map_or(EMPTY, |chat| &chat.news_posts)),
+                ])
+            }
             Self::Daily(puzzle) => {
                 let windows = data.daily_board(puzzle);
                 Standings::Paired {
@@ -211,6 +235,10 @@ impl Board {
                     all_time: windows.map_or(EMPTY, |board| &board.all_time),
                 }
             }
+            Self::DopewarsScore => Standings::Paired {
+                monthly: &data.dopewars_scores.monthly,
+                all_time: &data.dopewars_scores.all_time,
+            },
             // Unreachable: draw_detail special-cases BadgeGuide before
             // calling standings.
             Self::BadgeGuide => Standings::Snapshot(EMPTY),
@@ -246,8 +274,10 @@ pub(crate) struct LeaderboardPageState {
     selected: usize,
     scroll: Cell<u16>,
     max_scroll: Cell<u16>,
+    month: Cell<Option<NaiveDate>>,
     rail_area: Cell<Rect>,
     content_area: Cell<Rect>,
+    content_dividers: Cell<[Rect; 2]>,
     board_rows: RefCell<Vec<(Rect, usize)>>,
 }
 
@@ -258,8 +288,10 @@ impl LeaderboardPageState {
             selected: 0,
             scroll: Cell::new(0),
             max_scroll: Cell::new(0),
+            month: Cell::new(None),
             rail_area: Cell::new(Rect::default()),
             content_area: Cell::new(Rect::default()),
+            content_dividers: Cell::new([Rect::default(); 2]),
             board_rows: RefCell::new(Vec::new()),
         }
     }
@@ -303,6 +335,21 @@ impl LeaderboardPageState {
         self.scroll.get()
     }
 
+    /// Called on tick as well as draw: an idle page must repaint at the UTC
+    /// boundary without waiting for a new snapshot or keyboard input.
+    pub(crate) fn sync_month(&self, today: NaiveDate) -> bool {
+        let month = today.with_day(1).expect("first of month");
+        if self.month.replace(Some(month)) == Some(month) {
+            return false;
+        }
+        if self.selected_board() == Board::TopChat {
+            self.scroll.set(0);
+            self.max_scroll.set(0);
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn scroll_by(&self, delta: i16) {
         self.scroll.set(
             (i32::from(self.scroll.get()) + i32::from(delta))
@@ -325,6 +372,7 @@ impl LeaderboardPageState {
     pub(crate) fn clear_hit_regions(&self) {
         self.rail_area.set(Rect::default());
         self.content_area.set(Rect::default());
+        self.content_dividers.set([Rect::default(); 2]);
         self.board_rows.borrow_mut().clear();
     }
 
@@ -341,5 +389,14 @@ impl LeaderboardPageState {
 
     pub(crate) fn over_content(&self, point: Position) -> bool {
         self.content_area.get().contains(point)
+            && !self
+                .content_dividers
+                .get()
+                .iter()
+                .any(|rect| rect.contains(point))
+    }
+
+    pub(crate) fn set_content_dividers(&self, dividers: [Rect; 2]) {
+        self.content_dividers.set(dividers);
     }
 }

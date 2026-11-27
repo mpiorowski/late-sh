@@ -301,7 +301,11 @@ fn os_args(args: &[&str]) -> Vec<OsString> {
 #[test]
 fn mpv_args_for_a_window() {
     let args = mpv_args(&MpvLaunch {
-        url: "https://www.youtube.com/watch?v=abc",
+        input: MpvInput::Url {
+            url: "https://www.youtube.com/watch?v=abc",
+            ytdlp_override: None,
+            start_s: 1391,
+        },
         rect: VideoRect {
             left: 10,
             top: 3,
@@ -311,9 +315,7 @@ fn mpv_args_for_a_window() {
         tty: tty(),
         use_shm: true,
         ipc_path: Path::new("/run/user/1000/late-video-42.sock"),
-        ytdlp_override: None,
         log_path: Path::new("/home/me/.local/state/late/video.log"),
-        start_s: 1391,
     });
     assert_eq!(
         args,
@@ -349,7 +351,11 @@ fn mpv_args_for_a_window() {
 #[test]
 fn mpv_args_for_full_screen_without_shared_memory() {
     let args = mpv_args(&MpvLaunch {
-        url: "https://youtu.be/abc",
+        input: MpvInput::Url {
+            url: "https://youtu.be/abc",
+            ytdlp_override: Some(Path::new("/home/me/.local/bin/yt-dlp")),
+            start_s: 0,
+        },
         rect: VideoRect {
             left: 0,
             top: 0,
@@ -359,9 +365,7 @@ fn mpv_args_for_full_screen_without_shared_memory() {
         tty: TtySize::new(213, 57, 1917, 1140).unwrap(),
         use_shm: false,
         ipc_path: Path::new("/tmp/late-video-7.sock"),
-        ytdlp_override: Some(Path::new("/home/me/.local/bin/yt-dlp")),
         log_path: Path::new("/tmp/video.log"),
-        start_s: 0,
     });
     assert_eq!(
         args,
@@ -390,6 +394,72 @@ fn mpv_args_for_full_screen_without_shared_memory() {
             "https://youtu.be/abc",
         ])
     );
+}
+
+/// A live stream: raw frames of the canvas's size on stdin, shown as they
+/// arrive with nothing buffered, and no yt-dlp, start or volume.
+#[test]
+fn mpv_args_for_a_live_stream() {
+    let args = mpv_args(&MpvLaunch {
+        input: MpvInput::Frames(Canvas {
+            width: 1000,
+            height: 560,
+        }),
+        rect: VideoRect {
+            left: 10,
+            top: 3,
+            cols: 100,
+            rows: 28,
+        },
+        tty: tty(),
+        use_shm: true,
+        ipc_path: Path::new("/run/user/1000/late-video-42.sock"),
+        log_path: Path::new("/home/me/.local/state/late/video.log"),
+    });
+    assert_eq!(
+        args,
+        os_args(&[
+            "--no-config",
+            "--really-quiet",
+            "--terminal=no",
+            "--log-file=/home/me/.local/state/late/video.log",
+            "--vo=kitty",
+            "--vo-kitty-use-shm=yes",
+            "--vo-kitty-alt-screen=no",
+            "--vo-kitty-config-clear=no",
+            "--vo-kitty-left=11",
+            "--vo-kitty-top=4",
+            "--vo-kitty-cols=100",
+            "--vo-kitty-rows=28",
+            "--vo-kitty-width=1000",
+            "--vo-kitty-height=560",
+            "--demuxer=rawvideo",
+            "--demuxer-rawvideo-w=1000",
+            "--demuxer-rawvideo-h=560",
+            "--demuxer-rawvideo-mp-format=yuv420p",
+            "--demuxer-rawvideo-fps=30",
+            "--profile=low-latency",
+            "--untimed",
+            "--cache=no",
+            "--keep-open=no",
+            "--input-ipc-server=/run/user/1000/late-video-42.sock",
+            "--",
+            "-",
+        ])
+    );
+}
+
+/// A stream needs everything a video does but yt-dlp.
+#[test]
+fn streams_play_without_ytdlp_and_with_nothing_else_missing() {
+    assert!(can_play_streams(&[]));
+    assert!(can_play_streams(&[VideoBlocker::NoYtDlp]));
+    assert!(!can_play_streams(&[
+        VideoBlocker::NoYtDlp,
+        VideoBlocker::NoMpv
+    ]));
+    assert!(!can_play_streams(&[VideoBlocker::NotKitty]));
+    assert!(!can_play_streams(&[VideoBlocker::Multiplexer]));
 }
 
 #[test]
@@ -666,6 +736,7 @@ async fn messages_for_another_play_are_dropped() {
         rows: 24,
     };
     assert_eq!(player.place(7, rect).await, PlaceOutcome::Unchanged);
+    assert_eq!(player.hide(7), None);
     assert_eq!(player.control(7, VideoControl::TogglePause).await, None);
     assert_eq!(player.stop(7).await, None);
     assert_eq!(player.poll().await, None);
@@ -679,14 +750,16 @@ fn a_non_http_url_never_reaches_mpv() {
     let mut player = idle_player();
     let update = player.play(
         3,
-        "file:///etc/passwd".to_string(),
+        VideoSource::Url {
+            url: "file:///etc/passwd".to_string(),
+            start_s: 0,
+        },
         VideoRect {
             left: 0,
             top: 0,
             cols: 80,
             rows: 24,
         },
-        0,
     );
     assert_eq!(
         update,

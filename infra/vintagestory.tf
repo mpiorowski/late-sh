@@ -24,7 +24,8 @@
 # serverconfig.json on the volume. The full list of keys and values is in
 # late-ssh/src/app/door/vintagestory/WORLDCONFIG.md. Mods are not set here
 # either: they are zips in /data/Mods on the volume, listed in that folder's
-# CONTEXT.md.
+# CONTEXT.md. Our own server-side mod, latearrows, lives in
+# infra/vintagestory/latearrows and is zipped into the same folder by hand.
 #
 # The Games hub card (late-ssh/src/app/door/vintagestory/ui.rs) quotes the
 # version, address, and the settings below to players; its ui_test.rs reads
@@ -48,6 +49,10 @@ locals {
     AllowPvP          = true
     AllowFireSpread   = true
     PassTimeWhenEmpty = false
+    # X-ray mods, refused by the client at join: the server sends this list
+    # and the client refuses to run a listed mod. A modified client can still
+    # get past it; this stops the casual case.
+    ModIdBlackList = ["blocksoverlay", "orexrayserver", "golb"]
   }
 }
 
@@ -169,15 +174,18 @@ resource "kubernetes_deployment_v1" "vintagestory" {
           }
 
           # Measured on agent-2: about 1.2 GiB with the spawn area loaded and
-          # nobody on. The official estimate adds about 300 MiB per player.
+          # nobody on, about 2.6 GiB after two weeks up with players on. .NET
+          # caps its heap at 75% of the limit, and a join builds the whole
+          # asset payload in memory: at 3Gi that cap threw OutOfMemoryException
+          # on joins while Kubernetes saw nothing wrong.
           resources {
             limits = {
               cpu    = "3000m"
-              memory = "3Gi"
+              memory = "5Gi"
             }
             requests = {
               cpu    = "500m"
-              memory = "1536Mi"
+              memory = "2560Mi"
             }
           }
 

@@ -35,7 +35,7 @@ fn sanitize_extracts_first_clean_line() {
 
 #[test]
 fn nag_lists_each_platform_with_base_url() {
-    let text = nag_lines("v0.0.1-cli", "v0.33.5-cli", "https://cli.late.sh").join("\n");
+    let text = nag_lines("v0.0.1-cli", "v0.33.5-cli", "https://cli.late.sh", false).join("\n");
     assert!(text.contains("v0.0.1-cli -> v0.33.5-cli"));
     for label in ["linux", "macos", "windows", "nixos"] {
         assert!(text.contains(label), "missing platform: {label}");
@@ -47,7 +47,7 @@ fn nag_lists_each_platform_with_base_url() {
 
 #[test]
 fn nag_install_commands_align_to_one_column() {
-    let lines = nag_lines("v1-cli", "v2-cli", "https://cli.late.sh");
+    let lines = nag_lines("v1-cli", "v2-cli", "https://cli.late.sh", true);
     // Every command should begin at the same column. Match on command
     // prefixes that don't also appear in a label (e.g. "nix" would collide
     // with the "nixos" label, so match the fuller "nix run").
@@ -68,4 +68,96 @@ fn sanitize_rejects_html_and_empty() {
     assert_eq!(sanitize_version("<!DOCTYPE html>"), None);
     assert_eq!(sanitize_version(""), None);
     assert_eq!(sanitize_version("   \n"), None);
+}
+
+/// The nag offers `u` only where this build can replace itself.
+#[test]
+fn nag_offers_the_update_key_only_when_it_can_run() {
+    let offered = nag_lines("v1-cli", "v2-cli", "https://cli.late.sh", true).join("\n");
+    assert!(offered.contains("press u to update now"), "{offered}");
+    let plain = nag_lines("v1-cli", "v2-cli", "https://cli.late.sh", false).join("\n");
+    assert!(!plain.contains("press u"), "{plain}");
+}
+
+/// `u` updates, any other key skips the wait, and a key's release or
+/// repeat answers nothing.
+#[test]
+fn a_key_under_the_nag_answers_it() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    let key = |code, kind| KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind,
+        state: KeyEventState::NONE,
+    };
+    assert_eq!(
+        answer_for(key(KeyCode::Char('u'), KeyEventKind::Press)),
+        Some(NagAnswer::UpdateNow)
+    );
+    assert_eq!(
+        answer_for(key(KeyCode::Char('U'), KeyEventKind::Press)),
+        Some(NagAnswer::UpdateNow)
+    );
+    assert_eq!(
+        answer_for(key(KeyCode::Enter, KeyEventKind::Press)),
+        Some(NagAnswer::Continue)
+    );
+    assert_eq!(
+        answer_for(key(KeyCode::Char('u'), KeyEventKind::Release)),
+        None
+    );
+}
+
+/// Raw mode turns Ctrl+C into a key, so the nag answers it as the
+/// interrupt it was meant as: quit, never connect.
+#[test]
+fn ctrl_c_under_the_nag_quits() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    let ctrl_c = KeyEvent {
+        code: KeyCode::Char('c'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    };
+    assert_eq!(answer_for(ctrl_c), Some(NagAnswer::Quit));
+    let plain_c = KeyEvent {
+        modifiers: KeyModifiers::NONE,
+        ..ctrl_c
+    };
+    assert_eq!(answer_for(plain_c), Some(NagAnswer::Continue));
+}
+
+/// Unix builds run the same installer line the nag prints, from the
+/// configured host; Windows cannot replace its running binary.
+#[test]
+fn the_self_update_runs_the_printed_installer_on_unix_only() {
+    let script = self_update_script("https://mirror.example");
+    match cfg!(unix) {
+        true => assert_eq!(
+            script.as_deref(),
+            Some("curl -fsSL https://mirror.example/install.sh | bash")
+        ),
+        false => assert_eq!(script, None),
+    }
+}
+
+/// The installer writes a file named `late`, so only a binary of that name
+/// is offered the update; a renamed copy would restart unchanged.
+#[test]
+fn only_a_binary_named_late_is_replaced() {
+    use std::path::Path;
+    assert!(installer_replaces(Path::new("/usr/local/bin/late")));
+    assert!(!installer_replaces(Path::new(
+        "/home/mat/Downloads/late-x86_64"
+    )));
+}
+
+/// A failed download is a failed update: the pipe's first command decides
+/// the status too, so bash fed nothing never reads as an install.
+#[cfg(unix)]
+#[test]
+fn a_failed_download_fails_the_update() {
+    let exe = std::env::temp_dir().join("late");
+    let err = update_and_restart("false | cat", &exe).expect_err("the pipe failed");
+    assert!(format!("{err:#}").contains("installer exited"), "{err:#}");
 }

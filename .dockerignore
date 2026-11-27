@@ -49,3 +49,6 @@ vendor/frotz/src/common/defs.h
 vendor/frotz/src/common/hash.h
 vendor/frotz/src/curses/ux_defines.h
 vendor/frotz/**/__pycache__
+
+# Local-only dev tools, never built into an image
+late-nethack/sokoban/

@@ -19,7 +19,9 @@ pub enum Mode {
 const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
-    user_id: uuid::Uuid,
+    /// The player's `late.sh` username, sent to the host so dopewars starts with
+    /// `-P <playname>` instead of prompting for a name.
+    username: String,
     host: String,
     port: u16,
     secret: String,
@@ -43,7 +45,7 @@ pub struct State {
 
 impl State {
     pub fn new(
-        user_id: uuid::Uuid,
+        username: String,
         host: String,
         port: u16,
         secret: String,
@@ -52,7 +54,7 @@ impl State {
         repaint: Option<Arc<RenderSignal>>,
     ) -> Self {
         Self {
-            user_id,
+            username,
             host,
             port,
             secret,
@@ -96,7 +98,7 @@ impl State {
             host: self.host.clone(),
             port: self.port,
             secret: self.secret.clone(),
-            user_id: self.user_id,
+            playname: self.username.clone(),
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
@@ -161,7 +163,7 @@ impl State {
             host: "127.0.0.1".into(),
             port: 1,
             secret: "test-secret".into(),
-            user_id: uuid::Uuid::nil(),
+            playname: "tester".into(),
             cols: 80,
             rows: 24,
             term: "xterm".into(),
@@ -187,7 +189,8 @@ fn keys_for_game(proxy: &DopewarsProcess, data: &[u8]) -> Vec<u8> {
 
 /// Drop terminal reports dopewars must never see: SGR mouse (`ESC [ < … M/m`),
 /// legacy X10 mouse (`ESC [ M b x y`), and bracketed-paste markers (`ESC [ 200~`
-/// / `ESC [ 201~`). Everything else, including real keys and arrow-key escapes,
+/// / `ESC [ 201~`), then rewrite DEL (`0x7f`) to BS (`0x08`) so `nice_input()`
+/// can erase. Everything else, including real keys and arrow-key escapes,
 /// passes through verbatim. A sequence truncated at the chunk boundary falls
 /// through unchanged rather than swallowing a following keystroke.
 fn strip_input_noise(data: &[u8]) -> Vec<u8> {
@@ -214,7 +217,10 @@ fn strip_input_noise(data: &[u8]) -> Vec<u8> {
                 continue;
             }
         }
-        out.push(data[i]);
+        // Upstream dopewars enables keypad(stdscr, TRUE), turning 0x7f (kbs=\177)
+        // into KEY_BACKSPACE (263), which cursesport.c:bgetch() drops (`c > 255`).
+        // nice_input() accepts ASCII BS (8), so rewrite DEL -> BS.
+        out.push(if data[i] == 0x7f { 0x08 } else { data[i] });
         i += 1;
     }
     out

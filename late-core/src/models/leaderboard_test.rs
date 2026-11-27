@@ -8,8 +8,6 @@ use crate::{
     models::{
         chess_puzzle,
         chips::{ChipMove, Difficulty, UserChips},
-        drink_round::Bar,
-        drinks::{UserDrinks, WELCOME_DRINK_POINTS},
         le_word,
         leaderboard::{
             CountedSpan, DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP,
@@ -26,6 +24,214 @@ use crate::{
         create_test_user, roll_high_scores_back_a_month, roll_score_events_back_a_month, test_db,
     },
 };
+
+async fn chat_on(
+    client: &tokio_postgres::Client,
+    user_id: Uuid,
+    room_id: Uuid,
+    at: DateTime<Utc>,
+    body: &str,
+) -> crate::models::chat_message::ChatMessage {
+    use crate::models::chat_message::{ChatMessage, ChatMessageParams};
+    let message = ChatMessage::create(
+        client,
+        ChatMessageParams {
+            user_id,
+            room_id,
+            body: body.to_string(),
+        },
+    )
+    .await
+    .expect("message");
+    client
+        .execute(
+            "UPDATE chat_messages SET created = $2 WHERE id = $1",
+            &[&message.id, &at],
+        )
+        .await
+        .expect("date message");
+    message
+}
+
+#[tokio::test]
+async fn top_chat_counts_public_humans_and_longest_utc_month_streaks() {
+    use crate::models::{chat_room::ChatRoom, leaderboard::fetch_top_chat};
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    // Session timezone must not affect either the period or streak days.
+    client
+        .batch_execute("SET TIME ZONE 'Pacific/Honolulu'")
+        .await
+        .unwrap();
+    let alice = create_test_user(&test_db.db, "chat-alice").await;
+    let bob = create_test_user(&test_db.db, "chat-bob").await;
+    let ghost = create_test_user(&test_db.db, "chat-ghost").await;
+    client
+        .execute(
+            "UPDATE users SET settings = '{\"bot\":true}' WHERE id = $1",
+            &[&ghost.id],
+        )
+        .await
+        .unwrap();
+    let system = create_test_user(&test_db.db, "chat-system").await;
+    client
+        .execute(
+            "UPDATE users SET settings = '{\"system\":true}' WHERE id = $1",
+            &[&system.id],
+        )
+        .await
+        .unwrap();
+    let lounge = ChatRoom::ensure_lounge(&client).await.unwrap();
+    let topic = ChatRoom::get_or_create_public_room(&client, "chat-test")
+        .await
+        .unwrap();
+    let private = ChatRoom::create_private_room(&client, "chat-secret", alice.id)
+        .await
+        .unwrap();
+    let dm = ChatRoom::get_or_create_dm(&client, alice.id, bob.id)
+        .await
+        .unwrap();
+    let at = |day| Utc.with_ymd_and_hms(2026, 10, day, 0, 0, 0).unwrap();
+    // Two separate runs: the earlier three-day run beats the latest two.
+    for day in [1, 2, 3, 10, 11] {
+        chat_on(&client, alice.id, lounge.id, at(day), "hello").await;
+    }
+    chat_on(&client, alice.id, topic.id, at(2), "same day, another room").await;
+    chat_on(
+        &client,
+        alice.id,
+        topic.id,
+        at(11),
+        "@bartender2 is another handle",
+    )
+    .await;
+    chat_on(
+        &client,
+        alice.id,
+        topic.id,
+        at(11),
+        "email@bartender is not a mention",
+    )
+    .await;
+    for body in [
+        "@bartender tea",
+        "hi @BARTENDER!",
+        "(@bartender.)",
+        "`@bartender`",
+    ] {
+        chat_on(&client, alice.id, topic.id, at(4), body).await;
+    }
+    for room in [private.id, dm.id] {
+        chat_on(&client, alice.id, room, at(4), "private").await;
+    }
+    for user in [ghost.id, system.id] {
+        chat_on(&client, user, lounge.id, at(4), "house line").await;
+    }
+    // Last month's last instant does not extend this month's streak.
+    chat_on(
+        &client,
+        alice.id,
+        lounge.id,
+        at(1) - Duration::milliseconds(1),
+        "September",
+    )
+    .await;
+    chat_on(
+        &client,
+        alice.id,
+        lounge.id,
+        Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap(),
+        "November",
+    )
+    .await;
+    // Equal totals retain shared rank and stable username order.
+    for _ in 0..8 {
+        chat_on(&client, bob.id, topic.id, at(1), "hello").await;
+    }
+    let boards = fetch_top_chat(&client, at(20).date_naive(), 500)
+        .await
+        .unwrap();
+    assert_eq!(boards.all_rooms.len(), 2);
+    assert_eq!(
+        boards
+            .all_rooms
+            .iter()
+            .map(|r| (r.username.as_str(), r.rank, r.value))
+            .collect::<Vec<_>>(),
+        vec![("chat-alice", 1, 8), ("chat-bob", 1, 8)]
+    );
+    assert_eq!(entry_for(&boards.outside_lounge, alice.id).value, 3);
+    assert_eq!(entry_for(&boards.outside_lounge, bob.id).value, 8);
+    assert_eq!(entry_for(&boards.daily_streak, alice.id).value, 3);
+    assert_eq!(entry_for(&boards.daily_streak, bob.id).value, 1);
+    assert!(boards.in_month(at(1).date_naive()));
+    let november = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    assert!(!boards.in_month(november));
+    let next = fetch_top_chat(&client, november, 500).await.unwrap();
+    assert_eq!(entry_for(&next.daily_streak, alice.id).value, 1);
+    assert_eq!(entry_for(&next.all_rooms, alice.id).value, 1);
+}
+
+#[tokio::test]
+async fn top_chat_one_news_item_counts_once_and_its_card_never_counts_as_chat() {
+    use crate::models::{
+        article::{Article, ArticleParams},
+        chat_message::{ChatMessage, ChatMessageParams},
+        chat_room::ChatRoom,
+        leaderboard::fetch_top_chat,
+    };
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    let user = create_test_user(&test_db.db, "chat-news").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.unwrap();
+    let today = Utc::now().date_naive();
+    let article = Article::create_by_user_id(
+        &client,
+        user.id,
+        ArticleParams {
+            user_id: user.id,
+            url: "https://example.com/top-chat".into(),
+            title: "A story".into(),
+            summary: "summary".into(),
+            ascii_art: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+    // News still counts when room rules refuse its card or posting fails.
+    let without_card = fetch_top_chat(&client, today, 500).await.unwrap();
+    assert_eq!(entry_for(&without_card.news_posts, user.id).value, 1);
+    let card = ChatMessage::create_house_card(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: user.id,
+            body: "📰 A story https://example.com/top-chat".into(),
+        },
+    )
+    .await
+    .unwrap();
+    for linked in [false, true] {
+        if linked {
+            Article::link_lounge_message(&client, user.id, article.id, card.id)
+                .await
+                .unwrap();
+        }
+        let boards = fetch_top_chat(&client, today, 500).await.unwrap();
+        assert_eq!(entry_for(&boards.news_posts, user.id).value, 1);
+        assert!(boards.all_rooms.is_empty());
+        assert!(boards.outside_lounge.is_empty());
+        assert!(boards.daily_streak.is_empty());
+    }
+    // Even an orphaned card cannot turn into an ordinary chat message.
+    Article::delete_returning(&client, article.id)
+        .await
+        .unwrap();
+    let boards = fetch_top_chat(&client, today, 500).await.unwrap();
+    assert!(boards.news_posts.is_empty());
+    assert!(boards.all_rooms.is_empty());
+    assert!(boards.daily_streak.is_empty());
+}
 
 fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
     entries
@@ -693,6 +899,7 @@ async fn lateania_boards_rank_living_characters() {
 async fn door_boards_rank_wins_depth_and_score() {
     use crate::models::door_milestone::{DoorMilestone, DoorMilestoneKind, NewDoorMilestone};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    use crate::models::leaderboard::DOPEWARS_GAME_KEY;
 
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -812,9 +1019,45 @@ async fn door_boards_rank_wins_depth_and_score() {
         );
     }
 
+    // dopewars: an old high score and a recent smaller one. The board keeps
+    // the player's best single run, so all-time reads the old 5M while the
+    // monthly window reads the recent 1.25M — and neither leaks into the
+    // roguelike roster (dopewars is not in DoorGame).
+    let dealer = create_test_user(&test_db.db, "lb_dopewars_dealer").await;
+    for (score, offset, days_ago) in [(5_000_000, 900, 45), (1_250_000, 901, 0)] {
+        let mut dope = run(dealer.id, DoorRunResult::Leaving, score, 1, offset);
+        dope.game = DOPEWARS_GAME_KEY;
+        dope.depth = None;
+        dope.turns = Some(31);
+        dope.ended_at = now - Duration::days(days_ago);
+        dope.source_file = "runs".to_string();
+        assert!(
+            DoorRun::insert_ignore(&client, &dope)
+                .await
+                .expect("insert dopewars run")
+        );
+    }
+
     let data = fetch_leaderboard_data(&client)
         .await
         .expect("fetch leaderboard");
+
+    assert_eq!(
+        entry_for(&data.dopewars_scores.all_time, dealer.id).value,
+        5_000_000
+    );
+    assert_eq!(
+        entry_for(&data.dopewars_scores.monthly, dealer.id).value,
+        1_250_000
+    );
+    assert!(
+        !data.door_boards.values().any(|boards| boards
+            .score
+            .all_time
+            .iter()
+            .any(|entry| entry.user_id == dealer.id)),
+        "dopewars stays off the roguelike board triples"
+    );
 
     let nethack = data
         .door_board(DoorGame::Nethack)
@@ -1150,98 +1393,6 @@ async fn the_timestamp_repair_takes_restamped_bests_off_the_monthly_board() {
         );
         assert_eq!(entry_for(&board.all_time, veteran.id).value, 9_000);
     }
-}
-
-/// Top Drinkers sums the buzz of every drink taken: paid or comped, either
-/// bar, past the buzz cap, this month and this year. The welcome pour is not
-/// a drink anybody took, non-intoxicating pours add no points, and last
-/// year's drinks are off both windows.
-#[tokio::test]
-async fn top_drinkers_sums_buzz_by_month_and_year() {
-    let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let binger = create_test_user(&test_db.db, "drinkers-binger").await;
-    let steady = create_test_user(&test_db.db, "drinkers-steady").await;
-    let newcomer = create_test_user(&test_db.db, "drinkers-newcomer").await;
-    let lapsed = create_test_user(&test_db.db, "drinkers-lapsed").await;
-    let sober = create_test_user(&test_db.db, "drinkers-sober").await;
-
-    // Three big pours: the stored buzz caps at 4000, the board does not.
-    for _ in 0..3 {
-        UserDrinks::record_purchase(&client, binger.id, Bar::Tavern, 2_000, true)
-            .await
-            .expect("pour");
-    }
-    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 250, true)
-        .await
-        .expect("pour");
-    UserDrinks::record_comped_pour(&client, steady.id, Bar::Tavern, 400, true)
-        .await
-        .expect("round credit");
-    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 1_000, true)
-        .await
-        .expect("pour");
-    UserDrinks::record_welcome_pour(&client, newcomer.id, WELCOME_DRINK_POINTS)
-        .await
-        .expect("welcome");
-    UserDrinks::record_purchase(&client, lapsed.id, Bar::Tavern, 1_000, true)
-        .await
-        .expect("pour");
-    for user in [&steady, &sober] {
-        UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 50, false)
-            .await
-            .expect("coffee");
-        UserDrinks::record_comped_pour(&client, user.id, Bar::Nightcap, 400, false)
-            .await
-            .expect("comped water");
-    }
-
-    // steady's top shelf was the first night of the year; lapsed drank last
-    // year. Only drink_pours is moved: it is the table the board reads.
-    client
-        .execute(
-            "UPDATE drink_pours
-             SET created = date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-             WHERE user_id = $1 AND points = 1000",
-            &[&steady.id],
-        )
-        .await
-        .expect("backdate to new year");
-    client
-        .execute(
-            "UPDATE drink_pours
-             SET created = date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                 - interval '1 day'
-             WHERE user_id = $1",
-            &[&lapsed.id],
-        )
-        .await
-        .expect("backdate to last year");
-
-    let data = fetch_leaderboard_data(&client).await.expect("data");
-    let monthly: Vec<(Uuid, i64, i64)> = data
-        .top_drinkers
-        .monthly
-        .iter()
-        .map(|entry| (entry.user_id, entry.rank, entry.value))
-        .collect();
-    let yearly: Vec<(Uuid, i64, i64)> = data
-        .top_drinkers
-        .yearly
-        .iter()
-        .map(|entry| (entry.user_id, entry.rank, entry.value))
-        .collect();
-
-    // In January the first night of the year is also this month.
-    let steady_monthly = match Utc::now().month() {
-        1 => 1_650,
-        _ => 650,
-    };
-    assert_eq!(
-        monthly,
-        vec![(binger.id, 1, 6_000), (steady.id, 2, steady_monthly)]
-    );
-    assert_eq!(yearly, vec![(binger.id, 1, 6_000), (steady.id, 2, 1_650)]);
 }
 
 /// A Lobby match `winner` won this week, settled as `win_payout`.

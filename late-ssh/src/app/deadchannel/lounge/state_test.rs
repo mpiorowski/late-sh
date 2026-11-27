@@ -178,6 +178,18 @@ fn the_scene_reads_the_spawn_to_the_viewer() {
         said("a howler is in the channel.", "tom hit it. 2 to go.", true)
     );
 
+    // The second hitter still sees who hit before them, not only their own
+    // name: the live line names everyone in, the way the aftermath does.
+    let hit_twice = spawn(SpawnKind::Howler, vec![hit("dax"), mine.clone()]);
+    assert_eq!(
+        scene_text(&hit_twice, viewer),
+        said(
+            "a howler is in the channel.",
+            "dax and tom hit it. 1 to go.",
+            false
+        )
+    );
+
     let mut down = spawn(SpawnKind::Howler, vec![mine, hit("dax"), hit("mira")]);
     down.ended_at_ms = Some(2_000);
     down.outcome = Some(SpawnOutcome::Slain);

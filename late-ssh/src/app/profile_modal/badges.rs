@@ -105,7 +105,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "DRNK",
             "Top Drinkers",
-            "most buzz from drinks taken last month, first place only, no chips (Top Drinkers board)",
+            "retired, no longer awarded: most buzz from drinks taken in a month, first place only, no chips",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
@@ -153,7 +153,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "GDS",
             "Green Dragon Slayer",
-            "slay the green dragon (10,000 chips, every kill)",
+            "slay the green dragon (10,000 chips per kill, 30-day gap)",
         ),
         (
             "DCO",
@@ -178,12 +178,12 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "ADE",
             "A Dark Room Escape",
-            "fly the starship off the rock (15,000 chips, every run)",
+            "fly the starship off the rock (15,000 chips per run, 30-day gap)",
         ),
         (
             "ADB",
             "A Dark Room Homefleet",
-            "fly out holding the fleet beacon (20,000 chips, every run)",
+            "fly out holding the fleet beacon (20,000 chips per run, 30-day gap)",
         ),
         (
             "SIG",

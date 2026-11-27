@@ -1,3 +1,5 @@
+use late_core::models::chat_room::RoomKind;
+
 use crate::app::{
     common::primitives::Banner,
     hub::aquarium::state::CutOutcome,
@@ -107,20 +109,6 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
 
     match event {
         ParsedInput::Mouse(mouse) => handle_shop_mouse(app, mouse),
-        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T') => {
-            if let Some(banner) = toggle_pet_species(app) {
-                app.banner = Some(banner);
-                return true;
-            }
-            false
-        }
-        ParsedInput::Byte(b'o' | b'O') | ParsedInput::Char('o' | 'O') => {
-            if let Some(banner) = toggle_pet_out(app) {
-                app.banner = Some(banner);
-                return true;
-            }
-            false
-        }
         ParsedInput::Arrow(b'A')
         | ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K') => {
@@ -131,6 +119,16 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
         | ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J') => {
             app.shop_state.move_selection(1);
+            true
+        }
+        ParsedInput::PageUp => {
+            let index = app.shop_state.selected_index().saturating_sub(8);
+            app.shop_state.select_item(index);
+            true
+        }
+        ParsedInput::PageDown => {
+            let index = app.shop_state.selected_index().saturating_add(8);
+            app.shop_state.select_item(index);
             true
         }
         ParsedInput::Byte(b'[' | b'h' | b'H') | ParsedInput::Char('[' | 'h' | 'H') => {
@@ -187,19 +185,23 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
 fn current_room_effect_target(app: &App) -> Option<RoomEffectTarget> {
     let room_id = app.chat.selected_room_id?;
     let (room, _) = app.chat.rooms.iter().find(|(room, _)| room.id == room_id)?;
-    let label = if room.kind == "dm" {
-        "current DM".to_string()
-    } else {
-        room.slug
+    let label = match room.kind {
+        RoomKind::Dm => "current DM".to_string(),
+        RoomKind::Lounge
+        | RoomKind::Language
+        | RoomKind::Topic(_)
+        | RoomKind::Game(_)
+        | RoomKind::Deadchannel
+        | RoomKind::Nightcap => room
+            .slug
             .as_deref()
             .map(|slug| format!("#{slug}"))
-            .unwrap_or_else(|| "current room".to_string())
+            .unwrap_or_else(|| "current room".to_string()),
     };
     Some(RoomEffectTarget {
         room_id,
         label,
-        kind: room.kind.clone(),
-        visibility: room.visibility.clone(),
+        kind: room.kind,
         permanent: room.permanent,
         slug: room.slug.clone(),
     })
@@ -231,34 +233,6 @@ fn handle_shop_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
         }
         _ => false,
     }
-}
-
-fn toggle_pet_species(app: &mut App) -> Option<Banner> {
-    let item = app.shop_state.selected_item()?;
-    if !item.is_pet_companion() || !item.owned {
-        return None;
-    }
-    let next = app.pet_state.species.next();
-    app.pet_state.set_species(next);
-    Some(Banner::success(&format!(
-        "Switched companion to {}",
-        next.as_str()
-    )))
-}
-
-/// `o` on the owned pet: its on/off switch. Away it keeps everything it was
-/// (name, species, age), and nothing draws it or asks for it.
-fn toggle_pet_out(app: &mut App) -> Option<Banner> {
-    let item = app.shop_state.selected_item()?;
-    if !item.is_pet_companion() || !item.owned {
-        return None;
-    }
-    let enabled = !app.pet_state.enabled;
-    app.pet_state.set_enabled(enabled);
-    Some(Banner::success(match enabled {
-        true => "Your pet is back out",
-        false => "Put your pet away: no reminders, o brings it back",
-    }))
 }
 
 /// `-` on the Sprout row: cut the sprout on the tank floor. The floor

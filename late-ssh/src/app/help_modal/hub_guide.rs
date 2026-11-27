@@ -18,7 +18,6 @@ use late_core::models::{
     },
     drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
     leaderboard::{DailyPuzzle, ScoreGame},
-    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 
 pub(crate) fn bot_context_lines() -> Vec<String> {
@@ -144,18 +143,8 @@ fn quest_sections() -> Vec<GuideSection> {
             "Daily slot 1 is an easy Arcade quest; slot 2 is a medium one.".to_string(),
             "The weekly slot is a hard Arcade quest.".to_string(),
             "Quest rewards pay automatically when the progress target completes.".to_string(),
-            "Finishing any one daily quest advances your daily streak.".to_string(),
-            format!(
-                "Streak bonuses start on the second consecutive streak day: +{} chips.",
-                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
-            ),
-            format!(
-                "The bonus climbs by {} chips per day up to +{} chips.",
-                DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL,
-                i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL)
-                    * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
-            ),
-            "Weekly quests do not count toward the daily streak.".to_string(),
+            "The daily streak above the quests is kept by any daily board won that UTC day, quest or not; it pays no chips, and a missed day restarts it at 1.".to_string(),
+            "The rung is one daily board a day, the same for everyone; the week of them sits beside the daily cards, tomorrow's lit. Win it on its day for a star. Stars pay no chips and there is no catching up on yesterday's.".to_string(),
         ],
     }]
 }

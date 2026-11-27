@@ -56,8 +56,6 @@ impl Chrome {
     }
 }
 
-/// The pet box at its smallest: its three art rows.
-pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 /// The smallest page Rice draws. Under it the page is its too-small notice
 /// alone: no tiles.
 pub const RICE_MIN_COLS: u16 = 40;
@@ -70,7 +68,7 @@ pub fn rice_fits(area: Rect) -> bool {
 /// Home's content area cut into its rows (`rice_areas`).
 pub struct RiceAreas {
     /// The board's day across the top, over every tile, on a day the
-    /// board has an all-day post.
+    /// board has a post.
     pub banner: Option<Rect>,
     pub tiles: Rect,
     /// The arrange mode's key footer, while the mode is on.

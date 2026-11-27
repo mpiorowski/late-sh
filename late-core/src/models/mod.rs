@@ -68,11 +68,14 @@ pub mod cyberspace_account;
 pub mod daily_match;
 #[cfg(test)]
 mod daily_match_test;
+pub mod daily_rung;
+pub mod daily_streak;
 pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
 pub mod deadchannel_ambush;
+pub mod deadchannel_bout;
 pub mod deadchannel_name_hit;
 pub mod deadchannel_runner;
 pub mod deadchannel_spawn;

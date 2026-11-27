@@ -1,6 +1,6 @@
 use super::{
     ArticleListView, COMPACT_UNDER_ROWS, ascii_preview_if_fit, draw_article_list, lay_out,
-    lay_out_compact, lounge_card_lines, scroll_offset,
+    lay_out_compact, lounge_card_lines,
 };
 use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
@@ -104,43 +104,43 @@ fn card_meta_reads_watch_for_a_video() {
     );
 }
 
-/// With a shelf, a rule heads it and another heads the feed. Every story
-/// shows whole, selected or not: title, meta, link and bullets. Without a
-/// shelf a plain rule parts one story from the next.
+/// With a shelf, a rule heads the feed and another heads the shelf under
+/// it. Every story shows whole, selected or not: title, meta, link and
+/// bullets. Without a shelf a plain rule parts one story from the next.
 #[test]
-fn the_list_sections_the_shelf_over_the_feed_and_shows_every_story_whole() {
+fn the_list_sections_the_feed_over_the_shelf_and_shows_every_story_whole() {
     let positions = HashMap::new();
     let mut kept = card_at("https://example.com/kept", BodyStatus::Unavailable);
     kept.article.title = "Kept for later".to_string();
-    let articles = [kept, card(BodyStatus::Ready { reading_minutes: 7 })];
+    let articles = [card(BodyStatus::Ready { reading_minutes: 7 }), kept];
     // Both read, so no dot gets in the way of the rows.
     let marker: HashSet<Uuid> = articles.iter().map(|item| item.article.id).collect();
 
     let rows = drawn(&view(&articles, 1, 1, &marker, &positions), 80, 14);
-    assert!(
-        rows[0].starts_with("━━ saved · 1 of 10 ━━"),
-        "{:?}",
-        rows[0]
-    );
-    assert_eq!(rows[1], "  Kept for later");
-    assert!(rows[2].starts_with("  @mat ·"));
-    assert_eq!(rows[3], "  https://example.com/kept");
+    assert!(rows[0].starts_with("━━ latest ━━"), "{:?}", rows[0]);
+    assert_eq!(rows[1], "  Why LISTEN/NOTIFY stops scaling");
+    assert!(rows[2].ends_with("· 7 min read"));
+    assert_eq!(rows[3], "  https://example.com/listen-notify");
     assert_eq!(rows[4], "  • one");
     assert_eq!(rows[5], "  • two");
     assert_eq!(rows[6], "  • three");
-    assert!(rows[7].starts_with("━━ latest ━━"), "{:?}", rows[7]);
-    assert_eq!(rows[8], "  Why LISTEN/NOTIFY stops scaling");
-    assert!(rows[9].ends_with("· 7 min read"));
-    assert_eq!(rows[10], "  https://example.com/listen-notify");
+    assert!(
+        rows[7].starts_with("━━ saved · 1 of 10 ━━"),
+        "{:?}",
+        rows[7]
+    );
+    assert_eq!(rows[8], "  Kept for later");
+    assert!(rows[9].starts_with("  @mat ·"));
+    assert_eq!(rows[10], "  https://example.com/kept");
     assert_eq!(rows[11], "  • one");
     assert_eq!(rows[12], "  • two");
     assert_eq!(rows[13], "  • three");
 
     let rows = drawn(&view(&articles, 0, 0, &marker, &positions), 80, 13);
-    assert_eq!(rows[0], "  Kept for later");
+    assert_eq!(rows[0], "  Why LISTEN/NOTIFY stops scaling");
     assert_eq!(rows[5], "  • three");
     assert_eq!(rows[6], "─".repeat(80));
-    assert_eq!(rows[7], "  Why LISTEN/NOTIFY stops scaling");
+    assert_eq!(rows[7], "  Kept for later");
     assert_eq!(rows[12], "  • three");
 }
 
@@ -210,9 +210,9 @@ fn the_unread_dot_marks_the_feed_and_not_the_shelf() {
     let marker = HashSet::new();
     let positions = HashMap::new();
     let articles = [card(BodyStatus::Unavailable), card(BodyStatus::Unavailable)];
-    let rows = drawn(&view(&articles, 1, 1, &marker, &positions), 80, 14);
-    assert!(rows[1].starts_with("  Why"), "{:?}", rows[1]);
-    assert!(rows[8].starts_with("● Why"), "{:?}", rows[8]);
+    let rows = drawn(&view(&articles, 1, 0, &marker, &positions), 80, 14);
+    assert!(rows[1].starts_with("● Why"), "{:?}", rows[1]);
+    assert!(rows[8].starts_with("  Why"), "{:?}", rows[8]);
 }
 
 /// A bullet that runs on takes two rows at most, the second hung under the
@@ -242,76 +242,14 @@ fn a_long_bullet_is_cut_at_two_rows() {
     assert!(text(4).trim_end().ends_with('…'), "{:?}", text(4));
 }
 
-/// Stories of 5 rows with a rule between: story `i` is rows `6i..6i+5`.
-fn story(i: usize) -> std::ops::Range<usize> {
-    6 * i..6 * i + 5
-}
-
-/// The story above through the story below, as `lay_out` reports it.
-fn context(i: usize, count: usize) -> std::ops::Range<usize> {
-    let start = if i == 0 {
-        story(0).start
-    } else {
-        story(i - 1).start
-    };
-    let end = if i + 1 == count {
-        story(i).end
-    } else {
-        story(i + 1).end
-    };
-    start..end
-}
-
-/// Walking up from the newest story at the bottom, the window holds still
-/// until the story above the selection would leave it, and only then
-/// scrolls, a story at a time.
-#[test]
-fn the_list_scrolls_only_when_the_next_story_would_leave_the_window() {
-    let count = 10;
-    let total = story(count - 1).end;
-    let height = 24;
-    let mut offset = 0;
-    let mut offsets = Vec::new();
-    for i in (0..count).rev() {
-        offset = scroll_offset(offset, total, &story(i), &context(i, count), height);
-        offsets.push(offset);
-    }
-    // The first draw lands at the bottom; moving up keeps it there while
-    // stories 8, 7 and 6 (with 5, 6 above them in view) move inside it.
-    assert_eq!(offsets[0], total - height);
-    assert_eq!(offsets[1], total - height);
-    assert_eq!(offsets[2], total - height);
-    // Story 6 is selected: story 5 above it must be in view, row 30.
-    assert_eq!(offsets[3], story(5).start.min(total - height));
-    // At the top it stops at row 0.
-    assert_eq!(*offsets.last().unwrap(), 0);
-    // Every step keeps the selected story and the one above it in view.
-    for (step, i) in (0..count).rev().enumerate() {
-        let top = context(i, count).start;
-        assert!(
-            offsets[step] <= top,
-            "story {i} at offset {}",
-            offsets[step]
-        );
-        assert!(story(i).end <= offsets[step] + height);
-    }
-
-    // And back down: still until the story below would leave the window.
-    let held = scroll_offset(0, total, &story(1), &context(1, count), height);
-    assert_eq!(held, 0);
-    let held = scroll_offset(held, total, &story(2), &context(2, count), height);
-    assert_eq!(held, 0);
-    let moved = scroll_offset(held, total, &story(3), &context(3, count), height);
-    assert_eq!(moved, story(4).end - height);
-}
-
 /// Real draws sharing one kept offset, on a list with a shelf: the window holds
 /// while the selection moves inside it, scrolls when the story above would
-/// leave it, and walking back to the first story brings the shelf's rule back.
-/// Stories are 6 rows: a rule at row 0, the rule under the shelf at row 7, then
-/// 7 rows a story, so 42 rows and a lowest offset of 18 on a window of 24.
+/// leave it, and walking back to the first story brings the feed's rule back.
+/// Stories are 6 rows: a rule at row 0, then 7 rows a story (a plain rule or,
+/// over the shelf's one story, its rule), so 42 rows and a lowest offset of
+/// 18 on a window of 24.
 #[test]
-fn the_kept_offset_holds_the_list_and_walks_back_to_the_shelf_rule() {
+fn the_kept_offset_holds_the_list_and_walks_back_to_the_feed_rule() {
     let marker = HashSet::new();
     let positions = HashMap::new();
     let articles: Vec<_> = (0..6).map(|_| card(BodyStatus::Pending)).collect();
@@ -334,24 +272,7 @@ fn the_kept_offset_holds_the_list_and_walks_back_to_the_shelf_rule() {
     draw(1);
     let rows = draw(0);
     assert_eq!(scroll.get(), 0);
-    assert!(rows[0].starts_with("━━ saved"), "{:?}", rows[0]);
-}
-
-/// Too short for a story and both neighbours, the neighbours share what the
-/// selected story leaves; shorter than the story, its first rows show.
-#[test]
-fn a_short_window_keeps_the_selected_story_first() {
-    let total = story(9).end;
-    let offset = scroll_offset(0, total, &story(5), &context(5, 10), 9);
-    assert!(offset <= story(5).start && story(5).end <= offset + 9);
-    assert_eq!(
-        scroll_offset(0, total, &story(5), &context(5, 10), 3),
-        story(5).start
-    );
-    assert_eq!(
-        scroll_offset(0, total, &story(5), &context(5, 10), 0),
-        story(5).start.min(total)
-    );
+    assert!(rows[0].starts_with("━━ latest"), "{:?}", rows[0]);
 }
 
 /// A #lounge card is the story in six rows, the art down the right: the

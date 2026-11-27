@@ -41,6 +41,13 @@ is_termux() {
   [[ -n "${TERMUX_VERSION:-}" ]] || [[ "${PREFIX:-}" == "/data/data/com.termux/files/usr" ]]
 }
 
+# NixOS has no /lib64/ld-linux-x86-64.so.2 or FHS library paths, so the
+# prebuilt glibc binaries only start under nix-ld. The flake is the supported
+# route there; the install still proceeds for users who run nix-ld.
+is_nixos() {
+  [[ -e /etc/NIXOS ]] || { [[ -r /etc/os-release ]] && grep -Eq '^ID="?nixos"?$' /etc/os-release; }
+}
+
 is_windows_shell() {
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
@@ -335,6 +342,8 @@ Environment:
                                    (default: the GitHub Release assets)
   LATE_INSTALL_VERSION             Use a specific version instead of latest
   LATE_INSTALL_DIR                 Override the install directory
+  LATE_INSTALL_NO_MODIFY_PATH      Set to 1 to leave shell startup files alone
+                                   when the install directory is not on PATH
 EOF
         exit 0
         ;;
@@ -403,13 +412,23 @@ main() {
     *":${target_dir}:"*)
       ;;
     *)
-      if [[ "${EUID:-$(id -u)}" -ne 0 ]] && ! is_termux; then
+      # The CLI's own update sets this: it installs over the binary that is
+      # running, wherever that is, and one key press must not edit a shell
+      # startup file.
+      if [[ "${LATE_INSTALL_NO_MODIFY_PATH:-}" == "1" ]]; then
+        log_verbose "${target_dir} is not on PATH, left alone (LATE_INSTALL_NO_MODIFY_PATH)"
+      elif [[ "${EUID:-$(id -u)}" -ne 0 ]] && ! is_termux; then
         ensure_path_in_shell_rc "$target_dir"
       else
         log "warning: ${target_dir} is not currently on PATH"
       fi
       ;;
   esac
+
+  if is_nixos; then
+    log "warning: detected NixOS; prebuilt binaries only start under nix-ld, and embedded YouTube playback also needs GStreamer paths nix-ld does not set"
+    log "warning: use the flake instead: nix run github:mpiorowski/late-sh#late"
+  fi
 
   if [[ "$target" == *-windows-* ]]; then
     log "run 'late.exe --help' to verify the install"

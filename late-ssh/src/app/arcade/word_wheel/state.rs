@@ -264,12 +264,14 @@ impl State {
         }
     }
 
-    /// Today's wheel has a word found and Gold, the last paid rank, is
-    /// still ahead.
+    /// Today's wheel has a word found and no win yet: Bronze, the first paid
+    /// rank, is still ahead. The wheel has no end short of every word, so
+    /// the first win is where it leaves the backtick cycle, like a solved
+    /// daily; Silver and Gold are still there to chase from the Arcade.
     pub fn has_unfinished_daily(&self) -> bool {
         self.wheel.is_some()
             && !self.found.is_empty()
-            && self.rank() < Rank::Gold
+            && self.rank() < Rank::Bronze
             && self.puzzle_date == self.svc.today()
     }
 

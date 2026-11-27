@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -16,9 +16,6 @@ use super::door_run::DoorRunResult;
 /// timestamptz twin is `chips::MONTH_TS_FILTER`, shared with the profile's
 /// "earned this month" figure.
 const MONTH_DATE_FILTER: &str = "date_trunc('month', now() AT TIME ZONE 'UTC')::date";
-/// Start of the current UTC calendar year, the timestamptz twin of
-/// `chips::MONTH_TS_FILTER` for the boards with a yearly window.
-const YEAR_TS_FILTER: &str = "date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// Rows kept per board. Deep enough that the page can show an around-you
 /// tail for almost everyone; RANK ties can push slightly past it.
 const BOARD_DEPTH: i64 = 500;
@@ -107,6 +104,12 @@ roster!(
 /// The `difficulty_key` of a single-tier puzzle's one board: the `detail` of
 /// its `GameWon`, its reward-template key, its daily-status rows.
 pub const SINGLE_TIER_KEY: &str = "daily";
+
+/// dopewars' `door_runs.game` key. The door is not on the roguelike board
+/// roster (`DoorGame`): it has no wins/depth families, only one score board
+/// (a player's best final net worth), so it rides `fetch_door_boards`'
+/// single query and is split out by this key.
+pub const DOPEWARS_GAME_KEY: &str = "dopewars";
 
 /// The three tiers a keyed daily with easy/medium/hard boards pays.
 const THREE_TIERS: &[(&str, Difficulty)] = &[
@@ -375,14 +378,6 @@ pub struct BoardWindows {
     pub all_time: Vec<RankedEntry>,
 }
 
-/// The current UTC month and the current UTC year of one board (Top
-/// Drinkers), for a race that resets rather than one kept forever.
-#[derive(Clone, Default)]
-pub struct MonthYearWindows {
-    pub monthly: Vec<RankedEntry>,
-    pub yearly: Vec<RankedEntry>,
-}
-
 /// One stretch of a user's presence on one process: the wall-clock span the
 /// user was connected throughout, in the UTC month it began. A batch can
 /// carry a user more than once: a reconnect inside one checkpoint, or
@@ -502,19 +497,39 @@ pub struct DoorBoards {
     pub score: BoardWindows,
 }
 
-/// Every user's daily marks, stamped with the UTC day they were read for. The
-/// snapshot refreshes every few minutes, so for a while after midnight it
-/// still holds yesterday's; reading through [`DailyStatuses::on`] keeps those
-/// off today's puzzles.
+/// Every user's daily marks and the day's rung stars (`daily_rung_stars`),
+/// stamped with the UTC day they were read for. The snapshot refreshes
+/// every few minutes, so for a while after midnight it still holds
+/// yesterday's; reading through [`DailyStatuses::on`] and
+/// [`DailyStatuses::starred_on`] keeps those off today's puzzles.
 #[derive(Clone, Default)]
 pub struct DailyStatuses {
     day: NaiveDate,
     by_user: HashMap<Uuid, DailyCompletionStatus>,
+    starred: HashSet<Uuid>,
 }
 
 impl DailyStatuses {
-    pub fn new(day: NaiveDate, by_user: HashMap<Uuid, DailyCompletionStatus>) -> Self {
-        Self { day, by_user }
+    pub fn new(
+        day: NaiveDate,
+        by_user: HashMap<Uuid, DailyCompletionStatus>,
+        starred: HashSet<Uuid>,
+    ) -> Self {
+        Self {
+            day,
+            by_user,
+            starred,
+        }
+    }
+
+    /// Who has the star of `today`'s rung: nobody once `today` has moved
+    /// past the day the snapshot was read for.
+    pub fn starred_on(&self, today: NaiveDate) -> &HashSet<Uuid> {
+        static NOBODY: LazyLock<HashSet<Uuid>> = LazyLock::new(HashSet::new);
+        match self.day == today {
+            true => &self.starred,
+            false => &NOBODY,
+        }
     }
 
     /// The marks for `today`: none at all once `today` has moved past the
@@ -528,6 +543,23 @@ impl DailyStatuses {
     }
 }
 
+/// Four races over one UTC calendar month. The stamp keeps last month's
+/// standings off the page while the coarse refresh catches up at midnight.
+#[derive(Clone, Default)]
+pub struct TopChatBoards {
+    pub month_start: NaiveDate,
+    pub all_rooms: Vec<RankedEntry>,
+    pub outside_lounge: Vec<RankedEntry>,
+    pub daily_streak: Vec<RankedEntry>,
+    pub news_posts: Vec<RankedEntry>,
+}
+
+impl TopChatBoards {
+    pub fn in_month(&self, today: NaiveDate) -> bool {
+        self.month_start == today.with_day(1).expect("first of month")
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LeaderboardData {
     pub today_champions: Vec<LeaderboardEntry>,
@@ -536,12 +568,14 @@ pub struct LeaderboardData {
     pub monthly_chip_earners: Vec<RankedEntry>,
     pub arcade_champions: Vec<RankedEntry>,
     pub online_time: BoardWindows,
-    /// Buzz points from every drink taken (`drink_pours`), whatever bar
-    /// poured it and whoever paid.
-    pub top_drinkers: MonthYearWindows,
+    pub top_chat: TopChatBoards,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
     pub door_boards: HashMap<DoorGame, DoorBoards>,
+    /// dopewars' single board: each player's best final net worth
+    /// (Cash + Bank - Debt), monthly and all-time. Fed by the host's
+    /// append-only run log of every finished game.
+    pub dopewars_scores: BoardWindows,
     /// Living Lateania characters by level (ties broken by experience), the
     /// character's class carried in `note`. Past the level cap the value keeps
     /// climbing in paragon levels (see `LATEANIA_XP_PER_PARAGON_LEVEL`).
@@ -949,14 +983,16 @@ pub async fn day_lobby_starts(client: &Client, day: NaiveDate) -> Result<Vec<Lob
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
+    let today = Utc::now().date_naive();
     let (
         today_champions,
-        user_daily_statuses,
+        daily_marks,
+        starred_today,
         user_chips,
         monthly_chip_earners,
         arcade_champions,
         online_time,
-        top_drinkers,
+        top_chat,
         daily_monthly,
         daily_all_time,
         score_monthly,
@@ -967,12 +1003,13 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         door_all_time,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
-        fetch_daily_statuses(client, Utc::now().date_naive()),
+        fetch_daily_marks(client, today),
+        super::daily_rung::starred_on(client, today),
         UserChips::all_balances(client),
         fetch_monthly_chip_earners(client, BOARD_DEPTH),
         fetch_arcade_champions(client, BOARD_DEPTH),
         fetch_online_time(client, BOARD_DEPTH),
-        fetch_top_drinkers(client, BOARD_DEPTH),
+        fetch_top_chat(client, today, BOARD_DEPTH),
         fetch_daily_win_boards(client, DailyWindow::Monthly),
         fetch_daily_win_boards(client, DailyWindow::AllTime),
         fetch_score_boards(client, ScoreWindow::Monthly),
@@ -982,6 +1019,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_door_boards(client, DoorWindow::Monthly),
         fetch_door_boards(client, DoorWindow::AllTime),
     )?;
+    let (door_monthly, dopewars_monthly) = door_monthly;
+    let (door_all_time, dopewars_all_time) = door_all_time;
 
     let door_boards = DoorGame::ALL
         .iter()
@@ -1032,18 +1071,107 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
 
     Ok(LeaderboardData {
         today_champions,
-        user_daily_statuses,
+        user_daily_statuses: DailyStatuses::new(today, daily_marks, starred_today),
         user_chips,
         monthly_chip_earners,
         arcade_champions,
         online_time,
-        top_drinkers,
+        top_chat,
         daily_boards,
         score_boards,
         door_boards,
+        dopewars_scores: BoardWindows {
+            monthly: dopewars_monthly,
+            all_time: dopewars_all_time,
+        },
         lateania_adventurers,
         lateania_pvp,
     })
+}
+
+/// One bounded read for all four panels. Reduce messages to at most 31 rows
+/// per user before finding runs; no gaps-and-islands scan over full history.
+pub(super) async fn fetch_top_chat(
+    client: &Client,
+    today: NaiveDate,
+    limit: i64,
+) -> Result<TopChatBoards> {
+    let month_start = today.with_day(1).expect("first of month");
+    let rows = client.query(
+        "WITH chat_days AS MATERIALIZED (
+            SELECT m.user_id, (m.created AT TIME ZONE 'UTC')::date AS day,
+                   COUNT(*)::bigint AS messages,
+                   COUNT(*) FILTER (WHERE r.kind <> 'lounge')::bigint AS outside
+            FROM chat_rooms r
+            JOIN chat_messages m ON m.room_id = r.id
+            JOIN users u ON u.id = m.user_id
+            WHERE r.visibility = 'public'
+              AND m.created >= ($1::date::timestamp AT TIME ZONE 'UTC')
+              AND m.created < (($1::date + INTERVAL '1 month') AT TIME ZONE 'UTC')
+              AND (m.created AT TIME ZONE 'UTC')::date <= $2
+              AND NOT m.is_news_card
+              AND NOT EXISTS (
+                  SELECT 1 FROM articles a WHERE a.lounge_message_id = m.id
+                    AND a.created >= ($1::date::timestamp AT TIME ZONE 'UTC')
+                    AND a.created < (($1::date + INTERVAL '1 month') AT TIME ZONE 'UTC')
+              )
+              AND COALESCE(u.settings->'bot', 'false'::jsonb) <> 'true'::jsonb
+              AND COALESCE(u.settings->'system', 'false'::jsonb) <> 'true'::jsonb
+              AND m.body !~* '(^|[^a-z0-9_.-])@bartender[.]*($|[^a-z0-9_.-])'
+            GROUP BY m.user_id, (m.created AT TIME ZONE 'UTC')::date
+        ), runs AS (
+            SELECT user_id, day - (ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY day))::int AS run
+            FROM chat_days
+        ), run_lengths AS (
+            SELECT user_id, COUNT(*)::bigint AS days FROM runs GROUP BY user_id, run
+        ), totals AS (
+            SELECT 'all_rooms' AS metric, user_id, SUM(messages)::bigint AS value
+            FROM chat_days GROUP BY user_id
+            UNION ALL
+            SELECT 'outside_lounge', user_id, SUM(outside)::bigint
+            FROM chat_days GROUP BY user_id HAVING SUM(outside) > 0
+            UNION ALL
+            SELECT 'daily_streak', user_id, MAX(days) FROM run_lengths GROUP BY user_id
+            UNION ALL
+            SELECT 'news_posts', a.user_id, COUNT(*)::bigint
+            FROM articles a JOIN users u ON u.id = a.user_id
+            WHERE a.created >= ($1::date::timestamp AT TIME ZONE 'UTC')
+              AND a.created < (($1::date + INTERVAL '1 month') AT TIME ZONE 'UTC')
+              AND (a.created AT TIME ZONE 'UTC')::date <= $2
+              AND COALESCE(u.settings->'bot', 'false'::jsonb) <> 'true'::jsonb
+              AND COALESCE(u.settings->'system', 'false'::jsonb) <> 'true'::jsonb
+            GROUP BY a.user_id
+        ), ranked AS (
+            SELECT metric, user_id, value,
+                   RANK() OVER (PARTITION BY metric ORDER BY value DESC) AS rank
+            FROM totals
+        )
+        SELECT metric, ranked.user_id, u.username, value, rank
+        FROM ranked JOIN users u ON u.id = ranked.user_id
+        WHERE rank <= $3 ORDER BY metric, rank, u.username",
+        &[&month_start, &today, &limit],
+    ).await?;
+    let mut boards = TopChatBoards {
+        month_start,
+        ..TopChatBoards::default()
+    };
+    for row in rows {
+        let entries = match row.get::<_, &str>("metric") {
+            "all_rooms" => &mut boards.all_rooms,
+            "outside_lounge" => &mut boards.outside_lounge,
+            "daily_streak" => &mut boards.daily_streak,
+            "news_posts" => &mut boards.news_posts,
+            _ => unreachable!("closed Top Chat metric"),
+        };
+        entries.push(RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            value: row.get("value"),
+            rank: row.get("rank"),
+            note: None,
+        });
+    }
+    Ok(boards)
 }
 
 /// One user's lifetime connected time, as last flushed. Zero for a user
@@ -1185,16 +1313,18 @@ struct DoorWindowBoards {
 /// arm only reads `absdepth` values that are purely numeric: `raw` stores the
 /// log line's fields as uninterpreted strings, and an unguarded cast would
 /// let one malformed value error this query and take every board down with
-/// it.
+/// it. dopewars rides the same query for its one score board and is split
+/// out by [`DOPEWARS_GAME_KEY`], so the refresh stays at sixteen queries.
 async fn fetch_door_boards(
     client: &Client,
     window: DoorWindow,
-) -> Result<HashMap<DoorGame, DoorWindowBoards>> {
-    let keys: String = DoorGame::ALL
+) -> Result<(HashMap<DoorGame, DoorWindowBoards>, Vec<RankedEntry>)> {
+    let mut keys: Vec<String> = DoorGame::ALL
         .iter()
         .map(|game| format!("'{}'", game.key()))
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    keys.push(format!("'{DOPEWARS_GAME_KEY}'"));
+    let keys = keys.join(", ");
     let win_results: String = DoorRunResult::WINS
         .iter()
         .map(|result| format!("'{}'", result.key()))
@@ -1262,9 +1392,8 @@ async fn fetch_door_boards(
         .await?;
 
     let mut boards: HashMap<DoorGame, DoorWindowBoards> = HashMap::new();
+    let mut dopewars = Vec::new();
     for row in rows {
-        let game =
-            DoorGame::from_key(row.get("game")).expect("door board row game key from roster");
         let entry = RankedEntry {
             username: row.get("username"),
             user_id: row.get("user_id"),
@@ -1272,15 +1401,27 @@ async fn fetch_door_boards(
             value: row.get("value"),
             note: None,
         };
+        let family: &str = row.get("family");
+        // dopewars is off the roguelike roster and has only the score family
+        // (its runs never win and carry no depth); the query leaves it there
+        // naturally, so splitting it out here costs no extra round trip.
+        if row.get::<_, &str>("game") == DOPEWARS_GAME_KEY {
+            if family == "score" {
+                dopewars.push(entry);
+            }
+            continue;
+        }
+        let game =
+            DoorGame::from_key(row.get("game")).expect("door board row game key from roster");
         let board = boards.entry(game).or_default();
-        match row.get::<_, &str>("family") {
+        match family {
             "wins" => board.wins.push(entry),
             "depth" => board.depth.push(entry),
             "score" => board.score.push(entry),
             other => unreachable!("door board family {other} not produced by this query"),
         }
     }
-    Ok(boards)
+    Ok((boards, dopewars))
 }
 
 /// Lateania's level curve at the cap, mirrored from
@@ -1467,69 +1608,6 @@ async fn fetch_online_time(client: &Client, limit: i64) -> Result<BoardWindows> 
             "monthly" => windows.monthly.push(entry),
             "all_time" => windows.all_time.push(entry),
             other => unreachable!("online time window {other} not produced by this query"),
-        }
-    }
-    Ok(windows)
-}
-
-/// Top Drinkers: the buzz points of every drink taken this UTC month and
-/// this UTC year. A drink counts what it poured, never what it cost, so a
-/// round's free drink counts like a paid one and paying for others counts
-/// nothing; the welcome pour is never logged.
-async fn fetch_top_drinkers(client: &Client, limit: i64) -> Result<MonthYearWindows> {
-    let rows = client
-        .query(
-            &format!(
-                "WITH totals AS (
-                    SELECT 'monthly'::text AS period,
-                           user_id,
-                           SUM(points)::bigint AS value
-                    FROM drink_pours
-                    WHERE created >= {MONTH_TS_FILTER}
-                    GROUP BY user_id
-                    HAVING SUM(points) > 0
-                    UNION ALL
-                    SELECT 'yearly'::text AS period,
-                           user_id,
-                           SUM(points)::bigint AS value
-                    FROM drink_pours
-                    WHERE created >= {YEAR_TS_FILTER}
-                    GROUP BY user_id
-                    HAVING SUM(points) > 0
-                ),
-                ranked AS (
-                    SELECT totals.period,
-                           u.username,
-                           totals.user_id,
-                           totals.value,
-                           RANK() OVER (
-                               PARTITION BY totals.period ORDER BY totals.value DESC
-                           ) AS rank
-                    FROM totals
-                    JOIN users u ON u.id = totals.user_id
-                )
-                SELECT period, username, user_id, value, rank
-                FROM ranked
-                WHERE rank <= $1
-                ORDER BY period ASC, rank ASC, username ASC"
-            ),
-            &[&limit],
-        )
-        .await?;
-
-    let mut windows = MonthYearWindows::default();
-    for row in rows {
-        let entry = RankedEntry {
-            username: row.get("username"),
-            user_id: row.get("user_id"),
-            rank: row.get("rank"),
-            value: row.get("value"),
-            note: None,
-        };
-        match row.get::<_, &str>("period") {
-            "monthly" => windows.monthly.push(entry),
-            "yearly" => windows.yearly.push(entry),
-            other => unreachable!("top drinkers window {other} not produced by this query"),
         }
     }
     Ok(windows)
@@ -1839,7 +1917,10 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
 
 /// Every user's marks on `day`, a UTC date the caller reads once so the
 /// stamp and the rows name the same day.
-async fn fetch_daily_statuses(client: &Client, day: NaiveDate) -> Result<DailyStatuses> {
+async fn fetch_daily_marks(
+    client: &Client,
+    day: NaiveDate,
+) -> Result<HashMap<Uuid, DailyCompletionStatus>> {
     let arms: String = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| {
@@ -1872,5 +1953,5 @@ async fn fetch_daily_statuses(client: &Client, day: NaiveDate) -> Result<DailySt
             .mark_completed(game, difficulty);
     }
 
-    Ok(DailyStatuses::new(day, statuses))
+    Ok(statuses)
 }

@@ -94,3 +94,11 @@ fn a_click_lands_on_the_tile_the_frame_drew() {
         );
     }
 }
+
+/// The lent board fits wherever its frame can hold five tiles a side; a
+/// strip too short for that has nothing to play.
+#[test]
+fn the_lent_board_fits_a_default_page_and_not_a_strip() {
+    assert!(lent_board_fits(Rect::new(1, 1, 78, 15)));
+    assert!(!lent_board_fits(Rect::new(1, 1, 78, 2)));
+}

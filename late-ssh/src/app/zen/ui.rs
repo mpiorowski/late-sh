@@ -77,7 +77,7 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
         Some(badge) => {
             let fixed = UnicodeWidthStr::width(kind) + " · ".width() + 1 + badge.width();
             let budget = (width as usize).saturating_sub(4 + fixed);
-            let label = crate::app::chat::ui::truncate_cells(label, budget);
+            let label = crate::app::common::primitives::truncate_cells(label, budget);
             format!("{kind} · {label} {badge}")
         }
     }
@@ -138,9 +138,9 @@ pub(crate) struct ZenView<'a> {
     pub lobby_glow: bool,
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
     pub activity: &'a [ActivityTickerEntry],
-    /// Today's all-day board posts (`calendar::live::day_text`), the banner
-    /// across the top of every tile; `None` on any other day.
-    pub board_day: Option<&'a str>,
+    /// Today's board posts (`calendar::banner::day_posts`), the banner
+    /// across the top of every tile; empty on a day the board has none.
+    pub board_day: &'a [crate::app::calendar::banner::DayPost],
     /// The Live panel's rows, for the Live tile: it draws
     /// them the same way and records the same click and key targets.
     pub live_panel: LivePanelProps<'a>,
@@ -169,9 +169,9 @@ pub(crate) fn draw_rice(
         );
         return;
     }
-    let areas = layout::rice_areas(area, view.board_day.is_some(), view.zen.arrange);
-    if let (Some(row), Some(text)) = (areas.banner, view.board_day) {
-        draw_board_day(frame, row, text);
+    let areas = layout::rice_areas(area, !view.board_day.is_empty(), view.zen.arrange);
+    if let Some(row) = areas.banner {
+        draw_board_day(frame, row, view.board_day);
     }
     let tiles_area = areas.tiles;
     // One frame per chat tile in layout order.
@@ -899,10 +899,10 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
     frame.render_widget(Paragraph::new(lines), below);
 }
 
-/// The board's day across the top of Home, over every tile: today's
-/// all-day posts in amber, the board's colour, the board's key flush right
-/// in the strip's key style, one column in from each edge.
-fn draw_board_day(frame: &mut Frame, row: Rect, text: &str) {
+/// The board's day across the top of Home, over every tile: today's posts
+/// sharing the one row (`calendar::banner::day_spans`), the board's key
+/// flush right in the strip's key style, one column in from each edge.
+fn draw_board_day(frame: &mut Frame, row: Rect, posts: &[crate::app::calendar::banner::DayPost]) {
     let row = Rect::new(
         row.x.saturating_add(1),
         row.y,
@@ -920,11 +920,8 @@ fn draw_board_day(frame: &mut Frame, row: Rect, text: &str) {
     let hint_width: usize = hint.iter().map(|span| span.width()).sum();
     let text_room = width.saturating_sub(hint_width + 1);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            crate::app::chat::ui::truncate_cells(text, text_room),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
+        Paragraph::new(Line::from(crate::app::calendar::banner::day_spans(
+            posts, text_room,
         ))),
         row,
     );
@@ -995,7 +992,7 @@ fn draw_attention_tile(
             let act = item.act();
             let head = format!("{} ", item.glyph());
             let budget = width.saturating_sub(head.width() + act.width() + 1);
-            let words = crate::app::chat::ui::truncate_cells(&item.label(), budget);
+            let words = crate::app::common::primitives::truncate_cells(&item.label(), budget);
             let pad = width.saturating_sub(head.width() + words.width() + act.width());
             Line::from(vec![
                 Span::styled(head, head_style),

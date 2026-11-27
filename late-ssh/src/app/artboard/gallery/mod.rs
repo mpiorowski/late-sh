@@ -2,6 +2,7 @@
 //! monthly award, and the page rail that puts them in front of people.
 //! See `late-ssh/src/app/artboard/gallery/CONTEXT.md`.
 
+pub mod card;
 pub mod frame;
 pub mod input;
 pub mod state;

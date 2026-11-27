@@ -50,7 +50,9 @@ Owned by this domain:
 Out of scope (deliberate v1 boundaries):
 - Viewer talk-back / viewer mics, general browser voice rooms, recording,
   past-streams pages, quality settings, multi-presenter, web-side chat.
-- Routing stream media into the CLI audio path (the stream lives in a page).
+- Mixing stream media into CLI voice: the voice runtime plays human mics
+  only. A stream's picture and program audio play on the watch page, or in
+  the terminal through the paired CLI's own stream viewer (item 3 below).
 - A public `late.sh/live` index. Access is **unlisted, not public, not
   authed**: watch URLs carry a random per-stream id, shown only in-app,
   dead when the stream ends.
@@ -70,7 +72,8 @@ Cross-domain touchpoints:
 - `late-core/src/models/chat_room.rs::get_or_create_stream_room`: the
   permanent per-streamer room: `kind='game'`, `game_kind='stream'`, slug
   `{username}-live`, public. Chat history persists between streams; `kind='game'`
-  keeps it out of the normal rail/IRC surfaces, and the public game-room
+  keeps it out of the normal rail/IRC surfaces (unless the viewer favorites
+  it), and the public game-room
   join path (`ChatService::join_game_room_task`) lets anyone enter from the
   rail. `game_kind` is free-form TEXT, so the kind needs no migration. The room
   follows the **account**, not the name: lookup is by `created_by` first, so
@@ -136,15 +139,25 @@ Cross-domain touchpoints:
 - `app/chat/state.rs` / `app/chat/ui.rs`: `ChatState::live_streams` (copied
   from the registry watch ~1/s in `App::tick_stream`, epoch-bumped on
   change), the rail's `RoomSection::Stream` (under Core, above
-  Cyberspace/Channels, live streams only: a pending stream has no row; the
+  Cyberspace/Channels, live streams only: a pending stream has no row, and a
+  stream room the viewer favorited (`f` on its row, or `/fav` inside it)
+  rides in Favorites instead, where it stays after the stream ends; the
   `Ctrl+/` room picker lists the same live streams as `#{username}-live`,
   pickable before joining), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
-  room's chat (title, watcher count, watch-URL nudge; the URL carries a
+  room's chat (title, watcher count, the `/watch to stop` / `/watch to
+  play` hint for a session that can play it in the terminal, watch-URL
+  nudge; the URL carries a
   trailing space so it never lands in the last column, where terminal link
   detection swallows the pane border `│` or the `────` rule below it and
   hands the clicker a 404), and the stream-room arm in `select_room_slot`
-  (lazy join on first open).
+  (lazy join on first open). The header also records the room whose live
+  stream row it drew in `ChatState::last_stream_room_drawn` (reset every
+  frame), which is where a stream starts playing by itself. A bare
+  `/watch` records `StreamWatchRequest::Toggle` (carrying the selected
+  room when its stream is live), `/watch @user` records
+  `StreamWatchRequest::User`, and `App::tick_stream` consumes either. The
+  rail row of the stream this session is playing leads with `♪`.
 - `app/voice/ui.rs::OnAirView`: the ⦿ ON AIR strip marker while the
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
@@ -152,7 +165,38 @@ Cross-domain touchpoints:
   `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
   `voice_toggle_join`'s one-time ON AIR confirm, `StreamQrModal`.
 - `paired_clients.rs` / `late-cli/src/ws.rs`: `PairControlMessage::OpenUrl`
-  + the `open_url` capability (xdg-open/open/cmd start).
+  + the `open_url` capability (xdg-open/open/cmd start: the browser, for
+  `/watch @user` and the `/golive` console, whose `getDisplayMedia` needs a
+  real one).
+- `app/video` (`video::svc::auto_watch`, `toggle_stream`): a live stream
+  room on screen plays its stream by itself in the terminal, inline in the
+  room's own pane, between the header and the messages, so the chat stays
+  usable; F4 hides the messages so the picture takes the whole pane, and a
+  click on the picture takes it full screen. A bare `/watch` is
+  the session's switch: it stops the stream and keeps stream rooms quiet
+  until typed again (`video/CONTEXT.md`, "Live streams"). It is the News
+  video player underneath. `StreamService::cli_watch` hands it
+  what the paired CLI needs: the watch page's subscribe-only ticket
+  (`watch_grant`, under a `cli-{session}` watcher id), the title and
+  streamer for the player's header (and the streamer's id, so a streamer
+  is not played their own stream unasked), the watch URL for a failed
+  play, and the voices rule below. The CLI receives the stream itself with the
+  LiveKit SDK it links for voice and feeds its mpv
+  (`PairControlMessage::VideoPlayStream`, the `video_stream` capability;
+  `late-cli/VIDEO.md`, "Live streams"): no browser, and no webview, since
+  WebKitGTK ships without WebRTC. While the player is up `video::svc::tick`
+  calls `watch_heartbeat` once a second, which keeps the viewer in the
+  watcher count and closes the player when the stream is gone. The same
+  second asks `cli_voices` whether the room's voices still belong in the
+  stream: a viewer who joins or leaves the stream's voice channel mid-play
+  gets `PairControlMessage::VideoVoices`, so they never hear the room twice
+  or not at all. Leaving the
+  room, or opening a modal over it, only hides the picture
+  (`PairControlMessage::VideoHide`): the stream plays on, heard, and the
+  viewer still counts as watching. A session whose CLI cannot play it (no
+  CLI, an older one, no kitty-graphics terminal, tmux, no mpv) sees
+  nothing start, and one banner pointing at `/watch @user` if it types
+  `/watch`: there is no fallback.
 - `late-cli/src/voice.rs`: the audio-only voice runtime unsubscribes from
   any remote video track (`publication.set_subscribed(false)`), so a CLI
   voice participant in a stream room never downloads the screen share. Same
@@ -160,8 +204,10 @@ Cross-domain touchpoints:
   non-`stream-*` identities play. Any `stream-*` publisher (OBS ingress,
   go-live console) is program audio whatever source label it carries, since
   the ingress label may not survive transcoding-off passthrough. One audio
-  path per sound: program audio lives on the watch page; CLI voice carries
-  human voices; a streamer talks through CLI voice like everyone else.
+  path per sound: program audio lives on the watch page or in the CLI's
+  stream viewer (`late-cli/src/stream_view.rs`, which shares the
+  `stream-` prefix constant with this rule); CLI voice carries human
+  voices; a streamer talks through CLI voice like everyone else.
 - `main.rs`: service construction and the 5s sweeper task.
 
 ## 3. Lifecycle
@@ -198,7 +244,17 @@ Cross-domain touchpoints:
    poll reconnects in place, never stranding a viewer on "reload to retry". Note the two halves take different network paths
    (the page over HTTPS to `late.sh`, media over WebRTC to `rtc.late.sh`),
    so a working page with no picture is a normal failure mode and the status
-   line says so after three failures.
+   line says so after three failures. `/watch @user` composes the URL with
+   `StreamService::watch_url_for_username`, which appends `?voices=off`
+   when the viewer sits in that stream room's voice channel: they already
+   hear the voices through the terminal, so the page starts with its voices
+   toggle off (one audio path per sound); the toggle still works. Every
+   other watch URL (the room header's nudge, the rail) is bare, except the
+   one a stream played in the terminal offers when its play fails:
+   `cli_watch` applies the same rule to that URL and tells the CLI whether
+   to play the room's voices (`voices`). The rule is written once
+   (`watch_voices`), and `cli_voices` reads it again every second of a
+   play, since the viewer can join or leave voice while watching.
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -232,7 +288,8 @@ Cross-domain touchpoints:
      the rail record intent, `App` owns the service.
 4. Ending: `/golive stop`, or close the tab / stop sharing → grace
    (~30s, survives a refresh) → the registry sweeps the stream, watch and
-   publisher URLs die, the rail row disappears. A registered stream whose
+   publisher URLs die, the stream-section row disappears (a favorited
+   stream room keeps its Favorites row). A registered stream whose
    page never reports media is swept after 5 minutes. **Teardown kills the
    media, not just the URLs**: every path out of the registry (`stop`, a
    moderation voice kick, grace/pending sweep) also force-disconnects the
@@ -284,8 +341,9 @@ Cross-domain touchpoints:
    open a mic.
 5. **Voice is CLI-only, zero exceptions.** The publish grant carries
    `screen_share`/`screen_share_audio` only; a streamer talks through CLI
-   voice like everyone else (macOS included). One audio path per sound: program audio lives on the watch
-   page, voices live in CLI voice; see `../voice/CONTEXT.md` §7/§10.
+   voice like everyone else (macOS included). One audio path per sound:
+   program audio lives on the watch page or in the CLI's stream viewer,
+   voices live in CLI voice; see `../voice/CONTEXT.md` §7/§10.
 
 ## 5. Testing
 
@@ -325,7 +383,35 @@ Cross-domain touchpoints:
   through a rename; a reclaimed username does not inherit the old room.
 - `svc_test.rs`: the stream-ban gate on `go_live`: a banned user is refused
   with no half-registered stream left behind, an expired row does not block
-  (expiry is read-time only), and lifting the ban restores `/golive`.
+  (expiry is read-time only), and lifting the ban restores `/golive`; the
+  watch URL carries `?voices=off` only when asked.
+- `chat/ui_test.rs::stream_header_says_what_watch_does_for_a_session_that_can_play`:
+  a live stream's row leads its right side with `/watch to stop` or
+  `/watch to play`, keeps that switch over the link in a row too tight for
+  both, and says nothing about `/watch` while pending.
+- `chat/state_internal_test.rs::bare_watch_toggles_streams_with_the_selected_rooms_live_stream`:
+  a bare `/watch` always records the toggle, carrying the selected room
+  only while its stream is live, and `/watch @user` stays the browser
+  request.
+- `video/state_test.rs`: a live stream sits in its room until taken full
+  screen, hides its picture and plays on when its room leaves the screen,
+  starts by itself while the switch is on, plays from its ticket
+  (`video_play_stream`), has no pause, seek or position, ends when the
+  stream does, offers its watch page when it fails, and never prints its
+  token.
+- `chat/ui_test.rs::room_header_seats_an_inline_stream_above_the_messages`
+  and `room_header_gives_a_stream_no_rows_in_a_pane_too_short_for_it`: the
+  picture's rows, the rectangle reported to the player, the drawn-room
+  cell, and a short pane that draws no picture;
+  `stream_rail_label_is_the_username_and_a_bracketed_watcher_count` covers
+  the `♪` marker.
+- `stream/svc_test.rs::a_viewer_in_the_streams_voice_channel_gets_no_voices_with_the_stream`:
+  the one voices rule, for the page and the CLI.
+- `late-cli/src/ws_test.rs`: `video_play_stream`, `video_hide` and
+  `video_voices` deserialize from their wire names. `late-cli/src/video_test.rs`: the mpv command line for a stream,
+  and `video_stream` needing everything but yt-dlp.
+  `late-cli/src/stream_view_test.rs`: the canvas, the fit, the composed
+  frame, and the voices rule.
 - `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`:
   `/mod ban stream` tears a live stream out of the registry and writes the
   row; `/mod unban stream` clears it.
@@ -346,7 +432,7 @@ Cross-domain touchpoints:
 - `late-cli/src/voice_test.rs`: the `keep_remote_audio` policy: other
   users' mics play; `stream-*` publishers (any source label) and all
   program audio never do.
-- LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh --lib -E
+- LLM agents run targeted tests via `make test ARGS="-p late-ssh --lib -E
   'test(stream)'"`; never raw cargo test.
 
 ## 6. Moderation

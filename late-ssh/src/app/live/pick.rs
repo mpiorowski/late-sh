@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::app::door::spectate::state::LiveGameKey;
 
 /// What the live strip can show, and the panel rows it shares with the
-/// strip (a stream, a game, an event; `panel::PanelTarget`). Closed:
+/// strip (a stream, a game; `panel::PanelTarget`). Closed:
 /// a new source has to say its minimum (`min_for`), what it looks like
 /// (`ui.rs`), and what the keys do to it (`input.rs`) before it builds. The
 /// order of the variants only breaks a tie between two stamps of the same
@@ -41,10 +41,6 @@ pub enum LiveSource {
     /// Brogue), by its door and the player's handle (one live game per
     /// player per door).
     DoorGame(LiveGameKey),
-    /// An event on the board an hour before it starts, and again when it
-    /// starts, by event id. The viewer's own personal events ride it too,
-    /// for the viewer alone.
-    BoardEvent(Uuid),
     /// The house's standing world, by game id: its last moment (a rise, an
     /// arrival, a take, a fall, the end), stamped by the write that made it.
     Realm(Uuid),
@@ -63,9 +59,6 @@ pub const LIVE_STREAM_MIN: Duration = Duration::from_secs(2 * 60);
 /// A door game that just started stays up at least this long, the same as a
 /// stream: long enough to see who is playing and hop in to watch.
 pub const LIVE_DOOR_GAME_MIN: Duration = Duration::from_secs(2 * 60);
-/// A board event stays up at least this long, the same as a stream: long
-/// enough to read what it is and press the key.
-pub const LIVE_BOARD_EVENT_MIN: Duration = Duration::from_secs(2 * 60);
 /// With nothing waiting, whatever is up comes down this long after it went
 /// up: the strip is for what just happened.
 pub const LIVE_MAX_UP: Duration = Duration::from_secs(5 * 60);
@@ -91,7 +84,6 @@ fn min_for(source: LiveSource) -> chrono::Duration {
         LiveSource::BoothTrack(_) => LIVE_TRACK_MIN,
         LiveSource::Stream(_) => LIVE_STREAM_MIN,
         LiveSource::DoorGame(_) => LIVE_DOOR_GAME_MIN,
-        LiveSource::BoardEvent(_) => LIVE_BOARD_EVENT_MIN,
     })
 }
 

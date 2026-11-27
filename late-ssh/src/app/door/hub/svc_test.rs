@@ -15,7 +15,10 @@ use crate::app::door::hub::state::HubGame;
 #[tokio::test]
 async fn an_opening_is_written_and_every_card_knows_its_key() {
     let test = test_db().await;
-    let service = GamesHubService::new(test.db.clone());
+    let service = GamesHubService::new(
+        test.db.clone(),
+        crate::app::games::chips::svc::ChipService::new(test.db.clone()),
+    );
     let player = create_test_user(&test.db, "hub-player").await;
     for card in [DoorCard::Brogue, DoorCard::Brogue, DoorCard::Zork] {
         service.record(player.id, card).await.expect("record");
