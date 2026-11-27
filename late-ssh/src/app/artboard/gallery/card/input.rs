@@ -15,7 +15,7 @@ use crate::app::state::App;
 /// content disclaimer is answered.
 pub(crate) enum LoungeDoor {
     /// One piece full frame, from its card.
-    Piece(GalleryPiece),
+    Piece(Box<GalleryPiece>),
     /// The Vote listing full frame, from a vote call's line.
     Vote,
 }
@@ -40,7 +40,7 @@ pub(crate) fn open_selected_card(app: &mut App, room_id: Uuid) -> bool {
     match app.artboard_content_gated() {
         true => {
             let piece = piece.clone();
-            app.open_gallery_door(LoungeDoor::Piece(piece));
+            app.open_gallery_door(LoungeDoor::Piece(Box::new(piece)));
         }
         false => {
             app.gallery_cards.open(message_id);
@@ -61,7 +61,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         }
         ParsedInput::Byte(b'o' | b'O') | ParsedInput::Char('o' | 'O') => {
             if let Some(piece) = app.gallery_cards.close() {
-                app.open_gallery_door(LoungeDoor::Piece(piece));
+                app.open_gallery_door(LoungeDoor::Piece(Box::new(piece)));
             }
         }
         _ => {}

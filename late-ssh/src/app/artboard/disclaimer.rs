@@ -102,7 +102,7 @@ impl App {
             ) {
                 (Some(LoungeDoor::Piece(piece)), Some(state)) => {
                     if self.gallery_cards.has_card_for(piece.id) {
-                        state.gallery_mut().open_piece(piece);
+                        state.gallery_mut().open_piece(*piece);
                     }
                 }
                 (Some(LoungeDoor::Vote), Some(state)) => state.gallery_mut().open_vote(),
