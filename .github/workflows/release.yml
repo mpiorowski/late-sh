@@ -6,6 +6,7 @@ name: release
 #
 #   v0.27.11            -> deploy_service (component ssh, the default)
 #   v0.27.11-web        -> deploy_service (component web)
+#   v0.27.11-bastion    -> deploy_service (component bastion)
 #   v0.27.11-<game>     -> deploy_service (component <game>)
 #   v0.27.11-cli        -> deploy_cli
 #   v0.27.11-infra      -> deploy_infra
@@ -57,7 +58,7 @@ jobs:
         run: |
           suffix="${TAG##*-}"
           case "$suffix" in
-            web|nethack|dopewars|codekeep|zork|dcss|usurper|brogue|bashquest|cli|infra|full)
+            web|bastion|nethack|dopewars|codekeep|zork|dcss|usurper|brogue|bashquest|cli|infra|full)
               component="$suffix"
               ;;
             *)

@@ -38,6 +38,11 @@ jobs:
       TF_VAR_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
       TF_VAR_IMAGE_TAGS: ${{ inputs.image_tags }}
+      TF_VAR_BASTION_ENABLED: ${{ vars.BASTION_ENABLED || '0' }}
+      TF_VAR_BASTION_HOST_KEY: ${{ secrets.BASTION_HOST_KEY }}
+      TF_VAR_BASTION_SHARED_SECRET: ${{ secrets.BASTION_SHARED_SECRET }}
+      TF_VAR_BASTION_MAX_CONNS_GLOBAL: ${{ vars.BASTION_MAX_CONNS_GLOBAL || '10000' }}
+      TF_VAR_BASTION_SSH_IDLE_TIMEOUT: ${{ vars.BASTION_SSH_IDLE_TIMEOUT || '3600' }}
       TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}

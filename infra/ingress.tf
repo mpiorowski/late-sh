@@ -154,8 +154,8 @@ resource "kubernetes_ingress_v1" "icecast_admin_blocked" {
 # RKE2 ingress-nginx controller: HTTP(S) only
 # =============================================================================
 # No TCP services: public SSH and IRC go through ssh-edge (ssh-tcp.tf), so an
-# nginx reload never touches them. depends_on hands port 22 over in order: the
-# chart drops nginx's hostPort DNAT only once ssh-edge is up to take it.
+# nginx reload never touches them. Native host networking keeps the client
+# socket address on both IPv4 and IPv6; the former IPv6 TCP proxy lost it.
 
 locals {
   # https://www.cloudflare.com/ips/. A range missing here only means that edge
@@ -202,16 +202,26 @@ resource "kubernetes_manifest" "ingress_nginx_config" {
     spec = {
       valuesContent = yamlencode({
         controller = {
-          # api and audio sit behind Cloudflare, so nginx's peer is an edge and
-          # late-ssh's per-IP pair limits would count edges, not people. Take
-          # the client from CF-Connecting-IP, only when an edge sent it, so a
-          # direct request cannot forge it. Deliberately not
-          # use-forwarded-headers: that also trusts X-Forwarded-Host and Proto
-          # from anyone. X-Forwarded-For to the backends becomes the client.
+          # During the first maintenance cutover, delete the old IPv6 proxy
+          # before this pod starts: both need the node's public IPv6 :80/:443.
+          # hostPort through Canal only exposed the IPv4 side.
+          hostNetwork = true
+          dnsPolicy   = "ClusterFirstWithHostNet"
+          hostPort = {
+            enabled = false
+          }
           config = {
-            "enable-real-ip"       = "true"
-            "forwarded-for-header" = "CF-Connecting-IP"
-            "proxy-real-ip-cidr"   = join(",", local.cloudflare_cidrs)
+            # api and audio sit behind Cloudflare. Trust CF-Connecting-IP only
+            # from those edges; direct clients keep their socket address.
+            # Keep use-forwarded-headers off so arbitrary clients cannot forge
+            # X-Forwarded-Host, Proto or For.
+            "use-forwarded-headers"      = "false"
+            "enable-real-ip"             = "true"
+            "forwarded-for-header"       = "CF-Connecting-IP"
+            "proxy-real-ip-cidr"         = join(",", local.cloudflare_cidrs)
+            "use-proxy-protocol"         = "false"
+            "compute-full-forwarded-for" = "false"
+            "disable-ipv6"               = "false"
           }
           # 2026-09-03: a port-22 connection flood pushed nginx to ~5 cores,
           # the controller's healthz could not answer inside the chart's 1 s

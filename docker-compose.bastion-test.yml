@@ -1,0 +1,102 @@
+# Disposable qualification stack. No .env/.env.local, host app mounts, or cloud keys.
+x-backend: &backend
+  image: ${BASTION_TEST_SSH_IMAGE:-late-ssh:qualification}
+  platform: linux/amd64
+  cpus: 2
+  mem_limit: 8g
+  stop_grace_period: 10s
+  environment:
+    LATE_ENV: dev
+    RUST_LOG: info
+    LATE_DB_USER: postgres
+    LATE_DB_PASSWORD: qualification-only
+    LATE_DB_NAME: postgres
+    LATE_TUNNEL_SHARED_SECRET: qualification-only-shared-secret
+    LATE_LIVEKIT_API_KEY: qualification
+    LATE_LIVEKIT_API_SECRET: qualification-only-secret-with-at-least-32-characters
+    LATE_REBELS_SECRET: qualification-only
+    LATE_NETHACK_SECRET: qualification-only
+    LATE_DCSS_SECRET: qualification-only
+    LATE_BROGUE_SECRET: qualification-only
+    LATE_USURPER_SECRET: qualification-only
+    LATE_DOPEWARS_SECRET: qualification-only
+    LATE_BASHQUEST_SECRET: qualification-only
+    LATE_CODEKEEP_SECRET: qualification-only
+    LATE_ZORK_SECRET: qualification-only
+  volumes:
+    - ${BASTION_TEST_STATE_DIR:?set by qualification runner}/host_key:/app/server_key:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/localhost/4001; printf \"GET /api/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q 200'"]
+    interval: 2s
+    timeout: 3s
+    retries: 60
+    start_period: 10s
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_PASSWORD: qualification-only
+    command: ["postgres", "-c", "max_connections=200", "-c", "fsync=off", "-c", "synchronous_commit=off"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql
+  blue:
+    <<: *backend
+  green:
+    <<: *backend
+  bastion:
+    image: ${BASTION_TEST_IMAGE:-late-bastion:qualification}
+    platform: linux/amd64
+    cpus: 1
+    mem_limit: 512m
+    environment:
+      RUST_LOG: info
+      LATE_BASTION_SSH_PORT: 5222
+      LATE_BASTION_HOST_KEY_PATH: /app/host_key
+      LATE_BASTION_SSH_IDLE_TIMEOUT: 3600
+      LATE_BASTION_BACKEND_TUNNEL_URL: ws://edge:4002/tunnel
+      LATE_BASTION_SHARED_SECRET: qualification-only-shared-secret
+      LATE_BASTION_MAX_CONNS_GLOBAL: 1000
+      # Generous limits leave headroom for stress variants. The standard runner
+      # supplies a distinct PROXY source address for each synthetic client.
+      LATE_BASTION_MAX_CONNS_PER_IP: 1000
+      LATE_BASTION_MAX_ATTEMPTS_PER_IP: 10000
+      LATE_BASTION_PROXY_PROTOCOL: 1
+      LATE_BASTION_PROXY_TRUSTED_CIDRS: 172.16.0.0/12,192.168.0.0/16
+    volumes:
+      - ${BASTION_TEST_STATE_DIR}/host_key:/app/host_key:ro
+    depends_on:
+      blue:
+        condition: service_healthy
+  edge:
+    image: haproxy:2.9-alpine
+    volumes:
+      - ./scripts/test/bastion_haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "127.0.0.1:${BASTION_TEST_RAW_PORT:-55222}:5222"
+      - "127.0.0.1:${BASTION_TEST_DIRECT_PORT:-55224}:2222"
+      - "127.0.0.1:${BASTION_TEST_SSH_PORT:-55223}:5223"
+      - "127.0.0.1:${BASTION_TEST_API_PORT:-54011}:4001"
+      - "127.0.0.1:${BASTION_TEST_CONTROL_PORT:-55399}:9999"
+    networks:
+      - default
+      - access
+    depends_on:
+      bastion:
+        condition: service_started
+      blue:
+        condition: service_healthy
+      green:
+        condition: service_healthy
+networks:
+  default:
+    internal: true
+  access: {}

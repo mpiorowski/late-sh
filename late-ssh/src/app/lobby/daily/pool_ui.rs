@@ -354,7 +354,7 @@ fn panel_width(width: u16) -> u16 {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ShownShot<'a> {
     Local(&'a PoolDraft),
-    Shared(PoolDraft),
+    Shared(Box<PoolDraft>),
 }
 
 impl ShownShot<'_> {
@@ -378,7 +378,7 @@ impl ShownShot<'_> {
 /// broadcast if there is one.
 pub(crate) fn shown_shot(pool: &PoolDetail, mine: bool) -> ShownShot<'_> {
     match pool.watching {
-        Some(theirs) if !mine => ShownShot::Shared(PoolDraft::watching(theirs)),
+        Some(theirs) if !mine => ShownShot::Shared(Box::new(PoolDraft::watching(theirs))),
         _ => ShownShot::Local(&pool.draft),
     }
 }

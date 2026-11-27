@@ -152,6 +152,25 @@ fn enter_alt_screen_withholds_mouse_tracking_in_keyboard_mode() {
 }
 
 #[test]
+fn reconnect_notice_renders_as_six_second_success_banner() {
+    let notice = ReconnectNotice::new(ReconnectNoticeKind::Transport);
+    let banner = notice.as_banner();
+
+    assert!(notice.is_active());
+    assert_eq!(
+        banner.message,
+        "Reconnected after an update or network problem. Welcome back!"
+    );
+    assert!(matches!(banner.kind, BannerKind::Success));
+
+    let expired = ReconnectNotice {
+        kind: ReconnectNoticeKind::Updated,
+        created_at: Instant::now() - Duration::from_secs(7),
+    };
+    assert!(!expired.is_active());
+}
+
+#[test]
 fn alt_screen_asks_for_the_terminal_colors_and_stops_palette_notices() {
     use crate::app::common::terminal_colors::QUERY;
     let has = |buf: &[u8], seq: &[u8]| buf.windows(seq.len()).any(|w| w == seq);

@@ -112,6 +112,8 @@ use your normal `~/.ssh/config`, agent, and default identity discovery.
 `late` also reads a flat TOML config file from `$XDG_CONFIG_HOME/late/config.toml`
 or `~/.config/late/config.toml`. Use `--config <path>` to point at another file.
 Precedence is: CLI args, env vars, config file, built-in defaults.
+An unreadable or invalid file passed with `--config` stops startup with an
+error, so a destination override cannot silently fall back to the public service.
 
 Example:
 

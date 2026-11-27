@@ -8,9 +8,11 @@ capacity findings and the scaling plan are in `SCALE.md`.
 
 - **SSH and IRC (`ssh-edge`).** Public `22` and `6697`, IPv4 and IPv6, belong to
   the `kube-system/ssh-edge` HAProxy DaemonSet (`infra/ssh-tcp.tf`, host network
-  on `server-1`), which forwards raw TCP to `service-ssh-sv` with PROXY v1 (IRC
-  only when `IRC_PROXY_EMIT` is on). late-ssh sees the node address
-  `46.62.210.86` as the transport peer. Never put these ports back on
+  on `server-1`), which forwards raw TCP with PROXY v1 to `service-ssh-sv` or,
+  when `BASTION_ENABLED=1`, SSH to `service-bastion-sv` (IRC sends PROXY v1 only
+  when `IRC_PROXY_EMIT` is on). The backend sees the node address
+  `46.62.210.86` as the transport peer and, when present, the PROXY address
+  as the user IP. Never put these ports back on
   ingress-nginx: nginx kills what its old workers hold 240 s after every reload
   (`SCALE.md`, Pain Point 9). An `ssh-edge` rollout drains instead of cutting:
   the new pod binds beside the old one (SO_REUSEPORT) and the old one soft-stops
@@ -21,12 +23,12 @@ capacity findings and the scaling plan are in `SCALE.md`.
 - **Client IPs on HTTP(S).** `api.` and `audio.` sit behind Cloudflare, the apex
   does not. nginx takes the client from `CF-Connecting-IP` only when the peer is
   in Cloudflare's ranges (`infra/ingress.tf`), and hands it on as
-  `X-Forwarded-For`, which late-ssh's per-IP pair limits key on. So those limits
-  count people, and logs hold real client addresses.
-- **IPv6 HTTP(S).** RKE2's `hostPort` exposes ingress-nginx on IPv4 only; the
-  `kube-system/ipv6-proxy` HAProxy (`infra/ipv6-proxy.tf`) binds
-  `2a01:4f9:c013:2ae1::1` on 80/443 and forwards to the ingress. Do not switch
-  ingress-nginx to `hostNetwork` without a rollout plan. `Network is
+  `X-Forwarded-For`, which late-ssh's per-IP pair limits key on. Direct requests
+  use the observed socket address and cannot forge it with forwarding headers.
+- **IPv6 HTTP(S).** After the maintenance cutover, ingress-nginx uses
+  `hostNetwork` and binds 80/443 directly on IPv4 and IPv6. The former
+  `kube-system/ipv6-proxy` lost the IPv6 client address; its removal and rollback
+  are below. `Network is
   unreachable` on `ssh -6 late.sh` means the client lacks IPv6.
 - **SSH pod drain.** `service-ssh` has `termination_grace_period_seconds =
   21600` (6 h): a rollout stops new connections and lets sessions drain before
@@ -147,7 +149,7 @@ the ids given, nothing else, after a preview and a confirmation prompt.
 
 ## Releases and deploys
 
-Every published GitHub Release lands in `release.yml`, which parses the tag suffix once and routes to exactly one deploy workflow: `deploy_service.yml` for ssh (no suffix), web, and every door game; `deploy_cli.yml` for `-cli`; `deploy_infra.yml` for `-infra`; and for `-full`, both in sequence (`deploy_service.yml` with component ssh, then `deploy_infra.yml` gated on it) so one release ships an ssh image and a terraform apply in skew-rule order. Each of those also supports manual `workflow_dispatch` with explicit `release_tag` and `environment` inputs, the recovery path when GitHub misses a release event; shared `ci`, `build`, and `terraform` workflow calls accept `source_ref`, so manual deploys check out the requested tag instead of the UI-selected branch. `deploy_service.yml` is image-only for every component: `ci` + `build` (docker target `runtime-<component>`; the Dockerfile gives each door its own `builder-<door>` stage, so a door image build compiles only that host crate, never `late-ssh`/`late-web`), then `kubectl set image deployment/<name> '*=<image>'` and a rollout wait. It never runs terraform on ordinary releases, so nothing else in the cluster is touched. Doors self-bootstrap: a `check_deployment` job reads live cluster state, and when the door's deployment is missing (first deploy, disaster recovery) the run switches to `terraform.yml` with `targets: module.door["<game>"]`, scoping the apply to exactly that game's resources plus dependencies; no manual dispatch needed. Manifest changes ship through `deploy_infra.yml` (full apply). Terraform never needs current image tags: every deployment carries `ignore_changes` on its images, so applies leave running images alone, and the `IMAGE_TAGS` terraform var only matters when a deployment is being created. Door asset images (the pinned upstream binaries) build in `doors.yml`, one matrix over `docker/doors/`, publishing each `door-<game>` at the tag pinned in the root Dockerfile's `FROM` lines (the single source of truth). The deploy skew rule is below.
+Every published GitHub Release lands in `release.yml`, which parses the tag suffix once and routes to exactly one deploy workflow: `deploy_service.yml` for ssh (no suffix), web, bastion, and every door game; `deploy_cli.yml` for `-cli`; `deploy_infra.yml` for `-infra`; and for `-full`, both in sequence (`deploy_service.yml` with component ssh, then `deploy_infra.yml` gated on it) so one release ships an ssh image and a terraform apply in skew-rule order. Each of those also supports manual `workflow_dispatch` with explicit `release_tag` and `environment` inputs, the recovery path when GitHub misses a release event; shared `ci`, `build`, and `terraform` workflow calls accept `source_ref`, so manual deploys check out the requested tag instead of the UI-selected branch. `deploy_service.yml` is image-only for every component: `ci` + `build` (docker target `runtime-<component>`; the Dockerfile gives each door its own `builder-<door>` stage, so a door image build compiles only that host crate, never `late-ssh`/`late-web`), then `kubectl set image deployment/<name> '*=<image>'` and a rollout wait. It never runs terraform on ordinary releases, so nothing else in the cluster is touched. Doors self-bootstrap: a `check_deployment` job reads live cluster state, and when the door's deployment is missing (first deploy, disaster recovery) the run switches to `terraform.yml` with `targets: module.door["<game>"]`, scoping the apply to exactly that game's resources plus dependencies; no manual dispatch needed. Manifest changes ship through `deploy_infra.yml` (full apply). Terraform never needs current image tags: every deployment carries `ignore_changes` on its images, so applies leave running images alone, and the `IMAGE_TAGS` terraform var only matters when a deployment is being created. Door asset images (the pinned upstream binaries) build in `doors.yml`, one matrix over `docker/doors/`, publishing each `door-<game>` at the tag pinned in the root Dockerfile's `FROM` lines (the single source of truth). The deploy skew rule is below.
 
 **Deploy skew rule.** The image that requires a secret and the pod template
 that injects it must never meet the wrong way round: a pod whose template
@@ -164,6 +166,12 @@ requires it. A
 change to `late-web/src/config.rs` needs a `-web` release; an ssh release never
 applies infra drift. Prod env is `LATE_ENV=prod` plus secrets only, injected by
 `infra/service-ssh.tf` / `infra/service-web.tf`.
+
+## First bastion and IPv6 HTTP cutover
+
+The repo owner approved an out-of-service window for this first switch. The
+ordered preflight, port handoff, public-edge checks and rollback are in the
+[bastion deployment guide](../devdocs/BASTION-DEPLOY-GUIDE.md).
 
 ## RKE2 certificates and etcd snapshots
 

@@ -1,13 +1,13 @@
 name: deploy_service
 
-# Generic deploy for every in-cluster component: the ssh and web services and
+# Generic deploy for every in-cluster component: the ssh, web, bastion services and
 # each door-game host. The naming convention makes one workflow cover all of
 # them; from a component name everything else is derived:
 #
 #   crate/package:  late-<component>
 #   image:          ghcr.io/<repo>/late-<component>:<release_tag>
 #   docker target:  runtime-<component> (root Dockerfile)
-#   deployment:     service-<component> for ssh/web, late-<component> for doors
+#   deployment:     service-<component> for ssh/web/bastion, late-<component> for doors
 #
 # Flow: ci -> build image -> image-only kubectl rollout. Terraform never runs
 # on the happy path: the deployments ignore image changes (see the lifecycle
@@ -16,7 +16,7 @@ name: deploy_service
 #
 # First deploy of a new door (deployment does not exist yet): a terraform
 # apply scoped with -target to module.door["<component>"], which creates that
-# door's resources and touches nothing else. ssh/web have no bootstrap path
+# door's resources and touches nothing else. ssh/web/bastion have no bootstrap path
 # here; a cluster without them is built by deploy_infra.
 #
 # Called by release.yml on published releases; workflow_dispatch is the manual
@@ -26,7 +26,7 @@ on:
   workflow_call:
     inputs:
       component:
-        description: "Component to deploy (ssh, web, or a door game)"
+        description: "Component to deploy (ssh, web, bastion, or a door game)"
         required: true
         type: string
       release_tag:
@@ -46,6 +46,7 @@ on:
         options:
           - ssh
           - web
+          - bastion
           - nethack
           - dopewars
           - codekeep
@@ -99,7 +100,7 @@ jobs:
 
   # Decides between the two deploy paths from live cluster state: the
   # deployment exists -> image-only kubectl update; it does not exist (first
-  # deploy of a new door) -> targeted terraform bootstrap. Missing ssh/web is
+  # deploy of a new door) -> targeted terraform bootstrap. Missing ssh/web/bastion is
   # not a bootstrap case but a broken cluster, so it fails loudly instead.
   check_deployment:
     name: check_deployment_exists
@@ -124,7 +125,7 @@ jobs:
           COMPONENT: ${{ inputs.component }}
         run: |
           case "$COMPONENT" in
-            ssh|web) deployment="service-$COMPONENT" ;;
+            ssh|web|bastion) deployment="service-$COMPONENT" ;;
             *) deployment="late-$COMPONENT" ;;
           esac
           echo "deployment=$deployment" >> "$GITHUB_OUTPUT"
@@ -133,7 +134,7 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             case "$COMPONENT" in
-              ssh|web)
+              ssh|web|bastion)
                 echo "::error::deployment $deployment does not exist; bootstrap the cluster via deploy_infra"
                 exit 1
                 ;;

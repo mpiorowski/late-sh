@@ -62,16 +62,16 @@ late.sh      → <server-ip>
 *.late.sh    → <server-ip>
 ```
 
-For IPv6, configure matching AAAA records to the node IPv6 address. The
-Terraform-managed `ipv6-proxy` DaemonSet binds only that IPv6 address and
-forwards HTTP(S) into the existing IPv4 ingress path; SSH and IRC bind both
-address families on `ssh-edge` (see below).
+For IPv6, configure matching AAAA records to the node IPv6 address.
+Ingress-nginx binds HTTP(S) directly on the node's IPv4 and IPv6 interfaces;
+SSH and IRC bind both address families on `ssh-edge` (see below). The first
+switch from the old IPv6 HTTP proxy is a [maintenance cutover](../devdocs/BASTION-DEPLOY-GUIDE.md).
 
 This enables:
 
 - `ssh late.sh` — SSH TUI
 - `irc.late.sh:6697` — IRC over TLS
-- `https://late.sh` — Web landing + audio pairing
+- `https://late.sh` — Web landing + public `/listen` page
 - `https://api.late.sh` — SSH API / WebSocket
 - `https://audio.late.sh` — Icecast audio stream
 - `https://rtc.late.sh` — LiveKit voice signaling
@@ -135,7 +135,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Component     | Service                                                                         | Ports                                                  | Description                                       |
 | ------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
 | late-ssh      | `service-ssh-sv`                                                                | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled)    | SSH TUI server + HTTP API + embedded IRC          |
-| late-web      | `service-web-sv`                                                                | 3000                                                   | Web landing page + pairing                        |
+| late-web      | `service-web-sv`                                                                | 3000                                                   | Web landing and public listen page                |
 | Icecast       | `icecast-sv`                                                                    | 8000                                                   | Audio streaming server                            |
 | Liquidsoap    | none (dials out to `icecast-sv`)                                                | -                                                      | Playlist encoder                                  |
 | LiveKit       | `livekit-sv`                                                                    | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media                    |
@@ -144,13 +144,15 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | PostgreSQL    | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
 | Monitoring    | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
 
-SSH on port 22 and IRC on port 6697, IPv4 and IPv6, reach the late-ssh pod
+SSH on port 22 and IRC on port 6697, IPv4 and IPv6, reach their backends
 through `ssh-edge`, a host-network HAProxy DaemonSet (`ssh-tcp.tf`), never
 through NGINX: every NGINX reload (each cert-manager renewal is one) kills the
 connections its old workers hold 240 s later. HAProxy sends PROXY v1 metadata
-(for IRC, only when `IRC_PROXY_EMIT` is on) before the application's in-process
-TLS handshake; late-ssh accepts it only from the trusted CIDRs in its prod
-profile (`late-ssh/src/config.rs`). LiveKit signaling is routed
+(for IRC, only when `IRC_PROXY_EMIT` is on) before SSH negotiation or the IRC
+TLS handshake. SSH reaches bastion when `BASTION_ENABLED=1`, while IRC still
+reaches late-ssh. Both accept PROXY metadata only from their configured
+trusted peers (`late-bastion/src/config.rs`, `late-ssh/src/config.rs`).
+LiveKit signaling is routed
 through NGINX ingress on `rtc.<domain>`, while LiveKit media ports are bound
 directly on the node by the `livekit` pod. On a fresh cluster, the `livekit` pod
 may wait for cert-manager to create the `livekit-tls` secret used by embedded
@@ -161,7 +163,7 @@ treating the rollout as failed.
 
 | Node       | RKE2 role                    | Placement                                   | Runs                                                                                                                                                   |
 | ---------- | ---------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, Postgres                                                                      |
+| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ssh-edge, LiveKit, Postgres                                                                      |
 | `agent-1`  | agent                        | label and `NoSchedule` taint `role=support` | service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft, second CoreDNS replica |
 | `agent-2`  | agent (arm64)                | label and `NoSchedule` taint `role=games`   | Vintage Story                                                                                                                                          |
 
@@ -300,7 +302,22 @@ secrets/variables for CI/CD).
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `LOG_LEVEL`    | Rust log level (`RUST_LOG`)                                                                                                                                                          |
 | `SSH_HOST_KEY` | Ed25519 private key for SSH server                                                                                                                                                   |
-| `IMAGE_TAGS`   | Component name -> image ref map (ssh, web, and each door). Only read when a deployment is created; deploys go through `kubectl set image` and every deployment ignores image changes |
+| `IMAGE_TAGS`   | Component name -> image ref map (ssh, web, bastion, and each door). Only read when a deployment is created; deploys go through `kubectl set image` and every deployment ignores image changes |
+
+### Bastion
+
+`BASTION_ENABLED=1` provisions the SSH frontend and routes public IPv4/IPv6
+port `22` through `ssh-edge` to the bastion with PROXY v1 client metadata.
+With `BASTION_ENABLED=0`, port `22` reaches `late-ssh` directly. Both `BASTION_HOST_KEY` and
+`BASTION_SHARED_SECRET` are required when enabled. The shared secret is injected
+into both services; when absent or blank, the backend's private tunnel listener
+stays off and direct SSH still starts. Backend listener ports and trusted CIDRs
+live in the `late-ssh` profiles.
+
+For first enablement, follow the [maintenance cutover and rollback
+guide](../devdocs/BASTION-DEPLOY-GUIDE.md). It includes the required manual
+IPv6 port handoff, release order and public-edge acceptance checks. Later
+infra applies preserve the deployed bastion image.
 
 ### IRC
 
@@ -319,14 +336,6 @@ deploy-time rollout step: deploy a parser-capable image first, then set the
 GitHub environment variable `IRC_PROXY_EMIT=1` and run a subsequent
 infrastructure deployment. Rollback reverses the order. The prod profile always
 accepts PROXY headers, so there is no accept-side toggle.
-
-### IPv6 edge proxy
-
-| Variable             | Description                                          |
-| -------------------- | ---------------------------------------------------- |
-| `IPV6_PROXY_ENABLED` | Deploy the host-network IPv6-only HAProxy edge proxy |
-| `IPV6_PROXY_ADDRESS` | Public IPv6 address for the proxy to bind            |
-| `IPV6_PROXY_IMAGE`   | HAProxy image used by the proxy                      |
 
 ### Secrets injected into late-ssh
 

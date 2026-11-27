@@ -51,6 +51,36 @@ resource "kubernetes_secret_v1" "ssh_host_key" {
 }
 
 # =============================================================================
+# Bastion: russh host key + tunnel pre-shared secret
+# =============================================================================
+# `bastion-shared-secret` is mounted into BOTH the bastion and late-ssh pods
+# so they agree on the X-Late-Secret header value at /tunnel handshake time.
+
+resource "kubernetes_secret_v1" "bastion_host_key" {
+  metadata {
+    name = "bastion-host-key"
+  }
+
+  data = {
+    host_key = var.BASTION_HOST_KEY
+  }
+
+  type = "Opaque"
+}
+
+resource "kubernetes_secret_v1" "bastion_shared_secret" {
+  metadata {
+    name = "bastion-shared-secret"
+  }
+
+  data = {
+    secret = var.BASTION_SHARED_SECRET
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # AI Credentials (Gemini)
 # =============================================================================
 
