@@ -1063,6 +1063,8 @@ fn arcade_help_lines() -> Vec<String> {
         "            whoever took the most buzz from drinks in a month. No rank digit, no chips.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
         "            3 applause to count, and the one ranked badge that pays: 40,000 / 15,000 / 10,000 chips.",
+        "            Vote on the Artboard rail is the month's pieces you can applaud. In the last week",
+        "            #lounge gets three calls (7, 3 and 1 day left, 18:00 UTC): Enter on one opens Vote.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",
         "  time; the chips land again on the gate shown here. Full guide on the Leaderboards page.",
         "  [LMG]     Lateania Archdemon             10,000 chips  per character, 30-day gap",

@@ -12,13 +12,18 @@ use uuid::Uuid;
 use crate::app::artboard::gallery::state::{
     applause_notice, applause_refusal, current_period_month, take_applause,
 };
-use crate::app::artboard::gallery::svc::{CardResult, GalleryPiece, GalleryService, LoungeCards};
+use crate::app::artboard::gallery::svc::{
+    CardResult, GalleryPiece, GalleryService, LoungeCards, VoteCalls,
+};
 
 pub(crate) struct LoungeCardState {
     service: GalleryService,
     viewer_id: Uuid,
     cards_rx: watch::Receiver<LoungeCards>,
     cards: LoungeCards,
+    /// The closing week's vote calls. Nothing draws from them (a call is
+    /// its plain line), so they are read off the watch when Enter asks.
+    vote_calls_rx: watch::Receiver<VoteCalls>,
     modal: Option<PieceModal>,
 }
 
@@ -72,7 +77,9 @@ impl LoungeCardState {
     pub(crate) fn new(service: GalleryService, viewer_id: Uuid) -> Self {
         let cards_rx = service.subscribe_lounge_cards();
         let cards = cards_rx.borrow().clone();
+        let vote_calls_rx = service.subscribe_vote_calls();
         Self {
+            vote_calls_rx,
             service,
             viewer_id,
             cards_rx,
@@ -89,6 +96,12 @@ impl LoungeCardState {
     /// The piece `message_id` is the card of, if it is one.
     pub(crate) fn card(&self, message_id: Uuid) -> Option<&GalleryPiece> {
         self.cards.get(&message_id)
+    }
+
+    /// Whether `message_id` is a vote call's line: Enter on it opens the
+    /// Vote listing.
+    pub(crate) fn is_vote_call(&self, message_id: Uuid) -> bool {
+        self.vote_calls_rx.borrow().contains(&message_id)
     }
 
     /// Whether the piece `piece_id` has a card: it still hangs.

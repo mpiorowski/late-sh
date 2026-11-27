@@ -393,6 +393,7 @@ async fn main() -> anyhow::Result<()> {
         config.web_url.clone(),
     );
     let _gallery_splash_task = gallery_service.start_splash_refresh_task();
+    let _gallery_vote_call_task = gallery_service.start_vote_call_task();
     let _gallery_notify_task = gallery_service.start_notify_worker(
         pg_listener.subscribe(late_ssh::app::artboard::gallery::svc::GalleryService::CHANNELS),
     );

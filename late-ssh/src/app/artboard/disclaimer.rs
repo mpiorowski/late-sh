@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::{
+    artboard::gallery::card::input::LoungeDoor,
     common::{primitives::Screen, theme},
     input::{MouseButton, MouseEventKind, ParsedInput},
     settings_modal::state::TweakRow,
@@ -91,15 +92,21 @@ impl App {
     pub(crate) fn sync_dartboard_connection(&mut self) {
         if self.screen == Screen::Artboard && !self.artboard_disclaimer_visible() {
             self.enter_dartboard();
-            // A piece opened from its #lounge card (`open_gallery_piece`).
-            // It may have waited for the disclaimer's answer, so it opens
+            // What a #lounge line opened (`open_gallery_door`). A piece
+            // may have waited for the disclaimer's answer, so it opens
             // only while it still has a card: one taken down since stays
             // down, and the page shows without it.
-            if let Some(piece) = self.pending_gallery_piece.take()
-                && self.gallery_cards.has_card_for(piece.id)
-                && let Some(state) = self.dartboard_state.as_mut()
-            {
-                state.gallery_mut().open_piece(piece);
+            match (
+                self.pending_gallery_door.take(),
+                self.dartboard_state.as_mut(),
+            ) {
+                (Some(LoungeDoor::Piece(piece)), Some(state)) => {
+                    if self.gallery_cards.has_card_for(piece.id) {
+                        state.gallery_mut().open_piece(*piece);
+                    }
+                }
+                (Some(LoungeDoor::Vote), Some(state)) => state.gallery_mut().open_vote(),
+                (Some(LoungeDoor::Piece(_) | LoungeDoor::Vote), None) | (None, _) => {}
             }
         }
     }

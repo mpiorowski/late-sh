@@ -26,8 +26,15 @@
 //! from anywhere. Hanging posts the card; a take-down deletes it. The piece
 //! modal over #lounge (`card/`) reads and applauds through its own
 //! channel (`CardResult`).
+//!
+//! The closing week's vote calls (`vote_call.rs` says when and what) are
+//! posted from here: any replica may run the task, the one that wins the
+//! row in `artboard_vote_calls` posts the line as the `system` user. The
+//! lines' message ids ride the same signal as the cards into a second
+//! `watch`, which is how a session knows Enter on one opens the Vote
+//! listing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,23 +43,31 @@ use chrono::{DateTime, NaiveDate, Utc};
 use dartboard_core::Canvas;
 use late_core::db::Db;
 use late_core::models::artboard_piece::{
-    ApplauseOutcome, ArtboardPiece, GALLERY_LOUNGE_CARD_LIMIT, HangOutcome, HangParams,
-    ListingCounts, PieceListing, TakeDownOutcome,
+    ApplauseOutcome, ArtboardPiece, GALLERY_LOUNGE_CARD_LIMIT, GALLERY_VOTE_CALL_LIMIT,
+    HangOutcome, HangParams, ListingCounts, PieceListing, TakeDownOutcome, VoteCall,
 };
+use late_core::models::user::User;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::chat::svc::{ChatService, SendError, Wording};
 use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult};
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 use super::frame::{Credit, FramedPiece};
+use super::vote_call::{DueCall, vote_call_body, vote_call_due};
 
 /// How often the splash wall is re-read. It changes once a day, at UTC
 /// midnight, and a mod removal is the only thing that could change it in
 /// between; a replica is at most an hour behind either.
 const SPLASH_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// How often the vote call task looks at the clock. It bounds how late
+/// after its hour a call goes out; the claim query runs only while a call
+/// is due, on three evenings a month.
+const VOTE_CALL_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// The day's piece over the door, and the UTC day it holds. Read once
 /// at bootstrap; the session never re-reads it.
@@ -223,6 +238,23 @@ pub enum GalleryCardOutcome {
     PieceGone,
 }
 
+/// How a due vote call that this process claimed, or failed to, went
+/// (`GalleryService::run_vote_call`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoteCallOutcome {
+    Posted,
+    /// The room's rules turned the line away. The call is claimed, so it
+    /// is lost.
+    Refused,
+    /// Nothing was claimed; the next check tries again.
+    ClaimFailed,
+    /// Claimed and not posted: lost.
+    PostFailed,
+    /// Posted, but the call could not be pointed at its line: Enter on it
+    /// opens nothing.
+    LinkFailed,
+}
+
 /// What the piece modal over #lounge hears back (`card/state.rs`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum CardResult {
@@ -238,6 +270,9 @@ pub enum CardResult {
 /// The #lounge cards by chat message id, as every session draws them.
 pub type LoungeCards = Arc<HashMap<Uuid, GalleryPiece>>;
 
+/// The #lounge lines that are vote calls, by chat message id.
+pub type VoteCalls = Arc<HashSet<Uuid>>;
+
 const APPLAUSE_FAILED: &str = "Your applause did not land. Try again.";
 
 #[derive(Clone)]
@@ -252,6 +287,8 @@ pub struct GalleryService {
     splash_rx: watch::Receiver<Option<SplashPiece>>,
     lounge_cards_tx: Arc<watch::Sender<LoungeCards>>,
     lounge_cards_rx: watch::Receiver<LoungeCards>,
+    vote_calls_tx: Arc<watch::Sender<VoteCalls>>,
+    vote_calls_rx: watch::Receiver<VoteCalls>,
 }
 
 impl GalleryService {
@@ -260,6 +297,7 @@ impl GalleryService {
     pub fn new(db: Db, chat: ChatService, web_url: String) -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
         let (lounge_cards_tx, lounge_cards_rx) = watch::channel(LoungeCards::default());
+        let (vote_calls_tx, vote_calls_rx) = watch::channel(VoteCalls::default());
         Self {
             db: Some(db),
             chat: Some(chat),
@@ -268,6 +306,8 @@ impl GalleryService {
             splash_rx,
             lounge_cards_tx: Arc::new(lounge_cards_tx),
             lounge_cards_rx,
+            vote_calls_tx: Arc::new(vote_calls_tx),
+            vote_calls_rx,
         }
     }
 
@@ -276,6 +316,7 @@ impl GalleryService {
     pub fn disabled() -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
         let (lounge_cards_tx, lounge_cards_rx) = watch::channel(LoungeCards::default());
+        let (vote_calls_tx, vote_calls_rx) = watch::channel(VoteCalls::default());
         Self {
             db: None,
             chat: None,
@@ -284,6 +325,8 @@ impl GalleryService {
             splash_rx,
             lounge_cards_tx: Arc::new(lounge_cards_tx),
             lounge_cards_rx,
+            vote_calls_tx: Arc::new(vote_calls_tx),
+            vote_calls_rx,
         }
     }
 
@@ -292,8 +335,14 @@ impl GalleryService {
         self.lounge_cards_rx.clone()
     }
 
-    /// Keep this replica's cards current: re-read them on every
-    /// `artboard_pieces_changed` and whenever the listener (re)connects.
+    /// This replica's vote calls, replaced whole on every change.
+    pub fn subscribe_vote_calls(&self) -> watch::Receiver<VoteCalls> {
+        self.vote_calls_rx.clone()
+    }
+
+    /// Keep this replica's cards and vote calls current: re-read them on
+    /// every `artboard_pieces_changed` and whenever the listener
+    /// (re)connects.
     pub fn start_notify_worker(
         &self,
         mut signals: mpsc::UnboundedReceiver<Signal>,
@@ -311,9 +360,9 @@ impl GalleryService {
         })
     }
 
-    /// Read the newest cards and publish them. A piece that will not
-    /// decode fails the whole read, so the worker logs it and retries
-    /// instead of publishing a set with a card missing.
+    /// Read the newest cards and vote calls and publish them. A piece that
+    /// will not decode fails the whole read, so the worker logs it and
+    /// retries instead of publishing a set with a card missing.
     pub async fn refresh_lounge_cards(&self) -> Result<()> {
         let Some(db) = &self.db else {
             return Ok(());
@@ -338,7 +387,127 @@ impl GalleryService {
                     true
                 }
             });
+        // Nothing waits on a change to the calls (Enter reads them), so a
+        // re-read that found the same ones wakes no session either way.
+        let calls = VoteCall::message_ids(&client, GALLERY_VOTE_CALL_LIMIT).await?;
+        self.vote_calls_tx
+            .send_replace(Arc::new(calls.into_iter().collect()));
         Ok(())
+    }
+
+    /// The closing week's calls: on each check, the call whose day and
+    /// hour have come is claimed and posted. Every replica runs this; the
+    /// claim is what makes the line go out once.
+    pub fn start_vote_call_task(&self) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(VOTE_CALL_CHECK_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if let Some(call) = vote_call_due(Utc::now()) {
+                    service.run_vote_call(call).await;
+                }
+            }
+        })
+    }
+
+    /// Claim `call` and post its line in #lounge as the `system` user,
+    /// then point the call at the line so Enter on it opens the Vote
+    /// listing. `None` when there was nothing to do: no database, the call
+    /// already claimed, or a month with nothing on its wall. Every other
+    /// ending is counted (`late_ssh_gallery_vote_calls_total`).
+    async fn run_vote_call(&self, call: DueCall) -> Option<VoteCallOutcome> {
+        let (Some(db), Some(chat)) = (&self.db, &self.chat) else {
+            return None;
+        };
+        let claimed = async {
+            let client = db.get().await?;
+            // Looked up before the claim, so a missing author never
+            // spends it.
+            let system_user_id =
+                match User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT).await? {
+                    Some(user) => user.id,
+                    None => anyhow::bail!("system user not ensured yet"),
+                };
+            let claim = VoteCall::claim(&client, call.period_month, call.days_left).await?;
+            Ok::<_, anyhow::Error>(claim.map(|claim| (system_user_id, claim)))
+        }
+        .await;
+        let (system_user_id, claim) = match claimed {
+            Ok(Some(claimed)) => claimed,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    period_month = %call.period_month,
+                    days_left = call.days_left,
+                    "gallery vote call claim failed"
+                );
+                metrics::record_gallery_vote_call(VoteCallOutcome::ClaimFailed);
+                return Some(VoteCallOutcome::ClaimFailed);
+            }
+        };
+        let posted = chat
+            .send_lounge_message_returning(
+                system_user_id,
+                vote_call_body(call, claim.standings),
+                true,
+                Wording::Typed,
+            )
+            .await;
+        let outcome = match posted {
+            Ok(Some(message)) => {
+                let linked = async {
+                    let client = db.get().await?;
+                    VoteCall::link_message(&client, claim.id, message.id).await
+                }
+                .await;
+                match linked {
+                    Ok(()) => {
+                        tracing::info!(
+                            message_id = %message.id,
+                            period_month = %call.period_month,
+                            days_left = call.days_left,
+                            pieces = claim.standings.pieces,
+                            "gallery vote call posted to lounge"
+                        );
+                        VoteCallOutcome::Posted
+                    }
+                    Err(error) => {
+                        late_core::error_span!(
+                            "gallery_vote_call_link_failed",
+                            error = ?error,
+                            message_id = %message.id,
+                            "failed to point the vote call at its line"
+                        );
+                        VoteCallOutcome::LinkFailed
+                    }
+                }
+            }
+            Ok(None) => unreachable!("a vote call's line is never empty"),
+            Err(SendError::Refused(refusal)) => {
+                tracing::error!(
+                    refusal = ?refusal,
+                    period_month = %call.period_month,
+                    days_left = call.days_left,
+                    "gallery vote call claimed but refused by room rules"
+                );
+                VoteCallOutcome::Refused
+            }
+            Err(SendError::Failed(error)) => {
+                late_core::error_span!(
+                    "gallery_vote_call_post_failed",
+                    error = ?error,
+                    period_month = %call.period_month,
+                    days_left = call.days_left,
+                    "gallery vote call claimed but not posted"
+                );
+                VoteCallOutcome::PostFailed
+            }
+        };
+        metrics::record_gallery_vote_call(outcome);
+        Some(outcome)
     }
 
     /// Post `piece`'s card in #lounge, in its hanger's name, and point the
