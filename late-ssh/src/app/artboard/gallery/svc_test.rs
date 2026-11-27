@@ -7,8 +7,9 @@ use late_core::test_utils::create_test_user;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::{CardResult, GalleryResult, GalleryService, SplashRefresh};
+use super::{CardResult, GalleryResult, GalleryService, SplashRefresh, VoteCallOutcome};
 use crate::app::artboard::gallery::frame::FramedPiece;
+use crate::app::artboard::gallery::vote_call::DueCall;
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::{ChatEvent, ChatService};
 use crate::test_helpers::{new_test_db, wait_until};
@@ -439,4 +440,149 @@ async fn next_event(events: &mut tokio::sync::broadcast::Receiver<ChatEvent>) ->
         .await
         .expect("a chat event in time")
         .expect("chat event")
+}
+
+/// The `system` user the house posts as, made the way `activity/lounge.rs`
+/// ensures it.
+async fn system_user(db: &late_core::db::Db) -> late_core::models::user::User {
+    use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
+    use late_core::models::user::{User, UserParams};
+
+    let client = db.get().await.unwrap();
+    User::create(
+        &client,
+        UserParams {
+            fingerprint: SYSTEM_FINGERPRINT.to_string(),
+            username: SYSTEM_USERNAME.to_string(),
+            settings: json!({ "bot": true, "system": true }),
+        },
+    )
+    .await
+    .expect("system user")
+}
+
+/// A call due today, three days from the end of this month.
+fn due_call() -> DueCall {
+    use chrono::Datelike;
+
+    DueCall {
+        period_month: chrono::Utc::now()
+            .date_naive()
+            .with_day(1)
+            .expect("first of the month"),
+        days_left: 3,
+    }
+}
+
+/// A due vote call goes out once, as the system user, however often the
+/// task looks, and never for a month with nothing on its wall.
+#[tokio::test]
+async fn a_due_vote_call_posts_one_line_in_lounge() {
+    let test_db = new_test_db().await;
+    let (service, chat) = test_service(&test_db.db);
+    let artist = create_test_user(&test_db.db, "call-artist").await;
+    let system = system_user(&test_db.db).await;
+    let client = test_db.db.get().await.unwrap();
+    ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let mut events = chat.subscribe_events();
+
+    assert_eq!(service.run_vote_call(due_call()).await, None);
+
+    ArtboardPiece::hang(&client, hang_params(artist.id, "the only one"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service.run_vote_call(due_call()).await,
+        Some(VoteCallOutcome::Posted)
+    );
+    let line = loop {
+        if let ChatEvent::MessageCreated { message, .. } = next_event(&mut events).await {
+            break message;
+        }
+    };
+    assert_eq!(line.user_id, system.id);
+    assert!(
+        line.body
+            .contains("wall closes in 3 days.\n1 piece hangs and none has the 3 applause"),
+        "{}",
+        line.body
+    );
+    assert_eq!(
+        service.run_vote_call(due_call()).await,
+        None,
+        "the call is claimed: no second line"
+    );
+
+    service.refresh_lounge_cards().await.unwrap();
+    assert!(service.subscribe_vote_calls().borrow().contains(&line.id));
+}
+
+/// Enter on a vote call's line walks the month: the Artboard's Vote
+/// listing full frame (after the content disclaimer, for a viewer who has
+/// not answered it), where `v` applauds and the last piece says it is the
+/// last.
+#[tokio::test]
+async fn enter_on_a_vote_call_opens_the_vote_listing_full_frame() {
+    use crate::app::artboard::gallery::state::{Focus, GallerySection};
+    use crate::app::common::primitives::Screen;
+    use crate::test_helpers::{SessionWorld, make_app_in_world, wait_for_render_contains};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = new_test_db().await;
+    let (service, chat) = test_service(&test_db.db);
+    let me = create_test_user(&test_db.db, "call-viewer").await;
+    let artist = create_test_user(&test_db.db, "call-painter").await;
+    system_user(&test_db.db).await;
+    let client = test_db.db.get().await.unwrap();
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge");
+    let HangOutcome::Hung(piece) = ArtboardPiece::hang(&client, hang_params(artist.id, "dusk"))
+        .await
+        .unwrap()
+    else {
+        panic!("hang");
+    };
+    assert_eq!(
+        service.run_vote_call(due_call()).await,
+        Some(VoteCallOutcome::Posted)
+    );
+    service.refresh_lounge_cards().await.unwrap();
+
+    let world = SessionWorld {
+        gallery_service: Some(service.clone()),
+        chat_service: Some(chat),
+        ..Default::default()
+    };
+    let mut app = make_app_in_world(test_db.db.clone(), me.id, "call-viewer-it", world);
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "wall closes in 3 days.").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+    app.handle_input(b"A");
+
+    // The piece's caption: the listing has landed and the frame is up.
+    wait_for_render_contains(&mut app, "\"dusk\" by @").await;
+    let gallery = app.dartboard_state.as_ref().expect("the board").gallery();
+    assert_eq!(gallery.viewed_section(), Some(GallerySection::Vote));
+    assert_eq!(gallery.focus(), Focus::Piece);
+    assert_eq!(
+        gallery.selected_piece().map(|shown| shown.id),
+        Some(piece.id)
+    );
+
+    app.handle_input(b"v");
+    wait_for_render_contains(&mut app, "Applauded. 1 applause.").await;
+    assert_eq!(
+        ArtboardPiece::applause_count(&client, piece.id)
+            .await
+            .unwrap(),
+        1
+    );
+    app.handle_input(b"\x1b[C");
+    wait_for_render_contains(&mut app, "That was the last piece of the month.").await;
 }

@@ -24,17 +24,27 @@ use super::svc::{GalleryPiece, GalleryResult, GalleryService, HangRefusal, appla
 pub enum GallerySection {
     ThisMonth,
     Newest,
+    /// This month's pieces the viewer may applaud. A vote call's #lounge
+    /// line opens here (`open_vote`).
+    Vote,
     HallOfFame,
     Mine,
 }
 
 impl GallerySection {
-    pub const ALL: [Self; 4] = [Self::Newest, Self::ThisMonth, Self::HallOfFame, Self::Mine];
+    pub const ALL: [Self; 5] = [
+        Self::Newest,
+        Self::Vote,
+        Self::ThisMonth,
+        Self::HallOfFame,
+        Self::Mine,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::ThisMonth => "Ranking",
             Self::Newest => "Latest",
+            Self::Vote => "Vote",
             Self::HallOfFame => "Hall of fame",
             Self::Mine => "Mine",
         }
@@ -58,6 +68,9 @@ impl GallerySection {
                 format!("this month's pieces by applause; at month end {places}")
             }
             Self::Newest => "the newest pieces first, any month".to_string(),
+            Self::Vote => {
+                "this month's pieces by others, the ones without your applause first".to_string()
+            }
             Self::HallOfFame => "each past month's winner".to_string(),
             Self::Mine => "everything you have hung".to_string(),
         }
@@ -67,6 +80,7 @@ impl GallerySection {
         match self {
             Self::ThisMonth => PieceListing::ThisMonth,
             Self::Newest => PieceListing::Newest,
+            Self::Vote => PieceListing::Vote,
             Self::HallOfFame => PieceListing::HallOfFame,
             Self::Mine => PieceListing::Mine,
         }
@@ -76,6 +90,7 @@ impl GallerySection {
         match listing {
             PieceListing::ThisMonth => Self::ThisMonth,
             PieceListing::Newest => Self::Newest,
+            PieceListing::Vote => Self::Vote,
             PieceListing::HallOfFame => Self::HallOfFame,
             PieceListing::Mine => Self::Mine,
         }
@@ -87,6 +102,7 @@ impl GallerySection {
             Self::ThisMonth => 1,
             Self::HallOfFame => 2,
             Self::Mine => 3,
+            Self::Vote => 4,
         }
     }
 }
@@ -206,7 +222,7 @@ pub struct GalleryState {
     results_rx: mpsc::UnboundedReceiver<GalleryResult>,
     focus: Focus,
     rail_index: usize,
-    sections: [SectionState; 4],
+    sections: [SectionState; 5],
     /// The rail's numbers, fetched on entry so they are there before any
     /// listing is opened. A loaded listing's own length wins over them.
     counts: Option<ListingCounts>,
@@ -518,6 +534,19 @@ impl GalleryState {
         self.focus = Focus::Piece;
     }
 
+    /// Open the Vote listing full-frame on its first piece, from outside
+    /// the page (a vote call's #lounge line). Read afresh, so the pieces
+    /// applauded on an earlier walk have moved behind the rest. A month
+    /// with nothing to applaud lands on the empty list instead (`tick`).
+    pub fn open_vote(&mut self) {
+        self.reload(GallerySection::Vote);
+        self.rail_select(RailRow::Gallery(GallerySection::Vote));
+        let state = &mut self.sections[GallerySection::Vote.index()];
+        state.selected = 0;
+        state.scroll = 0;
+        self.focus = Focus::Piece;
+    }
+
     pub fn list_move(&mut self, delta: isize) {
         let Some(section) = self.viewed_section() else {
             return;
@@ -531,6 +560,16 @@ impl GalleryState {
             return;
         }
         let last = state.pieces.len() as isize - 1;
+        // Walking the month piece by piece has an end worth saying: the
+        // next key would otherwise do nothing, with no reason given.
+        if section == GallerySection::Vote
+            && self.focus == Focus::Piece
+            && delta > 0
+            && state.selected as isize == last
+        {
+            self.notice = Some(END_OF_VOTE.to_string());
+            return;
+        }
         state.selected = (state.selected as isize + delta).clamp(0, last) as usize;
         if state.selected < state.scroll {
             state.scroll = state.selected;
@@ -742,6 +781,7 @@ impl GalleryState {
                     {
                         state.select_or_insert(pending);
                     }
+                    self.leave_empty_frame(section);
                 }
                 GalleryResult::ListFailed {
                     listing,
@@ -755,6 +795,7 @@ impl GalleryState {
                     }
                     state.loading = false;
                     state.error = Some(error);
+                    self.leave_empty_frame(section);
                 }
                 GalleryResult::Hung(piece) => {
                     self.hang = HangFlow::Idle;
@@ -838,6 +879,18 @@ impl GalleryState {
         changed
     }
 
+    /// A full frame opened ahead of its listing (`open_vote`) goes back to
+    /// the list when `section`'s answer left it nothing to show: the list
+    /// is where the empty month, or the failed read, is said.
+    fn leave_empty_frame(&mut self, section: GallerySection) {
+        if self.focus == Focus::Piece
+            && self.viewed_section() == Some(section)
+            && self.selected_piece().is_none()
+        {
+            self.focus = Focus::List;
+        }
+    }
+
     /// A piece that is no longer on the wall leaves every listing; a full
     /// frame on it goes back to its list. A listing still in flight is
     /// asked for again, since its answer may have been read before the
@@ -882,6 +935,7 @@ impl GalleryState {
 }
 
 const OWN_PIECE_APPLAUSE: &str = "You cannot applaud your own piece.";
+const END_OF_VOTE: &str = "That was the last piece of the month. Esc for the list.";
 const CLOSED_MONTH_APPLAUSE: &str = "Applause closed with the month. The ranking stands.";
 const NOT_YOURS_TAKE_DOWN: &str = "Only the hanger takes a piece down.";
 const CLOSED_MONTH_TAKE_DOWN: &str = "Last month's wall is settled; that piece stays up.";

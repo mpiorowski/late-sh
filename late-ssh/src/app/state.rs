@@ -1043,9 +1043,10 @@ pub struct App {
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
-    /// A piece opened from its #lounge card, until the Artboard page may
-    /// show it (`open_gallery_piece`, `sync_dartboard_connection`).
-    pub(crate) pending_gallery_piece: Option<crate::app::artboard::gallery::svc::GalleryPiece>,
+    /// What a #lounge line opened in the gallery (a piece from its card,
+    /// the Vote listing from a vote call), until the Artboard page may
+    /// show it (`open_gallery_door`, `sync_dartboard_connection`).
+    pub(crate) pending_gallery_door: Option<crate::app::artboard::gallery::card::input::LoungeDoor>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -2029,7 +2030,7 @@ impl App {
             artboard_interacting: false,
             artboard_content_accepted: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
-            pending_gallery_piece: None,
+            pending_gallery_door: None,
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -2743,7 +2744,7 @@ impl App {
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
-            self.pending_gallery_piece = None;
+            self.pending_gallery_door = None;
         }
 
         if self.screen == Screen::Lateania {

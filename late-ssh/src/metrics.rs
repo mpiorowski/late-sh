@@ -11,7 +11,7 @@ use late_core::models::user::RadioStation;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
-use crate::app::artboard::gallery::svc::GalleryCardOutcome;
+use crate::app::artboard::gallery::svc::{GalleryCardOutcome, VoteCallOutcome};
 use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::nudge::RadioNudgeSpot;
 use crate::app::audio::radio_meta::polled::PolledFeed;
@@ -885,6 +885,7 @@ mod inner {
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::StreakDay;
+    use super::VoteCallOutcome;
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
@@ -2045,6 +2046,18 @@ mod inner {
                 .u64_counter("late_ssh_news_cards_total")
                 .with_description(
                     "News share cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its story)",
+                )
+                .build()
+        })
+    }
+
+    fn gallery_vote_calls_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_gallery_vote_calls_total")
+                .with_description(
+                    "Artboard gallery closing-week vote calls in #lounge by outcome: posted, refused (room rules), claim_failed, post_failed (claimed, so lost), link_failed (posted, but Enter on it opens nothing)",
                 )
                 .build()
         })
@@ -3739,6 +3752,21 @@ mod inner {
         gallery_cards_total().add(1, &[KeyValue::new("outcome", gallery_card_label(outcome))]);
     }
 
+    fn vote_call_label(outcome: VoteCallOutcome) -> &'static str {
+        match outcome {
+            VoteCallOutcome::Posted => "posted",
+            VoteCallOutcome::Refused => "refused",
+            VoteCallOutcome::ClaimFailed => "claim_failed",
+            VoteCallOutcome::PostFailed => "post_failed",
+            VoteCallOutcome::LinkFailed => "link_failed",
+        }
+    }
+
+    /// A closing-week vote call that was due and not already claimed.
+    pub fn record_gallery_vote_call(outcome: VoteCallOutcome) {
+        gallery_vote_calls_total().add(1, &[KeyValue::new("outcome", vote_call_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -4923,6 +4951,7 @@ mod inner {
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::StreakDay;
+    use super::VoteCallOutcome;
     use super::{
         ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
         AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
@@ -5068,6 +5097,7 @@ mod inner {
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_gallery_card(_outcome: GalleryCardOutcome) {}
+    pub fn record_gallery_vote_call(_outcome: VoteCallOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_roll_call(
         _result: RollCallResult,

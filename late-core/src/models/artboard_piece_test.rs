@@ -1,10 +1,10 @@
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, FeaturedPiece, HangOutcome, HangParams, ListingCounts,
-    PIECE_DAILY_CAP, PieceListing, PieceLookup, TakeDownOutcome,
+    MonthStandings, PIECE_DAILY_CAP, PieceListing, PieceLookup, TakeDownOutcome, VoteCall,
 };
 use crate::models::chat_message::{ChatMessage, ChatMessageParams};
 use crate::models::chat_room::ChatRoom;
@@ -253,6 +253,7 @@ async fn a_hanger_takes_down_only_their_own_piece_and_only_this_month() {
             newest: 2,
             hall_of_fame: 0,
             mine: 2,
+            vote: 0,
         }
     );
 
@@ -326,6 +327,7 @@ async fn listing_counts_answer_without_listing() {
             newest: 3,
             hall_of_fame: 0,
             mine: 2,
+            vote: 1,
         }
     );
 }
@@ -634,5 +636,155 @@ async fn a_linked_piece_is_a_lounge_card_until_it_is_taken_down() {
             .await
             .expect("list cards after")
             .is_empty()
+    );
+}
+
+/// The Vote listing is what a viewer may applaud: this month's pieces by
+/// anyone else, the ones without their applause first, in an order that is
+/// theirs and holds between reads.
+#[tokio::test]
+async fn the_vote_listing_is_the_months_other_pieces_unapplauded_first() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = create_test_user(&test_db.db, "vote-viewer").await;
+    let painter = create_test_user(&test_db.db, "vote-painter").await;
+    let other = create_test_user(&test_db.db, "vote-other").await;
+
+    hang(
+        &client,
+        hang_params(painter.id, "last month", "hash-vote-old"),
+    )
+    .await;
+    roll_artboard_pieces_back_a_month(&client).await;
+    hang(&client, hang_params(viewer.id, "my own", "hash-vote-mine")).await;
+    let mut theirs = vec![
+        hang(&client, hang_params(painter.id, "one", "hash-vote-1"))
+            .await
+            .id,
+        hang(&client, hang_params(painter.id, "two", "hash-vote-2"))
+            .await
+            .id,
+        hang(&client, hang_params(other.id, "three", "hash-vote-3"))
+            .await
+            .id,
+    ];
+    theirs.sort();
+
+    let ids = |pieces: Vec<ArtboardPiece>| pieces.iter().map(|piece| piece.id).collect::<Vec<_>>();
+    let first_look = ids(ArtboardPiece::list(&client, viewer.id, PieceListing::Vote)
+        .await
+        .expect("vote listing"));
+    let mut listed = first_look.clone();
+    listed.sort();
+    assert_eq!(listed, theirs, "not the viewer's own, not last month's");
+    assert_eq!(
+        ids(ArtboardPiece::list(&client, viewer.id, PieceListing::Vote)
+            .await
+            .expect("vote listing again")),
+        first_look,
+        "the order holds between reads"
+    );
+
+    // Applauding the first two leaves the third on top, the two in the
+    // order they had.
+    for piece_id in &first_look[..2] {
+        ArtboardPiece::toggle_applause(&client, *piece_id, viewer.id)
+            .await
+            .expect("applaud");
+    }
+    assert_eq!(
+        ids(ArtboardPiece::list(&client, viewer.id, PieceListing::Vote)
+            .await
+            .expect("vote listing after applause")),
+        vec![first_look[2], first_look[0], first_look[1]]
+    );
+}
+
+/// A vote call is won once per month and days left, never for a month with
+/// nothing on its wall, and its line stops being one when it is deleted
+/// while the claim stays spent.
+#[tokio::test]
+async fn a_vote_call_is_claimed_once_and_reports_the_month() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let painter = create_test_user(&test_db.db, "call-painter").await;
+    let today = Utc::now().date_naive();
+    let month = today.with_day(1).expect("first of the month");
+
+    assert_eq!(
+        VoteCall::claim(&client, month, 7).await.expect("claim"),
+        None,
+        "an empty wall is left unclaimed"
+    );
+
+    let leader = hang(&client, hang_params(painter.id, "leader", "hash-call-1")).await;
+    hang(&client, hang_params(painter.id, "quiet", "hash-call-2")).await;
+    let gone = hang(&client, hang_params(painter.id, "gone", "hash-call-3")).await;
+    ArtboardPiece::take_down(&client, gone.id, painter.id)
+        .await
+        .expect("take down");
+    for name in ["call-fan-1", "call-fan-2"] {
+        let fan = create_test_user(&test_db.db, name).await;
+        ArtboardPiece::toggle_applause(&client, leader.id, fan.id)
+            .await
+            .expect("applaud");
+    }
+
+    let call = VoteCall::claim(&client, month, 7)
+        .await
+        .expect("claim")
+        .expect("the first claim wins");
+    assert_eq!(
+        call.standings,
+        MonthStandings {
+            pieces: 2,
+            top_applause: 2,
+            one_short: 1,
+        }
+    );
+    assert_eq!(
+        VoteCall::claim(&client, month, 7).await.expect("claim"),
+        None
+    );
+    assert!(
+        VoteCall::claim(&client, month, 3)
+            .await
+            .expect("claim")
+            .is_some(),
+        "another day of the same month is its own call"
+    );
+
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let line = ChatMessage::create_house_card(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: painter.id,
+            body: "the wall closes".to_string(),
+        },
+    )
+    .await
+    .expect("line");
+    VoteCall::link_message(&client, call.id, line.id)
+        .await
+        .expect("link");
+    assert_eq!(
+        VoteCall::message_ids(&client, 10).await.expect("lines"),
+        vec![line.id]
+    );
+
+    ChatMessage::delete_by_admin(&client, line.id)
+        .await
+        .expect("delete the line");
+    assert!(
+        VoteCall::message_ids(&client, 10)
+            .await
+            .expect("lines")
+            .is_empty()
+    );
+    assert_eq!(
+        VoteCall::claim(&client, month, 7).await.expect("claim"),
+        None,
+        "a deleted line is not posted again"
     );
 }

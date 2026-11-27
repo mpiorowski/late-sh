@@ -205,7 +205,7 @@ otherwise.
 | `statusline` | The frame status bars and their customizer |
 | `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles, the attention guest (what waits on you, a row each, gone when the list is empty) |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
-| `artboard` | The Artboard: the shared canvas, its editor and input model, the board server and persistence (hung pieces, applause, the monthly award and the splash wall in `gallery/CONTEXT.md`) |
+| `artboard` | The Artboard: the shared canvas, its editor and input model, the board server and persistence (hung pieces, applause, the monthly award, the closing week's vote calls and the splash wall in `gallery/CONTEXT.md`) |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `pet` | The Pet Companion, an egg for every account: the animal picked at the hatch and a drawing picked at each stage after, hatched by days together and grown by treats, one treat a day from a win in any game shown as that day's title, tricks, visitors and the pets they send to stay an hour, the care box, the `/pet` commands |
 | `hub` | The Shop (`Ctrl+S`), quests (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |

@@ -26,6 +26,10 @@
 //! ([`ArtboardPiece::splash_for_day`]) stamps `splash_on` (migration 195)
 //! one piece per UTC day in hang order, the day after the piece was hung
 //! at the earliest.
+//!
+//! The closing week's #lounge lines ([`VoteCall`], table
+//! `artboard_vote_calls`, migration 292) are claimed here too: one row per
+//! month and days left, won before the line is posted.
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -61,6 +65,9 @@ pub const ARTBOARD_PIECES_CHANGED_CHANNEL: &str = "artboard_pieces_changed";
 /// How many of the newest pieces with a #lounge card every replica keeps
 /// in memory to draw them. An older card reads as its plain line.
 pub const GALLERY_LOUNGE_CARD_LIMIT: i64 = 100;
+/// How many of the newest vote calls' #lounge lines every replica knows by
+/// message id. Enter on an older one is an ordinary message's Enter.
+pub const GALLERY_VOTE_CALL_LIMIT: i64 = 12;
 
 /// A piece as the gallery shows it: the row, its author's name, and the
 /// applause count with the viewer's own hand marked.
@@ -173,6 +180,9 @@ pub enum PieceListing {
     HallOfFame,
     /// The viewer's own pieces, newest first.
     Mine,
+    /// This UTC month's pieces by everyone but the viewer, the ones they
+    /// have not applauded first, in an order that is the viewer's own.
+    Vote,
 }
 
 /// The gallery line on a profile.
@@ -190,6 +200,7 @@ pub struct ListingCounts {
     pub newest: i64,
     pub hall_of_fame: i64,
     pub mine: i64,
+    pub vote: i64,
 }
 
 impl ListingCounts {
@@ -199,8 +210,28 @@ impl ListingCounts {
             PieceListing::Newest => self.newest,
             PieceListing::HallOfFame => self.hall_of_fame,
             PieceListing::Mine => self.mine,
+            PieceListing::Vote => self.vote,
         }
     }
+}
+
+/// A closing-week call this process won, and the month as the line reports
+/// it: read in the claim's own statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VoteCall {
+    pub id: Uuid,
+    pub standings: MonthStandings,
+}
+
+/// A month's wall in three numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonthStandings {
+    /// Pieces of the month still up.
+    pub pieces: i64,
+    /// The most applause any of them has.
+    pub top_applause: i64,
+    /// Pieces one applause under [`GALLERY_AWARD_MIN_APPLAUSE`].
+    pub one_short: i64,
 }
 
 /// What `feature_now` pinned: enough for the audit row and the receipt.
@@ -376,6 +407,23 @@ impl ArtboardPiece {
                             "{PIECE_VIEW_SQL}
                              WHERE p.user_id = $1
                              ORDER BY p.created DESC
+                             LIMIT $2"
+                        ),
+                        &[&viewer_id, &GALLERY_LISTING_LIMIT],
+                    )
+                    .await?
+            }
+            // The order is a shuffle keyed on the viewer, the same every
+            // time they look: no piece is first for everybody, so where a
+            // walk through the month stops costs each piece the same.
+            PieceListing::Vote => {
+                client
+                    .query(
+                        &format!(
+                            "{PIECE_VIEW_SQL}
+                             WHERE p.period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                               AND p.user_id <> $1
+                             ORDER BY applauded_by_viewer ASC, md5(p.id::text || $1::text) ASC
                              LIMIT $2"
                         ),
                         &[&viewer_id, &GALLERY_LISTING_LIMIT],
@@ -667,7 +715,7 @@ impl ArtboardPiece {
         })
     }
 
-    /// The four listing sizes in one round trip: the rail's numbers. The
+    /// The listing sizes in one round trip: the rail's numbers. The
     /// hall of fame counts past months whose best piece cleared the award
     /// floor, the same months `list(HallOfFame)` returns.
     pub async fn listing_counts(
@@ -686,7 +734,10 @@ impl ArtboardPiece {
                         AND p.removed_at IS NULL
                         AND (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) >= $2) AS hall_of_fame,
                     (SELECT count(*) FROM artboard_pieces
-                      WHERE user_id = $1 AND removed_at IS NULL) AS mine",
+                      WHERE user_id = $1 AND removed_at IS NULL) AS mine,
+                    (SELECT count(*) FROM artboard_pieces
+                      WHERE period_month = date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                        AND user_id <> $1 AND removed_at IS NULL) AS vote",
                 &[&viewer_id, &GALLERY_AWARD_MIN_APPLAUSE],
             )
             .await?;
@@ -695,6 +746,7 @@ impl ArtboardPiece {
             newest: row.get("newest"),
             hall_of_fame: row.get("hall_of_fame"),
             mine: row.get("mine"),
+            vote: row.get("vote"),
         })
     }
 
@@ -823,5 +875,79 @@ impl ArtboardPiece {
             )
             .await?;
         Ok(updated)
+    }
+}
+
+impl VoteCall {
+    /// Claim the call for `period_month` at `days_left` and read the month
+    /// it reports, in one statement, so an error spends nothing. `None`
+    /// when the call is already claimed (another replica, a restart) or the
+    /// month has no piece up, which leaves it unclaimed: a piece hung later
+    /// that day still gets its call.
+    pub async fn claim(
+        client: &impl GenericClient,
+        period_month: NaiveDate,
+        days_left: i32,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "WITH standing AS (
+                    SELECT (SELECT count(*) FROM artboard_piece_votes v
+                             WHERE v.piece_id = p.id) AS applause
+                    FROM artboard_pieces p
+                    WHERE p.period_month = $1::date AND p.removed_at IS NULL
+                 ),
+                 claimed AS (
+                    INSERT INTO artboard_vote_calls (period_month, days_left)
+                    SELECT $1::date, $2::int
+                    WHERE EXISTS (SELECT 1 FROM standing)
+                    ON CONFLICT (period_month, days_left) DO NOTHING
+                    RETURNING id
+                 )
+                 SELECT claimed.id,
+                        (SELECT count(*) FROM standing) AS pieces,
+                        (SELECT COALESCE(max(applause), 0) FROM standing) AS top_applause,
+                        (SELECT count(*) FROM standing WHERE applause = $3::bigint - 1) AS one_short
+                 FROM claimed",
+                &[&period_month, &days_left, &GALLERY_AWARD_MIN_APPLAUSE],
+            )
+            .await?;
+        Ok(row.map(|row| Self {
+            id: row.get("id"),
+            standings: MonthStandings {
+                pieces: row.get("pieces"),
+                top_applause: row.get("top_applause"),
+                one_short: row.get("one_short"),
+            },
+        }))
+    }
+
+    /// Point a claimed call at its #lounge line.
+    pub async fn link_message(
+        client: &impl GenericClient,
+        call_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE artboard_vote_calls SET message_id = $2 WHERE id = $1",
+                &[&call_id, &message_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The #lounge lines of the newest `limit` calls that still have one.
+    pub async fn message_ids(client: &impl GenericClient, limit: i64) -> Result<Vec<Uuid>> {
+        let rows = client
+            .query(
+                "SELECT message_id FROM artboard_vote_calls
+                 WHERE message_id IS NOT NULL
+                 ORDER BY created DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows.into_iter().map(|row| row.get("message_id")).collect())
     }
 }

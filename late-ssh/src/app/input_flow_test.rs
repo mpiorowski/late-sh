@@ -4855,8 +4855,8 @@ async fn artboard_archives_time_travel_from_the_rail() {
     wait_for_render_contains(&mut app, "ARCHIVES").await;
     wait_for_render_contains(&mut app, "Daily").await;
 
-    // Down the rail past Board, four gallery rows, and Hang a piece.
-    for _ in 0..6 {
+    // Down the rail past Board, five gallery rows, and Hang a piece.
+    for _ in 0..7 {
         app.handle_input(b"j");
     }
     app.handle_input(b"\r");
@@ -4869,7 +4869,7 @@ async fn artboard_archives_time_travel_from_the_rail() {
     // Tab back to the rail, up to Board, Enter: live again.
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "archive").await;
-    for _ in 0..6 {
+    for _ in 0..7 {
         app.handle_input(b"k");
     }
     app.handle_input(b"\r");
@@ -4933,7 +4933,7 @@ async fn a_refused_hang_raises_one_banner() {
     wait_for_render_contains(&mut app, "Mode       view").await;
     app.handle_input(b"\x1b");
     wait_for_render_contains(&mut app, "rail j/k").await;
-    for _ in 0..5 {
+    for _ in 0..6 {
         app.handle_input(b"j");
     }
     app.handle_input(b"\r");
@@ -4986,10 +4986,10 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     // Esc on the board unfolds the rail; down it to Hang a piece: Board,
-    // four gallery rows, then it.
+    // five gallery rows, then it.
     app.handle_input(b"\x1b");
     wait_for_render_contains(&mut app, "rail j/k").await;
-    for _ in 0..5 {
+    for _ in 0..6 {
         app.handle_input(b"j");
     }
     app.handle_input(b"\r");

@@ -320,6 +320,7 @@ fn draw_list(frame: &mut Frame, area: Rect, gallery: &GalleryState, section: Gal
             match section {
                 GallerySection::ThisMonth => "  nothing hung this month yet",
                 GallerySection::Newest => "  nothing hung yet",
+                GallerySection::Vote => "  nobody else has hung a piece this month yet",
                 GallerySection::HallOfFame => "  no month has a winner yet",
                 GallerySection::Mine => "  you have not hung a piece yet",
             },
