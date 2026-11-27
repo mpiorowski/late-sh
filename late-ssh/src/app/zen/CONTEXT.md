@@ -423,7 +423,7 @@ where it swallows every other stray letter (`house_letter`,
 ahead of every page. In arrange mode `?` opens `HelpTopic::Layouts`,
 which lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). A few panels
-still name keys inside the tile in normal mode: the music dock's `- = volume  m mute` under its bar and `v+r tune`
+still name keys inside the tile in normal mode: the music dock's `- = volume  m mute` under its bar and `v+r tune`,
 the bonsai preview's `w care` after its `alive`/`watch`/`dry` (its age is
 the care box's), the pet's `p care` at the end of its status row, and the
 reef and tank's `a reef` after the care bar on the surface (dropped on a

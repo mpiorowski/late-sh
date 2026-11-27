@@ -19,7 +19,7 @@ use ratatui::{
 use super::session::PetState;
 use super::state::{Need, TRICK_DAYS, hatch_wait, treat_title, treat_wait};
 use super::ui::{Neighbours, PetView, draw_pet_box, guest_label, pick_name, still_rows};
-use crate::app::common::{primitives::truncate_cells, theme};
+use crate::app::common::{primitives::clip_spans, theme};
 
 const MODAL_WIDTH: u16 = 76;
 const PEN_ROWS: u16 = 6;
@@ -134,7 +134,7 @@ fn flow(label_text: &str, pieces: Vec<Piece>, width: usize) -> Vec<Line<'static>
     let mut line: Vec<Span<'static>> = Vec::new();
     let mut used = 0;
     for piece in pieces {
-        let spans = clip(piece.spans, room);
+        let spans = clip_spans(piece.spans, room);
         let cells: usize = spans.iter().map(Span::width).sum();
         match (line.is_empty(), used + piece.lead.width() + cells <= room) {
             (true, _) => {
@@ -165,30 +165,6 @@ fn flow(label_text: &str, pieces: Vec<Piece>, width: usize) -> Vec<Line<'static>
             Line::from(row)
         })
         .collect()
-}
-
-/// `spans` cut to `room` cells, the cut span ending in an ellipsis.
-fn clip(spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
-    let mut left = room;
-    let mut kept = Vec::new();
-    for span in spans {
-        let cells = span.width();
-        match (cells <= left, left) {
-            (true, _) => {
-                left -= cells;
-                kept.push(span);
-            }
-            (false, 0) => break,
-            (false, _) => {
-                kept.push(Span::styled(
-                    truncate_cells(&span.content, left),
-                    span.style,
-                ));
-                break;
-            }
-        }
-    }
-    kept
 }
 
 /// The rows under the pen, flowed into `width`. A pet with what its next

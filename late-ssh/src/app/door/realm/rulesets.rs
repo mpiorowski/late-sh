@@ -314,6 +314,15 @@ pub struct RealmRuleset {
     /// mild because a runaway leader was the standard ruleset's whole
     /// problem. Zero on the standard ruleset.
     pub land_points: f64,
+    /// The least a winner is paid at the reference tempo, before the pace's
+    /// multiplier (`svc::payout_plan`): the pot is raised until the winner's
+    /// share reaches it. Zero on the standard ruleset, which has no floor.
+    /// The campaign's is 20k, 10k at the house's fast pace: season 2, sized
+    /// on the per-player rate alone, paid its winner 3k for fifteen days,
+    /// because only two players had played as long as a win takes. A floor
+    /// cannot be farmed with alts: it is paid once per house world, to
+    /// whoever wins it.
+    pub win_min: i64,
 }
 
 /// How a ruleset turns moves into results. Closed: the engine and the
@@ -384,6 +393,7 @@ pub const STANDARD: RealmRuleset = RealmRuleset {
     domination_nights: 0,
     season_days: 0,
     land_points: 0.0,
+    win_min: 0,
 };
 
 /// Season 2 on: orders by day, the night resolves them, and half the world
@@ -415,6 +425,7 @@ pub const CAMPAIGN: RealmRuleset = RealmRuleset {
     // 20 days at the house pace.
     season_days: 57,
     land_points: 4.0,
+    win_min: 20_000,
     join_max_claimed: 0.9,
     // 10 days at the house pace: half the clock.
     min_active_days_to_win: 29,
@@ -557,6 +568,10 @@ pub struct RealmRulesetSnapshot {
     pub season_days: u16,
     #[serde(default)]
     pub land_points: f64,
+    /// Frozen with the rest so a finished game keeps the pot it was played
+    /// for: a world opened before the floor existed has none.
+    #[serde(default)]
+    pub win_min: i64,
 }
 
 impl From<&RealmRuleset> for RealmRulesetSnapshot {
@@ -626,6 +641,7 @@ impl From<&RealmRuleset> for RealmRulesetSnapshot {
             domination_nights: rs.domination_nights,
             season_days: rs.season_days,
             land_points: rs.land_points,
+            win_min: rs.win_min,
         }
     }
 }
@@ -1196,6 +1212,7 @@ mod tests {
             "domination_nights",
             "season_days",
             "land_points",
+            "win_min",
         ] {
             assert!(fields.remove(key).is_some(), "{key} is serialized");
         }

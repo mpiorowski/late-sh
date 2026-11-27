@@ -2635,7 +2635,7 @@ async fn chat_reaction_leader_routes_cancel_digits_and_wave() {
     assert!(!app.chat.is_reaction_leader_active());
     assert!(
         !app.show_bonsai_modal,
-        "reaction leader owns w before the global Bonsai shortcut"
+        "reaction leader owns w before Home's Bonsai key"
     );
     wait_until(
         || async {

@@ -2226,7 +2226,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  it hatches        the day after it arrives the egg is ready: click it, and in the care box press 1 for a cat, 2 for a dog",
         "                    or 3 for a bird. The egg waits as long as you like. Until it is ready the row under it",
         "                    says when, and a pat makes it rock",
-        "  it grows up       on treats: young after 5 treats eaten, adult after 20, elder after 60, one a day at most. When it",
+        "  it grows up       on treats: young after 5 treats eaten, adult after 20, elder after 60, one earned a day at most. When it",
         "                    has them, click it: the care box shows it drawn two ways and 1 or 2 picks one. You pick its ears",
         "                    (or crest) at young, its feet at adult and its face (the bird's wings) at elder, and the picks stay:",
         "                    eight different elders each",

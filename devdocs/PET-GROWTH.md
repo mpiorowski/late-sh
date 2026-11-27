@@ -24,7 +24,7 @@ actions, and "day 40 is day 4". So nothing here is upkeep.
   owner rarely changes (the name, the animal, away and out, the reset)
   is a slash command, so no key in the care box can undo a pet.
 - **Growth is play, capped at a day's worth.** Treats grow a hatched
-  pet, one a UTC day at most, and only the first treat or play of a UTC
+  pet, earned one a UTC day at most, and only the first treat or play of a UTC
   day counts toward the bond, so there is nothing to grind.
 - **Nothing about the pet is sold.** No unlock, no species, no looks, no
   toys: the Shop knows no pet.
@@ -85,7 +85,7 @@ more call lines, or a trick only a bonded pet learns.
   day after it arrives: the first day is day 1), so every account gets a
   creature. Then young, adult and elder at 5, 20 and 60 treats eaten: a
   push into playing anything, at the cost of a pet that stays a baby for
-  an owner who only chats. Days together stay the count on the tile.
+  an owner who only chats. Days together stay the count in the care box and on the profile.
 - **Every stage is a pick.** The owner picks cat, dog or bird in the
   care box when the egg is ready, and at young, adult and elder one of
   two drawings of the part that stage adds. The picks stay: eight elders

@@ -147,7 +147,7 @@ async fn the_care_box_hatches_what_its_owner_picks_plays_and_teaches() {
     assert_eq!(app.pet_state.animal(), Some(PetSpecies::Dog));
 }
 
-/// A pet with its days grows when its owner picks one of the two drawings
+/// A pet with its treats grows when its owner picks one of the two drawings
 /// the care box shows, by the key under it.
 #[tokio::test]
 async fn the_care_box_grows_the_pet_into_the_drawing_its_owner_picks() {

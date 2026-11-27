@@ -57,8 +57,8 @@ pub enum Need {
     Treats(i32),
 }
 
-/// What entering `stage` asks for, counted from the egg. Treats are one a
-/// UTC day at most, so an elder is sixty days of play at the soonest; an
+/// What entering `stage` asks for, counted from the egg. A treat is earned
+/// one a UTC day at most, so an elder is sixty days of play at the soonest; an
 /// owner who never plays keeps a baby, and loses nothing by it.
 pub fn need_for(stage: Stage) -> Need {
     match stage {

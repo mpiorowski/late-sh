@@ -3393,27 +3393,9 @@ pub(crate) fn open_message_search_modal_globally(app: &mut App, query: &str) {
 }
 
 fn open_settings_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
+    close_overlays_for_modal(app);
     // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_aquarium_modal = false;
-    app.show_lobby_modal = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
     app.settings_modal_state
         .open_from_profile(app.profile_state.profile(), device_artboard_disclaimer);
@@ -3426,26 +3408,7 @@ fn open_settings_modal_globally(app: &mut App) {
 /// shelf. It closes the modal stack the same way every other opener does,
 /// since a modal left up would cover the page it just went to.
 pub(crate) fn open_usermap_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_aquarium_modal = false;
-    app.show_lobby_modal = false;
-    app.show_hub_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
+    close_overlays_for_modal(app);
     app.set_screen(Screen::Profiles);
     app.directory_state
         .set_shelf(crate::app::directory::state::Shelf::Map);
@@ -3453,25 +3416,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
 
 /// Shared Shop entry point for Ctrl+S, `/shop`, and the status bar's Shop hint.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_aquarium_modal = false;
-    app.show_lobby_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
+    close_overlays_for_modal(app);
     app.show_hub_modal = true;
 }
 
@@ -3527,51 +3472,14 @@ fn open_aquarium_modal_globally(app: &mut App) {
 }
 
 fn open_bonsai_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_aquarium_modal = false;
-    app.show_lobby_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
+    close_overlays_for_modal(app);
     app.show_bonsai_modal = true;
 }
 
 pub(crate) fn open_daily_modal_globally(app: &mut App) {
-    clear_prefix_arms(app);
+    close_overlays_for_modal(app);
     // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
-    app.show_help = false;
-    app.show_mod_modal = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_sheet_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_gild_modal = false;
-    app.gild_modal_state.close();
-    app.show_bonsai_modal = false;
-    app.show_pet_modal = false;
-    app.show_aquarium_modal = false;
-    app.show_settings = false;
-    app.show_quit_confirm = false;
-    close_icon_picker(app);
-    app.chat.close_overlay();
-    close_reader_and_player(app);
-    app.chat.cancel_room_jump();
     app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;
 }

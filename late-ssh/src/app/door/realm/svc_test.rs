@@ -1131,10 +1131,14 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
     assert_eq!(row.winner_user_id, Some(alice));
 
     // Three players at start: the whole pot, winner takes all.
-    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
-        .iter()
-        .map(|(_, chips)| chips)
-        .sum();
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(
+        3,
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    )
+    .iter()
+    .map(|(_, chips)| chips)
+    .sum();
     assert_eq!(wait_for_payout(&test_db, alice).await, Some(pot));
     assert!(pot >= 9_000, "a three-player pot should be worth winning");
     // The three-player tier pays one place: the runners-up grew the pot and
@@ -2270,10 +2274,14 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
     svc.sweep(Utc::now()).await.expect("sweep");
     let row = svc.load_game(game_id).await.expect("load").expect("row");
     assert_eq!(row.payout.as_deref(), Some(RealmGame::PAYOUT_PAID));
-    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
-        .iter()
-        .map(|(_, chips)| chips)
-        .sum();
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(
+        3,
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    )
+    .iter()
+    .map(|(_, chips)| chips)
+    .sum();
     assert_eq!(wait_for_payout(&test_db, alice).await, Some(pot));
 
     // Settled is settled: another tick pays nothing twice.
@@ -2852,10 +2860,14 @@ async fn the_season_clock_gives_the_world_to_the_biggest_share_and_pays() {
                 LogEntry::Won { user_id, kind: WinKind::SeasonOver } if *user_id == biggest
             ))
     );
-    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
-        .iter()
-        .map(|(_, chips)| chips)
-        .sum();
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(
+        3,
+        state.ruleset.pot_scale,
+        state.ruleset.win_min,
+    )
+    .iter()
+    .map(|(_, chips)| chips)
+    .sum();
     assert_eq!(wait_for_payout(&test_db, biggest).await, Some(pot));
 }
 

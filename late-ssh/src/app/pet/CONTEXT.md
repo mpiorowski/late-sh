@@ -24,8 +24,10 @@ break: an owner who stays away finds it asleep and glad they are back.
 - **Days together.** One per UTC day on which the owner pressed a key
   with the pet out. The count only rises. It is not calendar age. It
   hatches the egg and is the `day N` in the care box, and does nothing after.
-- **Treats eaten** (`treats_eaten`). One per treat given; at most one a
-  UTC day, so nothing is ground. The count only rises.
+- **Treats eaten** (`treats_eaten`). One per treat given. A treat is
+  earned one a UTC day at most, so nothing is ground; one left waiting
+  overnight and the next day's can both be eaten on that day. The count
+  only rises.
 - **Stages**: `egg`, `baby`, `young`, `adult`, `elder` (`state::need_for`).
   The hatch needs 2 days together (the day it arrives is day 1, so the
   egg is ready the day after). Young, adult and elder need 5, 20 and 60
