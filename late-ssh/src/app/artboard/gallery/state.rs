@@ -537,7 +537,8 @@ impl GalleryState {
     /// Open the Vote listing full-frame on its first piece, from outside
     /// the page (a vote call's #lounge line). Read afresh, so the pieces
     /// applauded on an earlier walk have moved behind the rest. A month
-    /// with nothing to applaud lands on the empty list instead (`tick`).
+    /// with no piece by anyone else lands on the empty list instead
+    /// (`tick`).
     pub fn open_vote(&mut self) {
         self.reload(GallerySection::Vote);
         self.rail_select(RailRow::Gallery(GallerySection::Vote));

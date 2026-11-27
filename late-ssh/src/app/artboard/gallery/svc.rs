@@ -387,20 +387,11 @@ impl GalleryService {
                     true
                 }
             });
-        let calls: VoteCalls = Arc::new(
-            VoteCall::message_ids(&client, GALLERY_VOTE_CALL_LIMIT)
-                .await?
-                .into_iter()
-                .collect(),
-        );
+        // Nothing waits on a change to the calls (Enter reads them), so a
+        // re-read that found the same ones wakes no session either way.
+        let calls = VoteCall::message_ids(&client, GALLERY_VOTE_CALL_LIMIT).await?;
         self.vote_calls_tx
-            .send_if_modified(|current| match *current == calls {
-                true => false,
-                false => {
-                    *current = calls;
-                    true
-                }
-            });
+            .send_replace(Arc::new(calls.into_iter().collect()));
         Ok(())
     }
 

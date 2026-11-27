@@ -461,7 +461,8 @@ async fn system_user(db: &late_core::db::Db) -> late_core::models::user::User {
     .expect("system user")
 }
 
-/// A call due today, three days from the end of this month.
+/// This month's call with three days left, whatever today is:
+/// `run_vote_call` posts the call it is handed.
 fn due_call() -> DueCall {
     use chrono::Datelike;
 

@@ -60,7 +60,8 @@ pub const GALLERY_LISTING_LIMIT: i64 = 100;
 pub const HALL_OF_FAME_MONTHS: i64 = 36;
 /// Fired when what a #lounge card shows may have changed (migration 285):
 /// a card linked or unlinked, a piece taken down, applause given or taken
-/// back.
+/// back. Migration 292 fires it too when a vote call's line is linked or
+/// deleted.
 pub const ARTBOARD_PIECES_CHANGED_CHANNEL: &str = "artboard_pieces_changed";
 /// How many of the newest pieces with a #lounge card every replica keeps
 /// in memory to draw them. An older card reads as its plain line.
@@ -892,23 +893,24 @@ impl VoteCall {
         let row = client
             .query_opt(
                 "WITH standing AS (
-                    SELECT (SELECT count(*) FROM artboard_piece_votes v
-                             WHERE v.piece_id = p.id) AS applause
-                    FROM artboard_pieces p
-                    WHERE p.period_month = $1::date AND p.removed_at IS NULL
+                    SELECT count(*) AS pieces,
+                           max(applause) AS top_applause,
+                           count(*) FILTER (WHERE applause = $3::bigint - 1) AS one_short
+                    FROM (
+                        SELECT (SELECT count(*) FROM artboard_piece_votes v
+                                 WHERE v.piece_id = p.id) AS applause
+                        FROM artboard_pieces p
+                        WHERE p.period_month = $1::date AND p.removed_at IS NULL
+                    ) month_pieces
                  ),
                  claimed AS (
                     INSERT INTO artboard_vote_calls (period_month, days_left)
-                    SELECT $1::date, $2::int
-                    WHERE EXISTS (SELECT 1 FROM standing)
+                    SELECT $1::date, $2::int FROM standing WHERE pieces > 0
                     ON CONFLICT (period_month, days_left) DO NOTHING
                     RETURNING id
                  )
-                 SELECT claimed.id,
-                        (SELECT count(*) FROM standing) AS pieces,
-                        (SELECT COALESCE(max(applause), 0) FROM standing) AS top_applause,
-                        (SELECT count(*) FROM standing WHERE applause = $3::bigint - 1) AS one_short
-                 FROM claimed",
+                 SELECT claimed.id, standing.pieces, standing.top_applause, standing.one_short
+                 FROM claimed, standing",
                 &[&period_month, &days_left, &GALLERY_AWARD_MIN_APPLAUSE],
             )
             .await?;
