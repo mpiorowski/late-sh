@@ -6427,6 +6427,74 @@ async fn arranging_home_lets_the_keys_the_titles_name_through() {
         app.show_bonsai_modal,
         "w opens the care modal while arranging"
     );
+    app.handle_input(b"q");
+    app.handle_input(b"p");
+    assert!(app.show_pet_modal, "p opens the care box while arranging");
+    app.handle_input(b"q");
+    app.handle_input(b"a");
+    assert!(app.show_aquarium_modal, "a opens the reef while arranging");
+}
+
+/// The keepsakes' keys are Home's: `w` the bonsai, `p` the pet's care
+/// box, `a` the reef full screen, which `f` feeds and `q` closes. On
+/// another page the three open nothing.
+#[tokio::test]
+async fn the_keepsake_keys_open_their_boxes_on_home_only() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "keepsake-keys-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "keepsake-keys-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"6");
+    app.handle_input(b"wpa");
+    assert!(
+        !app.show_bonsai_modal && !app.show_pet_modal && !app.show_aquarium_modal,
+        "off Home the keys are the page's"
+    );
+
+    app.handle_input(b"1");
+    // The tiles name their keys the way the bonsai names `w care`.
+    wait_for_render_contains(&mut app, "a reef").await;
+    wait_for_render_contains(&mut app, "p care").await;
+    app.handle_input(b"a");
+    assert!(app.show_aquarium_modal);
+    wait_for_render_contains(&mut app, "not fed today · f feed · s more fish · q close").await;
+    app.handle_input(b"f");
+    assert!(
+        app.aquarium_care
+            .fed_on_day(chrono::Utc::now().date_naive()),
+        "f feeds the tank from the full view"
+    );
+    wait_for_render_contains(&mut app, "fed today · next fry in").await;
+    app.handle_input(b"q");
+    assert!(!app.show_aquarium_modal);
+    let plain = render_plain(&mut app);
+    assert!(!plain.contains("s more fish"), "{plain}");
+
+    // `s` in the view is the Shop on the tab that sells the tank's stock.
+    app.handle_input(b"as");
+    assert!(!app.show_aquarium_modal && app.show_hub_modal);
+    assert_eq!(
+        app.shop_state.selected_category(),
+        crate::app::hub::shop::catalog::ShopCategory::Companions
+    );
+    app.handle_input(b"\x1b");
+    wait_for_render_not_contains(&mut app, "-- Shop --").await;
+    assert!(!app.show_hub_modal);
+
+    app.handle_input(b"p");
+    assert!(app.show_pet_modal, "p opens the care box");
+    app.handle_input(b"q");
+    app.handle_input(b"w");
+    assert!(app.show_bonsai_modal, "w opens the bonsai");
 }
 
 #[tokio::test]

@@ -79,12 +79,8 @@ pub(crate) fn draw_bonsai_inline(
         } else {
             "alive"
         };
+        // Its age and the rest of the detail are the care box's.
         vec![
-            Span::styled(
-                format!("{}d", state.age_days),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
             Span::styled(status, Style::default().fg(theme::AMBER_DIM())),
             Span::styled(" · ", Style::default().fg(theme::BORDER_DIM())),
         ]
@@ -95,12 +91,10 @@ pub(crate) fn draw_bonsai_inline(
         )]
     };
     if state.is_alive {
-        footer.push(Span::styled(
-            "w care",
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::ITALIC),
-        ));
+        // Home's key: the letter in amber, the word dim.
+        let italic = Style::default().add_modifier(Modifier::ITALIC);
+        footer.push(Span::styled("w", italic.fg(theme::AMBER_DIM())));
+        footer.push(Span::styled(" care", italic.fg(theme::TEXT_DIM())));
     }
     lines.push(Line::from(footer).centered());
 

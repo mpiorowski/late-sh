@@ -2,12 +2,13 @@
 //! loads a `Growth` from the locked row, applies one of these, and stores
 //! it; a session's mirror reads the same type to draw and never writes.
 //!
-//! Nothing here goes down. Days together are counted, never lost; a stage
-//! is entered and never left; a trick and a bond day are kept. Only the
-//! owner's own `reset` starts a pet over.
+//! Nothing here goes down. Days together and treats eaten are counted,
+//! never lost; a stage is entered and never left; a trick and a bond day
+//! are kept. Only the owner's own `reset` starts a pet over.
 //!
-//! The days make a pet ready for its next stage and its owner's pick
-//! enters it: the animal at the hatch, then one of two drawings of a part
+//! The days make an egg ready to hatch, and treats eaten make a hatched pet
+//! ready for each stage after (`need_for`). Its owner's pick enters the
+//! stage: the animal at the hatch, then one of two drawings of a part
 //! (`Form`).
 
 use chrono::{DateTime, NaiveDate, Utc};
@@ -43,15 +44,29 @@ pub fn stay_left(since: DateTime<Utc>, now: DateTime<Utc>) -> Option<i64> {
     }
 }
 
-/// Days together a stage asks for. The day the pet arrives counts as the
+/// Days together the hatch asks for. The day the pet arrives counts as the
 /// first, so an egg hatches from the day after.
-pub fn days_for(stage: Stage) -> i32 {
+pub const HATCH_DAYS: i32 = 2;
+
+/// What a stage waits for, or what is still to come of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Need {
+    /// Days together: the hatch.
+    Days(i32),
+    /// Treats eaten: every stage after the hatch.
+    Treats(i32),
+}
+
+/// What entering `stage` asks for, counted from the egg. Treats are one a
+/// UTC day at most, so an elder is sixty days of play at the soonest; an
+/// owner who never plays keeps a baby, and loses nothing by it.
+pub fn need_for(stage: Stage) -> Need {
     match stage {
-        Stage::Egg => 0,
-        Stage::Baby => 2,
-        Stage::Young => 7,
-        Stage::Adult => 30,
-        Stage::Elder => 100,
+        Stage::Egg => Need::Days(0),
+        Stage::Baby => Need::Days(HATCH_DAYS),
+        Stage::Young => Need::Treats(5),
+        Stage::Adult => Need::Treats(20),
+        Stage::Elder => Need::Treats(60),
     }
 }
 
@@ -186,6 +201,7 @@ pub struct Growth {
     pub learning: Option<Trick>,
     pub learning_days: i32,
     pub last_practice: Option<NaiveDate>,
+    pub treats_eaten: i32,
 }
 
 impl Growth {
@@ -200,6 +216,7 @@ impl Growth {
             learning: row.learning(),
             learning_days: row.learning_days,
             last_practice: row.last_practice,
+            treats_eaten: row.treats_eaten,
         }
     }
 
@@ -215,6 +232,7 @@ impl Growth {
             learning: self.learning,
             learning_days: self.learning_days,
             last_practice: self.last_practice,
+            treats_eaten: self.treats_eaten,
         }
     }
 
@@ -225,7 +243,7 @@ impl Growth {
     /// Count `today` as a day together, once. `None` when the day is
     /// already counted, or when the row holds a later day (a clock that
     /// stepped back never uncounts one). The days enter no stage: they
-    /// make the pet ready, and its owner's pick does the rest.
+    /// make an egg ready, and its owner's pick does the rest.
     pub fn count_day(&mut self, today: NaiveDate) -> Option<DayCounted> {
         let days_away = match self.last_day {
             Some(last) if last >= today => return None,
@@ -237,28 +255,33 @@ impl Growth {
         Some(DayCounted { days_away })
     }
 
-    /// Whether it has the days for the stage after this one.
-    fn has_its_days(&self) -> bool {
-        match self.stage().next() {
-            Some(next) => self.days_together >= days_for(next),
-            None => false,
+    /// Count a treat eaten. Only a hatched pet is given one.
+    pub fn eat(&mut self) {
+        self.treats_eaten += 1;
+    }
+
+    /// Whether it has what the stage after this one asks for.
+    fn has_what_it_needs(&self) -> bool {
+        match self.still_needs() {
+            Some((_, Need::Days(0) | Need::Treats(0))) => true,
+            Some((_, Need::Days(_) | Need::Treats(_))) | None => false,
         }
     }
 
     /// Whether the egg has its days and waits on its owner to hatch it.
     pub fn ready_to_hatch(&self) -> bool {
         match self.form {
-            Form::Egg => self.has_its_days(),
+            Form::Egg => self.has_what_it_needs(),
             Form::Baby | Form::Young { .. } | Form::Adult { .. } | Form::Elder { .. } => false,
         }
     }
 
-    /// The two forms a hatched pet with its days can grow into, one per
+    /// The two forms a hatched pet with its treats can grow into, one per
     /// drawing of the part its next stage adds. `None` while it waits on
-    /// its days, for an egg (it hatches) and for an elder.
+    /// its treats, for an egg (it hatches) and for an elder.
     pub fn offers(&self) -> Option<[Form; 2]> {
         match (
-            self.has_its_days(),
+            self.has_what_it_needs(),
             self.form.grown(Pick::One),
             self.form.grown(Pick::Two),
         ) {
@@ -280,7 +303,7 @@ impl Growth {
     }
 
     /// Enter the next stage drawn with `pick`, for a hatched pet that has
-    /// its days. The stage entered, `None` for anything else.
+    /// its treats. The stage entered, `None` for anything else.
     pub fn grow(&mut self, pick: Pick) -> Option<Stage> {
         let [one, two] = self.offers()?;
         self.form = match pick {
@@ -303,6 +326,7 @@ impl Growth {
             learning: None,
             learning_days: 0,
             last_practice: None,
+            treats_eaten: 0,
         };
     }
 
@@ -345,20 +369,24 @@ impl Growth {
         Practiced::Progress { days }
     }
 
-    /// Days still to go before the next stage, `None` for an elder. 0
-    /// means it waits on its owner.
-    pub fn days_to_next(&self) -> Option<i32> {
-        self.stage()
-            .next()
-            .map(|next| (days_for(next) - self.days_together).max(0))
+    /// The next stage and what is still to come of what it asks for: days
+    /// for an egg, treats after. `None` for an elder. A count of 0 means it
+    /// waits on its owner's pick.
+    pub fn still_needs(&self) -> Option<(Stage, Need)> {
+        let next = self.stage().next()?;
+        let left = match need_for(next) {
+            Need::Days(days) => Need::Days((days - self.days_together).max(0)),
+            Need::Treats(treats) => Need::Treats((treats - self.treats_eaten).max(0)),
+        };
+        Some((next, left))
     }
 
     /// The days an egg still waits for. `None` once it has them, and for a
     /// hatched pet.
     pub fn days_to_hatch(&self) -> Option<i32> {
-        match self.form {
-            Form::Egg => self.days_to_next().filter(|days| *days > 0),
-            Form::Baby | Form::Young { .. } | Form::Adult { .. } | Form::Elder { .. } => None,
+        match self.still_needs() {
+            Some((_, Need::Days(days))) if days > 0 => Some(days),
+            Some((_, Need::Days(_) | Need::Treats(_))) | None => None,
         }
     }
 }
@@ -369,6 +397,16 @@ pub fn hatch_wait(days: i32) -> String {
     match days {
         1 => "tomorrow".to_string(),
         days => format!("in {days} days"),
+    }
+}
+
+/// What a hatched pet `treats` short of `next` waits for, as its owner
+/// reads it: `young after 1 more treat`. The care box and the treat's
+/// banner say it this way.
+pub fn treat_wait(next: Stage, treats: i32) -> String {
+    match treats {
+        1 => format!("{} after 1 more treat", next.as_str()),
+        treats => format!("{} after {treats} more treats", next.as_str()),
     }
 }
 

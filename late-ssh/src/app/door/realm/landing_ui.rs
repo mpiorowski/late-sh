@@ -208,15 +208,19 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
 /// The pitch's last sentence: how this world is won, as its rules say.
 fn how_it_is_won(rules: &super::rulesets::RealmRuleset) -> String {
     let dominate = rules.domination_share_tiers.last().map(|(_, share)| *share);
+    // Tiered bars ask a small realm for more than the last tier says.
+    let small = match rules.domination_share_tiers.len() {
+        0 | 1 => "",
+        _ => " (more in a small realm)",
+    };
     match (rules.domination_nights, dominate, rules.season_days) {
         (nights @ 1.., Some(share), 1..) => format!(
-            "Hold {:.0}% of it (more in a small realm) for {nights} nights running and the \
-             world is yours, or have the most of it when the season runs out.",
+            "Hold {:.0}% of it{small} for {nights} nights running and the world is yours, \
+             or have the most of it when the season runs out.",
             share * 100.0
         ),
         (nights @ 1.., Some(share), 0) => format!(
-            "Hold {:.0}% of it (more in a small realm) for {nights} nights running and the \
-             world is yours.",
+            "Hold {:.0}% of it{small} for {nights} nights running and the world is yours.",
             share * 100.0
         ),
         (_, _, 1..) => {

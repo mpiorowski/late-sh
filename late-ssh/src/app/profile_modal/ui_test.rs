@@ -575,6 +575,7 @@ async fn a_guest_stands_beside_the_pet_on_its_hosts_profile() {
                     learning: None,
                     learning_days: 0,
                     last_practice: None,
+                    treats_eaten: 5,
                 },
             )
             .await

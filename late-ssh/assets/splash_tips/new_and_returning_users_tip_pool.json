@@ -1,7 +1,7 @@
 [
   "late.sh is 18+ ~ house rules at late.sh/terms, reports to admin@dwarfforge.io",
   "Try our games! ~Rank up on the leaderboards, page 6~",
-  "Water your bonsai once a day with the w key",
+  "Water your bonsai once a day: w on Home opens it",
   "You can open a public room with /public #room",
   "Switch what you hear: v then x cycles audio sources, v then 1-4 picks a stream or station",
   "Copy a track to your clipboard: ctrl+y in the Music Booth (v then v) or Stations (v then r)",
@@ -34,7 +34,8 @@
   "When your pet is ready to grow, click it and pick one of two looks. Three picks make eight different elders",
   "The treat your pet ate today is its title until midnight UTC: win at a table and it is the lucky",
   "Your first win of the day in any game earns your pet a treat. Click it under the tile to give it",
-  "Right-click your pet's tile for its care box: toys, tricks, and how far it is from growing up",
+  "Press p on Home for your pet's care box: toys, tricks, and how far it is from growing up",
+  "Press a on Home to see your reef full screen, and f to feed it",
   "Open someone's profile and press p to pet their pet, or v to send yours over",
   "A pet you send over stays in their pet's box for an hour, with your name under it",
   "Try a different color theme in ctrl+o settings",

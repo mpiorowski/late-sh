@@ -42,7 +42,7 @@ before it when selected. Each tile keeps independent session-only playback in
 clears playback; resizing and overlays preserve it and its timer. Only
 the selection is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
-changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn as the profile portrait; its top row, `pet::ui::status_line`, reads `name title · stage · day N · mood` as far as the width allows, led by what the pet waits on, and a pouch row under the box holds its waiting treat; the mood is inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle), and everything else about the pet (stages, treats, tricks, the care box, the `/pet` commands) is `pet/CONTEXT.md`; when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it is the pet's (`pet::input::handle_click`: the care box for a pet with a pick waiting, pat, give a treat; the first pat of the UTC day pays 100 chips) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); a right click on the tile opens its care box; while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the dock, `common/music_dock.rs::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
+changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn as the profile portrait; its top row, `pet::ui::status_line`, reads `name title · stage · mood` as far as the width allows, led by what the pet waits on and ending on `p care`, which keeps its room ahead of the segments (the age and the rest of the detail are the care box's), and a pouch row under the box holds its waiting treat; the mood is inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle), and everything else about the pet (stages, treats, tricks, the care box, the `/pet` commands) is `pet/CONTEXT.md`; when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it is the pet's (`pet::input::handle_click`: the care box for a pet with a pick waiting, pat, give a treat; the first pat of the UTC day pays 100 chips) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); a right click on the tile opens its care box; while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the dock, `common/music_dock.rs::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the latest tables on the
 board, newest change first: open challenges, matches by their last move,
 unseen results, each `○ chess srw 2m` with the state as the marker and the
@@ -217,11 +217,11 @@ tile is named whatever it says, so the focus has a ring to land on.
 Outside arrange mode the rule is the tile's name and nothing else. In
 arrange mode its key hint comes up on the right (`TileKind::hints`, one
 table with the handler, `TileHint`): a house key the tile only names
-(`HouseKey`: `w tend`, `m mute`, `ctrl+/ room`, `^G open`, `s1-4 open`,
-`click pet`, `click feed`) on every tile, and a key the tile takes itself (`TileKey`:
-`[ ] Enter pick` on an ascii tile, `a feed` on the reef or tank, `[ ]
-cycle` on a chat, `Enter care` on the pet (its care box, only while a pet is out), and `j k Enter act` for the attention guest,
-`Guest::hints`) only on the focused one. The rail names none: it takes
+(`HouseKey`: `w tend`, `p care` on the pet, `a reef` on the reef or
+tank, `m mute`, `ctrl+/ room`, `^G open`, `s1-4 open`, `click pet`,
+`click feed`) on every tile, and a key the tile takes itself (`TileKey`:
+`[ ] Enter pick` on an ascii tile, `[ ] cycle` on a chat, and `j k Enter
+act` for the attention guest, `Guest::hints`) only on the focused one. The rail names none: it takes
 clicks on its rows. A layout with
 a border (the stock `street`, or `b` in
 arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
@@ -414,17 +414,21 @@ and the debounced flush. `late-core`: `extract_key_home_layouts` /
 Where they are shown: in arrange mode only, each tile names its own keys on
 the right of its title (`TileKind::hints` and `Guest::hints`, drawn with
 `hint_line` so the key is amber and the word dim), the ones the tile takes
-itself (`TileKey`: an ascii tile's pieces, the tank's feed, a chat's `[`
+itself (`TileKey`: an ascii tile's pieces, a chat's `[`
 `]`, the attention guest's rows) only with the focus on the tile. The
 house keys a title names (`HouseKey`) are answered in `app/input.rs`
-after Home, so arrange mode lets their letters (`w`, `m`, `s`) through
+after Home, so arrange mode lets their letters (`w`, `p`, `a`, `m`, `s`) through
 where it swallows every other stray letter (`house_letter`,
 `input_flow_test.rs`); the chords (`Ctrl+/`, `Ctrl+G`) are reserved
 ahead of every page. In arrange mode `?` opens `HelpTopic::Layouts`,
 which lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). A few panels
 still name keys inside the tile in normal mode: the music dock's `- = volume  m mute` under its bar and `v+r tune`
-and the bonsai preview's `w care`. The lobby tile's last row names
+the bonsai preview's `w care` after its `alive`/`watch`/`dry` (its age is
+the care box's), the pet's `p care` at the end of its status row, and the
+reef and tank's `a reef` after the care bar on the surface (dropped on a
+tile too narrow for both). Those three draw the letter in amber and the
+word dim. The lobby tile's last row names
 `^G open` and `` ` toggle`` (`lobby/daily/panel::COMPACT_FOOTER_KEYS`),
 trimmed a key at a time on a narrow tile.
 
@@ -532,14 +536,18 @@ saves the page as a new one (`presets::LayoutCommand`,
 `zen::input::run_layout_command`; a banner names the digit it got).
 Every form walks Home first (`go_home_for_layouts`).
 
-The pet has no key outside arrange mode: a left click is its gesture
+The keepsakes' keys are Home's, never global, and need no tile on the
+page (`home_letter_keys` in `app/input.rs`, not while composing): `w`
+Bonsai Care, `p` the pet's care box (a selected message and the
+cyberspace pane keep their own `p`), `a` the reef full screen
+(`../hub/aquarium/CONTEXT.md`). On the pet a left click is its gesture
 (hatch, pat, a treat), a right click on its tile opens its care box, and
 it reads the rest of the session itself. The tank takes the same click as its meal
 (`handle_tank_click`, before the tile focus like the pet's). The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row (`-`,
 Companions), never a page key: dedicated keys accumulate and collide, and
-the tile draws no caption for it either. The bonsai has no keys of its
-own: `w` is the global Bonsai Care key. Every layout edit marks the
+the tile draws no caption for it either. The bonsai tile has no keys of its
+own: `w` is Home's Bonsai Care key. Every layout edit marks the
 layout dirty; the write is debounced to tick's one-hertz edge, to leaving
 arrange mode and to leaving the page, so a held resize key costs one row
 update.

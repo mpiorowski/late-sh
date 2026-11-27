@@ -313,6 +313,8 @@ struct DrawContext<'a> {
     show_bonsai_modal: bool,
     /// The care box's pen, `Some` while the box is up.
     pet_care: Option<crate::app::pet::ui::PetView<'a>>,
+    /// The reef full screen, `Some` while it is up.
+    reef_view: Option<crate::app::hub::aquarium::ui::TankView<'a>>,
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
@@ -1614,6 +1616,7 @@ impl App {
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_pet_modal
+            || self.show_aquarium_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
             || self.comeback.is_open()
@@ -1640,6 +1643,7 @@ impl App {
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_pet_modal
+            || self.show_aquarium_modal
             || self.show_lobby_modal
             || self.paper.modal_visible()
             || self.comeback.is_open()
@@ -1881,6 +1885,12 @@ impl App {
                             pet_rect_slot: Some(&self.last_pet_rect),
                             frame_slot: Some(&self.last_pet_frame),
                         }),
+                        reef_view: self.show_aquarium_modal.then_some(
+                            crate::app::hub::aquarium::ui::TankView {
+                                state: &self.aquarium_state,
+                                care: &self.aquarium_care,
+                            },
+                        ),
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
@@ -2887,6 +2897,15 @@ impl App {
 
         if let Some(pet_care) = &ctx.pet_care {
             crate::app::pet::modal_ui::draw(frame, inner, pet_care);
+        }
+
+        if let Some(reef_view) = &ctx.reef_view {
+            crate::app::hub::aquarium::ui::draw_full_view(
+                frame,
+                inner,
+                reef_view,
+                chrono::Utc::now().date_naive(),
+            );
         }
 
         if ctx.show_lobby_modal {

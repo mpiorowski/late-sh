@@ -425,11 +425,13 @@ interaction mode ignores mouse reports.
 | `Ctrl+S` | Shop (active games and editors keep their own `Ctrl+S`) |
 | `Ctrl+R` | Full repaint (redo inside the chat composer) |
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |
-| `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
 | `/settings` `/lobby` `/edit` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
 | `/layout` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one |
 | `Esc` | Close the top modal |
+
+`w` (Bonsai Care), `p` (the pet's care box) and `a` (the reef full screen)
+are Home's keys, not global: `app/zen/CONTEXT.md`.
 
 `Ctrl+O/G/F/S` are ignored while a Settings text field is being edited.
 `Ctrl+Q` and bare `g` are unbound on purpose.

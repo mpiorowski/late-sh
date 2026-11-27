@@ -9,7 +9,7 @@ use ratatui::layout::{Position, Rect};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
-use super::state::{self, Growth, Practiced};
+use super::state::{self, Growth, Need, Practiced};
 use super::svc::{
     Did, PET_CHIP_BONUS, PetCommand, PetOutcome, PetService, PetSnapshot, Refusal, Visited,
 };
@@ -229,8 +229,9 @@ pub struct Body {
 pub enum Clicked {
     /// The pet took it: a pat, a treat, a trick.
     Done,
-    /// It has its days: the care box is where its owner picks what
-    /// hatches, or which drawing it grows into.
+    /// It has what its next stage asks for (days for an egg, treats
+    /// after): the care box is where its owner picks what hatches, or
+    /// which drawing it grows into.
     OpenCare,
 }
 
@@ -342,6 +343,7 @@ impl PetState {
                 learning: None,
                 learning_days: 0,
                 last_practice: None,
+                treats_eaten: 0,
             },
             revision: -1,
             waiting: None,
@@ -515,8 +517,8 @@ impl PetState {
         self.growth.ready_to_hatch()
     }
 
-    /// The two forms it can grow into, while it has its days and waits on
-    /// its owner to pick one.
+    /// The two forms it can grow into, while it has its treats and waits
+    /// on its owner to pick one.
     pub fn offers(&self) -> Option<[Form; 2]> {
         self.growth.offers()
     }
@@ -635,6 +637,19 @@ impl PetState {
         }
     }
 
+    /// What giving a treat says: treats grow it, so how far this one took
+    /// it toward the next stage.
+    pub fn fed_line(&self, kind: TreatKind) -> String {
+        let ate = format!("{} ate the {} treat", self.display_name(), kind.as_str());
+        match self.growth.still_needs() {
+            Some((_, Need::Treats(0))) => format!("{ate}: it is ready to grow"),
+            Some((next, Need::Treats(treats))) => {
+                format!("{ate}: {}", state::treat_wait(next, treats))
+            }
+            Some((_, Need::Days(_))) | None => ate,
+        }
+    }
+
     /// Give the treat that waits, if one does.
     pub fn give(&mut self) {
         if self.hatched() && self.waiting.is_some() {
@@ -651,7 +666,7 @@ impl PetState {
     }
 
     /// Grow into the next stage drawn with `pick`: the pick its owner
-    /// makes in the care box once the pet has its days.
+    /// makes in the care box once the pet has its treats.
     pub fn grow(&mut self, pick: Pick) {
         if self.offers().is_some() {
             self.request(PetCommand::Grow(pick));
@@ -931,7 +946,7 @@ impl PetState {
             Did::Gave { kind, .. } => {
                 self.moment = Some((Moment::Eating(kind), self.animation_ticks));
                 self.note_petted(now);
-                None
+                Some(Banner::info(&self.fed_line(kind)))
             }
             Did::Practiced { trick, practiced } => match practiced {
                 Practiced::Progress { days } => Some(Banner::info(&format!(

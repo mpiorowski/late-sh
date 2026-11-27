@@ -84,6 +84,19 @@ pub(crate) fn open_care(app: &mut App) {
     app.pet_state.open_care();
 }
 
+/// `p` on Home: the care box, tile or no tile. A pet put away has none,
+/// and the banner says how to bring it back.
+pub(crate) fn open_care_from_key(app: &mut App) {
+    match app.pet_out() {
+        true => open_care(app),
+        false => {
+            app.banner = Some(Banner::info(
+                "Your pet is put away: /pet out brings it back",
+            ));
+        }
+    }
+}
+
 /// Every key and click while the care box is up.
 pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
     match event {
@@ -97,7 +110,7 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
             app.pet_state.give();
         }
         // The picks: what comes out of a ready egg, and which of the two
-        // drawings a pet with its days grows into. Only one of the two can
+        // drawings a pet with its treats grows into. Only one of the two can
         // be waiting, and each asks for nothing when it is not.
         ParsedInput::Byte(b'1') | ParsedInput::Char('1') => {
             app.pet_state.hatch(PetSpecies::Cat);
@@ -238,7 +251,7 @@ pub(crate) fn handle_order(app: &mut App, order: Order) -> Option<Banner> {
             )),
         },
         (Order::ResetAsk, true) => Some(Banner::info(
-            "A reset turns your pet back into an egg: its days, its stage and its tricks go, its name stays. /pet reset yes does it",
+            "A reset turns your pet back into an egg: its days, its treats, its stage and its tricks go, its name stays. /pet reset yes does it",
         )),
         (Order::Reset, true) => {
             app.pet_state.start_over();

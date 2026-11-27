@@ -2173,15 +2173,25 @@ fn ended_news(state: &RealmGameState, end: ResolveEnd, now: DateTime<Utc>) -> Op
     }
 }
 
-/// Chips in the pot per player who started the game.
+/// Chips in the pot per player who played as long as a win takes
+/// (`paying_players`), at the reference tempo.
 ///
 /// The pot scales with the roster because placing in a big game is the hard
 /// part: being one of ten is a different feat from being one of two, and the
-/// game also runs longer for it. A duel is worth 6k, a full table 30k —
-/// which puts a realm win in the same class as the door-game milestones
-/// (Green Dragon 10k, A Dark Room 15-20k) rather than below a daily puzzle,
-/// where it sat when it paid a flat 2000.
+/// game also runs longer for it. A full table is worth 30k, which puts a
+/// realm win in the same class as the door-game milestones (Green Dragon
+/// 10k, A Dark Room 15-20k) rather than below a daily puzzle, where it sat
+/// when it paid a flat 2000.
 pub const REALM_POT_PER_PLAYER: i64 = 3_000;
+
+/// The least a realm's winner is paid at the reference tempo, before the
+/// pace's multiplier: 10k at the house's fast pace. Season 2, sized on the
+/// per-player rate alone, paid its winner 3k for fifteen days, because only
+/// two players had played as long as a win takes. The pot is raised until
+/// the winner's share reaches it, so the places behind rise with it and a
+/// crowded war never pays its winner less than a duel. A floor cannot be
+/// farmed with alts: it is paid once per house world, to whoever wins it.
+pub const REALM_WIN_MIN: i64 = 20_000;
 
 /// The most a single realm can ever pay, however many players and however
 /// long the tempo. Ten players at the epic tempo would otherwise compute a
@@ -2319,10 +2329,12 @@ pub fn paying_players(state: &RealmGameState) -> u8 {
 /// pays a quarter of the reference tempo, an epic three times it). The template carries the policy and the
 /// floor of its tier; the amount is the event's own.
 pub fn payout_plan(paying_count: u8, pot_scale: f64) -> Vec<(&'static str, i64)> {
-    let pot = (((REALM_POT_PER_PLAYER * i64::from(paying_count.max(2))) as f64)
-        * pot_scale.max(0.05))
-    .min(REALM_POT_MAX as f64) as i64;
-    payout_shares(paying_count)
+    let shares = payout_shares(paying_count);
+    let winner_share = shares.first().map(|(_, share)| *share).unwrap_or(1.0);
+    let base = ((REALM_POT_PER_PLAYER * i64::from(paying_count)) as f64)
+        .max(REALM_WIN_MIN as f64 / winner_share);
+    let pot = (base * pot_scale.max(0.05)).min(REALM_POT_MAX as f64) as i64;
+    shares
         .iter()
         .map(|(key, share)| {
             // Round to whole chips, to the nearest 50 so the figures read
@@ -2993,9 +3005,13 @@ mod tests {
             );
         }
         assert!(total(10) > total(2), "ten players must beat two");
-        // And it is roughly the per-player rate times the roster, until the
-        // ceiling takes over.
-        for n in 2..=10u8 {
+        // The winner is never paid under the floor, whatever the roster.
+        for n in 2..=20u8 {
+            assert!(payout_plan(n, 1.0)[0].1 >= REALM_WIN_MIN, "{n} players");
+        }
+        // And once the roster outgrows the floor the pot is the per-player
+        // rate times the roster, until the ceiling takes over.
+        for n in 12..=20u8 {
             let expected = (REALM_POT_PER_PLAYER * i64::from(n)).min(REALM_POT_MAX);
             let slack = (expected as f64 * 0.02) as i64 + 50;
             assert!(
@@ -3022,8 +3038,10 @@ mod tests {
             );
             assert!(plan.iter().all(|(key, _)| key.starts_with("realm_")));
         }
-        // Winning a crowded game beats winning a duel.
-        assert!(payout_plan(10, 1.0)[0].1 > payout_plan(2, 1.0)[0].1);
+        // Winning a crowded game never pays less than a duel, and past the
+        // winner's floor it pays more.
+        assert!(payout_plan(10, 1.0)[0].1 >= payout_plan(2, 1.0)[0].1);
+        assert!(payout_plan(15, 1.0)[0].1 > payout_plan(2, 1.0)[0].1);
         // A realm win is worth more than a day's Asterion escape (4000),
         // which is the whole reason these numbers moved.
         assert!(payout_plan(2, 1.0)[0].1 > 4_000);

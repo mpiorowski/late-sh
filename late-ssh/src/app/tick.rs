@@ -1239,6 +1239,12 @@ impl App {
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
+        // The full view closed (its own key, or any modal that took its
+        // place): the reef goes back to the tile's size.
+        if self.aquarium_bound_to_view != self.show_aquarium_modal {
+            self.sync_aquarium_bounds();
+            changed = true;
+        }
         if anim_quarter && self.aquarium_visible() {
             self.aquarium_state.tick();
             changed = true;
@@ -1616,13 +1622,13 @@ impl App {
             .any(|piece| cadence(piece) == Cadence::Quarter)
     }
 
-    /// Whether the reef is actually on screen: Home draws it in a
-    /// reef-form aquarium tile, owned or not (an unowned tank steps under
-    /// the shop note), and no other page draws it at all. Shared by the
+    /// Whether the reef is actually on screen: the full view is up, or
+    /// Home draws it in a reef-form aquarium tile, and no other page draws
+    /// it at all. Shared by the
     /// sim's step gate in tick() and the wake cadence, so an aquarium owner
     /// browsing other screens pays no fish frames.
     fn aquarium_visible(&self) -> bool {
-        self.reef_tile_inner().is_some()
+        self.show_aquarium_modal || self.reef_tile_inner().is_some()
     }
 
     /// A paired client is playing and unmuted: the same reading a music

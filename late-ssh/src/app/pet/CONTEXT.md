@@ -2,8 +2,9 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/pet`, its rows in `late-core/src/models/pet.rs`
-- Purpose: the Pet Companion: a creature that grows up over the days its
-  owner shows up, goes by what it ate today, and needs nothing.
+- Purpose: the Pet Companion: a creature that hatches when its owner
+  shows up and grows up on the treats they earn by playing, goes by what
+  it ate today, and needs nothing.
 - Status: live for every account. Nothing about it is sold: the
   `pet_companion` Shop item is retired and the Shop knows no pet.
 - Parent context: `../../../../CONTEXT.md`. The per-user state shape it
@@ -21,25 +22,33 @@ break: an owner who stays away finds it asleep and glad they are back.
   first sign in: an egg, out. The migration that added growth reset the
   pets that existed to eggs too (name and last pat kept).
 - **Days together.** One per UTC day on which the owner pressed a key
-  with the pet out. The count only rises. It is not calendar age.
-- **Stages**: `egg`, `baby`, `young`, `adult`, `elder`, needing 2, 7, 30
-  and 100 days together (the day it arrives is day 1, so the egg is ready
-  the day after).
+  with the pet out. The count only rises. It is not calendar age. It
+  hatches the egg and is the `day N` in the care box, and does nothing after.
+- **Treats eaten** (`treats_eaten`). One per treat given; at most one a
+  UTC day, so nothing is ground. The count only rises.
+- **Stages**: `egg`, `baby`, `young`, `adult`, `elder` (`state::need_for`).
+  The hatch needs 2 days together (the day it arrives is day 1, so the
+  egg is ready the day after). Young, adult and elder need 5, 20 and 60
+  treats eaten, counted from the hatch, since an egg eats nothing. An
+  owner who never plays keeps a baby: it loses nothing, it only stays.
 - **The hatch is the owner's pick.** Days never hatch an egg. A click on
   a ready egg opens the care box, which shows the three babies; `1` cat,
   `2` dog, `3` bird hatches it as that animal. Until then the row's
   species means nothing and an unnamed egg goes by "egg" everywhere.
-- **Every later stage is the owner's pick too.** The days make a pet
-  ready and enter no stage. A click on a pet with its days opens the care
-  box, which shows it drawn two ways; `1` or `2` grows it into that one.
+- **Every later stage is the owner's pick too.** The treats make a pet
+  ready and enter no stage. A click on a pet with its treats opens the
+  care box, which shows it drawn two ways; `1` or `2` grows it into that one.
   Each stage adds one part: the top at young (the cat's ears pointed or
   straight, the dog's floppy or upright, the bird's crest a tuft or
   horns), the feet at adult (neat or big paws, tucked or out, small feet
   or long legs), the face at elder (plain or whiskered, plain or
   freckled, the bird's wings down or up). The picks stay, so three of
   them make eight elders a species. `( )` and `{ }` mark the adult and the
-  elder and are never a pick. A pet with the days for two stages picks
-  twice in a row.
+  elder and are never a pick. Treats given while a pick waits still
+  count, so a pet with the treats for two stages picks twice in a row.
+  The care box's grow row says what is left (`young after 3 more
+  treats`), and so does the banner when a treat is eaten
+  (`PetState::fed_line`).
 - **A stage and its picks are one value** (`Form`, from the `stage` and
   `looks` columns): a young pet without its top cannot be stored or
   drawn.
@@ -79,8 +88,8 @@ break: an owner who stays away finds it asleep and glad they are back.
   changes a hatched pet's animal and nothing else (its picks carry over
   as that animal's drawings); `/pet away` and
   `/pet out`; `/pet reset` says what a reset takes and `/pet reset yes`
-  does it (back to an egg on its first day: days, stage, picks, bond,
-  tricks go;
+  does it (back to an egg on its first day: days, treats eaten, stage,
+  picks, bond, tricks go;
   the name, the day's pat and a waiting treat stay). `/petname` shows
   its name, `/petname <name>` sets it and `/petname clear` removes it
   (`Order::Name`), for a pet put away too.
@@ -105,7 +114,7 @@ input.rs     clicks on the tile, the care box's keys, the `/pet` and
              `/petname` orders
 ui.rs        the bodies drawn from picked parts, the tile's rows, the
              profile portrait
-modal_ui.rs  the care box
+modal_ui.rs  the care box, its rows flowed to the box's width
 ```
 
 Rows: `pet_companions` (one per user, the growth columns, `looks` (the
@@ -158,7 +167,9 @@ mirror that never decides.
   `PetCommand::Species(species)` write it under the same lock
   (`PetCompanion::set_species`, which bumps `revision`); the second is
   refused on an egg (`Refusal::Egg`). `PetCommand::Grow(pick)` stores
-  `Growth::grow`, refused without the days (`Refusal::NotReady`).
+  `Growth::grow`, refused without the treats (`Refusal::NotReady`).
+  `PetCommand::Give` counts the treat into `Growth::eat` in the same
+  transaction that marks it given.
   `PetCommand::Reset` stores `Growth::reset()`.
 - `PetService::visit_task(visitor, owner, kind, reply)` is the surface
   other domains call (the profile modal, through `PetState::visit`).
@@ -196,7 +207,9 @@ hands the order to `input::handle_order`.
 
 - **The Home tile** (`ui::draw_tile`, a `zen` tile): the box the pet
   roams, a status row above it and a pouch row under it when the tile is
-  tall enough (five rows for the first, six for both). The stock Home
+  tall enough (five rows for the first, six for both). The status row
+  ends in `p care`, Home's key for the care box, the first segment a
+  narrow tile drops. The stock Home
   gives it a third of the band over the chat beside the reef, kept to
   #lounge with it (`zen/CONTEXT.md`, Home).
 - **An egg short of its days says when** (`Growth::days_to_hatch`,
@@ -215,8 +228,8 @@ hands the order to `input::handle_order`.
   bodies only. The status row counts them when there is more than one.
   A guest stands still, idle, and blinks: the tick reports those edges
   (`ui::guest_moved`) while a box is on screen.
-- **Clicks**, in order, on the pet: one with its days (a ready egg, or
-  a hatched pet ready to grow) opens the care box for the pick; the
+- **Clicks**, in order, on the pet: one with what its next stage asks
+  for (a ready egg, or a hatched pet with its treats) opens the care box for the pick; the
   day's pat; give the waiting treat; otherwise purr
   and perform the next known trick. On the pouch's
   treat: give it. On a row: the care box. On the floor: throw a
@@ -224,14 +237,18 @@ hands the order to `input::handle_order`.
 - **The care box** (`show_pet_modal`): a pen with the same box, then
   rows for the treat, growing (a picker while a pick waits: the three
   babies for a ready egg, the pet drawn two ways for one ready to grow),
-  play, tricks, who came by, who is staying now (`here now`, all of
-  them by name), and for a hatched pet the slash commands that change
-  it. Keys: `f` give, `1` `2` `3` hatch a ready egg as a cat,
+  where it is staying while it is out calling (`visiting`), play, tricks
+  and their keys, who came by and who is staying now (`here now`), three
+  by name and the rest counted, and for a hatched pet the slash
+  commands that change it. A row too long for the box flows on under
+  its own value column (`modal_ui::flow`), so nothing is cut at the
+  border, and the box is as tall as its rows. Keys: `f` give, `1` `2` `3` hatch a ready egg as a cat,
   a dog or a bird, `1` `2` grow into the first or second drawing, `b`
   ball, `m` toy mouse, `t` next trick, `p` practise,
   `r` perform, `?` guide, `q`/Esc close.
-  Opening it marks the visitors seen. Also opened by Enter on the pet
-  tile in arrange mode (`zen`'s `TileKey::Care`).
+  Opening it marks the visitors seen. Also opened by `p` on Home, tile
+  or no tile (`input::open_care_from_key`, which `app/input.rs` calls;
+  a pet put away gets a banner saying `/pet out` instead).
 - **The profile** (`profile_modal`, through `ui::Portrait` and
   `portrait_lines`): the body in its form, the title, `stage · day N`,
   the mood, and a known trick every twenty seconds. A visitor gets `p`
@@ -297,8 +314,8 @@ hands the order to `input::handle_order`.
 
 ## 7. Tests
 
-- `state_test.rs`: the rules, whole-state from egg to elder by days and
-  picks, the reset, today's title, the hour of a stay.
+- `state_test.rs`: the rules, whole-state from egg to elder by days, then
+  treats, and picks, the reset, today's title, the hour of a stay.
 - `svc_test.rs`: every claim against a real database, two sessions
   racing, a pet put away, the hatch pick, the grow pick, a change of
   species, a reset, visits and calls, the guest a call leaves and the
@@ -307,6 +324,8 @@ hands the order to `input::handle_order`.
   the day counted after the pet is brought back out, the click chain,
   the door clock, snapshot ordering, the portrait, a stay from the call
   to the end of its hour.
+- `modal_ui_test.rs`: long care rows wrap under their label inside the
+  care box.
 - `ui_test.rs`: both drawings of every part of every species, whole;
   the eight elders a species; the eight columns; what the care box
   offers; guests in the box and beside a portrait; poses and the frame

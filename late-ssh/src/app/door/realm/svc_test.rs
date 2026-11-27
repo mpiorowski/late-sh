@@ -2575,8 +2575,8 @@ async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
         .expect("the order stands");
     let placed = load_state(&svc, game_id).await;
     assert_eq!(placed.player(alice).unwrap().orders, vec![take(target, 2)]);
-    // Five points a day for two players, as the campaign's tiers pay.
-    assert_eq!(placed.points_left(alice, today), 3);
+    // Six points a day for two players, as the campaign's tiers pay.
+    assert_eq!(placed.points_left(alice, today), 4);
     // Ordered, not taken: nothing moves until the night.
     assert_eq!(placed.ownership.get(&target), None);
     let answers: Vec<RealmEvent> = drained(&mut events)
@@ -2586,7 +2586,7 @@ async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
         .collect();
     assert!(matches!(
         answers.as_slice(),
-        [RealmEvent::OrderPlaced { user_id, order, probability: Some(_), points_left: 3, .. }]
+        [RealmEvent::OrderPlaced { user_id, order, probability: Some(_), points_left: 4, .. }]
             if *user_id == alice && *order == take(target, 2)
     ));
 
@@ -2608,7 +2608,7 @@ async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
         .expect("withdrawn");
     let withdrawn = load_state(&svc, game_id).await;
     assert!(withdrawn.player(alice).unwrap().orders.is_empty());
-    assert_eq!(withdrawn.points_left(alice, today), 5);
+    assert_eq!(withdrawn.points_left(alice, today), 6);
 }
 
 #[tokio::test]
@@ -2721,8 +2721,8 @@ async fn an_order_read_after_the_day_turned_lands_on_the_open_day() {
     assert_eq!(player.orders, vec![walls, take(target, 2)]);
     assert_eq!(
         state.points_left(alice, today + 1),
-        2,
-        "five points, one on walls, two on the take"
+        3,
+        "six points, one on walls, two on the take"
     );
 }
 

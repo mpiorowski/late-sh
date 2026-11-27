@@ -23,20 +23,11 @@ actions, and "day 40 is day 4". So nothing here is upkeep.
 - **Play is clicks and keys on the tile and in the care box.** What an
   owner rarely changes (the name, the animal, away and out, the reset)
   is a slash command, so no key in the care box can undo a pet.
-- **Growth is days together; play feeds a bond beside it.** Only the
-  first treat or play of a UTC day counts toward the bond, so there is
-  nothing to grind.
+- **Growth is play, capped at a day's worth.** Treats grow a hatched
+  pet, one a UTC day at most, and only the first treat or play of a UTC
+  day counts toward the bond, so there is nothing to grind.
 - **Nothing about the pet is sold.** No unlock, no species, no looks, no
   toys: the Shop knows no pet.
-
-## Undecided
-
-### Treats grow it, not days
-
-Stages by treats given (a free hatch, then young, adult and elder at 5,
-20 and 60) in place of days together: a push into playing anything, at
-the cost of a pet that stops growing for an owner who only chats. Days
-together would stay as the count on the tile.
 
 ## Unbuilt
 
@@ -61,7 +52,9 @@ state, which owns that row.
 win: they tell the registry who sat down (`RoomGameEvent::SeatJoined`)
 and nothing else. The wiring is a second `RoomGameEvent` from each
 table's settlement, forwarded to the winner's session as a private
-activity event. What counts as a win at each table is undecided (a paid
+activity event. With treats growing the pet, it is the one family whose
+play grows nothing but by door minutes. What counts as a win at each
+table is undecided (a paid
 Blackjack hand, a Poker pot, a round of Tron or Ssnake).
 
 ### The bond has no reader
@@ -88,9 +81,11 @@ more call lines, or a trick only a bonded pet learns.
 - **An egg for everyone.** The row is made at the first sign in. The
   `pet_companion` unlock is retired, with no refund for those who bought
   it.
-- **Days per stage.** Ready to hatch at 2 days together (the day after
-  it arrives: the first day is day 1), young at 7, adult at 30, elder at
-  100.
+- **Treats grow it, not days.** Ready to hatch at 2 days together (the
+  day after it arrives: the first day is day 1), so every account gets a
+  creature. Then young, adult and elder at 5, 20 and 60 treats eaten: a
+  push into playing anything, at the cost of a pet that stays a baby for
+  an owner who only chats. Days together stay the count on the tile.
 - **Every stage is a pick.** The owner picks cat, dog or bird in the
   care box when the egg is ready, and at young, adult and elder one of
   two drawings of the part that stage adds. The picks stay: eight elders

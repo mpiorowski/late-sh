@@ -38,6 +38,8 @@ crate::user_scoped_model! {
         pub learning: Option<String>,
         pub learning_days: i32,
         pub last_practice: Option<NaiveDate>,
+        // Treats given to it, ever: what grows a hatched pet.
+        pub treats_eaten: i32,
         // Visits made after this are the ones the owner has not looked at.
         pub visits_seen_at: DateTime<Utc>,
         pub revision: i64,
@@ -394,6 +396,7 @@ pub struct PetGrowthWrite {
     pub learning: Option<Trick>,
     pub learning_days: i32,
     pub last_practice: Option<NaiveDate>,
+    pub treats_eaten: i32,
 }
 
 /// The last treat the pet was given, and the UTC day it ate it. The day it
@@ -643,6 +646,7 @@ impl PetCompanion {
                      learning_days = $9,
                      last_practice = $10,
                      looks = $11,
+                     treats_eaten = $12,
                      revision = revision + 1,
                      updated = current_timestamp
                  WHERE user_id = $1
@@ -659,6 +663,7 @@ impl PetCompanion {
                     &write.learning_days,
                     &write.last_practice,
                     &looks,
+                    &write.treats_eaten,
                 ],
             )
             .await

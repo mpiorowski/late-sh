@@ -13,6 +13,7 @@ use super::{
 };
 use crate::app::activity::event::GameFamily;
 use crate::app::common::primitives::Screen;
+use crate::app::pet::state::Need;
 use crate::app::pet::svc::{PetCommand, PetOutcome, PetService};
 use crate::app::pet::ui::{Neighbours, WatchSide};
 use crate::test_helpers::new_test_db;
@@ -432,9 +433,9 @@ async fn the_first_key_of_a_day_counts_it_and_a_long_silence_gets_a_welcome() {
     ));
     assert_eq!(state.growth().last_day, Some(today));
     assert_eq!(
-        state.growth().days_to_next(),
-        Some(4),
-        "young is four days ahead"
+        state.growth().still_needs(),
+        Some((Stage::Young, Need::Treats(5))),
+        "days never grow a hatched pet: young is five treats ahead"
     );
 }
 
@@ -520,10 +521,16 @@ async fn a_ready_egg_asks_for_the_care_box_then_a_click_pats_and_gives_what_it_e
     assert_eq!(state.title(), None, "a treat in the pouch names nobody");
 
     assert_eq!(state.click(key, today, false), Clicked::Done);
-    tick_until(&mut state, key, "the treat eaten", |state| {
+    let banner = tick_until(&mut state, key, "the treat eaten", |state| {
         state.waiting().is_none()
     })
-    .await;
+    .await
+    .expect("a treat says how far it took the pet");
+    assert_eq!(
+        banner.message,
+        "dog ate the puzzle treat: young after 4 more treats"
+    );
+    assert_eq!(state.growth().treats_eaten, 1);
     assert!(matches!(
         state.moment(),
         Some((Moment::Eating(TreatKind::Puzzle), _))
@@ -595,32 +602,36 @@ async fn the_owner_changes_what_it_is_and_starts_it_over() {
     assert_eq!((state.animal(), state.growth().days_together), (None, 0));
 }
 
-/// Days never enter a stage: a pet with its days asks for the care box,
-/// and the drawing its owner picks there is the one it grows into.
+/// Treats never enter a stage: a pet with its treats asks for the care
+/// box, and the drawing its owner picks there is the one it grows into.
 #[tokio::test]
-async fn a_pet_with_its_days_asks_for_the_care_box_and_grows_as_its_owner_picks() {
+async fn a_pet_with_its_treats_asks_for_the_care_box_and_grows_as_its_owner_picks() {
     let (_test_db, svc, user_id) = owner("pet-state-grow").await;
     let today = chrono::Utc::now().date_naive();
-    for days_ago in (0..7).rev() {
-        svc.act(
-            user_id,
-            PetCommand::CountDay,
-            today - chrono::Duration::days(days_ago),
-        )
-        .await
-        .expect("count a day");
+    let ago = |days| today - chrono::Duration::days(days);
+    for days_ago in (5..7).rev() {
+        svc.act(user_id, PetCommand::CountDay, ago(days_ago))
+            .await
+            .expect("count a day");
     }
-    svc.act(user_id, PetCommand::Hatch(PetSpecies::Cat), today)
+    svc.act(user_id, PetCommand::Hatch(PetSpecies::Cat), ago(5))
         .await
         .expect("hatch");
+    for days_ago in (0..5).rev() {
+        for command in [PetCommand::Earn(TreatKind::Puzzle), PetCommand::Give] {
+            svc.act(user_id, command, ago(days_ago))
+                .await
+                .expect("a treat a day");
+        }
+    }
     let mut state = session(&svc, user_id).await;
     let key = Instant::now();
     state.tick(tick_after_key(1, key));
 
     assert_eq!(
-        state.growth().stage(),
-        Stage::Baby,
-        "seven days, still a baby"
+        (state.growth().stage(), state.growth().treats_eaten),
+        (Stage::Baby, 5),
+        "five treats, still a baby"
     );
     assert_eq!(
         state.offers(),
@@ -643,7 +654,7 @@ async fn a_pet_with_its_days_asks_for_the_care_box_and_grows_as_its_owner_picks(
     .expect("growing up says so");
     assert_eq!(banner.message, "cat grew up: young");
     assert_eq!(state.portrait().form, Form::Young { top: Pick::Two });
-    assert_eq!(state.offers(), None, "an adult is twenty three days off");
+    assert_eq!(state.offers(), None, "an adult is fifteen treats off");
 
     // With nothing to pick, a click is the pet's again.
     assert_eq!(state.click(key, today, false), Clicked::Done);

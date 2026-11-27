@@ -265,7 +265,11 @@ fn a_tall_narrow_tile_keeps_every_row_of_a_tree_that_fits() {
 
     assert_eq!(rows[..18], canvas_rows_above_pot(&state, 21, 18)[..]);
     assert!(rows[18].contains("[=====]"), "pot row: {:?}", rows[18]);
-    assert!(rows[19].contains("w care"), "footer row: {:?}", rows[19]);
+    assert_eq!(
+        rows[19].trim(),
+        "alive · w care",
+        "the age is the care box's"
+    );
 }
 
 /// A narrow tile wider than the small preview spends its spare columns on

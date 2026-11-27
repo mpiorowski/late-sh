@@ -1,4 +1,6 @@
-use late_core::models::pet::{Form, PetCompanion, PetSpecies, Pick, Stage, Trick, VisitKind};
+use late_core::models::pet::{
+    Form, PetCompanion, PetSpecies, Pick, Stage, TreatKind, Trick, VisitKind,
+};
 use late_core::test_utils::{TestDb, create_test_user};
 
 use super::{Naming, Order, handle_order, naming_banner, parse_name_order, parse_order};
@@ -116,7 +118,7 @@ async fn the_care_box_hatches_what_its_owner_picks_plays_and_teaches() {
     let plain = render_plain(&mut app);
     assert!(!plain.contains("3 bird"), "the pick is made:\n{plain}");
     assert!(
-        plain.contains("/pet cat, dog or bird"),
+        plain.contains("/pet cat|dog|bird"),
         "a hatched pet's settings are on the line:\n{plain}"
     );
     // The keys pick nothing once it has hatched.
@@ -155,8 +157,23 @@ async fn the_care_box_grows_the_pet_into_the_drawing_its_owner_picks() {
     assert!(app.show_pet_modal);
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, "baby cat · day 7").await;
+    assert!(
+        !render_plain(&mut app).contains("1 pointed"),
+        "days never grow a hatched pet"
+    );
 
-    // Seven days is a young cat's worth: the grow row is its two tops.
+    // Five treats are a young cat's worth: the grow row is its two tops.
+    let (svc, user_id) = (app.pet_state.svc.clone(), app.pet_state.user_id);
+    let today = chrono::Utc::now().date_naive();
+    for days_ago in (1..6).rev() {
+        for command in [PetCommand::Earn(TreatKind::Puzzle), PetCommand::Give] {
+            svc.act(user_id, command, today - chrono::Duration::days(days_ago))
+                .await
+                .expect("a treat a day");
+        }
+    }
+    svc.publish_change(&user_id.to_string());
+    wait_for_render_contains(&mut app, "1 pointed").await;
     let plain = render_plain(&mut app);
     for shown in [r"/\_/\", r"|\_/|", "1 pointed", "2 straight"] {
         assert!(
@@ -175,7 +192,7 @@ async fn the_care_box_grows_the_pet_into_the_drawing_its_owner_picks() {
         Form::Young { top: Pick::Two }
     );
     let plain = render_plain(&mut app);
-    assert!(plain.contains("adult in 23 days"), "{plain}");
+    assert!(plain.contains("adult after 15 more treats"), "{plain}");
     assert!(!plain.contains("1 pointed"), "the pick is made:\n{plain}");
     // With nothing waiting the keys pick nothing.
     app.handle_input(b"1");
