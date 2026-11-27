@@ -3487,10 +3487,10 @@ pub(crate) fn pet_the_pet_globally(app: &mut App) {
         .pat(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
-/// The tank's free daily meal, from any surface that shows it (`a` on its
-/// tile in arrange mode, a click on it, `/aquarium feed`, the attention
-/// row): the flakes are the immediate feedback, the chips banner follows
-/// when the service's event comes back.
+/// The tank's free daily meal, from any surface that shows it (a click on
+/// its tile, `f` or a click in the reef full screen, `/aquarium feed`, the
+/// attention row): the flakes are the immediate feedback, the chips banner
+/// follows when the service's event comes back.
 pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
     match app.aquarium_care.feed() {
@@ -3883,15 +3883,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 
     // The Artboard owns its letters. The paired-client hotkeys (`m` mute,
-    // `+`/`-` volume, `v` the music prefix) stay off
-    // that page entirely, the way the voice chords do: the page spends
-    // those letters itself (`v` applauds a piece), and every one of them is
-    // a printable that a piece title may want. Only quit, the page
-    // switches, and the guide stay global there.
+    // `+`/`-` volume, `v` the music prefix) stay off that page entirely,
+    // the way the voice chords do: the page spends those letters itself
+    // (`v` applauds a piece), and every one of them is a printable that a
+    // piece title may want. Only quit, the page switches, and the guide
+    // stay global there.
     let global_letter_keys = ctx.screen != Screen::Artboard;
-    // The keepsakes' keys, `w` the bonsai, `p` the pet's care box and `a`
-    // the reef full screen, are Home's, where their tiles live, and work
-    // whether or not the layout shows a tile for them.
+    // Home's own letters, outside any composer: the Live panel's `s`
+    // prefix, and the keepsakes' keys (`w` the bonsai, `p` the pet's care
+    // box, `a` the reef full screen), which work whether or not the layout
+    // shows a tile for them.
     let home_letter_keys = ctx.screen == Screen::Dashboard
         && !ctx.chat_composing
         && !ctx.feeds_processing
@@ -3992,10 +3993,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         // story); on every other page `s` is the page's (the Directory's
         // search, the Clubhouse's seat).
         b's' | b'S'
-            if ctx.screen == Screen::Dashboard
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
+            if home_letter_keys
                 && !app.chat.room_jump_active
                 && !app.chat.feeds_selected
                 && !app.chat.discover_selected

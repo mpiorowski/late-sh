@@ -208,8 +208,9 @@ hands the order to `input::handle_order`.
 - **The Home tile** (`ui::draw_tile`, a `zen` tile): the box the pet
   roams, a status row above it and a pouch row under it when the tile is
   tall enough (five rows for the first, six for both). The status row
-  ends in `p care`, Home's key for the care box, the first segment a
-  narrow tile drops. The stock Home
+  ends in `p care`, Home's key for the care box: a narrow tile drops the
+  segments before it first, and only one without room for the name and
+  the key drops the key. The stock Home
   gives it a third of the band over the chat beside the reef, kept to
   #lounge with it (`zen/CONTEXT.md`, Home).
 - **An egg short of its days says when** (`Growth::days_to_hatch`,
@@ -279,7 +280,7 @@ hands the order to `input::handle_order`.
 ## 5. Invariants and limits
 
 - A new stage adds a variant to `Form` and an arm to `form_rows` and
-  `days_for`; a new animal adds an arm to each part (`top_row`,
+  `need_for`; a new animal adds an arm to each part (`top_row`,
   `feet_row`, `elder_face`, `pick_name`, `mouth`): all exhaustive, no
   catch-all.
 - The bird's beak is the middle cell of its eyes (`face_cells`), so every

@@ -522,9 +522,6 @@ the pickers, the ascii piece picker included. In it:
   the message the way a `Ctrl+/` message jump does. A mention in a room
   the account never joined, or on a page with no chat tile, opens the
   history modal instead, and a DM with no chat tile says so in a banner.
-  `a` on the reef or the tank feeds
-  it (free, once a day, +100 chips on the first feed), as a click on
-  either does in any mode.
 - Every other key is swallowed so a stray letter never reaches the chat;
   the `v` music chords still pass (§4). Esc peels a typed name, the list,
   a picker, then leaves the mode, puts the focus back on a chat and

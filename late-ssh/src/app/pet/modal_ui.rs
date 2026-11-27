@@ -109,9 +109,9 @@ fn part(spans: Vec<Span<'static>>) -> Piece {
     Piece { lead: dot(), spans }
 }
 
-/// A run of words that may break between any two, set off from what
+/// A run of dim words that may break between any two, set off from what
 /// came before by `lead`.
-fn words(lead: Span<'static>, said: &str, style: Style) -> Vec<Piece> {
+fn words(lead: Span<'static>, said: &str) -> Vec<Piece> {
     said.split_whitespace()
         .enumerate()
         .map(|(at, word)| Piece {
@@ -119,7 +119,7 @@ fn words(lead: Span<'static>, said: &str, style: Style) -> Vec<Piece> {
                 0 => lead.clone(),
                 _ => gap(),
             },
-            spans: vec![Span::styled(word.to_string(), style)],
+            spans: vec![text(word)],
         })
         .collect()
 }
@@ -219,7 +219,6 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
             pieces.extend(words(
                 gap(),
                 &format!("{name} {} for the day", treat_title(kind)),
-                dim(),
             ));
             pieces
         }
@@ -231,21 +230,16 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
             part(vec![text("it eats once it hatches")]),
         ],
         (None, Some(kind), _) => {
-            let mut pieces = words(dot(), &format!("ate a {} treat", kind.as_str()), dim());
+            let mut pieces = words(dot(), &format!("ate a {} treat", kind.as_str()));
             pieces.extend(words(
                 dot(),
                 &format!("{name} {} until the day ends", treat_title(kind)),
-                dim(),
             ));
             pieces
         }
         (None, None, _) => {
-            let mut pieces = words(dot(), "none waiting", dim());
-            pieces.extend(words(
-                dot(),
-                "win any game or spend ten minutes in a door",
-                dim(),
-            ));
+            let mut pieces = words(dot(), "none waiting");
+            pieces.extend(words(dot(), "win any game or spend ten minutes in a door"));
             pieces
         }
     };
@@ -260,14 +254,14 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
                 Some((next, Need::Treats(treats))) => treat_wait(next, treats),
                 None => "fully grown".to_string(),
             };
-            rows.extend(flow("grow", words(dot(), &said, dim()), width));
+            rows.extend(flow("grow", words(dot(), &said), width));
         }
     }
 
     if let Some((host, left)) = state.calling() {
         rows.extend(flow(
             "visiting",
-            words(dot(), &format!("{host}, {left} min left"), dim()),
+            words(dot(), &format!("{host}, {left} min left")),
             width,
         ));
     }
@@ -276,7 +270,7 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
         part(vec![key("b"), text(" ball")]),
         part(vec![key("m"), text(" toy mouse")]),
     ];
-    play.extend(words(dot(), "or click the floor", dim()));
+    play.extend(words(dot(), "or click the floor"));
     rows.extend(flow("play", play, width));
 
     let teaching = state.teaching();
@@ -317,7 +311,7 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
     ));
 
     let came_by = match state.care.came_by.as_slice() {
-        [] => words(dot(), "nobody since you last looked", dim()),
+        [] => words(dot(), "nobody since you last looked"),
         visits => {
             let mut pieces: Vec<Piece> = visits
                 .iter()
@@ -334,7 +328,6 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
                 pieces.extend(words(
                     Span::styled(", ", dim()),
                     &format!("and {} more", visits.len() - NAMED),
-                    dim(),
                 ));
             }
             pieces
@@ -358,10 +351,9 @@ fn care_lines(state: &PetState, width: usize) -> Vec<Line<'static>> {
                 pieces.extend(words(
                     Span::styled(", ", dim()),
                     &format!("and {} more", guests.len() - NAMED),
-                    dim(),
                 ));
             }
-            pieces.extend(words(dot(), "each stays an hour", dim()));
+            pieces.extend(words(dot(), "each stays an hour"));
             rows.extend(flow("here now", pieces, width));
         }
     }

@@ -2330,7 +2330,7 @@ pub fn paying_players(state: &RealmGameState) -> u8 {
 /// floor of its tier; the amount is the event's own.
 pub fn payout_plan(paying_count: u8, pot_scale: f64) -> Vec<(&'static str, i64)> {
     let shares = payout_shares(paying_count);
-    let winner_share = shares.first().map(|(_, share)| *share).unwrap_or(1.0);
+    let (_, winner_share) = shares[0];
     let base = ((REALM_POT_PER_PLAYER * i64::from(paying_count)) as f64)
         .max(REALM_WIN_MIN as f64 / winner_share);
     let pot = (base * pot_scale.max(0.05)).min(REALM_POT_MAX as f64) as i64;

@@ -79,7 +79,7 @@ pub(crate) fn handle_right_click(app: &mut App, x: u16, y: u16) -> bool {
 
 /// Open the care box over whatever is up. Only for a pet that is out:
 /// every caller has checked `App::pet_out`.
-pub(crate) fn open_care(app: &mut App) {
+fn open_care(app: &mut App) {
     crate::app::input::open_pet_modal_globally(app);
     app.pet_state.open_care();
 }

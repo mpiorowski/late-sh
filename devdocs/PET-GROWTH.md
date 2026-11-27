@@ -124,8 +124,9 @@ more call lines, or a trick only a bonded pet learns.
 - **The art.** Drawn from parts and pinned whole in `pet/ui_test.rs`:
   the egg, three babies, and both drawings of every part.
 - **The daily pat** stays as it was, 100 chips.
-- **No global key.** The care box opens from the tile: a right click, a
-  click on its status row, or Enter on the tile in arrange mode.
+- **One key, and only on Home.** `p` opens the care box there, tile or
+  no tile. On the tile a right click or a click on its status row opens
+  it too.
 
 ## What would say it worked
 
