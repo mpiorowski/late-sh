@@ -2,6 +2,8 @@
 //! where it went; the paired CLI's mpv draws the video over exactly that
 //! rectangle. The setup box is a small card in the reader's frame style.
 
+use crate::app::common::text_layout;
+
 use std::time::Instant;
 
 use ratatui::{
@@ -11,7 +13,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::state::{
     Mark, Player, SetupBox, WatchModal, WatchSize, WatchSource, centered_rect, close_rect,
@@ -125,9 +126,8 @@ pub(crate) fn footer_line(
 ) -> Line<'static> {
     let key = Style::default().fg(theme::AMBER_DIM());
     let hint = Style::default().fg(theme::TEXT_DIM());
-    let status_width = UnicodeWidthStr::width(status);
-    let pair_width =
-        |(k, h): &(&str, &str)| UnicodeWidthStr::width(*k) + 1 + UnicodeWidthStr::width(*h) + 2;
+    let status_width = text_layout::width(status);
+    let pair_width = |(k, h): &(&str, &str)| text_layout::width(k) + 1 + text_layout::width(h) + 2;
     let mut hints = hints.to_vec();
     let mut esc = true;
     loop {
@@ -187,7 +187,7 @@ pub(crate) fn setup_lines(setup: &SetupBox) -> Vec<Line<'static>> {
     let label_width = setup
         .rows()
         .iter()
-        .map(|row| UnicodeWidthStr::width(row.requirement.label()))
+        .map(|row| text_layout::width(row.requirement.label()))
         .max()
         .unwrap_or(0);
     let mut lines = vec![
@@ -203,7 +203,10 @@ pub(crate) fn setup_lines(setup: &SetupBox) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled(mark, mark_style),
             Span::styled(
-                format!(" {:<label_width$}  ", row.requirement.label()),
+                format!(
+                    " {}  ",
+                    text_layout::pad_right(row.requirement.label(), label_width)
+                ),
                 text,
             ),
             Span::styled(row.requirement.detail(), dim),

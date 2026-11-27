@@ -1,9 +1,10 @@
+use crate::app::common::text_layout;
+
 use super::{chat_tile_title, draw_board_day, draw_tile_chrome, hint_line_fitting, hints_shown};
 use crate::app::common::primitives::hint_line;
 use crate::app::zen::layout::Chrome;
 use crate::app::zen::state::{TileKind, TileTitle};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
-use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn no_title_names_a_key_outside_arrange_mode() {
@@ -75,7 +76,7 @@ fn a_stream_chat_tile_title_keeps_the_watcher_count_on_a_narrow_tile() {
     // Four cells go to the corners and the title's padding spaces.
     let title = chat_tile_title("#mat-live", Some("[12]"), 20);
     assert_eq!(title, "chat · #ma… [12]");
-    assert_eq!(UnicodeWidthStr::width(title.as_str()), 16);
+    assert_eq!(text_layout::width(title.as_str()), 16);
 }
 
 /// The board's day reads at the left of its row with the board's key

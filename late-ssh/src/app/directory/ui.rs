@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::{
     input::FocusedItem,
     mouse::{Pane, Target},
@@ -294,7 +296,7 @@ fn draw_section_row(
                 Style::default().fg(theme::TEXT_FAINT()),
             )
         };
-        let width = (shelf.title().chars().count() + count.chars().count() + 2) as u16;
+        let width = (text_layout::width(shelf.title()) + text_layout::width(&count) + 2) as u16;
         spans.push(Span::styled(format!(" {}", shelf.title()), name_style));
         spans.push(Span::styled(format!("{count} "), count_style));
         spans.push(Span::raw(" "));
@@ -335,7 +337,7 @@ fn draw_section_row(
     if fitted {
         let widths: Vec<u16> = filters
             .iter()
-            .map(|filter| filter.label.chars().count() as u16)
+            .map(|filter| text_layout::width(filter.label) as u16)
             .collect();
         let total = widths.iter().sum::<u16>() + 3 * (widths.len() as u16 - 1) + 1;
         let mut x = area.right() - total;
@@ -383,7 +385,7 @@ fn draw_footer(
     if fitted {
         let widths: Vec<u16> = PAGE_ACTIONS
             .iter()
-            .map(|(key, desc, _)| (key.chars().count() + 1 + desc.chars().count()) as u16)
+            .map(|(key, desc, _)| (text_layout::width(key) + 1 + text_layout::width(desc)) as u16)
             .collect();
         let total = widths.iter().sum::<u16>() + 3 * (widths.len() as u16 - 1) + 1;
         let mut x = area.right() - total;
@@ -537,8 +539,9 @@ fn group_rule(label: &str, count: usize, color: Color, width: usize) -> Line<'st
     let rule = Style::default().fg(theme::BORDER());
     let lead = "\u{2500}\u{2500} ";
     let count = format!(" {count}");
-    let tail = width
-        .saturating_sub(lead.chars().count() + label.chars().count() + count.chars().count() + 1);
+    let tail = width.saturating_sub(
+        text_layout::width(lead) + text_layout::width(label) + text_layout::width(&count) + 1,
+    );
     Line::from(vec![
         Span::styled(lead, rule),
         Span::styled(
@@ -1073,7 +1076,7 @@ fn late_fetch_cell(
     let budget = width.saturating_sub(LATE_FETCH_LABEL_WIDTH + 2);
     vec![
         Span::styled(
-            format!("{label:<w$}", w = LATE_FETCH_LABEL_WIDTH),
+            text_layout::pad_right(label, LATE_FETCH_LABEL_WIDTH),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
         Span::styled(truncate_to_width(value, budget), *style),
@@ -1089,28 +1092,7 @@ fn display_link(url: &str) -> String {
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if Span::raw(text).width() <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let budget = width - 1;
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let cw = Span::raw(ch.to_string()).width();
-        if used + cw > budget {
-            break;
-        }
-        out.push(ch);
-        used += cw;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use ratatui::{
 };
 use std::time::Duration;
 
-use crate::app::common::theme;
+use crate::app::common::{text_layout, theme};
 
 enum RoomSidebarContent<'a> {
     Info(Vec<Line<'a>>),
@@ -108,7 +108,7 @@ pub fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 pub fn info_label_value<'a>(label: &'a str, value: String, color: Color) -> Line<'a> {
     Line::from(vec![
         Span::styled(
-            format!("{:<11}", label),
+            text_layout::pad_right(label, 11),
             Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(
@@ -121,7 +121,7 @@ pub fn info_label_value<'a>(label: &'a str, value: String, color: Color) -> Line
 pub fn key_hint(key: &str, desc: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{:<12}", key),
+            text_layout::pad_right(key, 12),
             Style::default().fg(theme::AMBER_DIM()),
         ),
         Span::styled(desc.to_string(), Style::default().fg(theme::TEXT_DIM())),

@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -646,7 +648,7 @@ fn theme_pseudo_group_line(
     let marker = if selected { "›" } else { " " };
     let symbol = if collapsed { "▸" } else { "▾" };
     let text = format!(" {marker} {symbol} {label}");
-    let padding = width.saturating_sub(text.chars().count());
+    let padding = width.saturating_sub(text_layout::width(&text));
     let style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
@@ -721,10 +723,10 @@ fn theme_option_line(
     // own group, so it is always obvious which themes are starred.
     let star = if favorite { "★ " } else { "☆ " };
     let id_text = format!("  {}", option.id);
-    let used = prefix.chars().count()
-        + star.chars().count()
-        + option.label.chars().count()
-        + id_text.chars().count()
+    let used = text_layout::width(&prefix)
+        + text_layout::width(star)
+        + text_layout::width(option.label)
+        + text_layout::width(&id_text)
         + 2
         + (swatches.len() * 2);
     let padding = width.saturating_sub(used);
@@ -890,12 +892,12 @@ fn shortcuts_hint_line(width: usize) -> Line<'static> {
     let key2 = "Ctrl+O";
     let text2 = "  reopen settings anywhere";
 
-    let used = leading.chars().count()
-        + key1.chars().count()
-        + text1.chars().count()
-        + separator.chars().count()
-        + key2.chars().count()
-        + text2.chars().count();
+    let used = text_layout::width(leading)
+        + text_layout::width(key1)
+        + text_layout::width(text1)
+        + text_layout::width(separator)
+        + text_layout::width(key2)
+        + text_layout::width(text2);
     let trailing = " ".repeat(width.saturating_sub(used));
 
     Line::from(vec![
@@ -1160,7 +1162,7 @@ fn account_row_line(
     };
 
     let prefix = format!(" {marker} ");
-    let used = prefix.chars().count() + label.chars().count();
+    let used = text_layout::width(&prefix) + text_layout::width(label);
     let trailing = " ".repeat(width.saturating_sub(used));
     Line::from(vec![
         Span::styled(prefix, prefix_style),
@@ -1299,14 +1301,14 @@ fn feed_row_line(
     };
 
     let prefix = format!(" {marker} ");
-    let title_text = format!("{title:<28}  ");
+    let title_text = format!("{}  ", text_layout::pad_right(&title, 28));
     let status_text = error
         .map(|err| format!("  error: {err}"))
         .unwrap_or_default();
-    let used = prefix.chars().count()
-        + title_text.chars().count()
-        + url.chars().count()
-        + status_text.chars().count();
+    let used = text_layout::width(&prefix)
+        + text_layout::width(&title_text)
+        + text_layout::width(url)
+        + text_layout::width(&status_text);
     let padding = width.saturating_sub(used.min(width));
 
     Line::from(vec![
@@ -1369,7 +1371,7 @@ fn feed_add_line(
         )
     };
 
-    let used = prefix.chars().count() + text.chars().count();
+    let used = text_layout::width(&prefix) + text_layout::width(&text);
     let padding = width.saturating_sub(used.min(width));
 
     Line::from(vec![
@@ -1454,14 +1456,14 @@ fn draw_speed_trail(
     let area_right = area.x + area.width;
 
     for (text, y) in [(mid, mid_y), (bottom, bottom_y)] {
-        let len = text.chars().count() as u16;
+        let len = text_layout::width(text) as u16;
         let (x, render_text): (u16, String) = match direction {
             MoveDirection::Leftward => {
                 // Trail starts immediately to the right of the gem; clip
                 // anything that would spill past the area's right edge.
                 let start = gem_x + 3;
                 let available = area_right.saturating_sub(start);
-                let clipped: String = text.chars().take(available as usize).collect();
+                let clipped: String = text_layout::clip(text, available as usize);
                 (start, clipped)
             }
             MoveDirection::Rightward => {
@@ -1477,7 +1479,7 @@ fn draw_speed_trail(
         if render_text.is_empty() {
             continue;
         }
-        let width = render_text.chars().count() as u16;
+        let width = text_layout::width(&render_text) as u16;
         let rect = Rect::new(x, y, width, 1);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(render_text, style))),
@@ -1552,7 +1554,7 @@ fn draw_grand_gem(frame: &mut Surface<'_>, area: Rect, gem: &GemState) {
 
     let row_widths: Vec<u16> = rows
         .iter()
-        .map(|row| row.iter().map(|(s, _)| s.chars().count() as u16).sum())
+        .map(|row| row.iter().map(|(s, _)| text_layout::width(s) as u16).sum())
         .collect();
     let max_width = row_widths.iter().copied().max().unwrap_or(0);
     if area.width < max_width {
@@ -1566,7 +1568,7 @@ fn draw_grand_gem(frame: &mut Surface<'_>, area: Rect, gem: &GemState) {
     let shine_style = Style::default().fg(gem.shine_color());
 
     for (i, row) in rows.iter().enumerate() {
-        let row_width: u16 = row.iter().map(|(s, _)| s.chars().count() as u16).sum();
+        let row_width: u16 = row.iter().map(|(s, _)| text_layout::width(s) as u16).sum();
         let row_rect = Rect::new(x_origin, y_origin + i as u16, row_width, 1);
         let spans: Vec<Span<'_>> = row
             .iter()
@@ -2199,7 +2201,11 @@ fn draw_chat_badges_dialog(frame: &mut Surface<'_>, area: Rect, state: &Settings
             let shown = state.chat_badge_row_shown(row);
             let marker = if selected { ">" } else { " " };
             let checkbox = if shown { "[x]" } else { "[ ]" };
-            let text = format!(" {marker} {checkbox} {:<22} {}", row.label, row.codes);
+            let text = format!(
+                " {marker} {checkbox} {} {}",
+                text_layout::pad_right(row.label, 22),
+                row.codes
+            );
             let style = if selected {
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
@@ -2554,7 +2560,7 @@ fn link_account_generate_line(selected: bool, pending: bool, width: usize) -> Li
         Style::default()
     };
     let prefix = format!(" {marker} ");
-    let used = prefix.chars().count() + label.chars().count();
+    let used = text_layout::width(&prefix) + text_layout::width(label);
     let trailing = " ".repeat(width.saturating_sub(used));
     Line::from(vec![
         Span::styled(prefix, prefix_style),
@@ -2783,7 +2789,10 @@ fn draw_invites_dialog(frame: &mut Surface<'_>, area: Rect, state: &SettingsModa
             Span::raw("   "),
             // Padded to a column, with a space that survives a username
             // longer than the column (they run to 32).
-            Span::styled(format!("@{:<20} ", invited.username), bright),
+            Span::styled(
+                format!("@{} ", text_layout::pad_right(&invited.username, 20)),
+                bright,
+            ),
             Span::styled(invitee_status_label(invited.status), status_style),
         ]));
     }
@@ -3137,7 +3146,7 @@ fn irc_token_single_button_line(
     width: usize,
 ) -> Line<'static> {
     let button = irc_token_button_span(label, selected, pending, false);
-    let used = 1 + label.chars().count() + 4;
+    let used = 1 + text_layout::width(label) + 4;
     Line::from(vec![
         Span::raw(" "),
         button,

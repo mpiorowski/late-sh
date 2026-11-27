@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -44,11 +46,7 @@ const SIDEBAR_TEXT_WIDTH: usize = SIDEBAR_WIDTH as usize - 2;
 /// Truncate to `width` columns, marking the cut so a clipped name does not
 /// read as someone's actual handle.
 fn fit(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}…")
+    text_layout::ellipsize(text, width)
 }
 
 // ── Arena palette ──────────────────────────────────────────────
@@ -530,7 +528,7 @@ fn control_block(seated: bool) -> Vec<Line<'static>> {
             key_hint(key, desc)
         } else {
             Line::from(Span::styled(
-                format!("{key:<12}{desc}"),
+                format!("{}{desc}", text_layout::pad_right(key, 12)),
                 Style::default().fg(theme::TEXT_FAINT()),
             ))
         }

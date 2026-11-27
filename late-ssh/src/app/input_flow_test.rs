@@ -1,5 +1,7 @@
 //! App input integration tests against a real ephemeral DB.
 
+use crate::app::common::text_layout;
+
 /// The retired stock `zen` page (`RiceLayout::default`, the tests'
 /// fixture: the bonsai and the reef over a chat, a rail of clock, pet,
 /// lobby, live and music) saved on the device as a layout named `zen` and
@@ -3640,7 +3642,7 @@ async fn clicking_a_status_bar_segment_opens_its_own_destination() {
     // cells.
     let display_col = |row: &str, needle: &str| {
         let byte = row.find(needle).expect("needle on the border row");
-        unicode_width::UnicodeWidthStr::width(&row[..byte])
+        text_layout::width(&row[..byte])
     };
     let chips_col = display_col(top_row, "chips");
     let mentions_col = display_col(bottom_row, "unread");

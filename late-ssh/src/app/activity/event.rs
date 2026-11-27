@@ -785,7 +785,11 @@ impl ActivityEvent {
     ) -> Self {
         use late_core::models::rental::duration_tag;
         let emoji = emoji.into();
-        let action = format!("rented {emoji} ({})", duration_tag(duration_secs));
+        let action = format!(
+            "rented {} ({})",
+            crate::app::common::emoji::badge_presentation(&emoji),
+            duration_tag(duration_secs)
+        );
         Self::new(
             Some(user_id),
             username,

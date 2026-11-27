@@ -1,8 +1,9 @@
+use crate::app::common::text_layout;
+
 use std::collections::HashSet;
 
 use late_core::models::leaderboard::DailyPuzzle;
 use ratatui::text::Line;
-use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use super::*;
@@ -32,9 +33,16 @@ fn plain(lines: &[Line<'_>]) -> Vec<String> {
 fn every_badge_is_its_size() {
     for puzzle in DailyPuzzle::ALL.iter().copied() {
         for row in small_art(puzzle) {
-            assert_eq!(row.width(), BADGE_ART_WIDTH, "{puzzle:?} small {row:?}");
+            assert_eq!(
+                text_layout::width(row),
+                BADGE_ART_WIDTH,
+                "{puzzle:?} small {row:?}"
+            );
         }
-        assert!(short_name(puzzle).width() <= BADGE_WIDTH, "{puzzle:?}");
+        assert!(
+            text_layout::width(short_name(puzzle)) <= BADGE_WIDTH,
+            "{puzzle:?}"
+        );
     }
 }
 
@@ -116,7 +124,7 @@ fn the_lobby_row_lines_up_seven_badges_and_narrows_to_a_list() {
     assert_eq!(rows[8], "   1 ✦");
     assert_eq!(rows[9], "  11 boards, one a day, all new at 00:00 UTC.");
     for row in &rows[..LOBBY_COLUMN_ROWS] {
-        assert!(row.width() <= BADGE_ROW_WIDTH, "{row:?}");
+        assert!(text_layout::width(row) <= BADGE_ROW_WIDTH, "{row:?}");
     }
 
     let list = plain(&week.lobby_lines(60));
@@ -155,7 +163,10 @@ fn the_panel_stacks_the_week_with_the_day_and_board_beside_each_badge() {
     assert_eq!(rows[38], "11 boards, one a day,");
     assert_eq!(rows[39], "all new at 00:00 UTC.");
     for row in &rows {
-        assert!(row.width() <= usize::from(PANEL_WIDTH), "{row:?}");
+        assert!(
+            text_layout::width(row) <= usize::from(PANEL_WIDTH),
+            "{row:?}"
+        );
     }
 }
 

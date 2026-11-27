@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::{
     DOUBLE_CLICK_WINDOW_MS, IconPickerState, IconPickerTab,
     catalog::{IconCatalogData, IconEntry, SectionView},
@@ -156,7 +158,7 @@ pub(crate) const TAB_STRIP_LEAD: u16 = 1;
 pub(crate) const TAB_STRIP_GAP: u16 = 2;
 
 fn tab_cell_width(label: &str) -> u16 {
-    4 + label.chars().count() as u16
+    4 + text_layout::width(label) as u16
 }
 
 pub(crate) fn tab_at_x(tabs_inner: Rect, x: u16) -> Option<IconPickerTab> {
@@ -390,7 +392,8 @@ fn entry_line(entry: &IconEntry, is_selected: bool, width: u16) -> Line<'static>
     let icon = &entry.icon;
     let name = &entry.name;
     if is_selected {
-        let pad = (width as usize).saturating_sub(icon.chars().count() + name.chars().count() + 3);
+        let pad = (width as usize)
+            .saturating_sub(text_layout::width(icon) + text_layout::width(name) + 3);
         Line::from(vec![
             Span::styled(
                 format!(" {icon} "),

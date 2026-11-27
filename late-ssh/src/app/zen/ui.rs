@@ -5,6 +5,8 @@
 //! between a kind and the drawer, and the clock, the blank tile and the
 //! board's day banner are the page's own.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -12,7 +14,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::{
     attention::Item as AttentionItem,
@@ -75,7 +76,10 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
     match stream_badge {
         None => format!("{kind} · {label}"),
         Some(badge) => {
-            let fixed = UnicodeWidthStr::width(kind) + " · ".width() + 1 + badge.width();
+            let fixed = text_layout::width(kind)
+                + text_layout::width(" · ")
+                + 1
+                + text_layout::width(badge);
             let budget = (width as usize).saturating_sub(4 + fixed);
             let label = crate::app::common::primitives::truncate_cells(label, budget);
             format!("{kind} · {label} {badge}")
@@ -438,7 +442,10 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
                 Span::styled(
-                    format!("{:<width$} ", item.name, width = MAX_LAYOUT_NAME_CHARS),
+                    format!(
+                        "{} ",
+                        text_layout::pad_right(&item.name, MAX_LAYOUT_NAME_CHARS)
+                    ),
                     name_style,
                 ),
                 Span::styled(note.to_string(), Style::default().fg(theme::TEXT_FAINT())),
@@ -769,7 +776,7 @@ fn draw_tile_chrome(
             if !keys.is_empty() {
                 let mut right = hint_line(keys);
                 right.spans.push(Span::raw(" "));
-                let used = 3 + title.chars().count() + 1;
+                let used = 3 + text_layout::width(title) + 1;
                 if right.width() + used < row.width as usize {
                     frame.render_widget(Paragraph::new(right).right_aligned(), row);
                 }
@@ -991,9 +998,12 @@ fn draw_attention_tile(
             };
             let act = item.act();
             let head = format!("{} ", item.glyph());
-            let budget = width.saturating_sub(head.width() + act.width() + 1);
+            let budget =
+                width.saturating_sub(text_layout::width(&head) + text_layout::width(act) + 1);
             let words = crate::app::common::primitives::truncate_cells(&item.label(), budget);
-            let pad = width.saturating_sub(head.width() + words.width() + act.width());
+            let pad = width.saturating_sub(
+                text_layout::width(&head) + text_layout::width(&words) + text_layout::width(act),
+            );
             Line::from(vec![
                 Span::styled(head, head_style),
                 Span::styled(words, words_style),
@@ -1021,7 +1031,7 @@ fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
             .add_modifier(Modifier::ITALIC)
     };
     let width = area.width as usize;
-    let used = 3 + label.chars().count() + 1;
+    let used = 3 + text_layout::width(label) + 1;
     let trail = width.saturating_sub(used).max(1);
     let line = Line::from(vec![
         Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),

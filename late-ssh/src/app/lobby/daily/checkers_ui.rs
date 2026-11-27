@@ -5,6 +5,8 @@
 //! Pieces are the shared square stone, red warm / white bright, kings with a
 //! gold top half; the cramped tier falls back to `●` men and `◉` kings.
 
+use crate::app::common::text_layout;
+
 use std::collections::HashSet;
 
 use chrono::Utc;
@@ -303,7 +305,7 @@ fn row_label(row: usize) -> Span<'static> {
 }
 
 fn summary_line(text: String, tier: CellTier) -> Line<'static> {
-    let pad = (grid_width(tier) as usize).saturating_sub(text.chars().count()) / 2;
+    let pad = (grid_width(tier) as usize).saturating_sub(text_layout::width(&text)) / 2;
     Line::from(Span::styled(
         format!("{}{text}", " ".repeat(pad)),
         Style::default().fg(theme::TEXT_FAINT()),

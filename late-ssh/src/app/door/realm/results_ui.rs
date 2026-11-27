@@ -6,6 +6,8 @@
 //! what the pot paid. It shows itself once when you open a finished game and
 //! can be called back with `r`.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -204,15 +206,18 @@ fn place_line(
     // Measured rather than counted, because a glyph's width is not something
     // to be confident about from a source file.
     let mut spans = vec![
-        Span::styled(format!("  {medal:<3}"), Style::default().fg(theme::AMBER())),
+        Span::styled(
+            format!("  {}", text_layout::pad_right(medal, 3)),
+            Style::default().fg(theme::AMBER()),
+        ),
         Span::styled("■ ", Style::default().fg(Color::Rgb(r, g, b))),
         Span::styled(
-            format!(
-                "{:<14}",
-                truncate(
+            text_layout::pad_right(
+                &truncate(
                     &format!("{}{}", place.username, if you { " (you)" } else { "" }),
-                    13
-                )
+                    13,
+                ),
+                14,
             ),
             name_style,
         ),
@@ -231,7 +236,7 @@ fn place_line(
     ];
     let used: usize = spans
         .iter()
-        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+        .map(|s| text_layout::width(s.content.as_ref()))
         .sum();
     let room = text_width.saturating_sub(used + 2);
     spans.push(Span::styled(
@@ -253,7 +258,6 @@ mod tests {
     use crate::app::door::realm::resolver::{RealmGameState, RealmPlayer};
     use crate::app::door::realm::rulesets::STANDARD;
     use std::collections::BTreeMap;
-    use unicode_width::UnicodeWidthStr;
     use uuid::Uuid;
 
     fn state_with(players: &[(u128, &str, RealmPlayerStatus, u16)]) -> RealmGameState {
@@ -312,9 +316,9 @@ mod tests {
             let line = place_line(place, Uuid::from_u128(1), &state, text_width);
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             assert!(
-                text.width() <= text_width,
+                text_layout::width(&text) <= text_width,
                 "{text:?} is {} wide, past {text_width}",
-                text.width()
+                text_layout::width(&text)
             );
         }
     }

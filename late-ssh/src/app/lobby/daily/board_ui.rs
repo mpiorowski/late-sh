@@ -4,6 +4,8 @@
 //! `battleship_ui`, connect4 its board in `connect4_ui`. Entered only from
 //! the Daily Games modal.
 
+use crate::app::common::text_layout;
+
 use chrono::Utc;
 use late_core::models::daily_match::DailyResult;
 use ratatui::{
@@ -801,7 +803,10 @@ fn append_moves(lines: &mut Vec<Line<'static>>, chess: &ChessDetail, budget: usi
                 format!("{number:>3}. "),
                 Style::default().fg(theme::TEXT_FAINT()),
             ),
-            Span::styled(format!("{white:<9}"), Style::default().fg(theme::TEXT())),
+            Span::styled(
+                text_layout::pad_right(&white, 9),
+                Style::default().fg(theme::TEXT()),
+            ),
         ];
         if let Some(black) = black {
             spans.push(Span::styled(black, Style::default().fg(theme::TEXT_DIM())));

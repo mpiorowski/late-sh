@@ -27,6 +27,8 @@
 //! opens it the way the strip's click does (`input::open_from_panel_click`),
 //! both off the targets the draw records in `LiveState::panel_hit`.
 
+use crate::app::common::text_layout;
+
 use std::cell::Cell;
 
 use chrono::{DateTime, Duration, Utc};
@@ -357,12 +359,15 @@ fn row_line(width: usize, number: usize, row: &LivePanelRow, now: DateTime<Utc>)
         Edge::Unread(true) => format!(" {UNREAD}"),
         Edge::Unread(false) => String::new(),
     };
-    let room = width.saturating_sub(KIND_COLS + 1 + edge.chars().count() + KEY_COLS);
+    let room = width.saturating_sub(KIND_COLS + 1 + text_layout::width(&edge) + KEY_COLS);
     let middle = truncate_chars(&middle, room);
     Line::from(vec![
-        Span::styled(format!("{kind:<KIND_COLS$} "), kind_style),
         Span::styled(
-            format!("{middle:<room$}"),
+            format!("{} ", text_layout::pad_right(kind, KIND_COLS)),
+            kind_style,
+        ),
+        Span::styled(
+            text_layout::pad_right(&middle, room),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
         Span::styled(edge, Style::default().fg(theme::AMBER_DIM())),

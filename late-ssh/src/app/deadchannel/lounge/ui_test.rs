@@ -1,9 +1,10 @@
+use crate::app::common::text_layout;
+
 use std::collections::HashMap;
 
 use late_core::models::deadchannel_spawn::{Spawn, SpawnHit, SpawnKind, SpawnOutcome};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use super::super::data::{EMPTY_SEAT, GHOST_PORTRAIT, face};
@@ -54,11 +55,11 @@ fn every_face_and_seat_row_is_its_width() {
     for kind in [SpawnKind::Flicker, SpawnKind::Howler] {
         for row in face(kind) {
             // Nine cells: the face is placed by width, never reshaped.
-            assert_eq!(UnicodeWidthStr::width(row), 9, "{kind:?} {row:?}");
+            assert_eq!(text_layout::width(row), 9, "{kind:?} {row:?}");
         }
     }
     for row in EMPTY_SEAT.iter().chain(GHOST_PORTRAIT.iter()) {
-        assert_eq!(UnicodeWidthStr::width(*row), PORTRAIT_WIDTH, "{row:?}");
+        assert_eq!(text_layout::width(row), PORTRAIT_WIDTH, "{row:?}");
     }
 }
 

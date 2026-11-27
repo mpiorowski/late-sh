@@ -5,6 +5,8 @@
 //! drawn screen until it has loaded; the words beside it are the title, the
 //! channel and length, and who queued it and where it stands.
 
+use crate::app::common::text_layout;
+
 use anyhow::Result;
 use image::RgbaImage;
 use late_core::models::user::AudioSource;
@@ -138,7 +140,7 @@ pub(crate) fn compact_spans(rest: u16, track: &TrackStripView) -> Vec<Span<'stat
     let rest = usize::from(rest);
     let lead = format!("booth {} · ", submitter(track));
     let lead = truncate_chars(&lead, rest);
-    let left = rest.saturating_sub(lead.chars().count());
+    let left = rest.saturating_sub(text_layout::width(&lead));
     vec![
         Span::styled(lead, Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
@@ -254,7 +256,7 @@ fn event_spans(budget: usize, track: &TrackStripView) -> Vec<Span<'static>> {
         TrackPlace::Behind(ahead) => format!(" queued it · #{} in line", ahead + 1),
     };
     let name = truncate_chars(&submitter(track), budget);
-    let left = budget.saturating_sub(name.chars().count());
+    let left = budget.saturating_sub(text_layout::width(&name));
     vec![
         Span::styled(
             name,

@@ -7,6 +7,8 @@
 //! shows a board post. Personal events are never on it; they are the
 //! viewer's and live on screen 7 alone.
 
+use crate::app::common::text_layout;
+
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use late_core::models::calendar::{CalendarEvent, EventTiming};
@@ -14,7 +16,6 @@ use ratatui::{
     style::{Modifier, Style},
     text::Span,
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::common::{primitives::truncate_cells, theme};
 
@@ -105,19 +106,28 @@ pub(crate) fn day_spans(posts: &[DayPost], width: usize) -> Vec<Span<'static>> {
             DayWhen::Until { time, .. } => format!(" (until {time})"),
         })
         .collect();
-    let titles: Vec<usize> = posts.iter().map(|post| post.title.width()).collect();
+    let titles: Vec<usize> = posts
+        .iter()
+        .map(|post| text_layout::width(&post.title))
+        .collect();
     let folded = |shown: usize| match posts.len() - shown {
         0 => String::new(),
         more => format!("+{more}"),
     };
     // The columns that are not a title's, with `shown` posts on the row.
     let fixed = |shown: usize| {
-        let tails: usize = tails[..shown].iter().map(|tail| tail.width()).sum();
-        let folded = match folded(shown).width() {
+        let tails: usize = tails[..shown]
+            .iter()
+            .map(|tail| text_layout::width(tail))
+            .sum();
+        let folded = match text_layout::width(&folded(shown)) {
             0 => 0,
-            columns => SEPARATOR.width() + columns,
+            columns => text_layout::width(SEPARATOR) + columns,
         };
-        LEAD.width() + tails + SEPARATOR.width() * shown.saturating_sub(1) + folded
+        text_layout::width(LEAD)
+            + tails
+            + text_layout::width(SEPARATOR) * shown.saturating_sub(1)
+            + folded
     };
     let shortest = |shown: usize| -> usize {
         titles[..shown]

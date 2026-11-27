@@ -7,6 +7,8 @@
 //! Orders are secret until the night, and this is where that is kept: a
 //! viewer only ever sees their own. A visitor gets the last night whole.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -185,7 +187,7 @@ fn order_line(
             Style::default().fg(theme::AMBER()),
         ),
         Span::styled(format!("{glyph} "), dim),
-        Span::styled(format!("{:<24}", truncate(&name, 24)), name_style),
+        Span::styled(text_layout::pad_right(&truncate(&name, 24), 24), name_style),
         Span::styled(format!("{size:>10}"), dim),
         Span::styled(format!("{odds:>6}"), odds_style(projection)),
         Span::styled(

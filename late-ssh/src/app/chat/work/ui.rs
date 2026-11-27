@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::common::theme;
 use crate::app::common::{composer, primitives::format_relative_time};
@@ -9,7 +11,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::svc::WorkFeedItem;
 
@@ -169,9 +170,9 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
 
 fn build_title_line(headline: &str, owner: bool, is_unread: bool, width: usize) -> Line<'static> {
     let unread_prefix = if is_unread { "● " } else { "" };
-    let unread_w = UnicodeWidthStr::width(unread_prefix);
+    let unread_w = text_layout::width(unread_prefix);
     let badge = if owner { "(yours)" } else { "" };
-    let badge_w = UnicodeWidthStr::width(badge);
+    let badge_w = text_layout::width(badge);
     // Keep at least one space between headline and badge; if width is so tight
     // we can't fit the badge, drop it rather than crowd the headline.
     let headline_budget = if owner {
@@ -183,7 +184,7 @@ fn build_title_line(headline: &str, owner: bool, is_unread: bool, width: usize) 
         width.saturating_sub(unread_w).max(4)
     };
     let truncated = truncate_to_width(headline, headline_budget);
-    let truncated_w = UnicodeWidthStr::width(truncated.as_str());
+    let truncated_w = text_layout::width(truncated.as_str());
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
     if is_unread {
@@ -230,7 +231,7 @@ fn build_meta_line(
         time = relative_time,
     );
     let prefix = format!("@{username}");
-    let prefix_w = UnicodeWidthStr::width(prefix.as_str());
+    let prefix_w = text_layout::width(prefix.as_str());
     let trailing_budget = width.saturating_sub(prefix_w);
     let trailing_truncated = truncate_to_width(&trailing, trailing_budget);
 
@@ -254,38 +255,14 @@ fn display_link(url: &str) -> String {
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let budget = width - 1; // reserve one cell for the ellipsis
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + cw > budget {
-            break;
-        }
-        out.push(ch);
-        used += cw;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 fn apply_inline_ellipsis(line: &mut String, width: usize) {
-    let width = width.max(1);
-    if line.chars().count() < width {
-        line.push_str("...");
-        return;
+    *line = format!("{}.", text_layout::clip(line, width.saturating_sub(1)));
+    if width == 0 {
+        line.clear();
     }
-    line.pop();
-    line.push('.');
 }
 
 fn summary_lines(summary: &str, width: usize, max_lines: usize) -> (Vec<String>, bool) {

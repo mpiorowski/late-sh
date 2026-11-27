@@ -14,6 +14,17 @@ fn preview_rows_wraps_into_two_rows() {
 }
 
 #[test]
+fn quoted_unicode_previews_keep_their_cell_budget() {
+    for width in 1..=12 {
+        let rows = preview_rows("☀️ 👨‍👩‍👧 界 repeated words repeated words", width, 2);
+        assert!(
+            rows.iter()
+                .all(|row| crate::app::common::text_layout::width(row) <= width)
+        );
+    }
+}
+
+#[test]
 fn preview_rows_drops_leading_reply_quote() {
     let rows = preview_rows("> quoted line\nactual reply line", 40, 2);
 

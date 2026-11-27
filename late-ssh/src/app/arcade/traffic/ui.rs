@@ -5,6 +5,8 @@
 //! Layout (left → right):
 //! `[minimap] [gap] [left grass] [road] [right grass] [gap] [stats]`
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -12,7 +14,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthChar;
 
 use super::state::{Config, Phase, State, TrafficDir, TrafficScreen, hash3};
 use super::theme;
@@ -841,46 +842,21 @@ fn draw_road(
         if let Some(&(_, sep_stage_idx)) = sep_at.iter().find(|&&(row, _)| row == ri) {
             let sep_stage = &track.stages[sep_stage_idx];
             let label: String = format!(" {} {} ", sep_stage.icon, sep_stage.name);
-            let label_w: usize = label
-                .chars()
-                .map(|c| UnicodeWidthChar::width(c).unwrap_or(1))
-                .sum();
             let inner_w = (geom.road_width as usize).saturating_sub(2);
-            let pad_left = inner_w.saturating_sub(label_w) / 2;
-            let mut x_inner = 0usize;
-            let mut label_chars = label.chars();
-            let mut in_label_idx = 0usize;
-            while x_inner < inner_w {
-                let screen_x = area.x + 1 + x_inner as u16;
-                let in_label = x_inner >= pad_left && in_label_idx < label_w;
-                if in_label {
-                    if let Some(ch) = label_chars.next() {
-                        let w = UnicodeWidthChar::width(ch).unwrap_or(1);
-                        let mut tmp = [0u8; 4];
-                        let sym = ch.encode_utf8(&mut tmp);
-                        if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
-                            cell.set_symbol(sym).set_fg(SEP_LABEL_FG).set_bg(SEP_BG);
-                        }
-                        if w == 2
-                            && let Some(cell) = buf.cell_mut((screen_x + 1, screen_y))
-                        {
-                            cell.set_symbol(" ").set_fg(SEP_LABEL_FG).set_bg(SEP_BG);
-                        }
-                        in_label_idx += w;
-                        x_inner += w;
-                    } else {
-                        if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
-                            cell.set_symbol("─").set_fg(SEP_LINE_FG).set_bg(SEP_BG);
-                        }
-                        x_inner += 1;
-                    }
-                } else {
-                    if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
-                        cell.set_symbol("─").set_fg(SEP_LINE_FG).set_bg(SEP_BG);
-                    }
-                    x_inner += 1;
+            let label = text_layout::clip(&label, inner_w);
+            let pad_left = inner_w.saturating_sub(text_layout::width(&label)) / 2;
+            for x in 0..inner_w {
+                if let Some(cell) = buf.cell_mut((area.x + 1 + x as u16, screen_y)) {
+                    cell.set_symbol("─").set_fg(SEP_LINE_FG).set_bg(SEP_BG);
                 }
             }
+            buf.set_stringn(
+                area.x + 1 + pad_left as u16,
+                screen_y,
+                label,
+                inner_w - pad_left,
+                Style::default().fg(SEP_LABEL_FG).bg(SEP_BG),
+            );
         }
 
         let p_top = anchor;

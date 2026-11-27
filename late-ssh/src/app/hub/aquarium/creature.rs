@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::{
     collections::HashMap,
     fs,
@@ -1187,7 +1189,7 @@ fn parse_mini(doc: &KdlDocument, path: &Path) -> Result<MiniGlyph> {
         let Some(glyph) = node.get(key).and_then(KdlValue::as_string) else {
             return Err(anyhow!("{} `mini` needs a `{key}` string", path.display()));
         };
-        let width = unicode_width::UnicodeWidthStr::width(glyph);
+        let width = text_layout::width(glyph);
         if width == 0 || width > MINI_MAX_WIDTH || glyph.contains('\n') {
             return Err(anyhow!(
                 "{} `mini {key}` must be one row of 1 to {MINI_MAX_WIDTH} cells",

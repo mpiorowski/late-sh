@@ -5,6 +5,8 @@
 //! label is full-bright. Per-game flavor (logos, art, glyphs, quotes) stays in
 //! each game's own render module.
 
+use crate::app::common::text_layout;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -30,7 +32,7 @@ pub fn stat(label: &str, value: &str, pad: usize) -> Line<'static> {
     Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            format!("{label:<pad$}"),
+            text_layout::pad_right(label, pad),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
@@ -68,7 +70,7 @@ pub fn action(marker: &str, key: &str, label: &str, color: Color) -> Line<'stati
     Line::from(vec![
         Span::styled(format!("{marker} "), Style::default().fg(color)),
         Span::styled(
-            format!("{key:<8}"),
+            text_layout::pad_right(key, 8),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(label.to_string(), Style::default().fg(theme::TEXT())),
@@ -87,7 +89,7 @@ pub fn hint(key: &str, label: &str, pad: usize) -> Line<'static> {
     Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            format!("{key:<pad$}"),
+            text_layout::pad_right(key, pad),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),

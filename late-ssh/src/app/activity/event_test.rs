@@ -29,3 +29,10 @@ fn cyberspace_posted_strips_mentions_from_the_title() {
         ActivityEvent::cyberspace_posted(Uuid::now_v7(), "mat", Some("ping @alice".to_string()));
     assert_eq!(event.action, "published \"ping alice\" on cyberspace");
 }
+#[test]
+fn rented_badge_announcement_prefers_emoji_without_changing_its_identity() {
+    use super::event::{ActivityEvent, ActivityKind};
+    let event = ActivityEvent::badge_rented(uuid::Uuid::nil(), "mira", "🌪", 86_400);
+    assert_eq!(event.action, "rented 🌪️ (24h)");
+    assert!(matches!(event.kind, ActivityKind::BadgeRented { emoji } if emoji == "🌪"));
+}

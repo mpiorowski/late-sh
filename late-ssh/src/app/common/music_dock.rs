@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -244,7 +246,7 @@ fn dock_track_line(width: u16, track: Option<&str>, active: bool, tick: usize) -
 fn station_heading_line(width: u16, station: RadioStation) -> Line<'static> {
     let label = station.label();
     let credit_room =
-        (width as usize).saturating_sub(label.chars().count() + " · ".chars().count());
+        (width as usize).saturating_sub(text_layout::width(label) + text_layout::width(" · "));
     let faint = Style::default()
         .fg(theme::TEXT_FAINT())
         .add_modifier(Modifier::ITALIC);
@@ -257,7 +259,7 @@ fn station_heading_line(width: u16, station: RadioStation) -> Line<'static> {
         ),
         Span::styled(" · ".to_string(), faint),
         Span::styled(
-            truncate_chars(station.provider().label(), credit_room),
+            truncate_columns(station.provider().label(), credit_room),
             faint,
         ),
     ])
@@ -279,11 +281,11 @@ fn selector_row_line(width: u16, name: &str, key: &str, selected: bool) -> Line<
             Style::default().fg(theme::TEXT_DIM()),
         )
     };
-    let key_w = key.chars().count();
+    let key_w = text_layout::width(key);
     let name_budget = (width as usize).saturating_sub(2 + key_w + 1);
-    let name_text = truncate_chars(name, name_budget);
+    let name_text = truncate_columns(name, name_budget);
     let pad = (width as usize)
-        .saturating_sub(2 + name_text.chars().count() + key_w)
+        .saturating_sub(2 + text_layout::width(&name_text) + key_w)
         .max(1);
     Line::from(vec![
         Span::styled(glyph.to_string(), glyph_style),
@@ -382,7 +384,8 @@ fn keybind_row_line(width: u16, groups: &[(&str, &str)]) -> Line<'static> {
     let mut used = 0usize;
     for (i, (key, label)) in groups.iter().enumerate() {
         let sep = if i == 0 { "" } else { "  " };
-        let group_w = sep.chars().count() + key.chars().count() + 1 + label.chars().count();
+        let group_w =
+            text_layout::width(sep) + text_layout::width(key) + 1 + text_layout::width(label);
         if used + group_w > width as usize {
             break;
         }
@@ -578,7 +581,8 @@ fn stage_title_line(area_w: u16, label: &str, tag: Option<&str>, active: bool) -
     let bar_w = 2;
     let pad_w = 2;
     let gap_w = if tag_text.is_empty() { 0 } else { 1 };
-    let used = bar_w + label_text.chars().count() + pad_w + gap_w + tag_text.chars().count();
+    let used =
+        bar_w + text_layout::width(&label_text) + pad_w + gap_w + text_layout::width(&tag_text);
     let dash_count = (area_w as usize).saturating_sub(used).max(1);
 
     let mut spans = vec![
@@ -656,11 +660,11 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize, tick: usize) 
         ("·".to_string(), Style::default().fg(theme::TEXT_FAINT()))
     };
 
-    let prefix_w = n_text.chars().count();
-    let score_w = score_text.chars().count();
+    let prefix_w = text_layout::width(&n_text);
+    let score_w = text_layout::width(&score_text);
     let title_budget = width.saturating_sub(prefix_w + score_w + 2);
     let title_text = crate::app::common::marquee::marquee_text(&title, title_budget, tick);
-    let pad = title_budget.saturating_sub(title_text.chars().count());
+    let pad = title_budget.saturating_sub(text_layout::width(&title_text));
 
     Line::from(vec![
         Span::styled(n_text, Style::default().fg(theme::TEXT_FAINT())),
@@ -686,22 +690,8 @@ pub(crate) fn current_track_text(
     }
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        return text.to_string();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-
-    let mut out: String = chars.into_iter().take(max_chars - 1).collect();
-    out.push('…');
-    out
+fn truncate_columns(text: &str, max_chars: usize) -> String {
+    text_layout::ellipsize(text, max_chars)
 }
 
 /// The narrowest tile the music dock reads in: the station rows with

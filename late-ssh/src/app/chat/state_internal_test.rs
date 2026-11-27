@@ -5477,3 +5477,14 @@ fn unread_mentions_are_newest_first_and_a_read_one_never_comes_back() {
         .collect();
     assert_eq!(listed, vec![fresh_id, older_id]);
 }
+#[test]
+fn composer_clicks_map_whole_graphemes_back_to_character_offsets() {
+    let text = "A☀️e\u{301}🇺🇸B";
+    assert_eq!(super::char_offset_for_display_col(text, 0), 0);
+    assert_eq!(super::char_offset_for_display_col(text, 1), 1);
+    assert_eq!(super::char_offset_for_display_col(text, 2), 1);
+    assert_eq!(super::char_offset_for_display_col(text, 3), 3);
+    assert_eq!(super::char_offset_for_display_col(text, 4), 5);
+    assert_eq!(super::char_offset_for_display_col(text, 5), 5);
+    assert_eq!(super::char_offset_for_display_col(text, 6), 7);
+}

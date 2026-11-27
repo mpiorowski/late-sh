@@ -8,6 +8,8 @@
 //! hints — with the other renderers. The board is drawn from the viewer's
 //! seat (home board bottom-right); spectators get white's.
 
+use crate::app::common::text_layout;
+
 use std::collections::HashSet;
 
 use chrono::Utc;
@@ -405,7 +407,7 @@ fn gap_line(ctx: &GridCtx, row: usize) -> Line<'static> {
         },
     ));
     spans.push(Span::styled(
-        format!("{right:^side_w$}"),
+        text_layout::pad_center(&right, side_w),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     // The off column stays quiet in the gap rows.

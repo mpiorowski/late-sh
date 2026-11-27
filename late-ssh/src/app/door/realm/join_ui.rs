@@ -2,6 +2,8 @@
 //! one thing to settle before marching in, and the one thing it must not do
 //! is let two players wear the same colour.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
@@ -110,7 +112,7 @@ fn color_cell(
         ));
     }
     spans.push(Span::styled(
-        format!(" {:<8}", palette.name),
+        format!(" {}", text_layout::pad_right(palette.name, 8)),
         Style::default().fg(match (held.is_some(), is_selected) {
             (true, _) => theme::TEXT_FAINT(),
             (false, true) => theme::TEXT_BRIGHT(),
@@ -125,7 +127,7 @@ fn color_cell(
         None => String::new(),
     };
     spans.push(Span::styled(
-        format!(" {worn:<room$}"),
+        format!(" {}", text_layout::pad_right(&worn, room)),
         Style::default().fg(theme::TEXT_FAINT()),
     ));
     spans
@@ -174,7 +176,9 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
-        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width.max(1) {
+        if !line.is_empty()
+            && text_layout::width(&line) + 1 + text_layout::width(word) > width.max(1)
+        {
             lines.push(std::mem::take(&mut line));
         }
         if !line.is_empty() {

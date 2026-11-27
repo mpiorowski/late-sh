@@ -3,6 +3,8 @@
 //! stores, and text fading in), and the terminal is if anything a better fit
 //! for that than the browser was, so nothing here decorates.
 
+use crate::app::common::text_layout;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -549,7 +551,11 @@ fn beat_lines(beat: &EndingBeat) -> Vec<Line<'static>> {
         ))],
         // Padded to a fixed width so the centered column lines up.
         EndingBeat::Stat { label, value } => vec![Line::from(Span::styled(
-            format!("{label:>16}   {value:<22}"),
+            format!(
+                "{}   {}",
+                text_layout::pad_left(label, 16),
+                text_layout::pad_right(value, 22)
+            ),
             Style::default().fg(theme::TEXT_DIM()),
         ))],
         EndingBeat::Award(escape) => vec![

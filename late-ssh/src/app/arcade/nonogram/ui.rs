@@ -191,12 +191,7 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
     )));
 
     // Cell rows
-    for (row, row_clues) in puzzle
-        .row_clues
-        .iter()
-        .enumerate()
-        .take(puzzle.height as usize)
-    {
+    for (row, row_clues) in puzzle.row_clues.iter().enumerate().take(num_rows) {
         let mut spans = Vec::new();
 
         // Row clues

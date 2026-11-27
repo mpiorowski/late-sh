@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::collections::HashMap;
 
 use ratatui::{
@@ -394,7 +396,7 @@ fn render_clipped_text(
     text: &str,
     style: Style,
 ) {
-    let text_width = text.chars().count() as i32;
+    let text_width = text_layout::width(text) as i32;
     if text_width == 0 || raw_x >= area.right() as i32 || raw_x + text_width <= area.x as i32 {
         return;
     }
@@ -423,7 +425,7 @@ fn render_creature_name(
     name: &str,
     viewport_x: i32,
 ) {
-    let name_width = name.chars().count() as i32;
+    let name_width = text_layout::width(name) as i32;
     if name_width == 0 {
         return;
     }
@@ -568,7 +570,7 @@ pub(crate) fn draw_mini_tank(
 }
 
 fn glyph_width(glyph: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(glyph)
+    text_layout::width(glyph)
 }
 
 /// The tank and its care, as Home's reef and tank tiles read them.

@@ -2,6 +2,8 @@
 //! listing pane (list plus preview), the full-frame piece, the hang modal,
 //! the framing bar, and the splash piece.
 
+use crate::app::common::text_layout;
+
 use late_core::models::artboard_piece::PIECE_TITLE_MAX_CHARS;
 use ratatui::{
     Frame,
@@ -234,11 +236,9 @@ fn rail_row_style(is_selected: bool, focused: bool) -> Style {
 
 fn rail_label(marker: &str, label: &str, tail: &str) -> String {
     let width = (RAIL_WIDTH as usize).saturating_sub(4);
-    let label: String = label
-        .chars()
-        .take(width.saturating_sub(tail.len() + 1))
-        .collect();
-    let pad = width.saturating_sub(label.chars().count() + tail.len());
+    let tail_width = text_layout::width(tail);
+    let label = text_layout::clip(label, width.saturating_sub(tail_width + 1));
+    let pad = width.saturating_sub(text_layout::width(&label) + tail_width);
     format!(" {marker} {label}{}{tail}", " ".repeat(pad))
 }
 

@@ -7,6 +7,8 @@
 //! cannot ship without words. What a ref points at is decided in
 //! `profile::ledger`; this module only says it.
 
+use crate::app::common::text_layout;
+
 use chrono::{DateTime, Utc};
 use late_core::models::chips::{ChipMove, MonthChips};
 use ratatui::{
@@ -253,14 +255,7 @@ fn short_date(at: DateTime<Utc>) -> String {
 }
 
 fn clip(text: &str, width: usize) -> String {
-    let count = text.chars().count();
-    if count <= width {
-        return text.to_string();
-    }
-    let keep = width.saturating_sub(1);
-    let mut out: String = text.chars().take(keep).collect();
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 #[cfg(test)]

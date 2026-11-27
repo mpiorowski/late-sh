@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
@@ -44,7 +46,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen
     // narrow terminal still leaves room for the body column.
     let nav_text_width = HelpTopic::ALL
         .iter()
-        .map(|topic| topic.title().chars().count())
+        .map(|topic| text_layout::width(topic.title()))
         .max()
         .unwrap_or(0) as u16;
     let main = layout[1];
@@ -120,13 +122,7 @@ fn draw_nav(frame: &mut Frame, area: Rect, state: &HelpModalState) {
 
         // Left-pad the label, then fill to the full column width so the active
         // row reads as a solid highlight bar instead of a colored word.
-        let mut text = format!("  {}", topic.title());
-        let len = text.chars().count();
-        if len > width {
-            text = text.chars().take(width).collect();
-        } else {
-            text.push_str(&" ".repeat(width - len));
-        }
+        let text = text_layout::fit(&format!("  {}", topic.title()), width);
 
         frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), row);
     }

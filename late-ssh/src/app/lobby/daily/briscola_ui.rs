@@ -12,6 +12,8 @@
 //! the five-line `Outline` cards when there is room, one-line `Boxed` cards
 //! when there is not.
 
+use crate::app::common::text_layout;
+
 use chrono::Utc;
 use ratatui::{
     Frame,
@@ -418,11 +420,7 @@ fn centered(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
 }
 
 fn centered_line(line: Line<'static>, width: usize) -> Line<'static> {
-    let drawn: usize = line
-        .spans
-        .iter()
-        .map(|span| span.content.chars().count())
-        .sum();
+    let drawn: usize = line.spans.iter().map(|span| span.width()).sum();
     if drawn == 0 || drawn >= width {
         return line;
     }
@@ -432,7 +430,7 @@ fn centered_line(line: Line<'static>, width: usize) -> Line<'static> {
 }
 
 fn centered_label(text: String, width: usize) -> Line<'static> {
-    let pad = width.saturating_sub(text.chars().count()) / 2;
+    let pad = width.saturating_sub(text_layout::width(&text)) / 2;
     Line::from(Span::styled(
         format!("{}{text}", " ".repeat(pad)),
         Style::default().fg(theme::TEXT_FAINT()),
@@ -673,7 +671,7 @@ fn draw_info_rail(
                     Style::default().fg(suit_color(trick.answer)),
                 ),
                 Span::styled(
-                    format!("{winner:<8}"),
+                    text_layout::pad_right(&winner, 8),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
                 Span::styled(

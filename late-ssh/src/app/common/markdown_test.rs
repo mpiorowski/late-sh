@@ -1,10 +1,11 @@
+use crate::app::common::text_layout;
+
 use crate::app::common::markdown::*;
 use crate::app::common::theme;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use unicode_width::UnicodeWidthStr;
 
 fn lines_to_strings(lines: &[Line]) -> Vec<String> {
     lines
@@ -187,7 +188,7 @@ fn wrap_plain_line_respects_display_width() {
     assert!(
         result
             .iter()
-            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 10),
+            .all(|line| text_layout::width(line.as_str()) <= 10),
         "wrapped rows exceeded display width: {result:?}"
     );
 }
@@ -197,7 +198,7 @@ fn render_body_to_lines_respects_display_width() {
     let lines = render_body_to_lines("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", 10, Span::raw(""), Style::default());
     for line in lines_to_strings(&lines) {
         assert!(
-            UnicodeWidthStr::width(line.as_str()) <= 10,
+            text_layout::width(line.as_str()) <= 10,
             "line exceeded display width: {line:?}"
         );
     }
@@ -206,7 +207,7 @@ fn render_body_to_lines_respects_display_width() {
 #[test]
 fn pad_to_width_respects_display_width() {
     let padded = pad_to_width("ab｀", 4);
-    assert_eq!(UnicodeWidthStr::width(padded.as_str()), 4);
+    assert_eq!(text_layout::width(padded.as_str()), 4);
 }
 
 #[test]

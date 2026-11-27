@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use late_core::models::chat_message_gild::GildTier;
 use ratatui::{
     Frame,
@@ -6,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
     chat::gild::{input::can_afford, state::GildModalState},
@@ -158,21 +159,7 @@ fn draw_tier_row(
 }
 
 fn truncate(text: &str, width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + w + 1 > width {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {

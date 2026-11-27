@@ -220,8 +220,8 @@ pub fn char_color(style: NameStyle, index: usize, len: usize) -> Color {
 /// style's bg (drunk tint) and modifiers (BOLD) survive; only fg is replaced,
 /// which is what lets an effect override the friend/own author colors.
 pub fn styled_name_spans(name: &str, style: NameStyle, base: Style) -> Vec<Span<'static>> {
-    let len = name.chars().count();
-    name.chars()
+    let len = super::text_layout::graphemes(name).count();
+    super::text_layout::graphemes(name)
         .enumerate()
         .map(|(index, ch)| Span::styled(ch.to_string(), base.fg(char_color(style, index, len))))
         .collect()

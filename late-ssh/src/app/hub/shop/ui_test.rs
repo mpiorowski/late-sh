@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::*;
 use crate::app::hub::shop::catalog::CompanionSection;
 
@@ -16,9 +18,9 @@ fn visible_window_start_keeps_selected_item_visible() {
 #[test]
 fn pad_display_width_handles_variation_selector_emoji() {
     let padded = pad_display_width("☀️", 6);
-    assert_eq!(UnicodeWidthStr::width(padded.as_str()), 6);
+    assert_eq!(text_layout::width(padded.as_str()), 6);
     let padded = pad_display_width("🐱", 6);
-    assert_eq!(UnicodeWidthStr::width(padded.as_str()), 6);
+    assert_eq!(text_layout::width(padded.as_str()), 6);
 }
 
 #[test]
@@ -150,6 +152,61 @@ fn chat_item(sku: &str, item_kind: &str) -> ShopCatalogItem {
         consumable_category: None,
         effect_kind: None,
         ..bonsai_shield_item()
+    }
+}
+
+#[test]
+fn badge_rows_keep_duration_and_action_in_fixed_cells() {
+    use late_core::models::rental::{
+        BADGE_RENTAL_ITEM_KIND, BadgeSlot, RENTAL_DAY_SECS, RENTAL_MONTH_SECS,
+    };
+    use ratatui::{buffer::Buffer, widgets::Widget};
+    let state = make_state_with_bonsai_protection(None);
+    for glyph in [
+        "🍗",
+        "☔",
+        "🌪",
+        "🌨",
+        "🌫",
+        "🌧",
+        "🌤",
+        "⛈",
+        "❤\u{fe0e}",
+        "x",
+        "🇺🇸",
+        "👨‍👩‍👧",
+    ] {
+        for duration in [RENTAL_DAY_SECS, RENTAL_MONTH_SECS] {
+            let mut item = chat_item("badge_probe_day", BADGE_RENTAL_ITEM_KIND);
+            item.badge_emoji = Some(glyph.to_string());
+            item.badge_slot = Some(BadgeSlot::Badge);
+            item.rental_duration_secs = Some(duration);
+            let line = item_row(
+                ShopCategory::Badges,
+                true,
+                &item,
+                &state,
+                SproutStatus::Bare { days_to_next: None },
+            );
+            let area = Rect::new(0, 0, 40, 1);
+            let mut buffer = Buffer::empty(area);
+            Paragraph::new(line.clone()).render(area, &mut buffer);
+            let tag = duration_tag(duration);
+            for (offset, ch) in tag.chars().enumerate() {
+                assert_eq!(
+                    buffer[(8 + offset as u16, 0)].symbol(),
+                    ch.to_string(),
+                    "{glyph:?}"
+                );
+            }
+            assert_eq!(buffer[(26, 0)].symbol(), "r", "{glyph:?}");
+            assert!(buffer[(8, 0)].modifier.contains(Modifier::BOLD));
+            for width in [0, 1, 5, 6, 8, 12] {
+                let area = Rect::new(0, 0, width, 1);
+                let mut narrow = Buffer::empty(area);
+                Paragraph::new(line.clone()).render(area, &mut narrow);
+            }
+        }
     }
 }
 

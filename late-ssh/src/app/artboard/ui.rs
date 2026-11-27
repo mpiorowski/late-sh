@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use dartboard_core::{Canvas, CellValue, Pos, RgbColor};
 use dartboard_editor::{Clipboard, SWATCH_CAPACITY, Swatch};
 use dartboard_tui::{CanvasStyle, CanvasWidgetState, SelectionView};
@@ -241,7 +243,7 @@ fn artboard_info_lines(state: &State, interacting: bool) -> Vec<Line<'static>> {
 fn info_label_value<'a>(label: &'a str, value: String, color: ratatui::style::Color) -> Line<'a> {
     Line::from(vec![
         Span::styled(
-            format!("{:<11}", label),
+            text_layout::pad_right(label, 11),
             Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(
@@ -306,7 +308,7 @@ fn color_palette_line(
     active_idx: Option<usize>,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(
-        format!("{:<width$}", label, width = INFO_LABEL_WIDTH as usize),
+        text_layout::pad_right(label, INFO_LABEL_WIDTH as usize),
         Style::default().fg(theme::TEXT_DIM()),
     )];
     for (idx, color) in PAINT_PALETTE[start..end].iter().copied().enumerate() {
@@ -1037,7 +1039,7 @@ fn tab_rects(area: Rect) -> Vec<(HelpTab, Rect)> {
     let mut x = area.x.saturating_add(2);
     for tab in HelpTab::ALL {
         let label = tab.label();
-        let width = label.chars().count() as u16 + 2;
+        let width = text_layout::width(label) as u16 + 2;
         if x.saturating_add(width) > area.right() {
             break;
         }

@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use crate::app::artboard::gallery::svc::GalleryPiece;
 use chrono::{DateTime, Utc};
 use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
@@ -22,7 +24,6 @@ use std::{
     collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
-use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::common::{
@@ -294,7 +295,7 @@ fn pick_title_that_fits<'a>(block_width: u16, tiers: &[&'a str]) -> &'a str {
     tiers
         .iter()
         .copied()
-        .find(|t| UnicodeWidthStr::width(*t) <= available)
+        .find(|t| text_layout::width(t) <= available)
         .unwrap_or("")
 }
 
@@ -753,7 +754,7 @@ fn draw_activity_ticker(
             " ({})",
             crate::app::common::primitives::format_relative_time_short(entry.at)
         );
-        let cost = entry.text.chars().count() + stamp.chars().count();
+        let cost = text_layout::width(&entry.text) + text_layout::width(&stamp);
         if i > 0 {
             if used + 3 + cost > width {
                 break;
@@ -762,15 +763,13 @@ fn draw_activity_ticker(
             used += 3;
         }
         // The newest entry always shows, truncated to fit if it must.
-        let budget = width.saturating_sub(used + stamp.chars().count());
-        let text: String = if i == 0 && entry.text.chars().count() > budget && budget > 1 {
-            let mut cut: String = entry.text.chars().take(budget - 1).collect();
-            cut.push('…');
-            cut
+        let budget = width.saturating_sub(used + text_layout::width(&stamp));
+        let text = if i == 0 {
+            text_layout::ellipsize(&entry.text, budget)
         } else {
             entry.text.clone()
         };
-        used += text.chars().count() + stamp.chars().count();
+        used += text_layout::width(&text) + text_layout::width(&stamp);
         spans.push(Span::styled(text, text_style));
         spans.push(Span::styled(stamp, faint));
     }
@@ -809,7 +808,7 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
     let meta_spans = poll_meta_spans(remaining_secs, total_votes);
     let meta_width: usize = meta_spans
         .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .map(|span| text_layout::width(span.content.as_ref()))
         .sum();
     let (question, byline) = poll_title_parts(
         poll.poll.question.as_str(),
@@ -859,7 +858,7 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
     let max_label = poll
         .options
         .iter()
-        .map(|option| UnicodeWidthStr::width(option.label.as_str()))
+        .map(|option| text_layout::width(option.label.as_str()))
         .max()
         .unwrap_or(4);
     let stats: Vec<String> = poll
@@ -869,7 +868,7 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
         .collect();
     let stats_width = stats
         .iter()
-        .map(|stat| UnicodeWidthStr::width(stat.as_str()))
+        .map(|stat| text_layout::width(stat.as_str()))
         .max()
         .unwrap_or(0);
 
@@ -952,7 +951,7 @@ fn poll_title_parts(
         .map(|author| format!(" · @{author}"))
         .unwrap_or_default();
     let with_byline =
-        inner_width.saturating_sub(chrome_width + UnicodeWidthStr::width(byline.as_str()));
+        inner_width.saturating_sub(chrome_width + text_layout::width(byline.as_str()));
     if !byline.is_empty() && with_byline >= MIN_POLL_QUESTION_CELLS {
         return (truncate_cells(question, with_byline), byline);
     }
@@ -1070,7 +1069,7 @@ fn poll_option_key(position: i32) -> String {
 }
 
 fn pad_to_width(text: &str, width: usize) -> String {
-    let used = UnicodeWidthStr::width(text);
+    let used = text_layout::width(text);
     if used >= width {
         text.to_string()
     } else {
@@ -1079,7 +1078,7 @@ fn pad_to_width(text: &str, width: usize) -> String {
 }
 
 fn pad_left_to_width(text: &str, width: usize) -> String {
-    let used = UnicodeWidthStr::width(text);
+    let used = text_layout::width(text);
     if used >= width {
         text.to_string()
     } else {
@@ -1567,10 +1566,10 @@ pub(crate) fn left_app_divider_line(width: usize, left_at: DateTime<Utc>) -> Lin
         " you left {} ",
         crate::app::common::primitives::format_relative_time(left_at)
     );
-    let stamp_width = UnicodeWidthStr::width(stamp.as_str());
-    let hint_width = UnicodeWidthStr::width(LEFT_APP_HINT_LEAD)
-        + UnicodeWidthStr::width(LEFT_APP_HINT_COMMAND)
-        + UnicodeWidthStr::width(LEFT_APP_HINT_TAIL);
+    let stamp_width = text_layout::width(stamp.as_str());
+    let hint_width = text_layout::width(LEFT_APP_HINT_LEAD)
+        + text_layout::width(LEFT_APP_HINT_COMMAND)
+        + text_layout::width(LEFT_APP_HINT_TAIL);
     let with_hint = stamp_width + hint_width + LEFT_APP_MIN_RULE <= width;
 
     let label_width = stamp_width + if with_hint { hint_width } else { 0 };
@@ -2221,7 +2220,7 @@ fn visible_chat_rows(
         let used: usize = row
             .spans
             .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .map(|span| text_layout::width(span.content.as_ref()))
             .sum();
         if used < row_width {
             row.spans.push(Span::styled(
@@ -2489,7 +2488,7 @@ fn image_modal_footer(width: u16) -> Line<'static> {
 fn line_display_width(line: &Line<'_>) -> usize {
     line.spans
         .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .map(|span| text_layout::width(span.content.as_ref()))
         .sum()
 }
 
@@ -2579,13 +2578,19 @@ fn format_username_with_country(
 fn chat_badge_display(badge: &str, show_flag_fallback: bool) -> Cow<'_, str> {
     if show_flag_fallback {
         if let Some((label, rest)) = regional_flag_label_prefix(badge) {
-            return Cow::Owned(format!("{label}{rest}"));
+            return Cow::Owned(format!(
+                "{label}{}",
+                crate::app::common::emoji::badge_presentation(rest)
+            ));
         }
         if let Some((label, rest)) = subdivision_flag_label_prefix(badge) {
-            return Cow::Owned(format!("{label}{rest}"));
+            return Cow::Owned(format!(
+                "{label}{}",
+                crate::app::common::emoji::badge_presentation(rest)
+            ));
         }
     }
-    Cow::Borrowed(badge)
+    crate::app::common::emoji::badge_presentation(badge)
 }
 
 fn chat_badge_display_parts(
@@ -2601,7 +2606,10 @@ fn chat_badge_display_parts(
     let mut parts = Vec::new();
     let rest = rest.trim_start();
     if !rest.is_empty() {
-        parts.push((HeaderTarget::StoreBadge, Cow::Borrowed(rest)));
+        parts.push((
+            HeaderTarget::StoreBadge,
+            crate::app::common::emoji::badge_presentation(rest),
+        ));
     }
     parts.push((HeaderTarget::StoreFlag, flag));
     parts
@@ -2801,7 +2809,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let mut col: u16 = 1;
 
     if is_friend {
-        let glyph_w = UnicodeWidthStr::width(FRIEND_BADGE) as u16;
+        let glyph_w = text_layout::width(FRIEND_BADGE) as u16;
         if glyph_w > 0 {
             segments.push(HeaderSegment {
                 start_col: col,
@@ -2818,9 +2826,9 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     // The ladder's marks widen the name's own click target: they are part
     // of who this is, and the profile is where their numbers live.
     let ladder_marks = ladder_marks.filter(|marks| !marks.is_empty());
-    let author_w = UnicodeWidthStr::width(author) as u16;
+    let author_w = text_layout::width(author) as u16;
     // The space between the name and its marks is theirs.
-    let marks_w = ladder_marks.map_or(0, |marks| 1 + UnicodeWidthStr::width(marks) as u16);
+    let marks_w = ladder_marks.map_or(0, |marks| 1 + text_layout::width(marks) as u16);
     if author_w + marks_w > 0 {
         segments.push(HeaderSegment {
             start_col: col,
@@ -2854,7 +2862,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
             let title_start = prefix.len();
             prefix.push_str(", ");
             prefix.push_str(title);
-            col += UnicodeWidthStr::width(", ") as u16 + UnicodeWidthStr::width(title) as u16;
+            col += text_layout::width(", ") as u16 + text_layout::width(title) as u16;
             (title_start, prefix.len())
         });
 
@@ -2903,13 +2911,13 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         let stack_start = prefix.len();
         prefix.push(' ');
         col += 1;
-        let sep_w = UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16;
+        let sep_w = text_layout::width(AUTHOR_BADGE_SEPARATOR) as u16;
         for (i, (target, text)) in typed_badges.iter().enumerate() {
             if i > 0 {
                 prefix.push_str(AUTHOR_BADGE_SEPARATOR);
                 col += sep_w;
             }
-            let w = UnicodeWidthStr::width(*text) as u16;
+            let w = text_layout::width(text) as u16;
             if w > 0 {
                 segments.push(HeaderSegment {
                     start_col: col,
@@ -2992,9 +3000,9 @@ pub(crate) fn draw_mention_autocomplete(
         let content = matches
             .iter()
             .map(|m| {
-                let name_width = m.prefix.len() + m.name.len();
+                let name_width = text_layout::width(m.prefix) + text_layout::width(&m.name);
                 let pad = 16usize.saturating_sub(name_width).max(2);
-                3 + name_width + pad + m.description.map_or(0, str::len)
+                3 + name_width + pad + m.description.map_or(0, text_layout::width)
             })
             .max()
             .unwrap_or(50);
@@ -3049,7 +3057,7 @@ pub(crate) fn draw_mention_autocomplete(
                 )));
             }
             if let Some(description) = m.description {
-                let name_width = m.prefix.len() + m.name.len();
+                let name_width = text_layout::width(m.prefix) + text_layout::width(&m.name);
                 let pad = " ".repeat(16usize.saturating_sub(name_width).max(2));
                 spans.push(Span::styled(pad, Style::default().fg(theme::TEXT_DIM())));
                 spans.push(Span::styled(
@@ -4175,26 +4183,11 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         } else {
             String::new()
         };
-        let display_label = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
-            let mut s = String::new();
-            let mut w = 0usize;
-            for c in label.chars() {
-                let cw = UnicodeWidthStr::width(c.to_string().as_str());
-                if w + cw > label_max.saturating_sub(1) {
-                    break;
-                }
-                s.push(c);
-                w += cw;
-            }
-            s.push('…');
-            s
-        } else {
-            label
-        };
+        let display_label = text_layout::ellipsize(&label, label_max);
         let display = format!("{key_prefix}{display_label}");
-        let used = UnicodeWidthStr::width(display.as_str());
+        let used = text_layout::width(display.as_str());
         let unread_str = if unread > 0 { badge } else { String::new() };
-        let pad = inner_width.saturating_sub(used + UnicodeWidthStr::width(unread_str.as_str()));
+        let pad = inner_width.saturating_sub(used + text_layout::width(unread_str.as_str()));
         let mut spans = Vec::new();
         if active {
             spans.push(Span::raw("▌"));
@@ -4632,7 +4625,7 @@ fn stream_rail_label(
 ) -> String {
     let count = stream_count_badge(stream);
     // The marker and a space before the name, one space before the count.
-    let name_budget = max_width.saturating_sub(3 + UnicodeWidthStr::width(count.as_str()));
+    let name_budget = max_width.saturating_sub(3 + text_layout::width(count.as_str()));
     let name = truncate_cells(&stream.username, name_budget);
     let marker = match playing_here {
         true => '♪',
@@ -5678,7 +5671,7 @@ fn compact_elapsed(elapsed: Duration) -> String {
 /// One list row: `spans` from the left, cut with an ellipsis where the
 /// room runs out, and `stamp` flush right in faint.
 fn stamped_row(spans: Vec<Span<'static>>, stamp: String, width: usize) -> Line<'static> {
-    let stamp_width = stamp.width();
+    let stamp_width = text_layout::width(&stamp);
     let budget = width.saturating_sub(stamp_width + 1);
     let mut used = 0usize;
     let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 2);
@@ -5688,7 +5681,7 @@ fn stamped_row(spans: Vec<Span<'static>>, stamp: String, width: usize) -> Line<'
             break;
         }
         let text = truncate_cells(&span.content, room);
-        used += text.width();
+        used += text_layout::width(&text);
         out.push(Span::styled(text, span.style));
     }
     out.push(Span::raw(

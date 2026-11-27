@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use late_core::models::marketplace::{
     BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND, TankStockKind,
 };
@@ -8,7 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use late_core::models::rental::{TITLE_MAX_LEN, duration_label, duration_tag};
 use late_core::models::username_effect::UsernameEffect;
@@ -72,7 +73,7 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
             Style::default().fg(theme::TEXT_DIM())
         };
         let label = format!(" {} ", category.label());
-        let width = label.chars().count() as u16;
+        let width = text_layout::width(&label) as u16;
         rects[index] = Rect::new(cursor_x, area.y, width, area.height.min(1));
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
@@ -323,14 +324,21 @@ fn draw_item_detail(
     let description_width = area.width.saturating_sub(2).max(1) as usize;
     let mut lines = vec![section_heading(&item_detail_title(item)), Line::from("")];
     lines.extend(
-        wrap_plain_line(&item.description, description_width)
-            .into_iter()
-            .map(|row| {
-                Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(row, Style::default().fg(theme::TEXT_DIM())),
-                ])
-            }),
+        wrap_plain_line(
+            &if item.is_badge_rental() {
+                crate::app::common::emoji::badge_presentation(&item.description)
+            } else {
+                std::borrow::Cow::Borrowed(item.description.as_str())
+            },
+            description_width,
+        )
+        .into_iter()
+        .map(|row| {
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(row, Style::default().fg(theme::TEXT_DIM())),
+            ])
+        }),
     );
     lines.extend([
         Line::from(""),
@@ -404,7 +412,11 @@ fn draw_item_detail(
             lines.push(Line::from(vec![
                 Span::raw("  worn   "),
                 Span::styled(
-                    active.label.clone(),
+                    if item.is_badge_rental() {
+                        crate::app::common::emoji::badge_presentation(&active.label).into_owned()
+                    } else {
+                        active.label.clone()
+                    },
                     Style::default()
                         .fg(theme::SUCCESS())
                         .add_modifier(Modifier::BOLD),
@@ -681,17 +693,7 @@ fn aquarium_creature_def(name: &str) -> Option<&'static CreatureDef> {
 }
 
 fn truncate_display_width(value: &str, max_width: usize) -> String {
-    let mut width = 0;
-    let mut out = String::new();
-    for ch in value.chars() {
-        let ch_width = ch.width().unwrap_or(0);
-        if width + ch_width > max_width {
-            break;
-        }
-        width += ch_width;
-        out.push(ch);
-    }
-    out
+    text_layout::clip(value, max_width)
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState) {
@@ -1119,6 +1121,14 @@ fn item_row(
     };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
+    } else if category == ShopCategory::Badges && item.is_chat_badge() {
+        let glyph = item.badge_emoji.as_deref().unwrap_or(&item.name);
+        let glyph = crate::app::common::emoji::badge_presentation(glyph);
+        format!(
+            "{}  {}",
+            text_layout::fit(&glyph, 2),
+            text_layout::fit(&duration_tag(item.rental_duration()), 3),
+        )
     } else if item.is_chat_badge() {
         badge_display_name(item)
     } else if item.is_title_rental() {
@@ -1154,6 +1164,7 @@ fn item_row(
 
 fn badge_display_name(item: &ShopCatalogItem) -> String {
     let emoji = item.badge_emoji.as_deref().unwrap_or(&item.name);
+    let emoji = crate::app::common::emoji::badge_presentation(emoji);
     format!("{emoji}{}", rental_tier_suffix(item))
 }
 
@@ -1280,6 +1291,7 @@ fn flag_display_name(item: &ShopCatalogItem) -> String {
         .map(flag_label)
         .unwrap_or_else(|| item.name.clone());
     let emoji = item.badge_emoji.as_deref().unwrap_or(&item.name);
+    let emoji = crate::app::common::emoji::badge_presentation(emoji);
     format!("{label} {emoji}{}", rental_tier_suffix(item))
 }
 
@@ -1304,9 +1316,7 @@ fn section_row(label: &'static str) -> Line<'static> {
 }
 
 fn pad_display_width(value: &str, width: usize) -> String {
-    let display_width = UnicodeWidthStr::width(value);
-    let padding = width.saturating_sub(display_width);
-    format!("{value}{}", " ".repeat(padding))
+    text_layout::pad_right(value, width)
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

@@ -11,6 +11,8 @@
 //! faces at all. What the table makes public is drawn for everyone: the
 //! starter once cut, every pegged card, and the show.
 
+use crate::app::common::text_layout;
+
 use chrono::Utc;
 use ratatui::{
     Frame,
@@ -441,7 +443,7 @@ fn draw_player_bar(
         .flatten()
         .map(|at| format_deadline(at, Utc::now()));
     let cols = Layout::horizontal([Constraint::Min(0), Constraint::Length(9)]).split(rect);
-    let used: usize = left.iter().map(|span| span.content.chars().count()).sum();
+    let used: usize = left.iter().map(|span| span.width()).sum();
     let track = (cols[0].width as usize).saturating_sub(used + 5);
     if track >= 10 {
         let pegged = (track * score.min(cribbage::WINNING_SCORE) as usize)
@@ -582,7 +584,7 @@ fn draw_info_rail(
                 }
             };
             lines.push(Line::from(vec![
-                Span::styled(format!("{owner:<20}"), dim),
+                Span::styled(text_layout::pad_right(&owner, 20), dim),
                 Span::styled(
                     format!("{:>3}", part.count.total()),
                     Style::default().fg(theme::TEXT()),
@@ -611,8 +613,11 @@ fn draw_info_rail(
             .filter(|peg| peg.hand == table.hand && !matches!(peg.why, Why::Show(_)))
         {
             lines.push(Line::from(vec![
-                Span::styled(format!("{:<10}", who(daily, board, state, peg.seat)), dim),
-                Span::styled(format!("{:<14}", peg.why.label()), faint),
+                Span::styled(
+                    text_layout::pad_right(&who(daily, board, state, peg.seat), 10),
+                    dim,
+                ),
+                Span::styled(text_layout::pad_right(&peg.why.label(), 14), faint),
                 Span::styled(
                     format!("{:>2}", peg.points),
                     Style::default().fg(theme::TEXT()),

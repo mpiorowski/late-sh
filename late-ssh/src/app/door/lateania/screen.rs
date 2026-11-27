@@ -93,12 +93,14 @@ fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
     draw_landing(
         frame,
         area,
-        view.delete_confirm,
-        view.online,
-        view.slots,
-        view.slot_cursor,
-        view.cooldowns,
-        0,
+        LandingView {
+            delete_confirm: view.delete_confirm,
+            online: view.online,
+            slots: view.slots,
+            slot_cursor: view.slot_cursor,
+            cooldowns: view.cooldowns,
+            scroll: 0,
+        },
     );
 }
 
@@ -236,6 +238,15 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
     true
 }
 
+pub struct LandingView<'a> {
+    pub delete_confirm: bool,
+    pub online: usize,
+    pub slots: &'a SlotList,
+    pub slot_cursor: usize,
+    pub cooldowns: Option<CooldownView<'a>>,
+    pub scroll: u16,
+}
+
 /// One row of the character-select list: the highlighted slot gets a `>`
 /// marker and bright text.
 fn slot_row(slot: i16, desc: String, desc_color: Color, highlighted: bool) -> Line<'static> {
@@ -301,17 +312,15 @@ fn slot_rows(slots: &SlotList, slot_cursor: usize) -> Vec<Line<'static>> {
 
 /// Lateania landing, used both by the standalone screen fallback and the Games
 /// hub when Lateania is the selected card.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_landing(
-    frame: &mut Frame,
-    area: Rect,
-    delete_confirm: bool,
-    online: usize,
-    slots: &SlotList,
-    slot_cursor: usize,
-    cooldowns: Option<CooldownView<'_>>,
-    scroll: u16,
-) -> u16 {
+pub fn draw_landing(frame: &mut Frame, area: Rect, view: LandingView<'_>) -> u16 {
+    let LandingView {
+        delete_confirm,
+        online,
+        slots,
+        slot_cursor,
+        cooldowns,
+        scroll,
+    } = view;
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([

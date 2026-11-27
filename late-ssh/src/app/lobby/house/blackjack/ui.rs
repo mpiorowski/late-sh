@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -281,7 +283,7 @@ fn draw_felt_divider(frame: &mut Frame, area: Rect, snapshot: &BlackjackSnapshot
     let total = snapshot.seats.len();
     let label = format!("seats {seated}/{total} · min bet {}", snapshot.min_bet);
 
-    let chip_w = label.chars().count() + 6;
+    let chip_w = text_layout::width(&label) + 6;
     let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
     let half_pattern = "─ ".repeat(side_each / 2);
     let line = Line::from(vec![
@@ -489,12 +491,7 @@ fn seat_title_left(
         .or_else(|| seat.user_id.and_then(|uid| usernames.get(&uid).cloned()))
         .unwrap_or_else(|| "player".to_string());
     let max_chars = 14usize;
-    let truncated: String = if name.chars().count() > max_chars {
-        let head: String = name.chars().take(max_chars - 1).collect();
-        format!("{head}…")
-    } else {
-        name
-    };
+    let truncated = text_layout::ellipsize(&name, max_chars);
     let (display, style) = if is_you {
         (
             format!(" ▶ {truncated} "),
@@ -1275,7 +1272,7 @@ fn render_seat_hands_compact(
                 },
             };
             Line::from(vec![
-                Span::styled(format!("{label:<13}"), label_style),
+                Span::styled(text_layout::pad_right(&label, 13), label_style),
                 Span::styled(
                     format!("{} ", seat.phase.label()),
                     Style::default().fg(theme::TEXT_DIM()),

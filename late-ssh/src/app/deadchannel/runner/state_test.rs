@@ -1,6 +1,7 @@
+use crate::app::common::text_layout;
+
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use unicode_width::UnicodeWidthChar;
 
 use super::*;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
@@ -21,8 +22,8 @@ fn every_piece_row_is_five_cells_and_never_wide() {
         );
         for glyph in piece.row.chars() {
             assert_eq!(
-                glyph.width(),
-                Some(1),
+                text_layout::char_width(glyph),
+                1,
                 "{} carries {glyph:?}, which is not single width",
                 piece.code
             );

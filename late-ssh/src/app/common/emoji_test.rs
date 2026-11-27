@@ -1,6 +1,15 @@
 use crate::app::common::emoji::expand_shortcodes;
 
 #[test]
+fn badge_display_prefers_valid_emoji_without_rewriting_explicit_text() {
+    use crate::app::common::emoji::badge_presentation;
+    assert_eq!(badge_presentation("🌪 🌨 ⛈"), "🌪️ 🌨️ ⛈️");
+    assert_eq!(badge_presentation("🇺🇸 🐱 👨‍👩‍👧"), "🇺🇸 🐱 👨‍👩‍👧");
+    assert_eq!(badge_presentation("☀\u{fe0e} unknown"), "☀\u{fe0e} unknown");
+    assert_eq!(badge_presentation("🌪️"), "🌪️");
+}
+
+#[test]
 fn known_shortcodes_become_emoji() {
     assert_eq!(expand_shortcodes(":thumbsup:"), "👍");
     assert_eq!(expand_shortcodes("nice :fire: work"), "nice 🔥 work");

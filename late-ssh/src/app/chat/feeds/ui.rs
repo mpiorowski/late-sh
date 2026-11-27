@@ -2,6 +2,7 @@ use std::cell::Cell;
 
 use crate::app::chat::list_ui::scroll_offset;
 use crate::app::common::primitives::format_relative_time;
+use crate::app::common::text_layout;
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
 use late_core::models::rss_entry::RssEntryView;
@@ -12,7 +13,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
 
 pub struct FeedListView<'a> {
     pub entries: &'a [RssEntryView],
@@ -104,14 +104,14 @@ fn entry_lines(item: &RssEntryView, width: usize) -> Vec<Line<'static>> {
     let mut title_spans = Vec::with_capacity(3);
     let shared = item.entry.shared_at.is_some();
     let badge = if shared { "(shared)" } else { "" };
-    let badge_w = UnicodeWidthStr::width(badge);
+    let badge_w = text_layout::width(badge);
     let title_budget = if shared {
         width.saturating_sub(badge_w + 1).max(4)
     } else {
         width.max(4)
     };
     let title = truncate_to_width(&item.entry.title, title_budget);
-    let title_w = UnicodeWidthStr::width(title.as_str());
+    let title_w = text_layout::width(title.as_str());
     title_spans.push(Span::styled(
         title,
         Style::default()
@@ -186,24 +186,7 @@ fn truncate_summary(text: &str, max_chars: usize) -> String {
 }
 
 fn truncate_to_width(s: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(s) <= max_width {
-        return s.to_string();
-    }
-
-    let ellipsis_w = 1;
-    let budget = max_width.saturating_sub(ellipsis_w);
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in s.chars() {
-        let w = UnicodeWidthStr::width(ch.to_string().as_str());
-        if used + w > budget {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(s, max_width)
 }
 
 fn display_feed_title(item: &RssEntryView) -> String {

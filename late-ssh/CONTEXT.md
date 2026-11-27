@@ -9,6 +9,22 @@ notify, presence, the help modal, the ghost bots). Root
 
 ## 1. File map
 
+### Text geometry
+
+UI widths are terminal cells measured by Ratatui (`Span::width`, `Line::width`,
+`Text::width`); `common::text_layout` supplies that measurement for raw strings
+and shared grapheme-safe clipping, ellipses, padding, wrapping ranges and scrolling
+windows. Keep emoji selectors, combining marks and ZWJ sequences together, even
+when styles meet inside one grapheme: the base character's style owns the cluster.
+Wrapped heights and hit targets use the same `Paragraph` configuration and width
+as rendering; `Text::height` counts explicit rows only. Character limits, source
+indices, protocol byte counts and intentional artwork grids retain their own units.
+
+App-owned rental badge displays use `common::emoji::badge_presentation` before
+measurement. It selects fully qualified emoji supported by the existing `emojis`
+data, preserves unknown symbols and explicit text presentation, and never changes
+stored rental payloads or user-authored messages.
+
 ```text
 late-ssh/src/
   main.rs              starts SSH + API + background loops; subscribes LISTEN channels

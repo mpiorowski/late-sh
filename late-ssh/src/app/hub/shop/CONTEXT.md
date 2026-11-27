@@ -7,6 +7,15 @@
 
 ## Files
 
+Badge list rows reserve two terminal cells for the emoji, a two-cell gap and
+three cells for the duration, inside the existing 22-cell label field. Actions
+therefore align independently of badge width; narrow panes clip without wrapping
+rows. Badge list/detail previews, worn labels and purchase copy prefer fully
+qualified emoji at display time, using the shared helper before measurement.
+The catalog and active rental payloads are unchanged, so renewal matching keeps
+the same identity. All text padding/clipping uses the shared Ratatui-based cell
+helpers; flag text fallbacks and the list/detail spacer remain in place.
+
 - `catalog.rs`: Shop categories and SKU helpers.
 - Rental vocabulary shared with `late-core` lives in `late-core/src/models/rental.rs`, not here.
 - `svc.rs`: `ShopService`, per-user watch snapshots, purchase tasks, and Postgres LISTEN/NOTIFY refresh listener.

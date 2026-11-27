@@ -2,6 +2,8 @@
 //! landing card. Pure presentation — everything is read off [`State`] getters
 //! and the [`Character`]; no game logic lives here.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -72,7 +74,7 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
 
     let stat = |label: &str, value: String, value_style: Style| {
         Line::from(vec![
-            Span::styled(format!("{label:<9}"), dim),
+            Span::styled(text_layout::pad_right(label, 9), dim),
             Span::styled(value, value_style),
         ])
     };
@@ -253,14 +255,14 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         let name_w = enc
             .foes
             .iter()
-            .map(|f| f.name.chars().count())
-            .chain([you.chars().count()])
+            .map(|f| text_layout::width(&f.name))
+            .chain([text_layout::width(you)])
             .max()
             .unwrap();
         let wield_w = enc
             .foes
             .iter()
-            .map(|f| f.weapon.chars().count() + 7)
+            .map(|f| text_layout::width(&f.weapon) + 7)
             .max()
             .unwrap_or(0);
         for (i, foe) in enc.foes.iter().enumerate() {
@@ -273,9 +275,12 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
                     .add_modifier(Modifier::BOLD)
             };
             let mut spans = vec![
-                Span::styled(format!("{:<name_w$}", foe.name), name_style),
+                Span::styled(text_layout::pad_right(&foe.name, name_w), name_style),
                 Span::styled(
-                    format!("  {:<wield_w$}", format!("wields {}", foe.weapon)),
+                    format!(
+                        "  {}",
+                        text_layout::pad_right(&format!("wields {}", foe.weapon), wield_w)
+                    ),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
                 Span::styled("  ", Style::default()),
@@ -308,7 +313,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{you:<name_w$}"),
+                text_layout::pad_right(you, name_w),
                 Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),

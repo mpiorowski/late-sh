@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use late_core::models::door_rc::DoorRcGame;
 use ratatui::{
     Frame,
@@ -319,12 +321,14 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
         HubGame::Lateania => crate::app::door::lateania::screen::draw_landing(
             frame,
             body[1],
-            view.delete_confirm,
-            view.lateania_online,
-            &view.lateania_slots,
-            view.lateania_slot_cursor,
-            view.cooldowns,
-            scroll,
+            crate::app::door::lateania::screen::LandingView {
+                delete_confirm: view.delete_confirm,
+                online: view.lateania_online,
+                slots: &view.lateania_slots,
+                slot_cursor: view.lateania_slot_cursor,
+                cooldowns: view.cooldowns,
+                scroll,
+            },
         ),
         HubGame::Realm => {
             crate::app::door::realm::landing_ui::draw_landing(frame, body[1], view.realm, scroll)
@@ -572,14 +576,17 @@ fn card_row_line(row: SidebarRow, selected: usize, pad: usize, view: &HubView) -
             if view.is_live(game) {
                 // A detached game in progress: a green pip after the name,
                 // on both the selected and unselected row styles.
-                let livepad = pad.saturating_sub(label.len() + 2);
+                let livepad = pad.saturating_sub(text_layout::width(label) + 2);
                 Line::from(vec![
                     Span::styled(format!("  {label} "), style),
                     Span::styled("\u{25cf}", style.fg(theme::SUCCESS())),
                     Span::styled(format!("{:<livepad$}", ""), style),
                 ])
             } else {
-                Line::from(Span::styled(format!("  {label:<pad$}"), style))
+                Line::from(Span::styled(
+                    format!("  {}", text_layout::pad_right(label, pad)),
+                    style,
+                ))
             }
         }
         // The standing invitation atop the nav: Lateania and the
@@ -626,7 +633,10 @@ fn live_row_line(row: LiveSectionRow, width: usize, view: &HubView) -> Line<'sta
                 true => selected_row_style(),
                 false => Style::default().fg(theme::TEXT_DIM()),
             };
-            Line::from(Span::styled(format!("  {name:<pad$}"), style))
+            Line::from(Span::styled(
+                format!("  {}", text_layout::pad_right(&name, pad)),
+                style,
+            ))
         }
         LiveSectionRow::Status(i) => Line::from(Span::styled(
             format!(
@@ -655,12 +665,7 @@ fn live_status(row: &LiveRow) -> String {
 /// `text` cut to `width` cells, ending in an ellipsis when it was cut. Rail
 /// text is ASCII (arcade handles, the hosts' place names).
 fn fit(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
-    cut.push('\u{2026}');
-    cut
+    text_layout::ellipsize(text, width)
 }
 
 /// The footer while a live game is previewed: the landing keys are gone

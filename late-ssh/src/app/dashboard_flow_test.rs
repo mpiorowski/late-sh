@@ -1,5 +1,7 @@
 //! App-level dashboard input integration tests against a real ephemeral DB.
 
+use crate::app::common::text_layout;
+
 use crate::paired_clients::PairControlMessage;
 use crate::test_helpers::{
     make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_app,
@@ -321,7 +323,7 @@ fn click_the_live_segment(app: &mut crate::app::state::App) {
     let screen = terminal.screen().contents();
     let bottom_row = screen.lines().last().expect("bottom border row");
     let byte = bottom_row.find("now ").expect("the now segment");
-    let live_col = unicode_width::UnicodeWidthStr::width(&bottom_row[..byte]);
+    let live_col = text_layout::width(&bottom_row[..byte]);
     // SGR mouse coords are 1-indexed.
     app.handle_input(format!("\x1b[<0;{};{STRIP_CLICK_ROWS}M", live_col + 1).as_bytes());
 }

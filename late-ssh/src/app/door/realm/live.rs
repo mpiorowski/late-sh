@@ -6,6 +6,8 @@
 //! the same time, and a claim on empty land, which is not news, never
 //! knocks a real moment off the strip.
 
+use crate::app::common::text_layout;
+
 use chrono::{DateTime, Utc};
 use ratatui::{
     style::{Modifier, Style},
@@ -92,7 +94,7 @@ pub(crate) fn compact_spans(rest: u16, strip: &RealmStripView) -> Vec<Span<'stat
     let rest = usize::from(rest);
     let lead = format!("realm {} · ", strip.item.name.to_lowercase());
     let lead = truncate_chars(&lead, rest);
-    let left = rest.saturating_sub(lead.chars().count());
+    let left = rest.saturating_sub(text_layout::width(&lead));
     vec![
         Span::styled(lead, Style::default().fg(theme::TEXT_DIM())),
         Span::styled(

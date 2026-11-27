@@ -4,6 +4,8 @@
 //! them: wrapped onto as many rows as the width needs, never folded into a
 //! "+N more". The badges are the reason to scroll down that far.
 
+use crate::app::common::text_layout;
+
 use late_core::models::profile_award::ProfileAward;
 use ratatui::{
     style::{Modifier, Style},
@@ -23,7 +25,7 @@ pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'st
     let mut used = 0usize;
     for award in awards {
         let text = format!("[{} {}]", award.badge(), award.month_label());
-        let text_width = text.chars().count();
+        let text_width = text_layout::width(&text);
         let needed = if spans.is_empty() {
             text_width
         } else {

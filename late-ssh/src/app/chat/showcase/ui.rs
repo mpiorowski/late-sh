@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::common::theme;
 use crate::app::common::{composer, primitives::format_relative_time};
@@ -160,14 +162,10 @@ pub fn draw_showcase_list(frame: &mut Frame, area: Rect, view: &ShowcaseListView
 }
 
 fn apply_inline_ellipsis(line: &mut String, width: usize) {
-    let width = width.max(1);
-    let char_count = line.chars().count();
-    if char_count < width {
-        line.push('…');
-        return;
+    *line = format!("{}…", text_layout::clip(line, width.saturating_sub(1)));
+    if width == 0 {
+        line.clear();
     }
-    line.pop();
-    line.push('…');
 }
 
 fn description_summary_lines(

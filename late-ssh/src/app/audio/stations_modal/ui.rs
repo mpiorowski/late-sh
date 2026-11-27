@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use late_core::models::user::{AudioSource, RADIO_SLOTS, RadioSlots, RadioStation};
 use ratatui::{
     Frame,
@@ -6,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::clubhouse::ui::TourHeader;
 use crate::app::common::theme;
@@ -135,7 +136,10 @@ fn pinned_line(slots: RadioSlots, width: usize) -> Line<'static> {
         None => "—",
     };
     let chrome = PREFIX.len() + RADIO_SLOTS * KEY_WIDTH + (RADIO_SLOTS - 1) * GAP.len();
-    let natural: usize = slots.iter().map(|slot| label(slot).width()).sum();
+    let natural: usize = slots
+        .iter()
+        .map(|slot| text_layout::width(label(slot)))
+        .sum();
     let label_room = if chrome + natural <= width {
         usize::MAX
     } else {
@@ -267,7 +271,7 @@ fn station_line(
                 .add_modifier(Modifier::ITALIC),
         ),
     };
-    let pad = track_budget.saturating_sub(track_text.width());
+    let pad = track_budget.saturating_sub(text_layout::width(&track_text));
 
     Line::from(vec![
         Span::styled(cursor.to_string(), Style::default().fg(theme::AMBER_GLOW())),
@@ -281,7 +285,7 @@ fn station_line(
         Span::styled(track_text, track_style),
         Span::raw(" ".repeat(pad + 1)),
         Span::styled(
-            format!("{key_text:>key_width$}"),
+            text_layout::pad_left(&key_text, key_width),
             Style::default()
                 .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::BOLD),
@@ -321,26 +325,12 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 
 fn pad_right(text: &str, width: usize) -> String {
     let text = truncate_to_width(text, width.saturating_sub(1));
-    let pad = width.saturating_sub(text.width());
+    let pad = width.saturating_sub(text_layout::width(&text));
     format!("{text}{}", " ".repeat(pad))
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_string();
-    }
-    if width <= 1 {
-        return "…".repeat(width.min(1));
-    }
-    let mut out = String::new();
-    for ch in text.chars() {
-        let next = format!("{out}{ch}");
-        if next.width() > width - 1 {
-            break;
-        }
-        out = next;
-    }
-    format!("{out}…")
+    text_layout::ellipsize(text, width)
 }
 
 #[cfg(test)]

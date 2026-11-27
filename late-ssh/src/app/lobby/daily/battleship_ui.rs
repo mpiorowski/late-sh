@@ -3,6 +3,8 @@
 //! the daily board chrome — status line, player bars, pinned key hints —
 //! with the chess renderer in `board_ui`.
 
+use crate::app::common::text_layout;
+
 use chrono::Utc;
 use ratatui::{
     Frame,
@@ -430,7 +432,7 @@ fn spectate_waters_lines(
 }
 
 fn grid_title(title: &str, tier: CellTier) -> Line<'static> {
-    let pad = (grid_width(tier) as usize).saturating_sub(title.chars().count()) / 2;
+    let pad = (grid_width(tier) as usize).saturating_sub(text_layout::width(title)) / 2;
     Line::from(Span::styled(
         format!("{}{title}", " ".repeat(pad)),
         Style::default()
@@ -483,7 +485,7 @@ fn row_label(row: usize, hot: bool) -> Span<'static> {
 }
 
 fn summary_line(text: String, tier: CellTier) -> Line<'static> {
-    let pad = (grid_width(tier) as usize).saturating_sub(text.chars().count()) / 2;
+    let pad = (grid_width(tier) as usize).saturating_sub(text_layout::width(&text)) / 2;
     Line::from(Span::styled(
         format!("{}{text}", " ".repeat(pad)),
         Style::default().fg(theme::TEXT_FAINT()),
@@ -731,7 +733,10 @@ fn draw_info_rail(
                 ("x", theme::TEXT_MUTED())
             };
             lines.push(Line::from(vec![
-                Span::styled(format!("{who:<9}"), Style::default().fg(theme::TEXT())),
+                Span::styled(
+                    text_layout::pad_right(&who, 9),
+                    Style::default().fg(theme::TEXT()),
+                ),
                 Span::styled(
                     format!("{:<4}", battleship::cell_label(shot.cell as usize)),
                     Style::default().fg(theme::TEXT_DIM()),

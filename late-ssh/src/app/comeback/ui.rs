@@ -1,6 +1,8 @@
 //! The box: a title, the pitch, a breaker carrying its two keys, centered
 //! over whatever page the login landed on, in the tour's voice and frame.
 
+use crate::app::common::text_layout;
+
 use late_core::radio::RadioStation;
 use ratatui::{
     Frame,
@@ -9,7 +11,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::common::theme;
 use crate::app::door::hub::state::{HubGame, HubGroup};
@@ -278,7 +279,9 @@ fn roster_lines(style: Style) -> Vec<Line<'static>> {
     let mut lines: Vec<String> = Vec::new();
     for label in RadioStation::enabled().map(RadioStation::label) {
         match lines.last_mut() {
-            Some(line) if line.width() + 3 + label.width() <= ROSTER_WIDTH => {
+            Some(line)
+                if text_layout::width(line) + 3 + text_layout::width(label) <= ROSTER_WIDTH =>
+            {
                 line.push_str(" · ");
                 line.push_str(label);
             }
@@ -303,7 +306,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &View<'_>) {
         .map(Line::width)
         .max()
         .unwrap_or(0)
-        .max(composed.title.width())
+        .max(text_layout::width(composed.title))
         // A breaker needs some rule left of its keys to read as one.
         .max(keys_width + 12);
     let width = (content + 2 + 2 * usize::from(SIDE_PADDING))

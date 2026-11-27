@@ -3,6 +3,8 @@
 //! loop as a chain, the prize boxed, keys as chips in a grid, rules as
 //! bullets), scrolled by the state. Pure.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -100,7 +102,7 @@ pub(crate) fn body_lines(width: usize) -> Vec<Line<'static>> {
 
 /// `▚ the street ──────`, the rule running to the edge.
 fn heading(title: &'static str, neon: Neon, width: usize) -> Line<'static> {
-    let used = 2 + title.chars().count() + 1;
+    let used = 2 + text_layout::width(title) + 1;
     Line::from(vec![
         Span::styled("▚ ", glow(neon)),
         Span::styled(title, lit(neon)),
@@ -135,10 +137,10 @@ fn prize_lines(title: &'static str, copy: &[&'static str], width: usize) -> Vec<
         .flat_map(|line| wrap_spans(&marked(line, text, strong), inside, inside))
         .collect();
     let content = rows.iter().map(|row| spans_width(row)).max().unwrap_or(0);
-    let inner = content.max(title.chars().count() + 3);
+    let inner = content.max(text_layout::width(title) + 3);
 
     let mut lines = Vec::new();
-    let top_fill = (inner + 2).saturating_sub(title.chars().count() + 3);
+    let top_fill = (inner + 2).saturating_sub(text_layout::width(title) + 3);
     lines.push(Line::from(vec![
         Span::styled("  ╭─ ", edge),
         Span::styled(title, lit(Neon::Amber)),
@@ -163,7 +165,7 @@ fn prize_lines(title: &'static str, copy: &[&'static str], width: usize) -> Vec<
 fn key_lines(keys: &[Key], width: usize) -> Vec<Line<'static>> {
     let key_width = keys
         .iter()
-        .map(|k| k.key.chars().count() + 2)
+        .map(|k| text_layout::width(k.key) + 2)
         .max()
         .unwrap_or(0);
     let text = ink(INK);
@@ -172,7 +174,7 @@ fn key_lines(keys: &[Key], width: usize) -> Vec<Line<'static>> {
         .map(|k| {
             let mut head = chip(k.key);
             head.push(Span::styled(
-                " ".repeat(key_width - (k.key.chars().count() + 2) + 1),
+                " ".repeat(key_width - (text_layout::width(k.key) + 2) + 1),
                 text,
             ));
             (head, marked(k.does, text, ink(INK_BRIGHT)))
@@ -185,7 +187,7 @@ fn key_lines(keys: &[Key], width: usize) -> Vec<Line<'static>> {
 fn figure_lines(figures: &[Figure], width: usize) -> Vec<Line<'static>> {
     let value_width = figures
         .iter()
-        .map(|f| f.value.chars().count())
+        .map(|f| text_layout::width(f.value))
         .max()
         .unwrap_or(0);
     let number = lit(Neon::Amber);
@@ -194,7 +196,7 @@ fn figure_lines(figures: &[Figure], width: usize) -> Vec<Line<'static>> {
         .iter()
         .map(|f| {
             let head = vec![Span::styled(
-                format!("{:<w$}  ", f.value, w = value_width),
+                format!("{}  ", text_layout::pad_right(f.value, value_width)),
                 number,
             )];
             (head, vec![Span::styled(f.means, text)])
@@ -271,7 +273,7 @@ fn indented(
     rest: &'static str,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let body = width.saturating_sub(rest.len()).max(1);
+    let body = width.saturating_sub(text_layout::width(rest));
     wrap_spans(spans, body, body)
         .into_iter()
         .enumerate()

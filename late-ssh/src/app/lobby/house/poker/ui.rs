@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::time::Instant;
 
 use crate::app::{
@@ -209,7 +211,7 @@ fn draw_felt_divider(frame: &mut Frame, area: Rect, snapshot: &PokerPublicSnapsh
     } else {
         format!("{label} · pot {}", snapshot.pot)
     };
-    let chip_w = label.chars().count() + 6;
+    let chip_w = text_layout::width(&label) + 6;
     let side_each = (area.width as usize).saturating_sub(chip_w) / 2;
     let half_pattern = "─ ".repeat(side_each / 2);
     let line = Line::from(vec![
@@ -398,12 +400,7 @@ fn seat_title_left(
         .cloned()
         .unwrap_or_else(|| "player".to_string());
     let max_chars = 14usize;
-    let truncated: String = if name.chars().count() > max_chars {
-        let head: String = name.chars().take(max_chars - 1).collect();
-        format!("{head}…")
-    } else {
-        name
-    };
+    let truncated = text_layout::ellipsize(&name, max_chars);
     let (display, style) = if is_you {
         (
             format!(" ▶ {truncated} "),
@@ -810,8 +807,11 @@ fn compact_seat_line(
         String::new()
     };
     Line::from(vec![
-        Span::styled(format!("{label:<11}"), label_style),
-        Span::styled(format!("{name:<12}"), Style::default().fg(theme::TEXT())),
+        Span::styled(text_layout::pad_right(&label, 11), label_style),
+        Span::styled(
+            text_layout::pad_right(&name, 12),
+            Style::default().fg(theme::TEXT()),
+        ),
         Span::styled(cards, Style::default().fg(theme::TEXT_BRIGHT())),
         Span::raw(" "),
         Span::styled(stack, Style::default().fg(theme::SUCCESS())),

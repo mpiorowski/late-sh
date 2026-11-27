@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::*;
 use chrono::Utc;
 use uuid::Uuid;
@@ -110,7 +112,7 @@ fn voice_row_is_one_line_with_the_keys_flushed_right() {
         "the keys sit at the right edge: {rendered}"
     );
     assert_eq!(
-        unicode_width::UnicodeWidthStr::width(rendered.as_str()),
+        text_layout::width(rendered.as_str()),
         70,
         "the row fills the width exactly, so the hint lands on the edge"
     );

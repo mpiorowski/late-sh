@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::*;
 use chrono::Utc;
 use late_core::models::chat_room::ChatRoom;
@@ -127,7 +129,7 @@ fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
 
     // Terminals detect links over the cell grid, so a URL flush against the
     // last column absorbs the pane border `│` and the `────` rule below it.
-    assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+    assert_eq!(text_layout::width(text.as_str()), width);
     assert!(text.ends_with(&format!("{url} ")), "got {text:?}");
 }
 
@@ -1199,7 +1201,7 @@ fn background_wash_fills_the_whole_row_width() {
         let painted: usize = line
             .spans
             .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .map(|span| text_layout::width(span.content.as_ref()))
             .sum();
         assert_eq!(painted, width, "row {index} should be washed edge to edge");
         assert!(
@@ -1483,7 +1485,7 @@ fn composer_title_collapses_across_block_widths() {
     let minimal = " (⏎ send, Esc cancel) ";
     let cancel = " (Esc cancel) ";
     let esc = " Esc ";
-    let need = |title: &str| (UnicodeWidthStr::width(title) + 2) as u16;
+    let need = |title: &str| (text_layout::width(title) + 2) as u16;
     let titled = |title: &str| format!("──{title}");
 
     assert_eq!(composer_title(&view, need(full)), titled(full));
@@ -2827,18 +2829,18 @@ fn header_segments_full_label_orders_special_bonsai_store() {
     // The store segment's start col must equal the prefix-relative
     // offset of the chat-badge emoji (column 0 is the pad cell).
     let expected_store_offset = 1
-        + UnicodeWidthStr::width(FRIEND_BADGE) as u16
+        + text_layout::width(FRIEND_BADGE) as u16
         + 1
-        + UnicodeWidthStr::width("alice") as u16
+        + text_layout::width("alice") as u16
         + 1
-        + UnicodeWidthStr::width("mod") as u16
-        + UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16
-        + UnicodeWidthStr::width("bonsai") as u16
-        + UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16;
+        + text_layout::width("mod") as u16
+        + text_layout::width(AUTHOR_BADGE_SEPARATOR) as u16
+        + text_layout::width("bonsai") as u16
+        + text_layout::width(AUTHOR_BADGE_SEPARATOR) as u16;
     assert_eq!(store.start_col, expected_store_offset);
     assert_eq!(
         store.end_col,
-        expected_store_offset + UnicodeWidthStr::width("🐱") as u16
+        expected_store_offset + text_layout::width("🐱") as u16
     );
 }
 
@@ -2896,11 +2898,11 @@ fn header_segments_put_monthly_awards_after_author() {
     assert_eq!(segs[3].target, HeaderTarget::Profile);
     assert_eq!(segs[4].target, HeaderTarget::StoreBadge);
 
-    let expected_awards_offset = 1 + UnicodeWidthStr::width("alice ") as u16;
+    let expected_awards_offset = 1 + text_layout::width("alice ") as u16;
     assert_eq!(segs[1].start_col, expected_awards_offset);
     assert_eq!(
         segs[1].end_col,
-        expected_awards_offset + UnicodeWidthStr::width("[AW1 CHIP2 SN3]") as u16
+        expected_awards_offset + text_layout::width("[AW1 CHIP2 SN3]") as u16
     );
 }
 
@@ -3143,6 +3145,19 @@ fn chat_badge_display_parts_put_store_badge_before_flag() {
     assert_eq!(fallback_parts[0].1, "🐱");
     assert_eq!(fallback_parts[1].0, HeaderTarget::StoreFlag);
     assert_eq!(fallback_parts[1].1, "US");
+}
+
+#[test]
+fn rented_badges_use_emoji_presentation_before_header_measurement() {
+    let parts = chat_badge_display_parts("🇺🇸 🌪", false);
+    assert_eq!(parts[0].0, HeaderTarget::StoreBadge);
+    assert_eq!(parts[0].1, "🌪️");
+    assert_eq!(parts[1].0, HeaderTarget::StoreFlag);
+    assert_eq!(parts[1].1, "🇺🇸");
+    assert_eq!(chat_badge_display("🌨", false), "🌨️");
+    let fallback = chat_badge_display_parts("🇺🇸 🌪", true);
+    assert_eq!(fallback[0].1, "🌪️");
+    assert_eq!(fallback[1].1, "US");
 }
 
 #[test]
@@ -3557,7 +3572,7 @@ fn stream_rail_label_shortens_the_username_and_keeps_the_watcher_count() {
 
     let label = super::stream_rail_label(&stream, false, LABEL_MAX);
     assert_eq!(label, "▶ averyvery… [12]");
-    assert_eq!(UnicodeWidthStr::width(label.as_str()), LABEL_MAX);
+    assert_eq!(text_layout::width(label.as_str()), LABEL_MAX);
 
     // Two cells fewer while jump keys are shown: still the whole bracket.
     let label = super::stream_rail_label(&stream, false, LABEL_MAX - 2);
@@ -3696,14 +3711,14 @@ fn the_you_left_rule_offers_summary_and_drops_the_tip_when_narrow() {
     let wide = text(80);
     assert!(wide.contains("you left 9 hrs ago"));
     assert!(wide.contains("· /summary to catch up"));
-    assert_eq!(UnicodeWidthStr::width(wide.as_str()), 80);
+    assert_eq!(text_layout::width(wide.as_str()), 80);
 
     // 20 columns of stamp plus 23 of tip cannot leave 4 columns of rule at
     // this width, so only the stamp survives.
     let narrow = text(44);
     assert!(narrow.contains("you left 9 hrs ago"));
     assert!(!narrow.contains("/summary"));
-    assert_eq!(UnicodeWidthStr::width(narrow.as_str()), 44);
+    assert_eq!(text_layout::width(narrow.as_str()), 44);
 }
 
 /// The two marks draw as two rules. The `you left` rule sits above the first
@@ -3891,7 +3906,6 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
     use crate::app::deadchannel::runner::state::Look;
     use crate::app::deadchannel::runner::svc::RunnerEntry;
     use crate::app::deadchannel::runner::ui::level_color;
-    use unicode_width::UnicodeWidthStr;
 
     theme::set_current_by_id("late");
 
@@ -4090,7 +4104,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         &rendered[mira + 1],
         &rendered[mira + 2],
     ] {
-        assert_eq!(row.width(), width, "{row:?}");
+        assert_eq!(text_layout::width(row), width, "{row:?}");
     }
     // Every row in the room wraps short of the gutter: nothing but a face
     // ever reaches the last six cells.
@@ -4100,7 +4114,10 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
             .trim_end_matches("▐◈ ◈▌")
             .trim_end_matches(" ▟▓▙ ")
             .trim_end();
-        assert!(text.width() <= width - 6, "{row:?} runs into the gutter");
+        assert!(
+            text_layout::width(text) <= width - 6,
+            "{row:?} runs into the gutter"
+        );
     }
     // Mira's continuation ("gg") carries no face, her message already
     // wore the coat, and neither does the civilian's message.
@@ -4166,7 +4183,7 @@ fn video_preview_puts_the_title_above_the_picture() {
     ))
     .remove(0);
     assert_eq!(cut, "Keynote: After the AI Hype - What's Real, and W…");
-    assert_eq!(UnicodeWidthStr::width(cut.as_str()), 48);
+    assert_eq!(text_layout::width(cut.as_str()), 48);
     assert_eq!(
         texts(with_watch_hint(&picture, None)),
         vec![

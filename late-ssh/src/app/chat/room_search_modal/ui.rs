@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
@@ -5,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
     chat::room_search_modal::state::{
@@ -403,9 +404,9 @@ fn message_hit_line(
     // stays visible: the match gets first claim on the row, then the prefix
     // (its tail, for lead-in context), then the suffix.
     let match_text = truncate_to_width(&hit.snippet_match, snippet_width);
-    let mut remaining = snippet_width.saturating_sub(UnicodeWidthStr::width(match_text.as_str()));
+    let mut remaining = snippet_width.saturating_sub(text_layout::width(match_text.as_str()));
     let prefix_text = truncate_tail_to_width(&hit.snippet_prefix, remaining.min(24));
-    remaining = remaining.saturating_sub(UnicodeWidthStr::width(prefix_text.as_str()));
+    remaining = remaining.saturating_sub(text_layout::width(prefix_text.as_str()));
     let suffix_text = truncate_to_width(&hit.snippet_suffix, remaining);
 
     spans.push(Span::styled(prefix_text, snippet_style));
@@ -413,9 +414,9 @@ fn message_hit_line(
     let mut suffix_padded = suffix_text;
     let used: usize = spans
         .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .map(|span| text_layout::width(span.content.as_ref()))
         .sum::<usize>()
-        + UnicodeWidthStr::width(suffix_padded.as_str());
+        + text_layout::width(suffix_padded.as_str());
     suffix_padded.push_str(&" ".repeat(width.saturating_sub(used)));
     spans.push(Span::styled(suffix_padded, snippet_style));
 
@@ -560,20 +561,23 @@ fn wrap_plain(text: &str, width: usize) -> Vec<String> {
         let mut row = String::new();
         let mut row_width = 0usize;
         for word in source_line.split_whitespace() {
-            let word_width = UnicodeWidthStr::width(word);
+            let word_width = text_layout::width(word);
             if row_width > 0 && row_width + 1 + word_width > width {
                 rows.push(std::mem::take(&mut row));
                 row_width = 0;
             }
             if word_width > width {
                 // Hard-split an over-long word across rows.
-                for ch in word.chars() {
-                    let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+                for symbol in text_layout::graphemes(word) {
+                    let ch_width = text_layout::width(symbol);
                     if row_width + ch_width > width {
                         rows.push(std::mem::take(&mut row));
                         row_width = 0;
                     }
-                    row.push(ch);
+                    if ch_width > width {
+                        continue;
+                    }
+                    row.push_str(symbol);
                     row_width += ch_width;
                 }
                 continue;
@@ -596,28 +600,7 @@ fn wrap_plain(text: &str, width: usize) -> Vec<String> {
 /// Truncate from the left, keeping the tail (used for snippet lead-in so the
 /// text immediately before the match survives).
 fn truncate_tail_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let mut kept: Vec<char> = Vec::new();
-    let mut used = 1usize; // leading ellipsis
-    for ch in text.chars().rev() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width > width {
-            break;
-        }
-        kept.push(ch);
-        used += ch_width;
-    }
-    let mut out = String::from("…");
-    out.extend(kept.into_iter().rev());
-    out
+    text_layout::ellipsize_tail(text, width)
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, message_mode: bool) {
@@ -662,43 +645,15 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn pad_right(text: &str, width: usize) -> String {
-    let used = UnicodeWidthStr::width(text);
-    let mut out = String::with_capacity(text.len() + width.saturating_sub(used));
-    out.push_str(text);
-    out.push_str(&" ".repeat(width.saturating_sub(used)));
-    out
+    text_layout::pad_right(text, width)
 }
 
 fn pad_left(text: &str, width: usize) -> String {
-    let used = UnicodeWidthStr::width(text);
-    let mut out = String::with_capacity(text.len() + width.saturating_sub(used));
-    out.push_str(&" ".repeat(width.saturating_sub(used)));
-    out.push_str(text);
-    out
+    text_layout::pad_left(text, width)
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width >= width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 #[cfg(test)]

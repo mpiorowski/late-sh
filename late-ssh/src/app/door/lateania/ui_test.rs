@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::{
     compare_span, fit, hug_poi_arrows, inventory_item_tag, land_chip_name, land_map_lines,
     line_rows, meter, rarity_color, scroll_offset, star_rating, wrapped_rows,
@@ -6,6 +8,21 @@ use crate::app::door::lateania::svc::{InvView, SectionRow};
 use crate::app::door::lateania::world::RegionProgress;
 use crate::app::door::lateania::worldmap::{MapArrow, Tile};
 use ratatui::style::Color;
+
+#[test]
+fn prose_wraps_whole_graphemes_within_its_column_budget() {
+    let text = "☀️ bright 界 👍🏽 e\u{301}";
+    for width in 4..=20 {
+        let plain = super::wrap_plain(text, width);
+        assert!(plain.iter().all(|row| text_layout::width(row) <= width));
+        assert!(
+            super::wrap(text, width)
+                .iter()
+                .all(|row| row.width() <= width)
+        );
+        assert_eq!(plain.concat().replace(' ', ""), text.replace(' ', ""));
+    }
+}
 
 #[test]
 fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
@@ -87,7 +104,6 @@ fn rarity_color_uses_the_standard_rpg_palette() {
     assert_eq!(rarity_color("mystery"), Color::Rgb(0xff, 0xff, 0xff));
 }
 use ratatui::text::Line;
-use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn scroll_offset_keeps_the_selection_visible_in_a_long_list() {
@@ -188,10 +204,10 @@ fn meter_fills_proportionally_and_clamps() {
 
 #[test]
 fn fit_pads_short_names_and_ellipsizes_long_ones() {
-    assert_eq!(UnicodeWidthStr::width(fit("Goblin", 10).as_str()), 10);
+    assert_eq!(text_layout::width(fit("Goblin", 10).as_str()), 10);
     assert_eq!(fit("Goblin", 10), "Goblin    ");
     let long = fit("Ancient Frost Wyrm", 8);
-    assert_eq!(UnicodeWidthStr::width(long.as_str()), 8);
+    assert_eq!(text_layout::width(long.as_str()), 8);
     assert!(long.ends_with('…'));
 }
 
@@ -518,7 +534,7 @@ fn room_panel_makes_each_foe_a_clickable_row() {
     for l in &blines {
         let text = line_text(l);
         assert!(
-            unicode_width::UnicodeWidthStr::width(text.as_str()) <= 30,
+            text_layout::width(text.as_str()) <= 30,
             "battle panel line overflows the panel: {text:?}"
         );
     }
@@ -795,7 +811,7 @@ fn journal_full_view_rows_wrap_and_carry_the_tracked_flag() {
     for r in &rows[1..] {
         let text = line_text(r);
         assert!(
-            unicode_width::UnicodeWidthStr::width(text.as_str()) <= 30,
+            text_layout::width(text.as_str()) <= 30,
             "journal column line overflows: {text:?}"
         );
     }
@@ -1862,9 +1878,7 @@ fn feeding_leads_the_panel_only_for_a_hurt_pet_and_otherwise_sits_under_it() {
         assert!(under.contains(chip), "{chip} missing: {lines:#?}");
     }
     assert!(
-        lines
-            .iter()
-            .all(|l| unicode_width::UnicodeWidthStr::width(l.as_str()) <= 28),
+        lines.iter().all(|l| text_layout::width(l.as_str()) <= 28),
         "{lines:#?}"
     );
 
@@ -1973,7 +1987,7 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         {
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             assert!(
-                UnicodeWidthStr::width(text.as_str()) <= width,
+                text_layout::width(text.as_str()) <= width,
                 "at width {width} this line is clipped: {text:?}"
             );
         }
@@ -2020,7 +2034,7 @@ fn what_this_room_offers_leads_the_panel_and_the_standing_keys_stay_short() {
         for line in footer_hints(&marked, width) {
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             assert!(
-                UnicodeWidthStr::width(text.as_str()) <= width,
+                text_layout::width(text.as_str()) <= width,
                 "at width {width} the waypoint chip is clipped: {text:?}"
             );
         }

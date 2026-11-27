@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::collections::{HashMap, HashSet};
 
 use late_core::models::leaderboard::{
@@ -171,8 +173,8 @@ fn overlay_size(heading: &str, subtitle: &str, area: Rect) -> (u16, u16) {
     const MIN_WIDTH: u16 = 28;
     const MAX_WIDTH: u16 = 44;
 
-    let heading_cols = (heading.chars().count() as u16).saturating_add(2);
-    let subtitle_cols = subtitle.chars().count() as u16;
+    let heading_cols = (text_layout::width(heading) as u16).saturating_add(2);
+    let subtitle_cols = text_layout::width(subtitle) as u16;
     let overlay_w = heading_cols
         .max(subtitle_cols)
         .saturating_add(BORDER_LINES)
@@ -180,8 +182,11 @@ fn overlay_size(heading: &str, subtitle: &str, area: Rect) -> (u16, u16) {
         .min(area.width);
 
     let text_cols = overlay_w.saturating_sub(BORDER_LINES).max(1);
-    let subtitle_lines = subtitle_cols.div_ceil(text_cols).max(1);
-    let overlay_h = (BORDER_LINES + 1 + subtitle_lines).min(area.height);
+    let rows = Paragraph::new(vec![Line::raw(heading), Line::raw(subtitle)])
+        .wrap(Wrap { trim: false })
+        .line_count(text_cols)
+        .min(u16::MAX as usize) as u16;
+    let overlay_h = BORDER_LINES.saturating_add(rows).min(area.height);
 
     (overlay_w, overlay_h)
 }
@@ -742,7 +747,7 @@ fn wrap_names(names: &[String], width: usize) -> Vec<Vec<String>> {
     let mut row: Vec<String> = Vec::new();
     let mut used = 0usize;
     for name in names {
-        let cells = name.chars().count();
+        let cells = text_layout::width(name);
         if !row.is_empty() && used + 2 + cells > width {
             rows.push(std::mem::take(&mut row));
         }
@@ -1087,7 +1092,9 @@ fn draw_game_entry(
         Span::styled(if is_selected { "> " } else { "  " }, title_style),
         Span::styled(format!("[ {} ]", entry.name), title_style),
     ];
-    let padding_len = entry.label_width.saturating_sub(entry.name.len() + 4);
+    let padding_len = entry
+        .label_width
+        .saturating_sub(text_layout::width(entry.name) + 4);
     title_line.push(Span::raw(" ".repeat(padding_len.max(1))));
     title_line.extend(entry.status);
     lines.push(Line::from(title_line));

@@ -1,6 +1,6 @@
-use std::borrow::Cow;
+use crate::app::common::text_layout;
 
-use unicode_width::UnicodeWidthStr;
+use std::borrow::Cow;
 
 const MARKER: &str = "||";
 const MASK: char = '▒';
@@ -40,7 +40,9 @@ pub(crate) fn has_spoiler(body: &str) -> bool {
 /// Each spoiler, markers included, becomes a `▒` bar as wide as its text, so
 /// the hidden word's length shows but nothing else does.
 pub(crate) fn mask_spoilers(body: &str) -> Cow<'_, str> {
-    replace_spoilers(body, |inner| MASK.to_string().repeat(inner.width().max(1)))
+    replace_spoilers(body, |inner| {
+        MASK.to_string().repeat(text_layout::width(inner).max(1))
+    })
 }
 
 /// A revealed spoiler reads as plain text: the markers drop, the words stay.

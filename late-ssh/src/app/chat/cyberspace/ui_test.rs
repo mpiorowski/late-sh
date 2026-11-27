@@ -79,6 +79,16 @@ fn wide_characters_wrap_by_display_width_not_char_count() {
 }
 
 #[test]
+fn a_full_author_prefix_moves_the_body_to_the_next_row() {
+    for body in ["hello", "☀️ hello"] {
+        assert_eq!(
+            super::wrap_paragraph_hanging(body, 0, 12),
+            vec![String::new(), body.to_string()]
+        );
+    }
+}
+
+#[test]
 fn a_long_chat_message_wraps_inside_the_pane_instead_of_running_off_it() {
     let long = "a sentence that keeps going ".repeat(12);
     let message: CircMessage = serde_json::from_str(&format!(

@@ -1,10 +1,11 @@
+use crate::app::common::text_layout;
+
 use super::{ARTIST, DEVELOPER, DJ, MODERATOR, special_badges};
-use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn badges_use_emoji_width_glyphs() {
     for badge in [MODERATOR, ARTIST, DEVELOPER, DJ] {
-        assert_eq!(UnicodeWidthStr::width(badge), 2);
+        assert_eq!(text_layout::width(badge), 2);
     }
 }
 

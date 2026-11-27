@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::collections::HashSet;
 
 use crate::app::common::{primitives::format_relative_time, theme};
@@ -130,7 +132,6 @@ fn preview_rows(body: &str, width: usize, max_rows: usize) -> Vec<String> {
         !trimmed.is_empty() && !trimmed.starts_with('>')
     });
     let mut rows = Vec::new();
-    let mut current = String::new();
 
     for line in body.lines() {
         let trimmed = line.trim();
@@ -141,31 +142,15 @@ fn preview_rows(body: &str, width: usize, max_rows: usize) -> Vec<String> {
             continue;
         }
 
-        for word in trimmed.split_whitespace() {
-            let next_len = if current.is_empty() {
-                word.chars().count()
-            } else {
-                current.chars().count() + 1 + word.chars().count()
-            };
-
-            if next_len > width && !current.is_empty() {
-                rows.push(current);
-                current = word.to_string();
-            } else if current.is_empty() {
-                current.push_str(word);
-            } else {
-                current.push(' ');
-                current.push_str(word);
-            }
-        }
-
-        if !current.is_empty() {
-            rows.push(std::mem::take(&mut current));
-        }
-    }
-
-    if !current.is_empty() {
-        rows.push(current);
+        let normalized = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+        rows.extend(
+            crate::app::common::markdown::wrap_plain_line(
+                &normalized,
+                width.saturating_sub(2).max(1),
+            )
+            .into_iter()
+            .map(|line| line.trim_end().to_string()),
+        );
     }
 
     if rows.is_empty() {
@@ -173,10 +158,15 @@ fn preview_rows(body: &str, width: usize, max_rows: usize) -> Vec<String> {
     }
 
     let truncated = rows.len() > max_rows;
-    finalize_preview_rows(rows, max_rows, truncated)
+    finalize_preview_rows(rows, max_rows, truncated, width)
 }
 
-fn finalize_preview_rows(mut rows: Vec<String>, max_rows: usize, truncated: bool) -> Vec<String> {
+fn finalize_preview_rows(
+    mut rows: Vec<String>,
+    max_rows: usize,
+    truncated: bool,
+    width: usize,
+) -> Vec<String> {
     if rows.is_empty() {
         rows.push(String::new());
     }
@@ -185,15 +175,24 @@ fn finalize_preview_rows(mut rows: Vec<String>, max_rows: usize, truncated: bool
         rows.truncate(max_rows);
     }
 
-    if truncated && let Some(last) = rows.last_mut() {
-        last.push_str("...");
-    }
-
-    if let Some(first) = rows.first_mut() {
-        first.insert(0, '"');
-    }
-    if let Some(last) = rows.last_mut() {
-        last.push('"');
+    let count = rows.len();
+    for (index, row) in rows.iter_mut().enumerate() {
+        let leading = usize::from(index == 0);
+        let trailing = usize::from(index + 1 == count);
+        let room = width.saturating_sub(leading + trailing);
+        let content = if truncated && trailing > 0 {
+            text_layout::truncate_with(&format!("{row}..."), room, "...")
+        } else {
+            text_layout::clip(row, room)
+        };
+        *row = text_layout::clip(
+            &format!(
+                "{}{content}{}",
+                if leading > 0 { "\"" } else { "" },
+                if trailing > 0 { "\"" } else { "" }
+            ),
+            width,
+        );
     }
 
     rows

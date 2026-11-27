@@ -8,6 +8,8 @@
 //! same record back, so a click can never land on a card the picture did not
 //! put there.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -172,7 +174,7 @@ pub fn centre(lines: Vec<Line<'static>>, drawn: u16, width: u16) -> Vec<Line<'st
 
 /// A dim single line centred in `width`.
 pub fn label(text: String, width: u16, color: Color) -> Line<'static> {
-    let pad = (width as usize).saturating_sub(text.chars().count()) / 2;
+    let pad = (width as usize).saturating_sub(text_layout::width(&text)) / 2;
     Line::from(Span::styled(
         format!("{}{text}", " ".repeat(pad)),
         Style::default().fg(color),

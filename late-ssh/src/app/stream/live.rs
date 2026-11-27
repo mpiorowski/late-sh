@@ -3,6 +3,8 @@
 //! with the on-air mark sits in the picture column; the words beside it are
 //! the title, the room and how many are watching, and who went live.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -80,7 +82,7 @@ pub(crate) fn compact_spans(rest: u16, strip: &StreamStripView) -> Vec<Span<'sta
     let rest = usize::from(rest);
     let lead = format!("stream {} · ", strip.stream.username);
     let lead = truncate_chars(&lead, rest);
-    let left = rest.saturating_sub(lead.chars().count());
+    let left = rest.saturating_sub(text_layout::width(&lead));
     vec![
         Span::styled(lead, Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
@@ -101,7 +103,7 @@ fn screen_lines() -> Vec<Line<'static>> {
             frame,
         ))
     };
-    let mark_width = ON_AIR.chars().count();
+    let mark_width = text_layout::width(ON_AIR);
     let lead = (inner - mark_width) / 2;
     let mut lines = vec![edge("╭", "╮")];
     for row in 1..SCREEN_ROWS - 1 {
@@ -163,7 +165,7 @@ fn title(strip: &StreamStripView) -> String {
 /// `mat went live`, the streamer in amber.
 fn event_spans(budget: usize, strip: &StreamStripView) -> Vec<Span<'static>> {
     let name = truncate_chars(&strip.stream.username, budget);
-    let left = budget.saturating_sub(name.chars().count());
+    let left = budget.saturating_sub(text_layout::width(&name));
     vec![
         Span::styled(
             name,

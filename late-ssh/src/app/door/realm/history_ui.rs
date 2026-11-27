@@ -11,6 +11,8 @@
 //! living game who owned a territory three weeks ago would get the wrong
 //! answer or none.
 
+use crate::app::common::text_layout;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -314,7 +316,9 @@ fn draw_slider(frame: &mut Frame, area: Rect, index: usize, total: usize, day: i
     };
     // The track is drawn between its keys. A slider whose ends are labelled
     // `[` and `]` says how to move it without spending a line on saying so.
-    let track_width = area.width.saturating_sub(label.chars().count() as u16 + 4) as usize;
+    let track_width = area
+        .width
+        .saturating_sub(text_layout::width(&label) as u16 + 4) as usize;
     let mut track = String::new();
     if track_width > 0 && total > 0 {
         // Where this day falls along the run, in cells.
@@ -407,7 +411,10 @@ fn draw_rail(
                 " █ ",
                 Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
             ),
-            Span::styled(format!("{:<14}", short(&player.username, 14)), text),
+            Span::styled(
+                text_layout::pad_right(&short(&player.username, 14), 14),
+                text,
+            ),
             Span::styled(format!("{held:>3}"), text),
             Span::styled(format!(" {share:>4.1}%"), faint),
         ]));
@@ -434,11 +441,7 @@ fn draw_rail(
 }
 
 fn short(name: &str, width: usize) -> String {
-    if name.chars().count() <= width {
-        return name.to_string();
-    }
-    let kept: String = name.chars().take(width.saturating_sub(1)).collect();
-    format!("{kept}…")
+    text_layout::ellipsize(name, width)
 }
 
 #[cfg(test)]

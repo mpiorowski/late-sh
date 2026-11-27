@@ -12,6 +12,7 @@ use super::{
     WatchSide, WatchTarget, draw_pet_box, frame_changed, guest_label, pick_name, portrait_lines,
     portrait_with_guests, status_line, still_rows,
 };
+use crate::app::common::text_layout;
 use crate::app::pet::session::{
     Ambient, Body, Look, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTick, PetTravel,
 };
@@ -655,7 +656,6 @@ fn a_birds_eyes_change_around_its_beak() {
 /// and the thing it carries on the floor beside its feet.
 #[test]
 fn no_body_outgrows_its_eight_columns() {
-    use unicode_width::UnicodeWidthStr;
     for species in PetSpecies::ALL {
         for form in all_forms() {
             for carries in TreatKind::ALL.into_iter().map(Some).chain([None]) {
@@ -664,7 +664,7 @@ fn no_body_outgrows_its_eight_columns() {
                 assert_eq!(rows.len(), usize::from(PET_BOX_MIN_ROWS));
                 for row in rows {
                     assert!(
-                        row.width() <= PET_WIDTH,
+                        text_layout::width(row) <= PET_WIDTH,
                         "{species:?} {form:?} {carries:?}: {row:?}"
                     );
                 }

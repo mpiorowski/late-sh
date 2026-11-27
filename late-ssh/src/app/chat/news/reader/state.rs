@@ -6,6 +6,8 @@
 //! frame. Lines carry [`ReaderInk`], and `ui.rs` turns inks into colours
 //! inside the draw, the way the paper does.
 
+use crate::app::common::text_layout;
+
 use std::cell::{Ref, RefCell};
 
 use chrono::{DateTime, Utc};
@@ -13,7 +15,6 @@ use late_core::models::article::ArticleFeedItem;
 use late_core::models::article_body::{
     ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan, reading_minutes,
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 use crate::app::chat::news::ui::split_summary_bullets;
@@ -290,7 +291,7 @@ impl ReaderModal {
         if !art.is_empty()
             && art
                 .iter()
-                .all(|line| UnicodeWidthStr::width(line.as_str()) <= width)
+                .all(|line| text_layout::width(line.as_str()) <= width)
         {
             for line in art {
                 rows.push(vec![ReaderSegment::new(line, ReaderInk::Art)]);
@@ -413,7 +414,7 @@ fn push_article(rows: &mut Vec<ReaderRow>, lines: &[ReaderLine], links: &[String
         rows.push(vec![ReaderSegment::new("LINKS", ReaderInk::Heading)]);
         for (index, href) in links.iter().enumerate() {
             let mark = format!("[{}] ", index + 1);
-            let room = width.saturating_sub(UnicodeWidthStr::width(mark.as_str()));
+            let room = width.saturating_sub(text_layout::width(mark.as_str()));
             rows.push(vec![
                 ReaderSegment::new(mark, ReaderInk::LinkMark),
                 ReaderSegment::new(clip_to_width(href, room), ReaderInk::LinkUrl),
@@ -469,19 +470,27 @@ fn wrap_segments(segments: &[ReaderSegment], width: usize, hanging: usize) -> Ve
     // ink midway still wraps as one word.
     let mut words: Vec<Vec<ReaderSegment>> = Vec::new();
     let mut current: Vec<ReaderSegment> = Vec::new();
-    for segment in segments {
-        for ch in segment.text.chars() {
-            if ch == ' ' {
-                if !current.is_empty() {
-                    words.push(std::mem::take(&mut current));
-                }
-                continue;
-            }
-            match current.last_mut() {
-                Some(last) if last.ink == segment.ink => last.text.push(ch),
-                _ => current.push(ReaderSegment::new(ch.to_string(), segment.ink)),
-            }
+    let text: String = segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect();
+    let mut index = 0;
+    let mut segment_end = segments.first().map_or(0, |segment| segment.text.len());
+    let mut offset = 0;
+    for symbol in text_layout::graphemes(&text) {
+        while index + 1 < segments.len() && offset >= segment_end {
+            index += 1;
+            segment_end += segments[index].text.len();
         }
+        let ink = segments[index].ink;
+        offset += symbol.len();
+        if symbol == " " {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        append(&mut current, symbol, ink);
     }
     if !current.is_empty() {
         words.push(current);
@@ -502,7 +511,7 @@ fn wrap_segments(segments: &[ReaderSegment], width: usize, hanging: usize) -> Ve
     for word in words {
         let word_width: usize = word
             .iter()
-            .map(|segment| UnicodeWidthStr::width(segment.text.as_str()))
+            .map(|segment| text_layout::width(segment.text.as_str()))
             .sum();
         if used > row_start {
             if used + 1 + word_width > width {
@@ -515,14 +524,17 @@ fn wrap_segments(segments: &[ReaderSegment], width: usize, hanging: usize) -> Ve
             }
         }
         for segment in word {
-            for ch in segment.text.chars() {
-                let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            for symbol in text_layout::graphemes(&segment.text) {
+                let ch_width = text_layout::width(symbol);
                 if used + ch_width > width && used > row_start {
                     rows.push(std::mem::replace(&mut row, indent()));
                     used = hanging;
                     row_start = hanging;
                 }
-                append(&mut row, &ch.to_string(), segment.ink);
+                if ch_width > width.saturating_sub(row_start) {
+                    continue;
+                }
+                append(&mut row, symbol, segment.ink);
                 used += ch_width;
             }
         }
@@ -541,17 +553,7 @@ fn append(row: &mut ReaderRow, text: &str, ink: ReaderInk) {
 }
 
 fn clip_to_width(text: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width > width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out
+    text_layout::clip(text, width)
 }
 
 #[cfg(test)]

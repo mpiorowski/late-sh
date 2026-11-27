@@ -528,7 +528,7 @@ impl Land {
                 land.star[k] = (0.35 + (h - 0.986) * 45.0) as f32;
             }
         }
-        for (r, gap) in land.gap.iter_mut().enumerate().take(H).skip(WL) {
+        for (r, gap) in land.gap.iter_mut().enumerate().skip(WL) {
             *gap = hash(r as f64, 404.0) < 0.3;
         }
         land
@@ -774,7 +774,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
     }
 
     let mut cells = Vec::with_capacity(W * H);
-    for (r, &gap) in land.gap.iter().enumerate().take(H) {
+    for (r, &gap) in land.gap.iter().enumerate() {
         let rf = r as f64;
         let y = rf + 0.5;
         let dw = y - WLF;

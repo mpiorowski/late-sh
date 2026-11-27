@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 // Rendering for Lateania. Reads the cached per-session snapshot and paints a
 // two-column view: the scrolling adventure log on the left, a context side panel
 // on the right (room / character / abilities / inventory / shop). Before a class
@@ -10,7 +12,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 use crate::app::common::theme;
@@ -288,7 +289,7 @@ struct Chip {
 /// Flee on the end (the three that shouldn't cost a panel to reach). Kept pure
 /// so the layout is unit-testable.
 fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
-    let width_of = |s: &str| UnicodeWidthStr::width(s) as u16;
+    let width_of = |s: &str| text_layout::width(s) as u16;
     let attack = Chip {
         label: "\u{2694} Atk".to_string(), // ⚔
         action: ClickAction::Attack,
@@ -356,7 +357,7 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
             spans.push(Span::raw(" "));
             col += 1;
         }
-        let w = UnicodeWidthStr::width(chip.label.as_str()) as u16;
+        let w = text_layout::width(chip.label.as_str()) as u16;
         state.record_combat_hit(
             Rect {
                 x: col,
@@ -393,12 +394,7 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
 
 /// Truncate to `max` display columns, adding a trailing dot when clipped.
 fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('.');
-    out
+    text_layout::truncate_with(s, max, ".")
 }
 
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
@@ -1397,7 +1393,7 @@ impl Canvas {
         let name = land_chip_name(region);
         let entered = progress.get(region).copied().and_then(|p| p.chain);
         let depth = entered.map(|(walked, zones)| format!("  {walked}/{zones}"));
-        let width = name.chars().count() + depth.as_ref().map_or(0, |d| d.chars().count());
+        let width = text_layout::width(&name) + depth.as_ref().map_or(0, |d| text_layout::width(d));
         let col = match at {
             At::Ends(end) => (end + 1).saturating_sub(width),
             At::Starts(start) => start,
@@ -1411,7 +1407,7 @@ impl Canvas {
             };
             self.write(
                 row,
-                col + name.chars().count(),
+                col + text_layout::width(&name),
                 &depth,
                 Style::default().fg(dim),
             );
@@ -1435,7 +1431,7 @@ impl Canvas {
         self.set(keep.bottom, keep.right, '\u{256F}', wall);
         let name = land_chip_name(keep.region).to_uppercase();
         let mid = (keep.left + keep.right) / 2;
-        let col = mid - name.chars().count() / 2;
+        let col = mid - text_layout::width(&name) / 2;
         self.write(
             (keep.top + keep.bottom) / 2,
             col,
@@ -2357,7 +2353,12 @@ fn attribute_rule_lines(view: &PlayerView) -> Vec<Line<'static>> {
         .iter()
         .map(|which| view.scores.effect(*which, view.level))
         .collect();
-    let width = effects.iter().map(|e| e.chars().count()).max().unwrap_or(0) + GAP;
+    let width = effects
+        .iter()
+        .map(|e| text_layout::width(e))
+        .max()
+        .unwrap_or(0)
+        + GAP;
     for (which, effect) in Score::ALL.iter().zip(effects) {
         lines.push(Line::from(vec![
             Span::styled(
@@ -2365,7 +2366,7 @@ fn attribute_rule_lines(view: &PlayerView) -> Vec<Line<'static>> {
                 Style::default().fg(theme::AMBER()),
             ),
             Span::styled(
-                format!("{effect:<width$}"),
+                text_layout::pad_right(&effect, width),
                 Style::default().fg(theme::TEXT()),
             ),
             Span::styled(
@@ -2607,7 +2608,7 @@ fn narrow_status_line(view: &PlayerView, width: usize) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ];
-    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    let used: usize = spans.iter().map(|s| s.width()).sum();
     let room = width.saturating_sub(used + 2);
     if room >= 4 {
         spans.push(Span::raw("  "));
@@ -2634,7 +2635,7 @@ fn narrow_foes_line(view: &PlayerView, width: usize) -> Option<(Line<'static>, V
     }
     let head = "\u{2020} ";
     let mut spans = vec![Span::styled(head, Style::default().fg(theme::ERROR()))];
-    let mut used = head.width();
+    let mut used = text_layout::width(head);
     let mut cells: Vec<FoeCell> = Vec::new();
     for (i, mob) in view.mobs.iter().enumerate() {
         let sep = if i == 0 { "" } else { SEP };
@@ -2642,9 +2643,13 @@ fn narrow_foes_line(view: &PlayerView, width: usize) -> Option<(Line<'static>, V
         let tail = format!(" +{rest}");
         let name = truncate_chars(&format!("Lv{} {}", mob.level, mob.name), 18);
         let hp = format!(" {}/{}", mob.hp, mob.max_hp);
-        let need = sep.width() + name.width() + hp.width();
+        let need = text_layout::width(sep) + text_layout::width(&name) + text_layout::width(&hp);
         // Keep room for a `+N` tail unless this is the last foe.
-        let reserve = if rest > 1 { tail.width() } else { 0 };
+        let reserve = if rest > 1 {
+            text_layout::width(&tail)
+        } else {
+            0
+        };
         if used + need + reserve > width {
             if i == 0 {
                 return None;
@@ -2653,10 +2658,10 @@ fn narrow_foes_line(view: &PlayerView, width: usize) -> Option<(Line<'static>, V
             break;
         }
         spans.push(Span::styled(sep, Style::default().fg(theme::TEXT_FAINT())));
-        let col = used + sep.width();
+        let col = used + text_layout::width(sep);
         cells.push((
             col as u16,
-            (name.width() + hp.width()) as u16,
+            (text_layout::width(&name) + text_layout::width(&hp)) as u16,
             ClickAction::AttackMob(mob.id),
         ));
         spans.push(Span::styled(
@@ -2684,11 +2689,15 @@ fn narrow_action_lines(view: &PlayerView, width: usize, max_rows: usize) -> Vec<
         return lines;
     }
     let mut spans = vec![Span::styled(LEAD, Style::default().fg(theme::TEXT_DIM()))];
-    let mut used = LEAD.width();
+    let mut used = text_layout::width(LEAD);
     let mut on_row = 0;
     for (key, label) in entries {
-        let chip_w = key.width() + 1 + label.width();
-        let gap = if on_row == 0 { 0 } else { GAP.width() };
+        let chip_w = text_layout::width(key) + 1 + text_layout::width(label);
+        let gap = if on_row == 0 {
+            0
+        } else {
+            text_layout::width(GAP)
+        };
         if used + gap + chip_w > width {
             if on_row == 0 {
                 // Wider than a whole row: it and the rest wait in the rail.
@@ -2765,7 +2774,7 @@ fn draw_narrow_field(
 
     let status = Layout::horizontal([
         Constraint::Min(1),
-        Constraint::Length(NARROW_RAIL_CHIP.width() as u16),
+        Constraint::Length(text_layout::width(NARROW_RAIL_CHIP) as u16),
     ])
     .split(rows[0]);
     frame.render_widget(
@@ -3043,42 +3052,10 @@ fn line_rows(line: &Line<'_>, width: usize) -> usize {
 /// `WordWrapper` (`Wrap { trim: false }`): break on spaces, split a word longer
 /// than the width across rows. Always at least 1.
 fn wrapped_rows(text: &str, width: usize) -> usize {
-    if width == 0 {
-        return 1;
-    }
-    let mut rows = 1usize;
-    let mut col = 0usize;
-    for (i, token) in text.split(' ').enumerate() {
-        if i > 0 {
-            // the single space that `split` consumed between tokens
-            if col + 1 > width {
-                rows += 1;
-                col = 0;
-            } else {
-                col += 1;
-            }
-        }
-        let tw = UnicodeWidthStr::width(token);
-        if tw == 0 {
-            continue;
-        }
-        if col + tw <= width {
-            col += tw;
-        } else {
-            if col > 0 {
-                rows += 1;
-            }
-            if tw > width {
-                // a single word longer than the panel breaks across rows
-                let extra = (tw - 1) / width;
-                rows += extra;
-                col = tw - extra * width;
-            } else {
-                col = tw;
-            }
-        }
-    }
-    rows
+    Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .line_count(width.min(u16::MAX as usize) as u16)
+        .max(1)
 }
 
 // ---- The room side panel, and the titles panel ---------------------------
@@ -3706,15 +3683,18 @@ fn item_row_line(
     let (tag, tag_color) = tag;
     Line::from(vec![
         Span::styled(
-            format!("{marker}{:<name_w$}", truncate_chars(name, name_w)),
+            format!(
+                "{marker}{}",
+                text_layout::pad_right(&truncate_chars(name, name_w), name_w)
+            ),
             name_style,
         ),
         Span::styled(
-            format!("{value:>ITEM_ROW_VALUE_W$}"),
+            text_layout::pad_left(&value, ITEM_ROW_VALUE_W),
             Style::default().fg(value_color),
         ),
         Span::styled(
-            format!("{tag:>ITEM_ROW_TAG_W$}"),
+            text_layout::pad_left(&tag, ITEM_ROW_TAG_W),
             Style::default().fg(tag_color).add_modifier(Modifier::BOLD),
         ),
     ])
@@ -4499,7 +4479,7 @@ fn draw_board_screen(frame: &mut Frame, area: Rect, state: &State, view: &Player
             Style::default().fg(base_fg)
         };
         let marker = if selected { "> " } else { "  " };
-        let name_w = list_w.saturating_sub(marker.len() + tag_text.chars().count() + 1);
+        let name_w = list_w.saturating_sub(marker.len() + text_layout::width(&tag_text) + 1);
         list.push(Line::from(vec![
             Span::styled(
                 format!("{marker}{}", truncate_chars(&e.title, name_w)),
@@ -5009,7 +4989,7 @@ fn room_panel(
             let tag_w = if tag.is_empty() {
                 0
             } else {
-                1 + UnicodeWidthStr::width(tag.as_str())
+                1 + text_layout::width(tag.as_str())
             };
             let name_w = width.saturating_sub(13 + tag_w).clamp(6, 16);
             let marker = if occ.targeted { "\u{00bb} " } else { "  " };
@@ -5308,8 +5288,7 @@ fn battle_abilities_block(view: &PlayerView, width: usize) -> RowBlock {
             hits.push((lines.len(), ClickAction::Ability(a.slot)));
             let key_label = format!(" {key} ");
             let name = format!(" {}", a.name);
-            let used =
-                UnicodeWidthStr::width(key_label.as_str()) + UnicodeWidthStr::width(name.as_str());
+            let used = text_layout::width(key_label.as_str()) + text_layout::width(name.as_str());
             let detail = truncate_chars(
                 &format!("  {}c {}", a.cost, a.effect),
                 width.saturating_sub(used),
@@ -5689,7 +5668,7 @@ fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
 fn bar_line(label: &str, cur: i32, max: i32, color: Color) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("{label:<4} "),
+            format!("{} ", text_layout::pad_right(label, 4)),
             Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(meter(cur, max, 10), Style::default().fg(color)),
@@ -5775,7 +5754,7 @@ fn meter(cur: i32, max: i32, width: usize) -> String {
 fn panel_meter_line(label: &str, cur: i32, max: i32, color: Color, width: usize) -> Line<'static> {
     let nums = format!("{cur}/{max}");
     let meter_w = width
-        .saturating_sub(UnicodeWidthStr::width(label) + UnicodeWidthStr::width(nums.as_str()) + 1)
+        .saturating_sub(text_layout::width(label) + text_layout::width(nums.as_str()) + 1)
         .clamp(6, 22);
     Line::from(vec![
         Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
@@ -5789,26 +5768,7 @@ fn panel_meter_line(label: &str, cur: i32, max: i32, color: Color, width: usize)
 /// Truncate (with an ellipsis) or right-pad `name` to exactly `w` display
 /// columns, so roster rows line up into clean columns regardless of name width.
 fn fit(name: &str, w: usize) -> String {
-    let width = UnicodeWidthStr::width(name);
-    if width <= w {
-        return format!("{name}{}", " ".repeat(w - width));
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in name.chars() {
-        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + cw > w.saturating_sub(1) {
-            break;
-        }
-        out.push(ch);
-        used += cw;
-    }
-    out.push('…');
-    used += 1;
-    if used < w {
-        out.push_str(&" ".repeat(w - used));
-    }
-    out
+    text_layout::pad_right(&text_layout::ellipsize(name, w), w)
 }
 
 /// One aligned roster row: a marker, the name padded to `name_w`, a small HP
@@ -7094,13 +7054,7 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
 
 /// Trim a string to `max` chars, adding an ellipsis when cut.
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('\u{2026}');
-        out
-    }
+    text_layout::ellipsize(s, max)
 }
 
 fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
@@ -7137,7 +7091,7 @@ fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{marker} {label:<9} "),
+                format!("{marker} {} ", text_layout::pad_right(label, 9)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::styled(value.clone(), row_style),
@@ -7164,21 +7118,11 @@ fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
 
 /// Word-wrap a plain string to `width` columns.
 fn wrap_plain(s: &str, width: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut line = String::new();
-    for word in s.split_whitespace() {
-        if !line.is_empty() && line.len() + 1 + word.len() > width {
-            out.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    if !line.is_empty() {
-        out.push(line);
-    }
-    out
+    let text = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::app::common::markdown::wrap_plain_line(&text, width)
+        .into_iter()
+        .map(|row| row.trim_end().to_string())
+        .collect()
 }
 
 // ---- The footer hint row -------------------------------------------------
@@ -7190,7 +7134,7 @@ fn wrap_plain(s: &str, width: usize) -> Vec<String> {
 fn action_hint(key: &str, label: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("  {key:<3}"),
+            format!("  {}", text_layout::pad_right(key, 3)),
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
@@ -7346,7 +7290,7 @@ fn footer_hints(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
     let warp = match &view.waypoint {
         Some(zone) => {
             let room = "/ warp ";
-            let budget = width.saturating_sub(RAIL_INDENT + room.chars().count());
+            let budget = width.saturating_sub(RAIL_INDENT + text_layout::width(room));
             format!("{room}{}", truncate(zone, budget))
         }
         None => "/ warp".to_string(),
@@ -7394,11 +7338,11 @@ fn pack_hint_chips(chips: &[&str], width: usize) -> Vec<String> {
     let mut current = String::new();
     for chip in chips {
         let need = if current.is_empty() {
-            UnicodeWidthStr::width(*chip)
+            text_layout::width(chip)
         } else {
-            UnicodeWidthStr::width(current.as_str())
-                + UnicodeWidthStr::width(SEP)
-                + UnicodeWidthStr::width(*chip)
+            text_layout::width(current.as_str())
+                + text_layout::width(SEP)
+                + text_layout::width(chip)
         };
         if !current.is_empty() && need > budget {
             lines.push(std::mem::take(&mut current));
@@ -7612,7 +7556,7 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
     if view.max_resource > 0 {
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  {:<4} ", short_resource(&view.resource_name)),
+                format!("  {} ", short_resource(&view.resource_name)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
             Span::styled(
@@ -7660,7 +7604,7 @@ fn zone_with_band(view: &PlayerView) -> String {
 
 /// A short label for a class resource, for the battle frame's meter gutter.
 fn short_resource(name: &str) -> String {
-    let mut label: String = name.chars().take(4).collect();
+    let mut label = text_layout::fit(name, 4);
     label.make_ascii_uppercase();
     label
 }
@@ -7724,7 +7668,7 @@ fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
 fn context_list(label: &str, value: String, color: ratatui::style::Color) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("  {label:<5}"),
+            format!("  {}", text_layout::pad_right(label, 5)),
             Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(value, Style::default().fg(color)),
@@ -7740,7 +7684,7 @@ fn side_kv_wrap(
     width: usize,
 ) -> Vec<Line<'static>> {
     let label_text = format!("  {label} ");
-    let label_width = UnicodeWidthStr::width(label_text.as_str());
+    let label_width = text_layout::width(label_text.as_str());
     let value_width = width.saturating_sub(label_width).max(1);
     let mut wrapped = wrap_log_text(value, value_width);
     if wrapped.is_empty() {
@@ -7820,8 +7764,8 @@ fn wrap_log_text(text: &str, width: usize) -> Vec<String> {
 
     for word in text.split_whitespace() {
         let prefix_only = !continuation.is_empty() && line == continuation;
-        let pending_width = UnicodeWidthStr::width(line.as_str());
-        let word_width = UnicodeWidthStr::width(word);
+        let pending_width = text_layout::width(line.as_str());
+        let word_width = text_layout::width(word);
         let sep_width = usize::from(!line.is_empty() && !prefix_only);
         if pending_width > 0 && pending_width + sep_width + word_width > width {
             out.push(line);
@@ -7859,14 +7803,16 @@ fn append_long_word(
         line.push_str(continuation);
     }
 
-    for ch in word.chars() {
-        let ch_width = ch.width().unwrap_or(0);
-        let line_width = UnicodeWidthStr::width(line.as_str());
-        if line_width > UnicodeWidthStr::width(continuation) && line_width + ch_width > width {
+    for symbol in text_layout::graphemes(word) {
+        let ch_width = text_layout::width(symbol);
+        let line_width = text_layout::width(line.as_str());
+        if line_width > text_layout::width(continuation) && line_width + ch_width > width {
             out.push(std::mem::take(line));
             line.push_str(continuation);
         }
-        line.push(ch);
+        if ch_width <= width.saturating_sub(text_layout::width(continuation)) {
+            line.push_str(symbol);
+        }
     }
 }
 
@@ -7965,7 +7911,7 @@ fn stat(label: &str, value: String) -> Line<'static> {
 fn stat_colored(label: &str, value: String, color: Color) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("  {label:<7}"),
+            format!("  {}", text_layout::pad_right(label, 7)),
             Style::default().fg(theme::TEXT_DIM()),
         ),
         Span::styled(value, Style::default().fg(color)),
@@ -7980,34 +7926,24 @@ fn hint(key: &str, label: &str) -> Line<'static> {
 }
 
 fn wrap(text: &str, width: usize) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let mut line = String::from("  ");
-    for word in text.split_whitespace() {
-        if line.len() + word.len() + 1 > width && !line.trim().is_empty() {
-            out.push(Line::from(Span::styled(
-                line.clone(),
+    let indent = text_layout::clip("  ", width);
+    wrap_plain(text, width.saturating_sub(text_layout::width(&indent)))
+        .into_iter()
+        .map(|row| {
+            Line::from(Span::styled(
+                format!("{indent}{row}"),
                 Style::default().fg(LAT_TEXT_DIM),
-            )));
-            line = String::from("  ");
-        }
-        line.push_str(word);
-        line.push(' ');
-    }
-    if !line.trim().is_empty() {
-        out.push(Line::from(Span::styled(
-            line,
-            Style::default().fg(LAT_TEXT_DIM),
-        )));
-    }
-    out
+            ))
+        })
+        .collect()
 }
 
 fn short_res(name: &str) -> String {
-    name.chars().take(4).collect()
+    text_layout::clip(name, 4)
 }
 
 fn vital_label(label: &str) -> String {
-    format!("{label:<5}")
+    text_layout::pad_right(label, 5)
 }
 
 fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {

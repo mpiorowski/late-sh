@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use crate::app::common::text_layout;
+
 use crate::app::activity::event::ActivityEvent;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::ai::svc::AiService;
@@ -1325,8 +1327,6 @@ pub fn render_plain(app: &mut App) -> String {
 /// contribute nothing, and rows are concatenated without separators, which
 /// is what a straight strip of a full repaint produced.
 pub fn strip_ansi(input: &str) -> String {
-    use unicode_width::UnicodeWidthChar;
-
     let mut cells: std::collections::BTreeMap<(u16, u16), String> =
         std::collections::BTreeMap::new();
     let (mut x, mut y) = (0u16, 0u16);
@@ -1381,7 +1381,7 @@ pub fn strip_ansi(input: &str) -> String {
                 x = 0;
                 y = y.saturating_add(1);
             }
-            _ => match ch.width().unwrap_or(0) {
+            _ => match text_layout::char_width(ch) {
                 0 => {
                     // A combining mark, VS16 or ZWJ belongs to the glyph
                     // before it.

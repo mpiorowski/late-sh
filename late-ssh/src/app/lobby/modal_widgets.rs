@@ -5,6 +5,8 @@
 //! They live apart from the panels so that every panel of the modal draws
 //! with the same pieces instead of one panel reaching sideways into another.
 
+use crate::app::common::text_layout;
+
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -12,14 +14,11 @@ use ratatui::text::{Line, Span};
 use crate::app::common::theme;
 
 pub(super) fn col(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() < width {
-        return format!("{text:<width$}");
+    if width == 0 {
+        return String::new();
     }
-    let mut out: String = chars.into_iter().take(width.saturating_sub(2)).collect();
-    out.push('…');
-    out.push(' ');
-    out
+    let text = text_layout::ellipsize(text, width.saturating_sub(1));
+    text_layout::pad_right(&text, width)
 }
 
 pub(super) fn marker_span(selected: bool) -> Span<'static> {
@@ -36,7 +35,7 @@ pub(super) fn marker_span(selected: bool) -> Span<'static> {
 }
 
 pub(super) fn section_line(width: usize, label: &str) -> Line<'static> {
-    let used = 3 + label.chars().count() + 1;
+    let used = 3 + text_layout::width(label) + 1;
     let trail = width.saturating_sub(used).max(1);
     Line::from(vec![
         Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),

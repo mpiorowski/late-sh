@@ -19,7 +19,7 @@ use crate::app::{
         GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, draw_rules_modal,
         game_content_area, keys_line, share_hints, single_board_chips, status_line, tip_line,
     },
-    common::theme,
+    common::{text_layout, theme},
 };
 
 const FULL_CONTROL_HINTS_WIDTH: u16 = 100;
@@ -117,7 +117,7 @@ pub(crate) fn tile_width(puzzle: &Puzzle) -> u16 {
         .quartets
         .iter()
         .flat_map(|quartet| quartet.words.iter())
-        .map(|word| word.len() as u16)
+        .map(|word| text_layout::width(word).min(u16::MAX as usize) as u16)
         .max()
         .unwrap_or(0);
     (longest + TILE_MARGIN).clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH)

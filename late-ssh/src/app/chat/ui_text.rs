@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::borrow::Cow;
 
 use ratatui::{
@@ -18,7 +20,6 @@ use late_core::models::{
     chat_message_gild::{ChatMessageGildSummary, GildTier},
     chat_message_reaction::ChatMessageReactionSummary,
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// The flair painted over the bare username inside the author header: the
 /// tavern drunk state as a trailing `(word)` label, a bought username effect
@@ -88,8 +89,8 @@ fn push_author_prefix_spans(
     let name = &prefix[start..end];
     match tint.name_style {
         Some(style) => {
-            let len = name.chars().count();
-            spans.extend(name.chars().enumerate().map(|(index, ch)| {
+            let len = text_layout::graphemes(name).count();
+            spans.extend(text_layout::graphemes(name).enumerate().map(|(index, ch)| {
                 Span::styled(
                     ch.to_string(),
                     author_style.fg(char_color(style, index, len)),
@@ -397,13 +398,7 @@ pub(crate) fn parse_system_line(body: &str) -> Option<&str> {
 /// stay dense — so overlong text is truncated, never wrapped.
 fn wrap_system_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
     let budget = width.saturating_sub(4); // pad + "· " + right breathing room
-    let shown: String = if text.chars().count() > budget && budget > 1 {
-        let mut cut: String = text.chars().take(budget - 1).collect();
-        cut.push('…');
-        cut
-    } else {
-        text.to_string()
-    };
+    let shown = text_layout::ellipsize(text, budget);
     vec![Line::from(vec![
         Span::raw(" "),
         Span::styled("· ", Style::default().fg(theme::TEXT_FAINT())),
@@ -587,7 +582,7 @@ fn render_message_footer_lines(
     let mut current_spans = vec![pad.clone()];
 
     for (text, style) in chips {
-        let chip_width = UnicodeWidthStr::width(text.as_str());
+        let chip_width = text_layout::width(text.as_str());
         let extra_space = usize::from(current_width > 0);
         if current_width > 0 && current_width + extra_space + chip_width > available_width {
             footer_lines.push(Line::from(current_spans));
@@ -660,47 +655,7 @@ fn normalize_inline_text(text: &str) -> String {
 }
 
 fn wrap_plain_display_width(text: &str, width: usize) -> Vec<String> {
-    if text.trim().is_empty() {
-        return Vec::new();
-    }
-    if width == 0 {
-        return vec![String::new()];
-    }
-
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = Vec::new();
-    let mut idx = 0;
-    while idx < chars.len() {
-        let mut end = idx;
-        let mut used = 0;
-        while end < chars.len() {
-            let ch_width = UnicodeWidthChar::width(chars[end]).unwrap_or(0);
-            if used > 0 && used + ch_width > width {
-                break;
-            }
-            used += ch_width;
-            end += 1;
-            if used >= width {
-                break;
-            }
-        }
-
-        let break_at = if end < chars.len() {
-            let mut pos = end;
-            while pos > idx && chars[pos - 1] != ' ' {
-                pos -= 1;
-            }
-            if pos > idx { pos } else { end.max(idx + 1) }
-        } else {
-            end
-        };
-        out.push(chars[idx..break_at].iter().collect());
-        idx = break_at;
-        while idx < chars.len() && chars[idx] == ' ' {
-            idx += 1;
-        }
-    }
-    out
+    crate::app::common::markdown::wrap_plain_line(text, width)
 }
 
 #[cfg(test)]

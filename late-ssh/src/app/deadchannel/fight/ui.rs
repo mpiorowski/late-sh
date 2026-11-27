@@ -30,6 +30,8 @@
 //! while the runner walks the street, so the ritual's budget is always
 //! in view.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -286,33 +288,7 @@ fn pad(mut spans: Vec<Span<'static>>, width: usize, left: bool) -> Vec<Span<'sta
 /// `spans` cut to `width` columns, the last one an ellipsis when cut, the
 /// way [`truncate`] cuts a string.
 fn truncate_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
-    let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    if total <= width {
-        return spans;
-    }
-    let mut room = width.saturating_sub(1);
-    let mut out = Vec::new();
-    let mut cut_style = ink(INK);
-    for span in spans {
-        if room == 0 {
-            break;
-        }
-        let count = span.content.chars().count();
-        cut_style = span.style;
-        match count <= room {
-            true => {
-                room -= count;
-                out.push(span);
-            }
-            false => {
-                let kept: String = span.content.chars().take(room).collect();
-                out.push(Span::styled(kept, span.style));
-                room = 0;
-            }
-        }
-    }
-    out.push(Span::styled("…", cut_style));
-    out
+    text_layout::clip_spans(spans, width)
 }
 
 /// The carried weapon's name, `bare hands` at tier 0.
@@ -418,14 +394,7 @@ fn header(
 }
 
 fn truncate(line: &str, width: usize) -> String {
-    match line.chars().count() > width {
-        true => {
-            let mut out: String = line.chars().take(width.saturating_sub(1)).collect();
-            out.push('…');
-            out
-        }
-        false => line.to_string(),
-    }
+    text_layout::ellipsize(line, width)
 }
 
 /// One in this many border cells is static on the Old Signal's frame,
@@ -712,7 +681,7 @@ fn hand_cards(sheet: &Sheet, fight: &Fight) -> Vec<Line<'static>> {
                 for (row, line) in [(1, first), (2, second)] {
                     rows[row].extend([
                         Span::styled("│ ", frame),
-                        Span::styled(format!("{line:<inside$}"), body),
+                        Span::styled(text_layout::pad_right(&line, inside), body),
                         Span::styled(" │", frame),
                     ]);
                 }
@@ -730,7 +699,7 @@ fn hand_cards(sheet: &Sheet, fight: &Fight) -> Vec<Line<'static>> {
                         },
                     ),
                     Span::styled(
-                        format!(" {}╯", "─".repeat(CARD_W - 4 - pips.chars().count())),
+                        format!(" {}╯", "─".repeat(CARD_W - 4 - text_layout::width(&pips))),
                         frame,
                     ),
                 ]);
@@ -1138,7 +1107,7 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
     let numbers = format!("signal {} · hits for {hit} · it ", offer.tier.signal);
     let moves = truncate_spans(
         pattern_spans(offer.kind.pattern),
-        width.saturating_sub(numbers.chars().count()),
+        width.saturating_sub(text_layout::width(&numbers)),
     );
     let rows: [Vec<Span<'static>>; 3] = [
         head,
@@ -1190,7 +1159,7 @@ fn rival_lines(prey: &Prey, threat: Option<Threat>, sheet: &Sheet) -> Vec<Line<'
     let numbers = format!("signal {} · hits for {hit} · it ", prey.signal);
     let moves = truncate_spans(
         pattern_spans(data::RUNNER_PATTERN),
-        width.saturating_sub(numbers.chars().count()),
+        width.saturating_sub(text_layout::width(&numbers)),
     );
     let carrying = data::carrying_line(prey.carrying, prey.stake);
     let rows: [Vec<Span<'static>>; 3] = [
@@ -1754,7 +1723,7 @@ fn inked_draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) 
         lines.push(Line::from(vec![
             Span::styled("        ", text),
             card_mark(card),
-            Span::styled(" ".repeat(10 - mark.chars().count()), text),
+            Span::styled(" ".repeat(10 - text_layout::width(&mark)), text),
             Span::styled(card.rule().to_string(), text),
         ]));
     }
@@ -1791,7 +1760,7 @@ fn draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
         lines.push(Line::from(vec![
             Span::styled(format!("    [{}] ", option + 1), key),
             card_mark(*card),
-            Span::styled(" ".repeat(10 - mark.chars().count()), text),
+            Span::styled(" ".repeat(10 - text_layout::width(&mark)), text),
             Span::styled(card.rule().to_string(), text),
         ]));
     }

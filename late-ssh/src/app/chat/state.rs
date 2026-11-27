@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use std::{
     borrow::Cow,
     cell::Cell,
@@ -9541,19 +9543,18 @@ pub(crate) fn new_chat_textarea() -> TextArea<'static> {
 /// Mirrors ratatui-textarea's own screen→char mapping so wide glyphs (CJK,
 /// emoji) line up with the rendered cursor.
 fn char_offset_for_display_col(text: &str, target_col: usize) -> usize {
-    use unicode_width::UnicodeWidthChar;
     let mut col = 0usize;
     let mut chars = 0usize;
-    for c in text.chars() {
+    for symbol in text_layout::graphemes(text) {
         if col >= target_col {
             break;
         }
-        let width = c.width().unwrap_or(0);
+        let width = text_layout::width(symbol);
         if col + width > target_col {
             break;
         }
         col += width;
-        chars += 1;
+        chars += symbol.chars().count();
     }
     chars
 }

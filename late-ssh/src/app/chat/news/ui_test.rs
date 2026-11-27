@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::{
     ArticleListView, COMPACT_UNDER_ROWS, ascii_preview_if_fit, draw_article_list, lay_out,
     lay_out_compact, lounge_card_lines,
@@ -294,7 +296,7 @@ fn a_lounge_card_is_the_story_beside_its_art() {
 
     let rows: Vec<String> = lounge_card_lines(&item, 60).iter().map(text).collect();
     let beside = |words: &str, art: &str| {
-        let pad = 47 - unicode_width::UnicodeWidthStr::width(words);
+        let pad = 47 - text_layout::width(words);
         format!("{words}{} {art}", " ".repeat(pad))
     };
     assert_eq!(

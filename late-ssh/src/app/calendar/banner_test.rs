@@ -1,7 +1,8 @@
+use crate::app::common::text_layout;
+
 use super::banner::*;
 use chrono::{Duration, TimeZone, Utc};
 use late_core::models::calendar::{CalendarEvent, EventTiming};
-use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 /// A two-hour timed post.
@@ -65,7 +66,10 @@ fn row(posts: &[DayPost], width: usize) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    assert!(text.width() <= width, "{text:?} is wider than {width}");
+    assert!(
+        text_layout::width(&text) <= width,
+        "{text:?} is wider than {width}"
+    );
     text
 }
 

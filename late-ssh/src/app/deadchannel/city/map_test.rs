@@ -1,6 +1,7 @@
+use crate::app::common::text_layout;
+
 use super::*;
 use std::collections::{HashSet, VecDeque};
-use unicode_width::UnicodeWidthChar;
 
 #[test]
 fn every_row_fits_the_grid_with_single_width_glyphs() {
@@ -11,7 +12,7 @@ fn every_row_fits_the_grid_with_single_width_glyphs() {
         );
         for ch in row.chars() {
             assert_eq!(
-                ch.width().unwrap_or(1),
+                text_layout::char_width(ch),
                 1,
                 "row {y} has a wide or zero-width glyph {ch:?}"
             );

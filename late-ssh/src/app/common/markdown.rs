@@ -1,8 +1,9 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::common::{mentions::mention_spans, theme};
 
@@ -13,12 +14,6 @@ enum MarkdownBlock<'a> {
     Quote(&'a str),
     ListItem(&'a str),
     OrderedListItem { marker: &'a str, text: &'a str },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct StyledChar {
-    ch: char,
-    style: Style,
 }
 
 /// Render a free-form markdown body into a list of ratatui `Line`s, each
@@ -463,18 +458,11 @@ fn spans_have_visible_text(spans: &[Span<'static>]) -> bool {
 }
 
 fn spans_width(spans: &[Span<'static>]) -> usize {
-    spans
-        .iter()
-        .map(|span| str_width(span.content.as_ref()))
-        .sum()
+    spans.iter().map(Span::width).sum()
 }
 
 fn str_width(text: &str) -> usize {
-    UnicodeWidthStr::width(text)
-}
-
-fn char_width(ch: char) -> usize {
-    UnicodeWidthChar::width(ch).unwrap_or(0)
+    text_layout::width(text)
 }
 
 /// Soft-wrap styled spans into rows, breaking at spaces when possible:
@@ -484,94 +472,26 @@ pub(crate) fn wrap_spans(
     first_width: usize,
     continuation_width: usize,
 ) -> Vec<Vec<Span<'static>>> {
-    let chars = flatten_spans(spans);
-    if chars.is_empty() {
-        return Vec::new();
-    }
-
-    let mut rows = Vec::new();
-    let mut idx = 0;
-    while idx < chars.len() {
-        let row_width = if rows.is_empty() {
-            first_width
-        } else {
-            continuation_width
-        }
-        .max(1);
-        let mut end = idx;
-        let mut used = 0usize;
-        while end < chars.len() {
-            let ch_width = char_width(chars[end].ch);
-            if end > idx && used + ch_width > row_width {
-                break;
+    let symbols = super::text_layout::styled_graphemes(spans);
+    let text: String = symbols.iter().map(|g| g.symbol.as_ref()).collect();
+    let ranges = super::text_layout::wrap_ranges(&text, first_width, continuation_width, true);
+    let mut index = 0;
+    let mut offset = 0;
+    ranges
+        .into_iter()
+        .map(|range| {
+            let mut row = Vec::new();
+            while index < symbols.len() && offset < range.end {
+                let g = &symbols[index];
+                if offset >= range.start {
+                    super::text_layout::push_span(&mut row, &g.symbol, g.style);
+                }
+                offset += g.symbol.len();
+                index += 1;
             }
-            used += ch_width;
-            end += 1;
-            if used >= row_width {
-                break;
-            }
-        }
-        if end == idx {
-            end += 1;
-        }
-        let break_at = if end < chars.len() {
-            let mut pos = end;
-            while pos > idx && chars[pos - 1].ch != ' ' {
-                pos -= 1;
-            }
-            if pos > idx { pos } else { end }
-        } else {
-            end
-        };
-
-        rows.push(rebuild_spans(&chars[idx..break_at]));
-        idx = break_at;
-        while idx < chars.len() && chars[idx].ch == ' ' {
-            idx += 1;
-        }
-    }
-
-    rows
-}
-
-fn flatten_spans(spans: &[Span<'static>]) -> Vec<StyledChar> {
-    let mut chars = Vec::new();
-    for span in spans {
-        for ch in span.content.chars() {
-            chars.push(StyledChar {
-                ch,
-                style: span.style,
-            });
-        }
-    }
-    chars
-}
-
-fn rebuild_spans(chars: &[StyledChar]) -> Vec<Span<'static>> {
-    let Some(first) = chars.first() else {
-        return Vec::new();
-    };
-
-    let mut spans = Vec::new();
-    let mut current_style = first.style;
-    let mut current_text = String::new();
-
-    for styled in chars {
-        if styled.style != current_style && !current_text.is_empty() {
-            spans.push(Span::styled(
-                std::mem::take(&mut current_text),
-                current_style,
-            ));
-            current_style = styled.style;
-        }
-        current_text.push(styled.ch);
-    }
-
-    if !current_text.is_empty() {
-        spans.push(Span::styled(current_text, current_style));
-    }
-
-    spans
+            row
+        })
+        .collect()
 }
 
 /// Soft-wrap plain text to `width`, breaking at spaces when possible.
@@ -582,57 +502,14 @@ pub(crate) fn wrap_plain_line(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
     }
-
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = Vec::new();
-    let mut idx = 0;
-    while idx < chars.len() {
-        let mut end = idx;
-        let mut used = 0usize;
-        while end < chars.len() {
-            let ch_width = char_width(chars[end]);
-            if end > idx && used + ch_width > width {
-                break;
-            }
-            used += ch_width;
-            end += 1;
-            if used >= width {
-                break;
-            }
-        }
-        if end == idx {
-            end += 1;
-        }
-        let break_at = if end < chars.len() {
-            let mut pos = end;
-            while pos > idx && chars[pos - 1] != ' ' {
-                pos -= 1;
-            }
-            if pos > idx { pos } else { end }
-        } else {
-            end
-        };
-        let chunk: String = chars[idx..break_at].iter().collect();
-        out.push(chunk);
-        idx = break_at;
-    }
-
-    out
+    super::text_layout::wrap_ranges(text, width, width, false)
+        .into_iter()
+        .map(|range| text[range].to_string())
+        .collect()
 }
 
 /// Pad `text` with spaces on the right to exactly `width` display cells,
 /// truncating if too wide.
 pub(crate) fn pad_to_width(text: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let ch_width = char_width(ch);
-        if used + ch_width > width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push_str(&" ".repeat(width.saturating_sub(used)));
-    out
+    super::text_layout::fit(text, width)
 }

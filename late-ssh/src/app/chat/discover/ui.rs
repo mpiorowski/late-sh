@@ -1,4 +1,4 @@
-use unicode_width::UnicodeWidthStr;
+use crate::app::common::text_layout;
 
 use crate::app::chat::svc::DiscoverRoomItem;
 use crate::app::common::{primitives::format_relative_time, theme};
@@ -226,9 +226,9 @@ fn room_lines(item: &DiscoverRoomItem, selected: bool, width: u16) -> Vec<Line<'
         // Cells, not bytes: the marker and the separator are both wider than
         // their byte length, and a wrong budget clips the ellipsis off the end.
         const SEPARATOR: &str = "  ·  ";
-        let used = UnicodeWidthStr::width(marker)
-            + UnicodeWidthStr::width(name.as_str())
-            + UnicodeWidthStr::width(SEPARATOR);
+        let used = text_layout::width(marker)
+            + text_layout::width(name.as_str())
+            + text_layout::width(SEPARATOR);
         let room = (width as usize).saturating_sub(used);
         if room >= 8 {
             name_spans.push(Span::styled(

@@ -1,6 +1,8 @@
 //! Home's lobby tile (daily correspondence games): passive, all interaction
 //! lives in the modal (`Ctrl+G`).
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -206,12 +208,12 @@ fn feed_line(width: u16, row: &DailyFeedRow) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     };
-    let age_w = row.age.chars().count();
+    let age_w = text_layout::width(&row.age);
     let game = format!("{} ", row.game);
-    let fixed = 2 + game.chars().count() + age_w + 1;
+    let fixed = 2 + text_layout::width(&game) + age_w + 1;
     let who = truncate_chars(&row.who, (width as usize).saturating_sub(fixed));
     let pad = (width as usize)
-        .saturating_sub(2 + game.chars().count() + who.chars().count() + age_w)
+        .saturating_sub(2 + text_layout::width(&game) + text_layout::width(&who) + age_w)
         .max(1);
     Line::from(vec![
         Span::styled(marker.to_string(), marker_style),
@@ -237,7 +239,7 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
     };
     let open_text = format!("{} open", props.open_count);
     let entries_text = format!(" · {}/{}", props.entry_count, props.entry_cap);
-    let budget = (width as usize).saturating_sub(open_text.chars().count());
+    let budget = (width as usize).saturating_sub(text_layout::width(&open_text));
     Line::from(vec![
         Span::styled(open_text, open_style),
         Span::styled(
@@ -248,19 +250,7 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        return text.to_string();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let mut out: String = chars.into_iter().take(max_chars - 1).collect();
-    out.push('…');
-    out
+    text_layout::ellipsize(text, max_chars)
 }
 
 #[cfg(test)]

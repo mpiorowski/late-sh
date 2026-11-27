@@ -10,6 +10,8 @@
 //! patron's own pet, when it is out, is one letter at their heel (`c` cat,
 //! `d` dog, `b` bird).
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
@@ -18,7 +20,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::collections::HashMap;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 use crate::app::arcade::week::Week;
@@ -888,7 +889,7 @@ fn draw_presence(
     let label = clubhouse_label(username, flair);
     // The name label spans this many cells, centered on the avatar (matches
     // `put_label`), so the clickable box tracks the drawn label width.
-    let label_w = UnicodeWidthStr::width(label.as_str()) as u16;
+    let label_w = text_layout::width(label.as_str()) as u16;
     let name_len = truncate_name(username).chars().count();
     let label_span = |center: u16| {
         let x0 = center.saturating_sub(label_w / 2);
@@ -1116,7 +1117,13 @@ fn bubble_text(body: &str) -> String {
 /// desync the row they draw into; each is replaced with a `·` placeholder.
 fn to_single_width(text: &str) -> String {
     text.chars()
-        .map(|ch| if ch.width() == Some(1) { ch } else { '·' })
+        .map(|ch| {
+            if text_layout::char_width(ch) == 1 {
+                ch
+            } else {
+                '·'
+            }
+        })
         .collect()
 }
 
@@ -1175,7 +1182,11 @@ fn wrap_bubble(text: String, width: usize, max_lines: usize) -> (Vec<String>, bo
 /// A bordered speech bubble whose bottom row sits at `bottom_y`, centered
 /// on `x`. Flips below the anchor when the top wall is too close.
 fn draw_bubble_box(cells: &mut Cells, x: u16, bottom_y: u16, lines: &[String]) {
-    let text_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let text_w = lines
+        .iter()
+        .map(|l| crate::app::common::text_layout::width(l))
+        .max()
+        .unwrap_or(0) as u16;
     let box_w = text_w + 4;
     let box_h = lines.len() as u16 + 2;
     let mut top = bottom_y.saturating_sub(box_h - 1);
@@ -1251,10 +1262,10 @@ fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_
     let title = " O the bartender ";
     let width = (lines
         .iter()
-        .map(|l| l.chars().count())
+        .map(|l| crate::app::common::text_layout::width(l))
         .max()
         .unwrap_or(0)
-        .max(title.chars().count())
+        .max(crate::app::common::text_layout::width(title))
         + 4)
     .min(usize::from(inner.width).saturating_sub(2)) as u16;
     let height = (lines.len() as u16 + 2).min(inner.height);
@@ -1865,7 +1876,7 @@ impl TourHeader {
             .map(Line::width)
             .max()
             .unwrap_or(0)
-            .max(self.title.width())
+            .max(text_layout::width(self.title))
             // A breaker needs some rule left of its keys to read as one.
             .max(keys_width + 12);
         let width = (content + 2 + 2 * usize::from(TOUR_SIDE_PADDING))
@@ -2344,7 +2355,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
         .map(Line::width)
         .max()
         .unwrap_or(0)
-        .max(title.chars().count())
+        .max(crate::app::common::text_layout::width(title))
         + 4)
     .min(usize::from(inner.width).saturating_sub(2)) as u16;
     let height = (lines.len() as u16 + 2).min(inner.height.saturating_sub(1));
@@ -2402,7 +2413,7 @@ fn put_label_styled(
     if y == 0 || y >= map::MAP_H - 1 {
         return;
     }
-    let width = UnicodeWidthStr::width(label) as u16;
+    let width = text_layout::width(label) as u16;
     let max_start = map::MAP_W.saturating_sub(width + 1);
     let start = x_center
         .saturating_sub(width / 2)
@@ -2415,7 +2426,7 @@ fn put_label_styled(
         };
         set(cells, col, y, ch, cell_style);
         col += 1;
-        if ch.width() == Some(2) {
+        if text_layout::char_width(ch) == 2 {
             set(cells, col, y, WIDE_TAIL, cell_style);
             col += 1;
         }

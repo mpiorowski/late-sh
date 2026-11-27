@@ -358,7 +358,7 @@ fn meld_line(hand: &[Card], width: u16) -> Line<'static> {
         )),
         points => spans.push(Span::styled(format!("deadwood {points}"), faint)),
     }
-    let drawn: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    let drawn: usize = spans.iter().map(|span| span.width()).sum();
     let mut line = vec![Span::raw(
         " ".repeat((width as usize).saturating_sub(drawn) / 2),
     )];

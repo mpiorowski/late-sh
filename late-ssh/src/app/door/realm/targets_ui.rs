@@ -3,6 +3,8 @@
 //! the best odds), each with the route it would take or the front behind
 //! it, who holds it, and the odds the engine would actually roll.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -260,11 +262,7 @@ fn target_line(row: &TargetRow, selected: bool, columns: Columns, width: usize) 
         Span::styled(marker, Style::default().fg(theme::AMBER())),
         Span::styled(format!("{glyph} "), hop_style),
         Span::styled(
-            format!(
-                "{:<width$}",
-                truncate(&row.name, columns.name),
-                width = columns.name
-            ),
+            text_layout::pad_right(&truncate(&row.name, columns.name), columns.name),
             name_style,
         ),
     ];
@@ -275,7 +273,7 @@ fn target_line(row: &TargetRow, selected: bool, columns: Columns, width: usize) 
                 Style::default().fg(theme::AMBER()),
             ),
             (Some(name), Some((r, g, b))) => Span::styled(
-                format!("{:<width$}", truncate(name, width), width = width),
+                text_layout::pad_right(&truncate(name, width), width),
                 Style::default().fg(Color::Rgb(r, g, b)),
             ),
             _ => Span::styled(
@@ -317,8 +315,7 @@ fn target_line(row: &TargetRow, selected: bool, columns: Columns, width: usize) 
 /// Fill the rest of the row with blanks, so a row style covers the row rather
 /// than the words in it.
 pub(super) fn pad_to(spans: &mut Vec<Span<'static>>, width: usize) {
-    use unicode_width::UnicodeWidthStr;
-    let used: usize = spans.iter().map(|span| span.content.width()).sum();
+    let used: usize = spans.iter().map(|span| span.width()).sum();
     if used < width {
         spans.push(Span::raw(" ".repeat(width - used)));
     }

@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use chrono::NaiveDate;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use rand::{SeedableRng, rngs::StdRng};
@@ -1308,7 +1310,7 @@ fn every_glyph_wears_a_five_by_three_face() {
             assert_eq!(row.chars().count(), 5, "{}: {row:?}", foe.name);
             for ch in row.chars() {
                 assert!(
-                    unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) <= 1,
+                    text_layout::char_width(ch) <= 1,
                     "{}: wide glyph {ch:?}",
                     foe.name
                 );

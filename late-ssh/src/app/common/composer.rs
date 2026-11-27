@@ -51,36 +51,18 @@ fn wrap_composer_paragraph(paragraph: &str, width: usize) -> Vec<(String, usize,
     if width == 0 {
         return vec![(String::new(), 0, 0)];
     }
-
-    let chars: Vec<char> = paragraph.chars().collect();
-    let mut out = Vec::new();
-    let mut start = 0;
-
-    while start < chars.len() {
-        let end = (start + width).min(chars.len());
-        if end == chars.len() {
-            out.push((chars[start..end].iter().collect(), start, end));
-            break;
-        }
-
-        let break_at = chars[start..end]
-            .iter()
-            .rposition(|ch| ch.is_whitespace())
-            .map(|idx| start + idx);
-
-        match break_at {
-            Some(split) if split > start => {
-                out.push((chars[start..split].iter().collect(), start, split));
-                start = split + 1;
-            }
-            _ => {
-                out.push((chars[start..end].iter().collect(), start, end));
-                start = end;
-            }
-        }
-    }
-
-    out
+    let mut previous_byte = 0;
+    let mut previous_char = 0;
+    super::text_layout::wrap_ranges(paragraph, width, width, true)
+        .into_iter()
+        .map(|range| {
+            let text = paragraph[range.clone()].trim_end_matches(char::is_whitespace);
+            let start = previous_char + paragraph[previous_byte..range.start].chars().count();
+            previous_byte = range.start + text.len();
+            previous_char = start + text.chars().count();
+            (text.to_string(), start, previous_char)
+        })
+        .collect()
 }
 
 pub fn composer_line_count(text: &str, width: usize) -> usize {

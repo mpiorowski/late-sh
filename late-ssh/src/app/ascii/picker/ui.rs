@@ -1,6 +1,8 @@
 //! The picker popup: every piece on its own row, the cursor on one, the
 //! keys.
 
+use crate::app::common::text_layout;
+
 use late_core::models::user::AsciiSelection;
 use ratatui::{
     Frame,
@@ -80,7 +82,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &PiecePickerState) {
             false => ("·", Style::default().fg(theme::TEXT())),
         };
         let text = format!(" {marker} {}", piece.label());
-        let padded = format!("{text:<width$}");
+        let padded = text_layout::pad_right(&text, width);
         lines.push(Line::from(Span::styled(padded, style)));
     }
     frame.render_widget(Paragraph::new(lines), list_area);

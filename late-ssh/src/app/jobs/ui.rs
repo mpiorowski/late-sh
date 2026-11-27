@@ -2,6 +2,8 @@
 //! detail pane, the same frame the Profiles section uses, the "for you"
 //! lines a person's own card prints, and the post form over the page.
 
+use crate::app::common::text_layout;
+
 use crate::app::common::mouse_ui::{self, Surface};
 use crate::app::directory::mouse::{Pane, Target};
 use late_core::models::job_posting::{JobPosting, JobSource};
@@ -475,28 +477,7 @@ fn released_or_posted(posting: &JobPosting) -> chrono::DateTime<chrono::Utc> {
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if Span::raw(text).width() <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let budget = width - 1;
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let cw = Span::raw(ch.to_string()).width();
-        if used + cw > budget {
-            break;
-        }
-        out.push(ch);
-        used += cw;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 fn display_link(url: &str) -> String {

@@ -5,6 +5,8 @@
 //! words beside it are the door, where the player is and who else is
 //! watching, and who is playing.
 
+use crate::app::common::text_layout;
+
 use chrono::{DateTime, Utc};
 use ratatui::{
     style::{Modifier, Style},
@@ -93,7 +95,7 @@ pub(crate) fn compact_spans(rest: u16, strip: &DoorGameStripView) -> Vec<Span<'s
     let rest = usize::from(rest);
     let lead = format!("{} {} · ", strip.key.game().slug(), strip.player);
     let lead = truncate_chars(&lead, rest);
-    let left = rest.saturating_sub(lead.chars().count());
+    let left = rest.saturating_sub(text_layout::width(&lead));
     vec![
         Span::styled(lead, Style::default().fg(theme::TEXT_DIM())),
         Span::styled(
@@ -266,7 +268,7 @@ fn word_rows(budget: usize, strip: &DoorGameStripView) -> Vec<Vec<Span<'static>>
 /// `mat is playing`, the player in amber.
 fn player_spans(budget: usize, strip: &DoorGameStripView) -> Vec<Span<'static>> {
     let name = truncate_chars(&strip.player, budget);
-    let left = budget.saturating_sub(name.chars().count());
+    let left = budget.saturating_sub(text_layout::width(&name));
     vec![
         Span::styled(
             name,

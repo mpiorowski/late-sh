@@ -3,6 +3,8 @@
 //! the domination bar and the season clock where the rules have them, plus
 //! your own holdings list.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -10,8 +12,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
-
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::common::theme;
 
@@ -137,7 +137,10 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
         };
         lines.push(Line::from(vec![
             Span::styled("■ ", Style::default().fg(Color::Rgb(r, g, b))),
-            Span::styled(format!("{:<18}", format!("{}{you}", p.username)), text),
+            Span::styled(
+                text_layout::pad_right(&format!("{}{you}", p.username), 18),
+                text,
+            ),
             Span::styled(
                 format!(
                     "{held:>5} {:>9} {:>11} {share:>6.1}% {walls:>6}{dominating} {:>6}  {status}",
@@ -345,7 +348,7 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
                 Style::default().fg(theme::AMBER()),
             ),
             Span::styled(
-                format!("{:<28}", t.name),
+                text_layout::pad_right(&t.name, 28),
                 if selected {
                     Style::default()
                         .fg(theme::TEXT_BRIGHT())
@@ -367,7 +370,7 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
         // the last column reads as "these characters" rather than "this row".
         let used: usize = spans
             .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .map(|span| text_layout::width(span.content.as_ref()))
             .sum();
         if used < area.width as usize {
             spans.push(Span::raw(" ".repeat(area.width as usize - used)));

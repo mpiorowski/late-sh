@@ -20,6 +20,8 @@
 //! the grid beside the runner, squeezes the reef beside the pet, and cuts
 //! the bonsai.
 
+use crate::app::common::text_layout;
+
 use chrono::Utc;
 use dartboard_core::Canvas;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
@@ -891,7 +893,7 @@ fn fetch_row(label: &str, value: Vec<Span<'static>>, width: usize) -> Vec<Line<'
                 .enumerate()
                 .map(|(index, row)| {
                     let lead = match index {
-                        0 => Span::styled(format!("{label:<FETCH_KEY_WIDTH$}"), key),
+                        0 => Span::styled(text_layout::pad_right(label, FETCH_KEY_WIDTH), key),
                         _ => Span::raw(" ".repeat(FETCH_KEY_WIDTH)),
                     };
                     let mut spans = vec![lead];

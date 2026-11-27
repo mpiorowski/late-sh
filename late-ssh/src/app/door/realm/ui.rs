@@ -3,6 +3,8 @@
 //! while one is being written, the world's chat in a right column while it
 //! is up (in place of the map's rail), and the pinned key-hint footer.
 
+use crate::app::common::text_layout;
+
 use chrono::Utc;
 use ratatui::{
     Frame,
@@ -52,36 +54,7 @@ fn map_label(detail: &super::state::RealmDetail) -> String {
 /// Trim a line of spans to `width` display columns, marking the cut with an
 /// ellipsis. Used where a row has exactly one line to say everything in.
 fn fit_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
-    use unicode_width::UnicodeWidthStr;
-    let total: usize = spans.iter().map(|s| s.content.width()).sum();
-    if total <= width || width == 0 {
-        return Line::from(spans);
-    }
-    let mut out: Vec<Span<'static>> = Vec::new();
-    let mut used = 0usize;
-    for span in spans {
-        let span_width = span.content.width();
-        if used + span_width <= width.saturating_sub(1) {
-            used += span_width;
-            out.push(span);
-            continue;
-        }
-        // The span that overruns is cut mid-way, char by char so wide
-        // glyphs are not split.
-        let room = width.saturating_sub(used + 1);
-        let mut text = String::new();
-        for ch in span.content.chars() {
-            let ch_width = ch.to_string().width();
-            if text.width() + ch_width > room {
-                break;
-            }
-            text.push(ch);
-        }
-        text.push('…');
-        out.push(Span::styled(text, span.style));
-        break;
-    }
-    Line::from(out)
+    Line::from(text_layout::clip_spans(spans, width))
 }
 
 /// The world's chat as the board gets it from the app, which owns the chat
@@ -392,14 +365,10 @@ pub(crate) fn draw(
     );
 }
 
-/// `text` cut to `width` characters, an ellipsis standing in for the rest.
+/// `text` cut to `width` display columns, an ellipsis standing in for the rest.
 /// Every realm renderer cuts names and labels the same way.
 pub(crate) fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let keep: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{keep}\u{2026}")
+    text_layout::ellipsize(text, width)
 }
 
 #[cfg(test)]
@@ -427,30 +396,33 @@ mod tests {
             20,
         );
         let text = rendered(&line);
-        assert!(text.chars().count() <= 20, "{text:?} is still too wide");
+        assert!(
+            text_layout::width(&text) <= 20,
+            "{text:?} is still too wide"
+        );
         assert!(text.ends_with('…'), "{text:?} should show it was cut");
         assert!(text.starts_with("EU 2 "), "the front survives: {text:?}");
     }
 
     #[test]
     fn cutting_never_splits_a_wide_glyph() {
-        // Box-drawing and CJK are two columns each; the cut has to land
-        // between them, not inside one.
+        // CJK glyphs are two columns each; the cut has to land between them.
         let line = fit_line(spans(&["日本語のテキスト"]), 7);
         let text = rendered(&line);
         assert!(text.ends_with('…'));
         assert!(
-            unicode_width::UnicodeWidthStr::width(text.as_str()) <= 7,
+            text_layout::width(text.as_str()) <= 7,
             "{text:?} overflows its 7 columns"
         );
     }
 
     #[test]
-    fn a_pane_with_no_room_does_not_panic() {
+    fn a_pane_with_no_room_renders_no_text() {
         // Terminals can hand us a zero-width area mid-resize.
         let line = fit_line(spans(&["anything"]), 0);
-        assert_eq!(rendered(&line), "anything", "nothing to trim against");
+        assert!(rendered(&line).is_empty());
+        assert_eq!(line.width(), 0);
         let line = fit_line(spans(&["anything at all"]), 1);
-        assert!(unicode_width::UnicodeWidthStr::width(rendered(&line).as_str()) <= 1);
+        assert!(text_layout::width(rendered(&line).as_str()) <= 1);
     }
 }

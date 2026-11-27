@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
@@ -6,8 +8,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-
-use unicode_width::UnicodeWidthChar;
 
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
@@ -387,50 +387,10 @@ fn wrap_paragraph(paragraph: &str, width: usize) -> Vec<String> {
 /// Wrap with a narrower first row, for text that follows a prefix on its own
 /// line (a chat message's stamp and author) and hangs under it afterwards.
 fn wrap_paragraph_hanging(paragraph: &str, first_width: usize, rest_width: usize) -> Vec<String> {
-    let chars: Vec<char> = paragraph.chars().collect();
-    let mut rows = Vec::new();
-    let mut start = 0;
-
-    while start < chars.len() {
-        let width = match rows.is_empty() {
-            true => first_width.max(1),
-            false => rest_width.max(1),
-        };
-        let mut cols = 0;
-        let mut end = start;
-        while end < chars.len() {
-            let char_cols = chars[end].width().unwrap_or(0);
-            // A single glyph wider than the pane still has to land somewhere,
-            // so a row always takes at least one char.
-            if cols + char_cols > width && end > start {
-                break;
-            }
-            cols += char_cols;
-            end += 1;
-        }
-
-        if end == chars.len() {
-            rows.push(chars[start..end].iter().collect());
-            break;
-        }
-
-        let break_at = chars[start..end]
-            .iter()
-            .rposition(|ch| ch.is_whitespace())
-            .map(|idx| start + idx);
-        match break_at {
-            Some(split) if split > start => {
-                rows.push(chars[start..split].iter().collect());
-                start = split + 1;
-            }
-            _ => {
-                rows.push(chars[start..end].iter().collect());
-                start = end;
-            }
-        }
-    }
-
-    rows
+    text_layout::wrap_ranges(paragraph, first_width, rest_width, true)
+        .into_iter()
+        .map(|range| paragraph[range].trim_end().to_string())
+        .collect()
 }
 
 /// The room picker: their whole chat roster, with a check against the rooms
@@ -840,11 +800,7 @@ pub(crate) fn room_lines(
             false => Style::default(),
         };
 
-        let prefix_cols: usize = prefix
-            .content
-            .chars()
-            .map(|ch| ch.width().unwrap_or(0))
-            .sum();
+        let prefix_cols = prefix.width();
         let first_width = width.saturating_sub(indent_cols + prefix_cols);
         let rest_width = width.saturating_sub(indent_cols);
         let wrapped = wrap_paragraph_hanging(&body, first_width, rest_width);
@@ -1295,14 +1251,9 @@ fn first_content_line(content: &str) -> String {
     preview_text(line, 80)
 }
 
-fn preview_text(text: &str, max_chars: usize) -> String {
+fn preview_text(text: &str, columns: usize) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= max_chars {
-        return flat;
-    }
-    let mut out: String = flat.chars().take(max_chars).collect();
-    out.push('…');
-    out
+    text_layout::ellipsize(&flat, columns)
 }
 
 fn relative_stamp(created_at: Option<DateTime<Utc>>) -> Option<String> {

@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::state::MouseTarget;
 use crate::app::common::mouse_ui::{self, Surface};
 use ratatui::{
@@ -575,25 +577,5 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn truncate(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if Span::raw(text).width() <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let cw = Span::raw(ch.to_string()).width();
-        if used + cw > width - 1 {
-            break;
-        }
-        out.push(ch);
-        used += cw;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }

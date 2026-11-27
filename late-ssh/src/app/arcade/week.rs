@@ -8,6 +8,8 @@
 //! beside them. Time-ordered, where the cards stay game-ordered. Pure:
 //! the rotation and today's stars in, lines out.
 
+use crate::app::common::text_layout;
+
 use std::collections::HashSet;
 
 use chrono::NaiveDate;
@@ -19,7 +21,6 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::app::{common::theme, hub::dailies::state::RungStanding};
@@ -388,7 +389,7 @@ fn strokes(kind: DayKind) -> Strokes {
 
 /// `text` centred in `width` cells, padded with spaces.
 fn centered(text: &str, width: usize) -> String {
-    let text_width = text.width();
+    let text_width = text_layout::width(text);
     let left = width.saturating_sub(text_width) / 2;
     let right = width.saturating_sub(text_width + left);
     format!("{}{text}{}", " ".repeat(left), " ".repeat(right))

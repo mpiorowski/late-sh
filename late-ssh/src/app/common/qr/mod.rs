@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use qrcodegen::QrCode;
 use ratatui::{
     Frame,
@@ -35,16 +37,25 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
     let content_w = qr_size
         .width
         .max(28)
-        .max((url.len() as u16).saturating_add(4));
+        .max((text_layout::width(url).min(u16::MAX as usize) as u16).saturating_add(4));
     let footer_h = 3u16;
 
     let w = (content_w + 4)
         .max((area.height.saturating_sub(4)) * 2)
         .min(area.width.saturating_sub(4));
     let inner_w = w.saturating_sub(2).max(1);
-    let url_rows = (url.len() as u16 + 2).div_ceil(inner_w).max(1);
-    let subtitle_rows = (subtitle.len() as u16 + 2).div_ceil(inner_w).max(1);
-    let header_h = 3 + subtitle_rows + url_rows;
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let amber = Style::default().fg(theme::AMBER());
+    let header = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(format!("  {subtitle}"), dim)),
+        Line::from(""),
+        Line::from(Span::styled(format!("  {url}"), amber)),
+        Line::from(""),
+    ])
+    .centered()
+    .wrap(ratatui::widgets::Wrap { trim: true });
+    let header_h = header.line_count(inner_w).min(u16::MAX as usize) as u16;
     let content_h = header_h + qr_size.height + footer_h;
     let h = (content_h + 2).min(area.height.saturating_sub(4));
 
@@ -81,21 +92,7 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
         .flex(Flex::Center)
         .areas(qr_area);
 
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let amber = Style::default().fg(theme::AMBER());
-
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(""),
-            Line::from(Span::styled(format!("  {subtitle}"), dim)),
-            Line::from(""),
-            Line::from(Span::styled(format!("  {url}"), amber)),
-            Line::from(""),
-        ])
-        .centered()
-        .wrap(ratatui::widgets::Wrap { trim: true }),
-        header_area,
-    );
+    frame.render_widget(header, header_area);
 
     frame.render_widget(qr_widget, qr_area);
 

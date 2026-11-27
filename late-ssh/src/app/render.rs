@@ -20,7 +20,7 @@ use super::{
     chat::{mod_modal, room_info_modal, room_search_modal, sheet_modal},
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        terminal_colors, theme,
+        terminal_colors, text_layout, theme,
         time::clock_text,
     },
     help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
@@ -2828,7 +2828,9 @@ impl App {
                 BannerKind::Info => theme::AMBER(),
             };
             // leading space (1) + icon (2) + message + border padding (4)
-            let msg_w = (banner.message.len() as u16) + 7;
+            let msg_w = text_layout::width(&banner.message)
+                .saturating_add(7)
+                .min(u16::MAX as usize) as u16;
             let toast_w = msg_w.max(20).min(inner.width);
             // Centred, not right-aligned: screens with a right-hand info rail
             // (the realm board's territory/points panel, for one) had their

@@ -7,6 +7,8 @@
 //! hidden from Home, so there is no scrollback anywhere: what is said at
 //! this bar scrolls off it.
 
+use crate::app::common::text_layout;
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -159,7 +161,7 @@ fn draw_tv(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
         None => "static".to_string(),
     };
     let width = area.width.saturating_sub(6) as usize;
-    let caption: String = caption.chars().take(width).collect();
+    let caption: String = text_layout::clip(&caption, width);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("▢ tv  ", Style::default().fg(theme::TEXT_FAINT())),
@@ -332,9 +334,9 @@ fn draw_lines(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
             .map(String::as_str)
             .unwrap_or("someone");
         let prefix = format!("{name}  ");
-        let indent = " ".repeat(prefix.chars().count());
+        let indent = " ".repeat(text_layout::width(&prefix));
         let body_width = (area.width as usize)
-            .saturating_sub(prefix.chars().count())
+            .saturating_sub(text_layout::width(&prefix))
             .max(1);
         // `||spoilers||` stay bars: the wall has no selection to reveal one.
         let body = crate::app::common::spoiler::mask_spoilers(&message.body);

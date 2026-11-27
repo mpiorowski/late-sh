@@ -3,6 +3,8 @@
 //! half-block table (`fit_cloth`) with the shooter's guide and cue stick
 //! while an aim is fresh.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -50,7 +52,7 @@ pub(crate) fn live_compact_line(width: u16, view: &LiveView<'_>) -> Line<'static
         ));
     }
     let label = item.game.label();
-    let budget = (width as usize).saturating_sub(label.chars().count() + 1 + 3) / 2;
+    let budget = (width as usize).saturating_sub(text_layout::width(label) + 1 + 3) / 2;
     let styled = |user_id: uuid::Uuid, username: &Option<String>| {
         let style = if item.turn_user_id == Some(user_id) {
             Style::default()
@@ -514,19 +516,7 @@ fn pool_lines(
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        return text.to_string();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let mut out: String = chars.into_iter().take(max_chars - 1).collect();
-    out.push('…');
-    out
+    text_layout::ellipsize(text, max_chars)
 }
 
 // ── Backgammon ────────────────────────────────────────────────

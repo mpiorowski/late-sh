@@ -1,6 +1,8 @@
 //! Drawing the map shelf: a title line, the world on the left, who is on it
 //! down the right. The footer is the host page's row, its keys from [`hints`].
 
+use crate::app::common::text_layout;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -149,7 +151,7 @@ fn country_row(tally: &CountryTally, selected: bool, state: &UserMapState) -> Li
             Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
         ),
         Span::styled(
-            format!("{name:<19}"),
+            text_layout::pad_right(&name, 19),
             Style::default().fg(if selected {
                 theme::TEXT_BRIGHT()
             } else {
@@ -165,13 +167,7 @@ fn country_row(tally: &CountryTally, selected: bool, state: &UserMapState) -> Li
 
 /// Cut to `max` characters, the last of them an ellipsis.
 fn ellipsize(text: &str, max: usize) -> String {
-    match text.chars().count() > max {
-        true => {
-            let short: String = text.chars().take(max - 1).collect();
-            format!("{short}…")
-        }
-        false => text.to_string(),
-    }
+    text_layout::ellipsize(text, max)
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {
@@ -255,7 +251,7 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {
     for (rung, _) in floors.iter().enumerate() {
         let (r, g, b) = HEAT[rung.min(HEAT.len() - 1)];
         let label = format!("{} ", heat_label_for(&floors, rung));
-        let width = label.chars().count() + 1;
+        let width = text_layout::width(&label) + 1;
         if used + width > area.width as usize && legend.len() > 1 {
             lines.push(Line::from(std::mem::take(&mut legend)));
             legend.push(Span::raw(" "));

@@ -28,6 +28,8 @@
 //! and does not follow the theme at all: one look, tuned once. Nothing on
 //! this screen reads the theme module, so a light theme cannot bleed in.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -1603,7 +1605,8 @@ fn draw_street_line(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         return;
     };
     let neon = landmark_neon(landmark);
-    let width = (text.chars().count() + 4).min(usize::from(area.width).saturating_sub(2)) as u16;
+    let width = (crate::app::common::text_layout::width(text) + 4)
+        .min(usize::from(area.width).saturating_sub(2)) as u16;
     let rect = Rect {
         x: area.x + 1,
         y: area.y,
@@ -1707,7 +1710,7 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         .map(Line::width)
         .max()
         .unwrap_or(0)
-        .max(title.chars().count())
+        .max(crate::app::common::text_layout::width(&title))
         + 4)
     .min(usize::from(area.width).saturating_sub(2)) as u16;
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
@@ -1898,7 +1901,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
             for notice in data::NOTICES.iter() {
                 lines.push(Line::from(vec![
                     Span::styled("  ▪ ", glow(Neon::Amber)),
-                    Span::styled(format!("{:<40}", notice.text), text),
+                    Span::styled(text_layout::pad_right(notice.text, 40), text),
                     Span::styled(notice.reward, number),
                 ]));
             }
@@ -2622,7 +2625,7 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         // The cards keep their neon whatever the needle says: a card is
         // drawn one way everywhere. The column fits the widest row.
         let cards = ink_row_cards(sheet, draft);
-        let width: usize = cards.iter().map(|span| span.content.chars().count()).sum();
+        let width: usize = cards.iter().map(Span::width).sum();
         let mut row = vec![
             marker,
             Span::styled(

@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
@@ -5,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use late_core::models::media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS};
 
@@ -164,7 +165,7 @@ fn draw_submit(
 
     let label = if enabled { "YouTube URL" } else { "Disabled" };
     let prefix = format!(" {marker} ");
-    let label_text = format!("{label:<16}");
+    let label_text = text_layout::pad_right(label, 16);
 
     let (value_text, value_color) = if !enabled {
         (
@@ -191,7 +192,9 @@ fn draw_submit(
         Style::default().fg(value_color)
     };
 
-    let used = prefix.chars().count() + label_text.chars().count() + value_text.chars().count();
+    let used = text_layout::width(&prefix)
+        + text_layout::width(&label_text)
+        + text_layout::width(&value_text);
     let padding = width.saturating_sub(used.min(width));
 
     frame.render_widget(
@@ -481,7 +484,7 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     };
     let duration_text = format_queue_duration(item);
     let prefix = format!(" {marker} ");
-    let prefix_w = prefix.chars().count();
+    let prefix_w = text_layout::width(&prefix);
     const RIGHT_PAD: usize = 3;
     let inner_width = width.saturating_sub(RIGHT_PAD);
     let duration_width = 5usize.min(inner_width.saturating_sub(prefix_w + 4));
@@ -585,7 +588,7 @@ fn history_line(
         None => String::new(),
     };
     let prefix = format!(" {marker} ");
-    let prefix_w = prefix.chars().count();
+    let prefix_w = text_layout::width(&prefix);
     const RIGHT_PAD: usize = 3;
     let inner_width = width.saturating_sub(RIGHT_PAD);
     let duration_width = 5usize.min(inner_width.saturating_sub(prefix_w + 4));
@@ -789,43 +792,15 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn pad_right(text: &str, width: usize) -> String {
-    let used = UnicodeWidthStr::width(text);
-    let mut out = String::with_capacity(text.len() + width.saturating_sub(used));
-    out.push_str(text);
-    out.push_str(&" ".repeat(width.saturating_sub(used)));
-    out
+    text_layout::pad_right(text, width)
 }
 
 fn pad_left(text: &str, width: usize) -> String {
-    let used = UnicodeWidthStr::width(text);
-    let mut out = String::with_capacity(text.len() + width.saturating_sub(used));
-    out.push_str(&" ".repeat(width.saturating_sub(used)));
-    out.push_str(text);
-    out
+    text_layout::pad_left(text, width)
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width >= width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push('…');
-    out
+    text_layout::ellipsize(text, width)
 }
 
 #[cfg(test)]

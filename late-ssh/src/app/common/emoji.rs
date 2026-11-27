@@ -8,6 +8,28 @@
 
 use std::borrow::Cow;
 
+/// Prefer fully qualified emoji in app-owned badge text. Never apply this to
+/// user messages: an explicit text selector and unknown symbols are preserved.
+pub(crate) fn badge_presentation(text: &str) -> Cow<'_, str> {
+    let mut out: Option<String> = None;
+    let mut offset = 0;
+    for symbol in super::text_layout::graphemes(text) {
+        let shown = if symbol.contains('\u{fe0e}') {
+            symbol
+        } else {
+            emojis::get(symbol).map_or(symbol, emojis::Emoji::as_str)
+        };
+        if shown != symbol && out.is_none() {
+            out = Some(text[..offset].to_string());
+        }
+        if let Some(out) = out.as_mut() {
+            out.push_str(shown);
+        }
+        offset += symbol.len();
+    }
+    out.map_or(Cow::Borrowed(text), Cow::Owned)
+}
+
 /// The shortcode character set: what GitHub allows between the colons. Anything
 /// else ends the candidate, which is what keeps `http://host` and `10:30:00`
 /// from being read as shortcodes.

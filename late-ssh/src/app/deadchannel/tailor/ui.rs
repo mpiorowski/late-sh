@@ -7,6 +7,8 @@
 //! `draw_panel` frames it and puts the tailor's last word (`word`) at
 //! its foot.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     style::Modifier,
     text::{Line, Span},
@@ -76,7 +78,7 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
             Row::Mark => "mark",
         };
         spans.push(Span::styled(
-            format!("{label:<6}"),
+            text_layout::pad_right(label, 6),
             match on {
                 true => head,
                 false => dim_text,

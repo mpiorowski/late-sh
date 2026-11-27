@@ -4,6 +4,8 @@
 //! never a table snapshot. Surface chrome (player bars, clocks, overlays,
 //! info rails) belongs to the calling domain.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -476,13 +478,7 @@ fn marker_cell_line(tier: Tier, sub: usize) -> String {
 }
 
 fn centered_cell(text: &str, width: usize) -> String {
-    let text_w = text.chars().count();
-    if text_w >= width {
-        return text.chars().take(width).collect();
-    }
-    let left = (width - text_w) / 2;
-    let right = width - text_w - left;
-    format!("{}{}{}", " ".repeat(left), text, " ".repeat(right))
+    text_layout::pad_center(&text_layout::clip(text, width), width)
 }
 
 /// Resolve a square's background colour, layering highlights by

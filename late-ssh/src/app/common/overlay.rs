@@ -96,12 +96,6 @@ impl Overlay {
     }
 }
 
-fn wrapped_row_count(line: &str, width: u16) -> u16 {
-    let width = width.max(1) as usize;
-    let cell_count = 1 + line.chars().count();
-    cell_count.div_ceil(width) as u16
-}
-
 pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
     if anchor.width < 12 || anchor.height < 8 {
         return;
@@ -109,34 +103,6 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
 
     let width = anchor.width.saturating_sub(4).max(10);
     let inner_width = width.saturating_sub(2).max(1);
-    let content_height = if let Some(lines) = &overlay.styled_lines {
-        lines.len() as u16
-    } else {
-        overlay
-            .lines
-            .iter()
-            .map(|line| wrapped_row_count(line, inner_width))
-            .sum::<u16>()
-    }
-    .saturating_add(2);
-    let height = content_height.min(anchor.height).max(8);
-    let area = Rect::new(
-        anchor.x + 2,
-        anchor.y + anchor.height - height,
-        width,
-        height,
-    );
-
-    let hint = if overlay.close_on_any_key {
-        "↑/↓ j/k scroll · other key close"
-    } else {
-        "↑/↓ j/k scroll · Esc/q close"
-    };
-    let block = Block::default()
-        .title(format!(" {} ({hint}) ", overlay.title))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-
     let lines: Vec<Line> = match &overlay.styled_lines {
         Some(styled) => styled
             .iter()
@@ -159,13 +125,32 @@ pub fn draw_overlay(frame: &mut Frame, anchor: Rect, overlay: &Overlay) {
             })
             .collect(),
     };
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let content_height = paragraph
+        .line_count(inner_width)
+        .saturating_add(2)
+        .min(u16::MAX as usize) as u16;
+    let height = content_height.min(anchor.height).max(8);
+    let area = Rect::new(
+        anchor.x + 2,
+        anchor.y + anchor.height - height,
+        width,
+        height,
+    );
+
+    let hint = if overlay.close_on_any_key {
+        "↑/↓ j/k scroll · other key close"
+    } else {
+        "↑/↓ j/k scroll · Esc/q close"
+    };
+    let block = Block::default()
+        .title(format!(" {} ({hint}) ", overlay.title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
 
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((overlay.scroll_offset, 0)),
+        paragraph.block(block).scroll((overlay.scroll_offset, 0)),
         area,
     );
 }

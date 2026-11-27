@@ -1,6 +1,8 @@
 //! The picker popup: the chosen line, the query, the list under its group
 //! headings with the cursor on a tag, the keys.
 
+use crate::app::common::text_layout;
+
 use late_core::vocab::{self, TAG_LIMIT};
 use ratatui::{
     Frame,
@@ -186,13 +188,7 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &TagPickerState) {
 }
 
 fn pad(text: &str, width: usize) -> String {
-    let len = text.chars().count();
-    if len >= width {
-        return text.chars().take(width).collect();
-    }
-    let mut out = String::from(text);
-    out.push_str(&" ".repeat(width - len));
-    out
+    text_layout::fit(text, width)
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

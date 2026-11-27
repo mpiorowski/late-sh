@@ -11,6 +11,8 @@
 //! (`audio/booth/live.rs`), a stream a drawn screen (`stream/live.rs`), a
 //! door game its own door's dungeon in ASCII (`door/spectate/live.rs`).
 
+use crate::app::common::text_layout;
+
 use std::cell::Cell;
 
 use ratatui::{
@@ -191,27 +193,7 @@ fn frame_lines(width: u16, host: StripHost, body: StripBody) -> Vec<Line<'static
 /// A picture row cut to its column, so nothing a source draws can run into
 /// the gap or the words.
 fn clip_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
-    let mut left = max;
-    let mut out = Vec::with_capacity(spans.len());
-    for span in spans {
-        if span.width() <= left {
-            left -= span.width();
-            out.push(span);
-            continue;
-        }
-        let mut kept = String::new();
-        for ch in span.content.chars() {
-            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if w > left {
-                break;
-            }
-            left -= w;
-            kept.push(ch);
-        }
-        out.push(Span::styled(kept, span.style));
-        break;
-    }
-    out
+    text_layout::clip_spans_plain(spans, max)
 }
 
 /// `── now ────`, the label lit while the source says so. The strip is
@@ -228,7 +210,7 @@ fn rule_line(width: u16, glow: bool) -> Line<'static> {
             .add_modifier(Modifier::ITALIC)
     };
     let label = "now";
-    let used = 3 + label.chars().count() + 1;
+    let used = 3 + text_layout::width(label) + 1;
     let trail = usize::from(width).saturating_sub(used).max(1);
     Line::from(vec![
         Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
@@ -305,7 +287,7 @@ pub(crate) fn key_hint_spans(budget: usize, parts: &[HintPart<'_>]) -> Vec<Span<
             HintPart::Key(text) | HintPart::Text(text) => *text,
         })
         .collect();
-    if full.chars().count() > budget {
+    if text_layout::width(&full) > budget {
         return vec![Span::styled(truncate_chars(&full, budget), faint)];
     }
     parts
@@ -323,19 +305,7 @@ pub(crate) fn key_hint_spans(budget: usize, parts: &[HintPart<'_>]) -> Vec<Span<
 }
 
 pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        return text.to_string();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let mut out: String = chars.into_iter().take(max_chars - 1).collect();
-    out.push('…');
-    out
+    text_layout::ellipsize(text, max_chars)
 }
 
 #[cfg(test)]

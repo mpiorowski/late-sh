@@ -75,3 +75,20 @@ fn compact_shape_is_the_feed_rows_and_one_footer() {
     let done = line_text(&feed_line(21, &feed(1, DailyFeedState::Done)[0]));
     assert!(done.starts_with("· chess p0·q0"), "{done:?}");
 }
+
+#[test]
+fn feed_ages_stay_flush_right_after_wide_names() {
+    for who in ["alice", "界·界", "☀️·👨‍👩‍👧"] {
+        let row = DailyFeedRow {
+            game: "chess",
+            who: who.to_string(),
+            state: DailyFeedState::Playing,
+            age: "2m".to_string(),
+        };
+        let line = feed_line(24, &row);
+        assert_eq!(line.width(), 24);
+        let text = line_text(&line);
+        let age_start = text.rfind("2m").expect("age");
+        assert_eq!(text_layout::width(&text[..age_start]), 22);
+    }
+}

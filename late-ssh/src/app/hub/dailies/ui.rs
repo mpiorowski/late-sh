@@ -18,6 +18,8 @@
 //!     ○ Win draw-3 Solitaire       hard     +750
 //! ```
 
+use crate::app::common::text_layout;
+
 use chrono::{NaiveDate, Utc};
 use late_core::models::daily_streak::DailyStreakSnapshot;
 use ratatui::{
@@ -255,11 +257,14 @@ fn item_line(item: &QuestItem, width: usize) -> Line<'static> {
         Span::raw("    "),
         Span::styled(format!("{mark} "), mark_style),
         Span::styled(
-            format!("{:<title_budget$}", truncate(&item.title, title_budget)),
+            text_layout::pad_right(&truncate(&item.title, title_budget), title_budget),
             title_style,
         ),
         Span::raw("  "),
-        Span::styled(format!("{:<7}", item.difficulty), difficulty_style),
+        Span::styled(
+            text_layout::pad_right(&item.difficulty, 7),
+            difficulty_style,
+        ),
         Span::raw(" "),
         Span::styled(
             format!("{:>6}", format!("+{}", thousands(item.reward_chips))),
@@ -308,16 +313,7 @@ fn difficulty_color(difficulty: &str) -> Style {
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
-    let count = value.chars().count();
-    if count <= max_chars {
-        return value.to_string();
-    }
-    if max_chars <= 3 {
-        return value.chars().take(max_chars).collect();
-    }
-    let mut out: String = value.chars().take(max_chars - 3).collect();
-    out.push_str("...");
-    out
+    text_layout::clip(value, max_chars)
 }
 
 #[cfg(test)]

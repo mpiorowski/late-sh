@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use super::*;
 
 fn key(key: &str) -> RadioStation {
@@ -96,7 +98,11 @@ fn the_pinned_row_shortens_long_labels_to_fit_every_slot() {
         slots.pin(index, key(station));
     }
     let text = line_text(&pinned_line(slots, 74));
-    assert!(text.width() <= 74, "{} wide: {text}", text.width());
+    assert!(
+        text_layout::width(&text) <= 74,
+        "{} wide: {text}",
+        text_layout::width(&text)
+    );
     for slot in 1..=RADIO_SLOTS {
         assert!(text.contains(&format!("v{slot} ")), "{text}");
     }

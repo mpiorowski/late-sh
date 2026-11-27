@@ -1,6 +1,8 @@
 //! The News reader's frame: a centered box over whatever screen is up,
 //! shaped like the paper's, with the story laid out in one text column.
 
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
@@ -8,7 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::state::{READER_MAX_TEXT_WIDTH, ReaderInk, ReaderModal, ReaderRow};
 use crate::app::common::scroll_view::ScrollViewport;
@@ -140,7 +141,7 @@ fn footer_line(modal: &ReaderModal, width: usize) -> Line<'static> {
     loop {
         let used: usize = hints
             .iter()
-            .map(|(k, h)| UnicodeWidthStr::width(*k) + 1 + UnicodeWidthStr::width(*h) + 2)
+            .map(|(k, h)| text_layout::width(k) + 1 + text_layout::width(h) + 2)
             .sum();
         if used + esc_width <= width || hints.is_empty() {
             break;

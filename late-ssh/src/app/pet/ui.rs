@@ -8,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::session::{
     Body, Look, Moment, PET_HEIGHT, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTravel,
@@ -17,7 +16,7 @@ use super::session::{
 use super::state::hatch_wait;
 use crate::app::common::{
     primitives::{draw_centered_note, truncate_cells},
-    theme,
+    text_layout, theme,
 };
 
 /// The pet's box at its smallest: the three art rows.
@@ -392,7 +391,7 @@ pub fn status_line(state: &PetState, neighbours: Neighbours, width: u16) -> Line
         PetPose::Stroll | PetPose::Sulk | PetPose::Sleep | PetPose::Nest => {}
     }
 
-    let mut used = name.width();
+    let mut used = text_layout::width(&name);
     let mut spans = vec![Span::styled(
         name,
         Style::default()
@@ -400,7 +399,7 @@ pub fn status_line(state: &PetState, neighbours: Neighbours, width: u16) -> Line
             .add_modifier(Modifier::BOLD),
     )];
     for (text, style) in segments {
-        let cost = text.width() + 3;
+        let cost = text_layout::width(&text) + 3;
         if used + cost > usize::from(width) {
             break;
         }
@@ -436,9 +435,10 @@ fn pouch_row(state: &PetState, width: u16) -> Option<(Line<'static>, Option<(u16
     };
     let lead = "treat ";
     let chip = format!("[{}]", kind.as_str());
-    let chip_width = chip.width();
+    let lead_width = text_layout::width(lead);
+    let chip_width = text_layout::width(&chip);
     // The row is drawn centred: the target is an offset from its left edge.
-    let x = usize::from(width).saturating_sub(lead.width() + chip_width) / 2 + lead.width();
+    let x = usize::from(width).saturating_sub(lead_width + chip_width) / 2 + lead_width;
     let target = (x + chip_width <= usize::from(width)).then_some((x as u16, chip_width as u16));
     Some((
         Line::from(vec![Span::styled(lead, dim), Span::styled(chip, glow)]),

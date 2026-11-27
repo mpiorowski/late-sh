@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use crate::app::common::marquee::*;
 
 #[test]
@@ -61,7 +63,7 @@ fn marquee_measures_wide_glyphs_in_columns() {
     for tick in 0..400 {
         let window = marquee_text("@ada 💤 @bob 💤 @cyd", 7, tick);
         assert_eq!(
-            unicode_width::UnicodeWidthStr::width(window.as_str()),
+            text_layout::width(window.as_str()),
             7,
             "tick {tick} painted {window:?}"
         );

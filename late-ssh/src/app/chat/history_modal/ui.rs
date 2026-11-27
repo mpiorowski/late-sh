@@ -1,3 +1,5 @@
+use crate::app::common::text_layout;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
@@ -5,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use late_core::models::chat_message::ChatMessage;
 
@@ -275,7 +276,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
 
 fn pad_right(text: &str, width: usize) -> String {
     let mut out = text.to_string();
-    let text_width = UnicodeWidthStr::width(text);
+    let text_width = text_layout::width(text);
     if text_width < width {
         out.push_str(&" ".repeat(width - text_width));
     }
