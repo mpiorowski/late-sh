@@ -50,7 +50,13 @@ async fn home_with_pet(handle: &str, days: i64) -> (TestDb, App) {
     // The session's first key asks for the day, and the answer carries
     // the pet as the row has it. The mouse moving is such a key.
     app.handle_input(b"\x1b[<35;2;2M");
-    wait_for_render_contains(&mut app, &format!("day {days}")).await;
+    // The tile no longer prints the count, so the mirror is what says the
+    // answer landed; the frame after it is the one the tests click on.
+    wait_for_app(&mut app, "the pet's days to land", |app| {
+        i64::from(app.pet_state.growth().days_together) == days
+    })
+    .await;
+    render_plain(&mut app);
     (test_db, app)
 }
 
